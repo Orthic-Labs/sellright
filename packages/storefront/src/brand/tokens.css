@@ -1,0 +1,38 @@
+/* A18: the base's own brand values. Every global brand token is DECLARED here under a distinct backing name
+   (--brand-*) and MAPPED to its public name in global.css (@theme for the colour registry, :root for fonts and accent),
+   so a brand replaces this one file and nothing else. Public names (--color-accent, --font-body, ...) are unchanged.
+   Values below are the neutral demo defaults, copied unchanged from the old global.css declarations.
+   iOS dark :root variables (--color-bg, --color-surface, --color-border, --color-text, --color-text-muted) are NOT
+   here: they stay in global.css (L1) because they theme the iOS status bar and safe area. */
+:root {
+  /* Card / parchment sub-palette (global.css @theme registers these as --color-*) */
+  --brand-color-ink: #18181b;
+  --brand-color-ink-hover: #27272a;
+  --brand-color-ink-soft: #52525b;
+  --brand-color-ink-muted: #a1a1aa;
+  --brand-color-ink-contrast: #fafafa;
+  --brand-color-parchment: #f4f4f5;
+  --brand-color-parchment-hover: #e4e4e7;
+  --brand-color-card-border: #e4e4e7;
+  --brand-color-image-bg: #18181b;
+  --brand-color-tint: #e4e4e7;
+  /* Optional (global.css falls back when a brand omits them): the page background behind every route, the header height
+     the root layout clears. */
+  --brand-color-page: #f4f4f5;
+  --brand-header-offset: 4rem;
+
+  /* Accent: CTAs, links, active states */
+  --brand-color-accent: #2563eb;
+  --brand-color-accent-hover: #1d4ed8;
+  --brand-color-accent-rgb: 37, 99, 235;
+
+  /* Font stacks */
+  --brand-font-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --brand-font-heading: 'Inter', system-ui, -apple-system, sans-serif;
+  --brand-font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --brand-font-mono: ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+
+  /* Values that were literal rgb triplets in component CSS (A20): tooltip fill on the PDP, text on the dark processing modal */
+  --brand-color-tooltip-rgb: 17, 17, 16;
+  --brand-color-on-dark-rgb: 247, 242, 234;
+}

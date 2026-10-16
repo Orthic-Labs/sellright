@@ -5,6 +5,7 @@
  * _test-DB guard + TRUNCATE store CASCADE wipe + seed helpers under
  * withStore(). vitest runs files serially (fileParallelism: false).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -12,11 +13,7 @@ import { env } from '../env.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `processed-event-reaper test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'processed-event-reaper.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'processed-event-reaper-test-store';

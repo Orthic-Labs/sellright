@@ -4,6 +4,9 @@ import { defineConfig, loadEnv } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import { imagetools } from 'vite-imagetools';
 import viteCompression from 'vite-plugin-compression';
+import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
+import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
+import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -20,11 +23,19 @@ export default defineConfig((config) => {
   // sub-path mount would need those fixed too. The demo instead mounts this
   // app at the domain root and relocates the admin SPA to /admin, which
   // React Router's `basename` handles cleanly with no such landmines.
+  // The commerce flow picks the route tree (src/platform/license/flow.ts): the license flow builds src/platform/license/routes.
+  const commerceFlow = commerceFlowFrom(process.env.VITE_SR_COMMERCE_FLOW || env.VITE_SR_COMMERCE_FLOW);
   const outDirSuffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
 
   return {
     logLevel: 'info', // Show build progress and info logs
     base: '/', // Ensure root-relative URLs
+    // Vite 8 / Rolldown (ported from the Rotten Hand and Damned storefronts): the
+    // SSR build must bundle tailwindcss so the `@import 'tailwindcss'` in
+    // global.css (?inline) resolves instead of being externalised.
+    ssr: {
+      noExternal: ['tailwindcss'],
+    },
 
     build: {
       sourcemap: false, // Explicitly disable for production to save memory
@@ -67,12 +78,13 @@ export default defineConfig((config) => {
         keep_classnames: false, // Set to true if you need class names preserved
       },
 
-      // manualChunks removed — Qwik beta.30 manages its own chunking.
-      // Custom manualChunks breaks manifest generation → "Qwik core bundle not found" → QRL failures at SSR.
-      // experimentalMinChunkSize merges tiny chunks (<4KB) to reduce HTTP request count.
-      rollupOptions: {
+      // manualChunks is unsupported (Qwik 2.0.0-beta.40+ requires Vite 8 / Rolldown and
+      // manages its own chunking; custom chunking breaks manifest generation → QRL
+      // failures at SSR). `rollupOptions` is the deprecated Vite 7 name; Rolldown reads
+      // `rolldownOptions`. `experimentalMinChunkSize` (merge chunks <4KB) is dropped:
+      // the brand storefronts run without it on Rolldown.
+      rolldownOptions: {
         output: {
-          experimentalMinChunkSize: 4000,
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {
@@ -87,7 +99,12 @@ export default defineConfig((config) => {
       },
     },
     plugins: [
+      // A17: validates src/brand-slots (or SELLRIGHT_BRAND_SLOTS_DIR) and serves virtual:sellright-brand-slots.
+      brandSlotsPlugin(),
+      // Brand views: validates src/brand/head.json and routes.json and serves virtual:sellright-brand-data (a missing file = defaults).
+      brandDataPlugin(),
       qwikRouter({
+        routesDir: routesDirFor(commerceFlow),
         // Exclude dynamic sitemap routes from static generation
         exclude: ['/sitemap.xml', '/sitemap-*.xml'],
       }),

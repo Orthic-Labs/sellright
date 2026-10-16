@@ -1,0 +1,140 @@
+{
+  "_comment": "The complete capture inventory for the SSR fallback proof (e2e/ssr-fallback-capture.spec.ts writes it, scripts/ssr-normalize.mjs reads it). Each page has an expected status and a marker that must appear in the body, so two matching error pages or two empty captures can never pass as the intended pages. Entries with kind \"rendered\" are the settled DOM of a surface whose data loads in the browser (populated cart drawer, signed-in checkout with loyalty points, account order history, address book), captured for one fixed shopper with per-run values (order code, ids, dates) replaced by fixed tokens. `ignoreAttrs` (blog post headings gain the `id` the table of contents already links to) and `ignorePreloads` (the contact page preloads one extra chunk: its form logic moved into a shared controller module) are the only documented differences, per page, plus one `expectedDifference` (checkout-loyalty: the redeem control exists only on the branch; `scripts/ssr-normalize.mjs` removes just that one marked element from the after side when the before side lacks it and compares everything else strictly).",
+  "pages": [
+    {
+      "name": "home",
+      "path": "/",
+      "status": 200,
+      "marker": "class=\"hp\""
+    },
+    {
+      "name": "about",
+      "path": "/about/",
+      "status": 200,
+      "marker": "<h1"
+    },
+    {
+      "name": "privacy",
+      "path": "/privacy/",
+      "status": 200,
+      "marker": "Payment Processors"
+    },
+    {
+      "name": "terms",
+      "path": "/terms/",
+      "status": 200,
+      "marker": "Terms of Service"
+    },
+    {
+      "name": "returns",
+      "path": "/returns/",
+      "status": 200,
+      "marker": "Returns &amp; Refund Policy"
+    },
+    {
+      "name": "press",
+      "path": "/press/",
+      "status": 200,
+      "marker": "<h1"
+    },
+    {
+      "name": "contact",
+      "path": "/contact/",
+      "status": 200,
+      "marker": "Get In Touch",
+      "ignorePreloads": true
+    },
+    {
+      "name": "blog",
+      "path": "/blog/",
+      "status": 200,
+      "marker": "Stories &amp; updates"
+    },
+    {
+      "name": "blog-post",
+      "path": "/blog/ssr-capture-post/",
+      "status": 200,
+      "marker": "SSR capture post",
+      "ignoreAttrs": [
+        {
+          "tag": "h2",
+          "attr": "id"
+        },
+        {
+          "tag": "h3",
+          "attr": "id"
+        }
+      ]
+    },
+    {
+      "name": "blog-missing-post",
+      "path": "/blog/no-such-post/",
+      "status": 404,
+      "marker": "Post Not Found"
+    },
+    {
+      "name": "no-such-page",
+      "path": "/no-such-page/",
+      "status": 404,
+      "marker": "",
+      "allowEmptyBody": true
+    },
+    {
+      "name": "nested-404",
+      "path": "/a/b/",
+      "status": 404,
+      "marker": "Page Not Found"
+    },
+    {
+      "name": "indexnow-key-hit",
+      "path": "/e2e0123456789abcdef0123456789abcdef.txt",
+      "status": 200,
+      "marker": "e2e0123456789abcdef0123456789abcdef"
+    },
+    {
+      "name": "indexnow-key-miss",
+      "path": "/not-a-key.txt",
+      "status": 404,
+      "marker": "",
+      "allowEmptyBody": true
+    },
+    {
+      "name": "track-order",
+      "path": "/track-order/",
+      "status": 200,
+      "marker": "</html>"
+    },
+    {
+      "name": "cart-drawer",
+      "path": "/products/e2e-shirt/",
+      "kind": "rendered",
+      "status": 200,
+      "marker": "Shopping cart"
+    },
+    {
+      "name": "checkout-loyalty",
+      "path": "/checkout/",
+      "kind": "rendered",
+      "status": 200,
+      "marker": "data-testid=\"loyalty-redeem\"",
+      "expectedDifference": {
+        "reason": "a capture from a main older than brand views PR 1 never rendered the points-redeem control (the module-level `getSlot(..) ?? LoyaltyRedeem` evaluated to undefined in the client chunk, so the leaf component never mounted); every build since renders it, and the capture spec fails if it does not.",
+        "afterOnlyMarker": "data-testid=\"loyalty-redeem\""
+      }
+    },
+    {
+      "name": "account-orders",
+      "path": "/account/orders/",
+      "kind": "rendered",
+      "status": 200,
+      "marker": "/account/orders/ORDER-CODE"
+    },
+    {
+      "name": "account-address-book",
+      "path": "/account/address-book/",
+      "kind": "rendered",
+      "status": 200,
+      "marker": "1 Capture Way"
+    }
+  ]
+}

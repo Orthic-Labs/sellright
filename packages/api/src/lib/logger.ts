@@ -18,19 +18,33 @@
  *     alongside the process.
  */
 import pino, { type Logger as PinoLogger } from 'pino';
-import { env } from '../env.js';
+// One process-wide base logger, created on first use (importing this module
+// must not read the env: createApp parses it, plan 2.1). Re-using the same
+// instance keeps child loggers cheap (pino interns them). `resetLogger()` is
+// called by createApp after it parses its env so the level reflects it.
+let baseInstance: PinoLogger | undefined;
+let nodeEnvOverride: string | undefined;
 
-const level = env.NODE_ENV === 'production' ? 'info' : 'debug';
+function createBase(): PinoLogger {
+  const nodeEnv = nodeEnvOverride ?? process.env.NODE_ENV;
+  return pino({
+    level: nodeEnv === 'production' ? 'info' : 'debug',
+    // ISO timestamps beat ms-since-epoch in shipped logs.
+    timestamp: pino.stdTimeFunctions.isoTime,
+    // Keep the default field names — collectors parse on `time`, `level`, `msg`.
+    base: { service: 'sellright-api' },
+  });
+}
 
-// One process-wide base logger. Re-using the same instance keeps child loggers
-// cheap (pino interns them) and lets a future test stub replace just `base`.
-const base: PinoLogger = pino({
-  level,
-  // ISO timestamps beat ms-since-epoch in shipped logs.
-  timestamp: pino.stdTimeFunctions.isoTime,
-  // Keep the default field names — collectors parse on `time`, `level`, `msg`.
-  base: { service: 'sellright-api' },
-});
+function getBase(): PinoLogger {
+  return (baseInstance ??= createBase());
+}
+
+/** Drop the cached base logger so the next line re-reads the level (createApp passes its parsed NODE_ENV). */
+export function resetLogger(nodeEnv?: string): void {
+  nodeEnvOverride = nodeEnv;
+  baseInstance = undefined;
+}
 
 /**
  * Bound (child) loggers carry requestId + storeId once and emit every line
@@ -48,12 +62,12 @@ export function withContext(ctx: RequestContext): PinoLogger {
   const bindings: Record<string, string> = {};
   if (ctx.requestId) bindings.requestId = ctx.requestId;
   if (ctx.storeId) bindings.storeId = ctx.storeId;
-  return bindings.requestId || bindings.storeId ? base.child(bindings) : base;
+  return bindings.requestId || bindings.storeId ? getBase().child(bindings) : getBase();
 }
 
 /** Get the raw base logger — for cases where bindings don't fit. */
 export function baseLogger(): PinoLogger {
-  return base;
+  return getBase();
 }
 
 /**
@@ -61,9 +75,9 @@ export function baseLogger(): PinoLogger {
  * structured info line (replaces `console.log` at high-value sites).
  */
 export const log = {
-  info: (msg: string, fields?: Record<string, unknown>) => base.info(fields ?? {}, msg),
-  warn: (msg: string, fields?: Record<string, unknown>) => base.warn(fields ?? {}, msg),
-  debug: (msg: string, fields?: Record<string, unknown>) => base.debug(fields ?? {}, msg),
+  info: (msg: string, fields?: Record<string, unknown>) => getBase().info(fields ?? {}, msg),
+  warn: (msg: string, fields?: Record<string, unknown>) => getBase().warn(fields ?? {}, msg),
+  debug: (msg: string, fields?: Record<string, unknown>) => getBase().debug(fields ?? {}, msg),
 };
 
 /**
@@ -76,7 +90,7 @@ export const log = {
  */
 export const err = {
   error: (msg: string, error?: unknown, fields?: Record<string, unknown>) => {
-    if (error === undefined) base.error(fields ?? {}, msg);
-    else base.error({ ...(fields ?? {}), err: error }, msg);
+    if (error === undefined) getBase().error(fields ?? {}, msg);
+    else getBase().error({ ...(fields ?? {}), err: error }, msg);
   },
 };

@@ -1,1 +1,4 @@
 title = "SellRight gitleaks configuration"
+
+[extend]
+useDefault = true

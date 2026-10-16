@@ -11,6 +11,7 @@
  * DB test (vs sellright_test ONLY — TRUNCATEs). Same conventions as
  * catalog-collection-sql.db.test.ts.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createApp } from '../app.js';
@@ -19,9 +20,7 @@ import { env } from '../env.js';
 import { invalidateStoreCache } from '../store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`catalog collection parity db test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'catalog-collection-parity.db.test.ts');
 
 const STORE_ID = '11111111-2222-3333-4444-555555550002';
 const SLUG = 'parity-collection-store';

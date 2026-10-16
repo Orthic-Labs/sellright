@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "_comments": {
+    "scope": "Paths are relative to the storefront package root (the composed build directory root). Globs match per path segment: '*' and '?' never cross '/', '**' as a whole segment matches zero or more segments, '[' ']' are literal (route dirs like [...slug]).",
+    "layers": "Each path belongs to at most one layer. A path matching two layers (or a layer and an assetException of another layer) is an error. 'exclude' removes a path from the layer it is listed under, it never assigns it to another one.",
+    "unclassified": "A path matching no layer is unclassified: base-only today (see the A14 report), rejected as an overlay path by check-imports until it is listed here.",
+    "baseL2Enforcement": "report until A13 moves every orchestration call behind ~/platform/*, then set to block (plan A14).",
+    "trustModel": "Brand code is reviewed owner code. The import and shape rules stop accidental coupling (writable props, live stores, context lookup, QRL introspection, HTML or script insertion); they are not a sandbox against deliberately hostile JavaScript.",
+    "transitiveL1Allow": "Reviewed pure L1 files a reached base L2 file may import, listed one by one (never a directory: src/utils/** holds the API adapter). They are walked like any other reached file, so a re-export of an adapter, a forbidden package or a context symbol inside them is still import-l1-transitive. Any other non-public L1 file reached from an overlay file is import-l1-transitive.",
+    "transitivePackagesAllow": "Third-party packages a reached base file may import besides the framework packages (those get the r2 name check).",
+    "payments": "src/components/payment, checkout and cart are L1 and not ejectable (plan A11 item 4, A8 refreshCartStock callers).",
+    "gateway": "Brand views gateway (docs/plans/2026-10-11-brand-views-gateway.md, scripts/check-gateway.mjs): the only L1 access to presentation implementations (L2/L3 modules and the slot lookup) is gateway.dir. Every other non-presentation file may import them type-only. Inside gateway.dir a raw binding may only be an argument of a gateway.factories call; the slot lookup is imported only by gateway.slotLookupImporters; an action handle literal is built only in gateway.actionModule. modal is L1 because it frames interactive L1 markup (children never cross the gateway)."
+  },
+  "gateway": {
+    "dir": "src/platform/gateway/",
+    "implementationModules": ["src/components/slots/index.ts"],
+    "slotLookupImporters": ["src/platform/gateway/gate.tsx"],
+    "virtualImplementations": { "virtual:sellright-brand-slots": ["src/components/slots/index.ts"] },
+    "factories": ["gate", "slotGate", "gateValue"],
+    "actionModule": "src/platform/gateway/actions.ts",
+    "actionKind": "sr-action"
+  },
+  "platformApi": {
+    "alias": "~/platform/",
+    "dir": "src/platform/",
+    "public": {
+      "~/platform/views": "*",
+      "~/platform/head": ["BrandHeadSpec", "StaticSchema"]
+    },
+    "reexports": {
+      "Link": "@qwik.dev/router",
+      "OptimizedImage": "~/components/ui/LazyImage",
+      "VerificationButton": "~/components/verification/VerificationButton"
+    }
+  },
+  "layers": {
+    "L1": {
+      "include": [
+        "src/platform/**",
+        "src/routes/**",
+        "src/entry.*",
+        "src/root.tsx",
+        "src/services/**",
+        "src/providers/**",
+        "src/sellright/**",
+        "src/contexts/**",
+        "src/hooks/**",
+        "src/config/**",
+        "src/utils/**",
+        "src/types/**",
+        "src/types.ts",
+        "src/constants*.ts",
+        "src/env.ts",
+        "src/vite-env.d.ts",
+        "src/two-store-identity.test.ts",
+        "src/data/**",
+        "src/global.css",
+        "src/components/payment/**",
+        "src/components/checkout/**",
+        "src/components/cart/**",
+        "src/components/slots/**",
+        "src/components/ui/LazyImage.tsx",
+        "src/theme/**",
+        "src/components/cart-totals/**",
+        "src/components/cart-contents/**",
+        "src/components/address-form/**",
+        "src/components/billing-address-form/**",
+        "src/components/customer-info-form/**",
+        "src/components/account/AddressCard.tsx",
+        "src/components/account/AccountNav.tsx",
+        "src/components/account/OrderReturns.tsx",
+        "src/components/loyalty/**",
+        "src/components/order-tracking/**",
+        "src/components/header/**",
+        "src/components/menu/**",
+        "src/components/footer/**",
+        "src/components/head/**",
+        "src/components/auth/**",
+        "src/components/verification/**",
+        "src/components/reviews/**",
+        "src/components/modal/**",
+        "adapters/**"
+      ],
+      "exclude": []
+    },
+    "L2": {
+      "include": [
+        "src/components/**"
+      ],
+      "exclude": [
+        "src/components/payment/**",
+        "src/components/checkout/**",
+        "src/components/cart/**",
+        "src/components/slots/**",
+        "src/components/ui/LazyImage.tsx",
+        "src/theme/**",
+        "src/components/cart-totals/**",
+        "src/components/cart-contents/**",
+        "src/components/address-form/**",
+        "src/components/billing-address-form/**",
+        "src/components/customer-info-form/**",
+        "src/components/account/AddressCard.tsx",
+        "src/components/account/AccountNav.tsx",
+        "src/components/account/OrderReturns.tsx",
+        "src/components/loyalty/**",
+        "src/components/order-tracking/**",
+        "src/components/header/**",
+        "src/components/menu/**",
+        "src/components/footer/**",
+        "src/components/head/**",
+        "src/components/auth/**",
+        "src/components/verification/**",
+        "src/components/reviews/**",
+        "src/components/modal/**"
+      ]
+    },
+    "L3": {
+      "include": [
+        "src/brand/**",
+        "src/brand-slots/**",
+        "public/brand/**"
+      ]
+    }
+  },
+  "assetExceptions": [
+    {
+      "path": "public/sezzle-color.svg",
+      "layer": "L3",
+      "reason": "Required at this exact URL (sites.md: Sezzle assets); referenced by absolute string from the PDP widget and the checkout Sezzle component."
+    },
+    {
+      "path": "public/sezzle-white.svg",
+      "layer": "L3",
+      "reason": "Required at this exact URL (sites.md: Sezzle assets). Not present in the SellRight base today; Damned supplies it."
+    }
+  ],
+  "deploy": {
+    "_comment": "Brand deploy files (brand.json deployFiles) that are not storefront source. A file is exempt from the overlay import, shape and executable-asset rules only when it is a declared deploy file, sits in no layer and matches one of these globs (check-imports.mjs deployExemption). operationalScripts: build and process files run by Node, the shell or pm2, never bundled (Node built-ins allowed). publicScripts: public files a browser fetches by a fixed URL that a live brand must keep answering: the iOS privacy worker (an installed registration re-fetches it; the brand's copy retires itself) and the legacy analytics loader (cached pages still reference it).",
+    "operationalScripts": ["scripts/*.mjs", "scripts/*.sh", "ecosystem.config.cjs"],
+    "publicScripts": ["public/ios-privacy-sw.js", "public/analytics.js"]
+  },
+  "imports": {
+    "forbidden": [
+      "@sellright/storefront-client",
+      "~/sellright/client"
+    ],
+    "framework": {
+      "@qwik.dev/core": [
+        "component$", "$", "useSignal", "useStore", "useComputed$", "useTask$", "useVisibleTask$",
+        "useStyles$", "useStylesScoped$", "useId", "useOn", "useOnDocument", "useOnWindow", "Slot", "Fragment", "sync$",
+        "type:QRL", "type:Signal", "type:Component", "type:JSXOutput", "type:PropsOf", "type:CSSProperties"
+      ],
+      "@qwik.dev/router": ["Link", "useLocation", "useNavigate", "type:DocumentHead"]
+    },
+    "typeOnlyAllow": ["~/components/slots/registry"],
+    "transitiveL1Allow": [
+      "src/utils/price-format.ts", "src/utils/sanitize.ts", "src/utils/image-cache.ts", "src/types/**", "src/types.ts", "src/config/**",
+      "src/theme/**", "src/media/**", "src/data/**"
+    ],
+    "transitivePackagesAllow": ["isomorphic-dompurify"],
+    "codeExtensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+    "assetExtensions": [
+      ".css", ".scss", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
+      ".woff", ".woff2", ".ttf", ".otf", ".json", ".txt", ".md", ".mp4", ".webm"
+    ]
+  },
+  "codeShape": {
+    "baseL2Enforcement": "report",
+    "definitionCalls": [
+      "routeLoader$", "routeAction$", "globalAction$", "server$",
+      "routeLoaderQrl", "routeActionQrl", "globalActionQrl", "serverQrl"
+    ],
+    "networkGlobals": ["fetch", "XMLHttpRequest", "WebSocket"],
+    "networkMethods": ["sendBeacon"],
+    "globalObjects": ["window", "globalThis", "self", "global"],
+    "orchestrationCalls": [
+      "refreshCartStock",
+      "placeOrder",
+      "loadStripe",
+      "confirmPayment",
+      "getProductStockLevelsOnly",
+      "getProductStockStatus"
+    ],
+    "orchestrationPatterns": [
+      "^refresh.*Stock",
+      "^(get|fetch|load|check).*Stock(Level|Levels|Status)"
+    ],
+    "gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)",
+    "injectionProps": ["dangerouslySetInnerHTML", "innerHTML", "outerHTML", "srcdoc"],
+    "injectionCalls": ["insertAdjacentHTML", "createContextualFragment", "write", "writeln", "eval", "Function", "importScripts", "parseFromString"],
+    "createElementAllow": ["div", "span", "p", "a", "img", "picture", "source", "ul", "ol", "li", "button", "input", "label", "canvas"],
+    "qrlIntrospection": ["getCaptured", "getSymbol", "getHash", "resolve", "$captureRef$", "$capture$", "$chunk$", "$symbol$"],
+    "workerCalls": ["register", "Worker", "SharedWorker"],
+    "forbiddenJsxTags": ["script", "iframe", "object", "embed", "base", "frame", "meta", "link"],
+    "brandStockFlags": ["^(stock|availability|inventory).*(Loaded|Checked|Fresh|Cached)$", "^(skip|cache).*Stock"]
+  },
+  "brandLint": {
+    "mode": "warn",
+    "_comments": {
+      "mode": "warn until plan A20 clears the base, then block. Overridable with --mode.",
+      "vendorUiAllowFiles": "Files that may name a vendor: the provider label map (src/platform/payments/labels.ts) and the env key list (src/env.ts, a configuration identifier, not UI). Only the vendor-ui rule is skipped there.",
+      "scope": "Base files only: every src file that is not L3 (layers.json), not a test, and not listed in .compose-overlay-files.txt (brand-owned). Fonts: 'Inter' is the base default and is not a brand font."
+    },
+    "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.css"],
+    "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    "identityColours": ["#B87333", "#F7F2EA", "#111110", "#B07A84", "#9D6B75", "#C49DA5", "#8C5F68", "#F5C518", "#FDFBF2"],
+    "brandFonts": ["Cormorant Garamond", "IBM Plex Sans", "IBM Plex Mono", "Fraunces", "Montserrat", "Space Grotesk", "Gelato Luxe"],
+    "brandNames": ["Damned Designs", "DamnedDesigns", "damneddesigns", "Rotten Hand", "Rottenhand", "Stunning Strangers", "StunningStrangers", "stunningstrangers", "RightSites", "Right Sites"],
+    "vendorUi": ["sezzle"],
+    "vendorUiExemptProviderValues": ["sezzle"],
+    "vendorUiAllowFiles": ["src/platform/payments/labels.ts", "src/env.ts"]
+  }
+}

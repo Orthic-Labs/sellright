@@ -18,8 +18,8 @@
  * fetches, and this job deliberately does no `processing` status flip, so
  * there is no durable claim. Two concurrent passes would therefore both POST
  * the same rows. What actually makes that safe is threefold: the leader-lock
- * serializes ticks; Listmonk returns 409 on a duplicate, which we treat as
- * success; and the final UPDATE re-checks `status='confirmed' AND
+ * serializes ticks; duplicate subscribers are looked up & enrolled with an
+ * idempotent list-membership update; and the final UPDATE re-checks `status='confirmed' AND
  * listmonk_synced_at IS NULL`, so a double mark is idempotent. Do not read the
  * SKIP LOCKED as the safety property — if this job ever grows a side effect
  * that is not idempotent, it needs a real claim (see email_outbox's
@@ -27,7 +27,7 @@
  *
  * Crash mid-pass: nothing was committed, so the next tick re-claims cleanly. A
  * row that reached Listmonk but crashed before `listmonk_synced_at` was set is
- * retried and 409s into success. `preconfirm_subscriptions` keeps the Listmonk
+ * retried through the duplicate membership path. `preconfirm_subscriptions` keeps the Listmonk
  * side from sending a confirmation email we already sent.
  */
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -47,9 +47,8 @@ const DEFAULT_BATCH_LIMIT = 200;
  * sync pass below claims confirmed+unsynced rows and pushes them to Listmonk
  * with retry. Deduplication is the table's own unique index on
  * (store_id, email, kind, topic): a replayed settlement / second order for
- * the same address is a silent no-op, and a Listmonk-side 409 is already
- * treated as success by the sync pass. `topic` distinguishes stores' lists
- * the same way waitlist topics do; '' is the default list.
+ * the same address is a silent no-op. Every kind uses the store's explicitly
+ * configured listId; topic is local segmentation, never a remote list ID.
  *
  * Call-site (payments lane owns paid-effects.ts): inside
  * enqueuePaidEffects(), after recipient resolution —
@@ -78,7 +77,7 @@ export async function enrollOnPaidOrder(
   return r.rows.length > 0;
 }
 
-interface ListmonkCfg { url: string; apiUser: string; apiToken: string; }
+interface ListmonkCfg { url: string; apiUser: string; apiToken: string; listId?: number; }
 
 async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
   const [row] = await withStore(storeId, async (tx) =>
@@ -89,6 +88,80 @@ async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
 }
 
 type Claimed = { id: string; email: string; name: string | null; kind: string; topic: string };
+type SyncResult = 'synced' | 'unsubscribed' | 'unconfirmed' | 'blocklisted' | 'disabled';
+type RemoteSubscriber = {
+  id: number; email: string; status: string;
+  lists: Array<{ id: number; subscription_status: string }>;
+};
+
+function membershipResult(existing: RemoteSubscriber | undefined, c: Claimed, listId: number): SyncResult | undefined {
+  if (!existing || !Number.isSafeInteger(existing.id) || existing.id <= 0
+    || normalizeEmail(existing.email) !== normalizeEmail(c.email) || !Array.isArray(existing.lists)) {
+    throw new Error('duplicate subscriber lookup did not return the requested address & memberships');
+  }
+  if (existing.status === 'blocklisted' || existing.status === 'disabled') return existing.status;
+  if (existing.status !== 'enabled') throw new Error('unknown provider subscriber status');
+  const membership = existing.lists.find((list) => list.id === listId);
+  if (!membership) return undefined;
+  switch (membership.subscription_status) {
+    case 'confirmed': return 'synced';
+    case 'unsubscribed': return 'unsubscribed';
+    case 'unconfirmed': return 'unconfirmed';
+    default: throw new Error('unknown provider membership status');
+  }
+}
+
+async function syncSubscriber(cfg: ListmonkCfg & { listId: number }, c: Claimed): Promise<SyncResult> {
+  const auth = Buffer.from(`${cfg.apiUser}:${cfg.apiToken}`).toString('base64');
+  const baseUrl = cfg.url.replace(/\/$/, '');
+  const request = (path: string, init: RequestInit = {}) => safeOutboundFetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' },
+  });
+  const created = await request('/api/subscribers', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: c.email, name: c.name || c.email, status: 'enabled', lists: [cfg.listId],
+      // Only locally confirmed rows reach this job; do not send a second opt-in email.
+      preconfirm_subscriptions: true,
+    }),
+  });
+  if (created.ok) {
+    const result = await created.json() as { data?: RemoteSubscriber };
+    const outcome = membershipResult(result.data, c, cfg.listId);
+    if (!outcome) throw new Error('provider created subscriber without configured list membership');
+    return outcome;
+  }
+  if (created.status !== 409) throw new Error(`HTTP ${created.status}`);
+
+  // A duplicate address does not prove membership in this store's list.
+  // Escape the SQL literal & independently check the returned identity before writing.
+  const emailLiteral = c.email.replace(/\\/g, '\\\\').replace(/'/g, "''");
+  const query = encodeURIComponent(`subscribers.email = E'${emailLiteral}'`);
+  const found = await request(`/api/subscribers?query=${query}&per_page=1`);
+  if (!found.ok) throw new Error(`subscriber lookup HTTP ${found.status}`);
+  const body = await found.json() as { data?: { results?: RemoteSubscriber[] } };
+  const existing = body.data?.results?.[0];
+  const current = membershipResult(existing, c, cfg.listId);
+  if (current) return current;
+  // The query endpoint atomically does ON CONFLICT DO NOTHING. The ordinary
+  // ids endpoint overwrites status & could erase an opt-out racing this job.
+  const added = await request('/api/subscribers/query/lists', {
+    method: 'PUT',
+    body: JSON.stringify({
+      query: `subscribers.id = ${existing!.id} AND subscribers.status = 'enabled'`,
+      action: 'add', target_list_ids: [cfg.listId], status: 'confirmed',
+    }),
+  });
+  if (!added.ok) throw new Error(`list enrollment HTTP ${added.status}`);
+  const readback = await request(`/api/subscribers/${existing!.id}`);
+  if (!readback.ok) throw new Error(`membership readback HTTP ${readback.status}`);
+  const result = await readback.json() as { data?: RemoteSubscriber };
+  if (result.data?.id !== existing!.id) throw new Error('membership readback returned another subscriber');
+  const outcome = membershipResult(result.data, c, cfg.listId);
+  if (!outcome) throw new Error('provider did not enroll subscriber into the configured list');
+  return outcome;
+}
 
 /**
  * One idempotent pass: claim a batch of confirmed + unsynced rows and push
@@ -99,20 +172,26 @@ type Claimed = { id: string; email: string; name: string | null; kind: string; t
  * Returns counts so the scheduler can log a per-store summary. Failures are
  * per-row; one bad email never blocks the rest of the batch.
  */
-export async function listmonkSync(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ synced: number; skipped: number; failed: number }> {
+export async function listmonkSync(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ synced: number; suppressed: number; skipped: number; failed: number }> {
   const log = opts.log ?? (() => {});
   const limit = opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_BATCH_LIMIT;
   const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
   let synced = 0;
+  let suppressed = 0;
   let skipped = 0;
   let failed = 0;
 
   for (const st of stores.rows) {
     const cfg = await getCfg(st.id);
     if (!cfg) { skipped++; continue; }
+    const listId = cfg.listId;
+    if (!Number.isSafeInteger(listId) || !listId || listId <= 0) {
+      skipped++;
+      log(`[listmonk-sync] ${st.slug}: skipped: configure a positive listId; subscriber rows remain queued`);
+      continue;
+    }
 
-    // Claim a batch of confirmed + unsynced rows. SKIP LOCKED so a manual
-    // run that bypasses the leader-lock still doesn't double-process.
+    // Locks protect only this transaction; leader-lock serializes outbound work.
     const claimed = await withStore(st.id, async (tx): Promise<Claimed[]> => {
       const r = await tx.execute(
         sql`SELECT id, email, name, kind, topic
@@ -127,29 +206,15 @@ export async function listmonkSync(opts: { limit?: number; log?: (m: string) => 
 
     if (!claimed.length) continue;
 
-    const auth = Buffer.from(`${cfg.apiUser}:${cfg.apiToken}`).toString('base64');
-    const baseUrl = cfg.url.replace(/\/$/, '');
     const claimedIds: string[] = [];
+    let storeSuppressed = 0;
 
     for (const c of claimed) {
       try {
-        const res = await safeOutboundFetch(`${baseUrl}/api/subscribers`, {
-          method: 'POST',
-          headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            email: c.email,
-            name: c.name || c.email,
-            // SUBSCRIBER-1: preconfirm_subscriptions=true so Listmonk doesn't
-            // send ITS own confirmation — we already sent ours via the email
-            // outbox, and the row is only here after confirmed_at IS NOT NULL.
-            status: 'enabled',
-            preconfirm_subscriptions: true,
-          }),
-        });
-        // 200/201 = created, 409 = already exists (idempotent re-sync — treat
-        // as success so we mark synced_at and stop retrying forever).
-        if (!res.ok && res.status !== 409) {
-          throw new Error(`HTTP ${res.status}`);
+        const outcome = await syncSubscriber({ ...cfg, listId }, c);
+        if (outcome !== 'synced') {
+          storeSuppressed++;
+          log(`[listmonk-sync] ${st.slug}: subscriber=${c.id} suppressed: preserving provider ${outcome}`);
         }
         claimedIds.push(c.id);
       } catch (e) {
@@ -173,12 +238,13 @@ export async function listmonkSync(opts: { limit?: number; log?: (m: string) => 
           .set({ listmonkSyncedAt: new Date(), updatedAt: new Date() })
           .where(and(eq(s.subscriber.status, 'confirmed'), isNull(s.subscriber.listmonkSyncedAt), sql`id IN ${claimedIds}`));
       });
-      synced += claimedIds.length;
+      synced += claimedIds.length - storeSuppressed;
+      suppressed += storeSuppressed;
     }
 
-    if (claimed.length) log(`[listmonk-sync] ${st.slug}: claimed=${claimed.length} synced=${claimedIds.length} failed=${claimed.length - claimedIds.length}`);
+    if (claimed.length) log(`[listmonk-sync] ${st.slug}: claimed=${claimed.length} synced=${claimedIds.length - storeSuppressed} suppressed=${storeSuppressed} failed=${claimed.length - claimedIds.length}`);
   }
 
-  log(`[listmonk-sync] done: synced=${synced} failed=${failed} skipped=${skipped}`);
-  return { synced, skipped, failed };
+  log(`[listmonk-sync] done: synced=${synced} suppressed=${suppressed} failed=${failed} skipped=${skipped}`);
+  return { synced, suppressed, skipped, failed };
 }

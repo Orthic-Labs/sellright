@@ -1,28 +1,21 @@
 import { component$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import { CartContextId, clearCart } from '~/contexts/CartContext';
+import { CartContextId, retireSettledCart } from '~/contexts/CartContext';
 import { getOrder, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
-import { OptimizedImage } from '~/components/ui';
-import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl } from './confirmation-data';
-import { createSEOHead } from '~/utils/seo';
-import { useStoreIdentityLoader } from '~/routes/layout';
+import { OptimizedImage } from '~/components/ui/LazyImage';
+import { trackPurchaseOnce } from '~/platform/controllers/conversion';
+import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
+import { APP_STATE } from '~/constants';
 
-export const head = ({ params, resolveValue }: { params: { code: string }; resolveValue: any }) => {
-	const identity = resolveValue(useStoreIdentityLoader);
-	return createSEOHead({
-		title: 'Order Confirmation',
-		description: `Thank you for your order${params?.code ? ' #' + params.code : ''} at ${identity.storeName}. View your order summary and details.`,
-		noindex: true,
-		identity,
-	});
-};
+export { confirmationHead as head } from '~/platform/checkout';
 
 const ConfirmationPage = component$(() => {
 	const loc = useLocation();
 	const { code } = loc.params;
 	const localCart = useContext(CartContextId);
+	const appState = useContext(APP_STATE);
 	const store = useStore<{
 		order?: OrderSummary;
 		loading: boolean;
@@ -31,7 +24,12 @@ const ConfirmationPage = component$(() => {
 		loading: true,
 	});
 
-	useVisibleTask$(async () => {
+	useVisibleTask$(async ({ cleanup }) => {
+		// Abort in-flight reads and stop polling when the page unmounts —
+		// otherwise a shopper who navigates away leaves a loop re-reading the
+		// order (and writing state into a dead component) for up to ~12s.
+		const ac = new AbortController();
+		cleanup(() => ac.abort());
 		try {
 			// Receipt-token scoped read (or authed owner). The token is carried as
 			// ?rt= from the placing session + the Stripe return_url.
@@ -47,8 +45,9 @@ const ConfirmationPage = component$(() => {
 			const paymentAttempt = loc.url.searchParams.get('paymentAttempt') || undefined;
 			if (paymentAttempt) {
 				try {
-					await verifyGatewayPayment(code, paymentAttempt, rt);
+					await verifyGatewayPayment(code, paymentAttempt, rt, ac.signal);
 				} catch (error) {
+					if (ac.signal.aborted) return;
 					console.warn('[Confirmation] gateway verify failed (will still poll the order):', error);
 				}
 			}
@@ -56,22 +55,23 @@ const ConfirmationPage = component$(() => {
 			// Tolerate webhook lag: Stripe redirects here the instant the shopper
 			// returns, but the webhook that flips the order to Paid may land a
 			// moment later. Poll a few times while still PendingPayment.
-			let order = await getOrder(code, rt);
-			for (let i = 0; i < 8 && order.state === 'PendingPayment'; i++) {
-				await new Promise((r) => setTimeout(r, 1500));
-				order = await getOrder(code, rt);
-			}
+			const order = await readOrderUntilSettled((signal) => getOrder(code, rt, signal), ac.signal);
+			if (!order) return; // aborted — the page is gone, touch nothing
 			store.order = order;
 
 			if (isOrderSettled(order.state)) {
-				// Cart already converted server-side into this order — retire the
-				// local mirror. `clearCart` dispatches the cart-updated event the
-				// header badge listens for.
-				clearCart(localCart);
+				// Plan v3.1 §3.5: purchase, once per order code (every settled checkout path lands here). The sessionStorage key holds
+				// analytics state only (never stock); GA4 also dedupes by transaction_id = the order code.
+				trackPurchaseOnce(order);
+				// Free the cart slot — but only if the cookie's cart is the one that became THIS order: an old
+				// confirmation page opened while a newer cart exists must leave that cart alone. The retirement
+				// verifies the order server-side under the cart lock and announces the cart-updated event.
+				retireSettledCart(localCart, code);
 			}
 
 			store.loading = false;
 		} catch (error) {
+			if (ac.signal.aborted) return;
 			store.error = `Failed to load order: ${error}`;
 			store.loading = false;
 		}
@@ -140,6 +140,7 @@ const ConfirmationPage = component$(() => {
 				const activeStep = activeStepFromState(order.state);
 				const addr = order.shippingAddress as OrderAddressSnapshot | null | undefined;
 				const fullName = addr?.fullName || '';
+				const contactEmail = resolveConfirmationEmail(order, appState.customer?.emailAddress);
 
 				return (
 				<div class="max-w-3xl mx-auto pt-8 sm:pt-12 pb-24 px-6">
@@ -156,9 +157,9 @@ const ConfirmationPage = component$(() => {
 						<p class="text-[#5b5a56] text-sm mb-1">
 							Your order <span class="font-medium text-[var(--color-ink)]">#{order.code}</span> is confirmed
 						</p>
-						{order.customerEmail && (
+						{contactEmail && (
 							<p class="text-[#7a7873] text-xs">
-								A confirmation is on its way to {order.customerEmail}
+								A confirmation is on its way to {contactEmail}
 							</p>
 						)}
 					</div>
@@ -258,8 +259,8 @@ const ConfirmationPage = component$(() => {
 						<div>
 							<h3 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-2">Contact</h3>
 							<p class="text-sm text-[var(--color-ink)]">{fullName || '—'}</p>
-							{order.customerEmail && (
-								<p class="text-xs text-[#5b5a56] mt-0.5">{order.customerEmail}</p>
+							{contactEmail && (
+								<p class="text-xs text-[#5b5a56] mt-0.5">{contactEmail}</p>
 							)}
 						</div>
 

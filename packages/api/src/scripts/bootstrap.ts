@@ -4,6 +4,7 @@ import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
 import { hashPassword } from '../auth/password.js';
 import { env } from '../env.js';
+import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 
 function parseHostnames(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -53,6 +54,19 @@ async function main(): Promise<void> {
   const name = env.BOOTSTRAP_STORE_NAME?.trim() || slug;
   const currency = env.BOOTSTRAP_STORE_CURRENCY ?? 'USD';
   const hostnames = parseHostnames(env.BOOTSTRAP_STORE_HOSTNAMES);
+  const storefrontUrl = env.BOOTSTRAP_STORE_URL ? normalizeStorefrontUrl(env.BOOTSTRAP_STORE_URL) : null;
+  if (env.BOOTSTRAP_STORE_URL && !storefrontUrl) throw new Error('BOOTSTRAP_STORE_URL must be an https URL (http only for localhost)');
+
+  let [admin] = await db
+    .select({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash })
+    .from(s.adminUser)
+    .where(eq(s.adminUser.email, email))
+    .limit(1);
+  // Agent identities (admin_user.kind = 'agent') never get a password or an owner grant — refuse before ANY write (incl. the store insert below).
+  if (admin?.kind === 'agent') {
+    console.error(`[script] refusing to touch agent identity ${email}`);
+    process.exit(3);
+  }
 
   let [store] = await db.select({ id: s.store.id }).from(s.store).where(eq(s.store.slug, slug)).limit(1);
   if (!store) {
@@ -65,6 +79,7 @@ async function main(): Promise<void> {
       // is the payment layer's default until an operator explicitly flips live.
       config: {
         hostnames,
+        ...(storefrontUrl ? { storefrontUrl } : {}),
         payments: { stripe: true },
         stripe: { mode: 'test' },
       },
@@ -74,15 +89,9 @@ async function main(): Promise<void> {
     console.log(`[bootstrap] store ${slug} already exists; leaving settings unchanged`);
   }
 
-  let [admin] = await db
-    .select({ id: s.adminUser.id, passwordHash: s.adminUser.passwordHash })
-    .from(s.adminUser)
-    .where(eq(s.adminUser.email, email))
-    .limit(1);
-
   if (!admin) {
     const passwordHash = await hashPassword(env.ADMIN_PASSWORD);
-    [admin] = await db.insert(s.adminUser).values({ email, passwordHash }).returning({ id: s.adminUser.id, passwordHash: s.adminUser.passwordHash });
+    [admin] = await db.insert(s.adminUser).values({ email, passwordHash }).returning({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash });
     console.log(`[bootstrap] created admin ${email} (${admin!.id})`);
   } else if (!admin.passwordHash) {
     const passwordHash = await hashPassword(env.ADMIN_PASSWORD);

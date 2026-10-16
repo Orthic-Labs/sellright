@@ -1,17 +1,37 @@
 import { component$ } from '@qwik.dev/core';
-import { OptimizedImage } from '~/components/ui';
-import Alert from '~/components/alert/Alert';
-import CheckIcon from '~/components/icons/CheckIcon';
+import { OptimizedImage } from '~/components/ui/LazyImage';
+import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, priceDeltaLabel, swatchColor, titleCase } from './product-options';
+import { availableForGroup, enhanceDescription, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
+import { LoyaltyPdpEarn } from '~/components/loyalty/LoyaltyPdpEarn';
+import { ProductReviews } from '~/components/reviews/ProductReviews';
+import { starString } from '~/utils/rewards';
+import { productPageContent } from '~/platform/brand-data';
+import { useRelatedProducts } from '~/platform/product-related';
+import { formatPrice } from '~/utils/price-format';
 
-const SEZZLE_ENABLED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
+// A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
+// now lives in the base's own default slot files under src/brand-slots.
+const hasPaymentWidget = hasView('pdp.payment-widget');
+const hasWaitlist = hasView('pdp.waitlist');
+const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, quantitySignal, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
+  let widgetPriceCents = 0;
+  if (hasPaymentWidget) {
+    const sv: CatalogVariant | undefined = selectedVariant.value;
+    const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
+    const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
+    widgetPriceCents = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
+  }
+  // routes.json productPage: editorial content for this product and the related row (empty unless the brand turns it on).
+  const content = productPageContent(String(product?.slug ?? ''));
+  const related = useRelatedProducts();
   return (
     <div class="sr-pdp">
       <div class="sr-layout">
@@ -131,6 +151,18 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         <div class="sr-info-col">
           {isPreOrder.value && <div class="sr-kicker">New Release</div>}
           <h1 class="sr-title">{titleCase(product.name)}</h1>
+          {rating && rating.count > 0 && (
+            <a
+              href="#reviews"
+              class="inline-flex items-center gap-2 -mt-3 mb-3 text-[13px] no-underline"
+              style="color:var(--mid)"
+              aria-label={`${rating.average.toFixed(1)} out of 5 stars, ${rating.count} ${rating.count === 1 ? 'review' : 'reviews'}`}
+              data-testid="pdp-rating-link"
+            >
+              <span style="color:var(--gold);letter-spacing:2px;font-size:16px" aria-hidden="true">{starString(rating.average)}</span>
+              <span>{rating.average.toFixed(1)} ({rating.count})</span>
+            </a>
+          )}
           {(() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
@@ -159,20 +191,12 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </div>
             );
           })()}
-          {SEZZLE_ENABLED && (() => {
-            const sv: CatalogVariant | undefined = selectedVariant.value;
-            const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
-            const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
-            const live = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
-            return (
-              <div class="sr-sezzle-inline">
-                or 4 interest-free payments of <strong>${(live / 400).toFixed(0)}</strong> with{' '}
-                <a href="https://sezzle.com/how-it-works" target="_blank" rel="noopener noreferrer">
-                  <img src="/sezzle-color.svg" alt="Sezzle" width="58" height="16" loading="lazy" style={{ display: 'inline', verticalAlign: 'middle', marginLeft: '3px' }} />
-                </a>
-              </div>
-            );
-          })()}
+          <LoyaltyPdpEarn
+            cents={liveUnitPrice(selectedVariant.value, !!isPreOrder.value, displayPrice.value)}
+            productId={productId}
+            from={!!showFromPrefix.value && !hasSale.value && !isPreOrder.value}
+          />
+          {hasPaymentWidget && <PaymentWidgetView priceCents={widgetPriceCents} />}
           <div class="sr-rule" />
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
@@ -346,17 +370,36 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             )}
             {!!addItemToOrderErrorSignal.value && (
               <div style="margin-top:8px">
-                <Alert message={addItemToOrderErrorSignal.value} />
+                <Alert message={String(addItemToOrderErrorSignal.value)} />
               </div>
             )}
           </div>
+          {hasWaitlist && <WaitlistView productId={productId} productName={product.name || ''} soldOut={!!allVariantsSoldOut.value} />}
           <ProductTrustBar />
+          {hasGuaranteeModal && <GuaranteeModalView productId={productId} productName={product.name || ''} />}
           <div class="sr-rule" />
           {product.description && (
             <div
               class="sr-desc"
               dangerouslySetInnerHTML={enhanceDescription(product.name, sanitizeProductDescription(product.description || ''))}
             />
+          )}
+          {content?.designNote && (
+            <div class="sr-designnote">
+              <div class="sr-designnote-title">Design notes</div>
+              <p class="sr-designnote-text">{content.designNote}</p>
+            </div>
+          )}
+          {content?.faqs && content.faqs.length > 0 && (
+            <div class="sr-faq">
+              <div class="sr-faq-title">Common questions</div>
+              {content.faqs.map((f, i) => (
+                <details key={i} class="sr-faq-item">
+                  <summary class="sr-faq-q">{f.q}</summary>
+                  <p class="sr-faq-a">{f.a}</p>
+                </details>
+              ))}
+            </div>
           )}
           {isPreOrder.value && (
             <div class="sr-po-notice">
@@ -371,6 +414,24 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           )}
         </div>{/* end sr-info-col */}
       </div>{/* end sr-layout */}
+      {related.value.items.length > 0 && (
+        <section class="sr-related">
+          <h2 class="sr-related-title">{related.value.heading}</h2>
+          <div class="sr-related-grid">
+            {/* A plain <a> (full load), as the base product links: the PDP state does not re-sync on an SPA product change. */}
+            {related.value.items.map((rp) => (
+              <a key={rp.slug} href={rp.href} class="sr-related-card">
+                <div class="sr-related-img">
+                  {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
+                </div>
+                <div class="sr-related-name">{titleCase(rp.name)}</div>
+                <div class="sr-related-price">{rp.priceCents > 0 ? formatPrice(rp.priceCents, product.currency || undefined) : ''}</div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+      {product?.slug && <ProductReviews slug={product.slug} productName={product.name || 'this product'} />}
       <ProductMobileBar
         allVariantsSoldOut={allVariantsSoldOut}
         ctaClass={ctaClass}

@@ -37,40 +37,52 @@ cmd_logs() {
   compose logs -f --tail=200 "$@"
 }
 
-cmd_backup() {
+cmd_backup() (
   require_home
-  mkdir -p "${SELLRIGHT_HOME}/backups"
+  umask 077
+  backup_root="${SELLRIGHT_HOME}/backups"
+  out_dir=""
+  complete=0
+  status=0
+  # Subshell-local traps leave update's rollback bookkeeping trap intact.
+  trap 'status=$?; if [ "$complete" -eq 0 ] && [ -n "$out_dir" ]; then rm -rf -- "$out_dir"; fi; exit "$status"' 0
+  trap 'exit 1' HUP INT TERM
+  if [ -e "$backup_root" ] || [ -L "$backup_root" ]; then
+    [ ! -L "$backup_root" ] && [ -d "$backup_root" ] || die "backup parent must be a real directory: $backup_root"
+    [ "$(stat -c %u -- "$backup_root")" = "$(id -u)" ] || die "backup parent must be owned by current user: $backup_root"
+    chmod 700 "$backup_root"
+  else
+    mkdir -m 700 "$backup_root"
+  fi
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  out_dir="${SELLRIGHT_HOME}/backups/${stamp}"
-  mkdir -p "$out_dir"
-  # The api container writes into this bind mount as its non-root `node`
-  # user, whose uid won't generally match whoever owns $SELLRIGHT_HOME on the
-  # host (root, via install.sh). 0777 only on this one transient per-backup
-  # staging directory, not on $SELLRIGHT_HOME itself.
-  chmod 777 "$out_dir"
+  out_dir=$(mktemp -d "${backup_root}/${stamp}.XXXXXX")
   log "Backing up database..."
   compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump"
   log "Backing up assets and downloads volumes..."
-  compose run --rm -v "${out_dir}:/backup" -T api \
-    sh -c 'tar czf /backup/assets.tar.gz -C /app/var assets && tar czf /backup/downloads.tar.gz -C /app/var downloads'
+  compose run --rm --no-deps -T api tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz"
+  compose run --rm --no-deps -T api tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz"
   api_ref="${COMPOSE_API_IMAGE:-$(compose images -q api)}"
+  database_sha=$(sha256sum "${out_dir}/database.dump")
+  assets_sha=$(sha256sum "${out_dir}/assets.tar.gz")
+  downloads_sha=$(sha256sum "${out_dir}/downloads.tar.gz")
   {
     printf '{\n'
     printf '  "createdAt": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '  "appVersion": "%s",\n' "$(env_get SELLRIGHT_IMAGE_TAG)"
     printf '  "apiImageId": "%s",\n' "${api_ref:-unknown}"
     printf '  "parts": {\n'
-    printf '    "database.dump": "sha256:%s",\n' "$(sha256sum "${out_dir}/database.dump" | cut -d' ' -f1)"
-    printf '    "assets.tar.gz": "sha256:%s",\n' "$(sha256sum "${out_dir}/assets.tar.gz" | cut -d' ' -f1)"
-    printf '    "downloads.tar.gz": "sha256:%s"\n' "$(sha256sum "${out_dir}/downloads.tar.gz" | cut -d' ' -f1)"
+    printf '    "database.dump": "sha256:%s",\n' "${database_sha%% *}"
+    printf '    "assets.tar.gz": "sha256:%s",\n' "${assets_sha%% *}"
+    printf '    "downloads.tar.gz": "sha256:%s"\n' "${downloads_sha%% *}"
     printf '  }\n'
     printf '}\n'
   } > "${out_dir}/manifest.json"
+  complete=1
   log "Backup set written to ${out_dir}"
   if [ "${1:-}" = "--offsite" ]; then
     cmd_backup_offsite "$out_dir"
   fi
-}
+)
 
 # Encrypt-then-MAC (authenticated encryption from plain `openssl enc` +
 # `openssl dgst -hmac`, portable to any OpenSSL 1.1+ without depending on
@@ -101,7 +113,8 @@ decrypt_authenticated() {
     -pass "pass:${enc_key}" -in "$in_file" -out "$out_file"
 }
 
-cmd_backup_offsite() {
+cmd_backup_offsite() (
+  umask 077
   out_dir="$1"
   remote="$(env_get SELLRIGHT_OFFSITE_REMOTE)"
   if [ -z "$remote" ]; then
@@ -114,13 +127,14 @@ cmd_backup_offsite() {
   enc_key=$(derive_key enc "$master_key" "$kit_id")
   mac_key=$(derive_key mac "$master_key" "$kit_id")
   enc_dir=$(mktemp -d)
+  trap 'rm -rf -- "$enc_dir"' 0
+  trap 'exit 1' HUP INT TERM
   for f in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
     encrypt_authenticated "${out_dir}/${f}" "${enc_dir}/${f}.enc" "$enc_key" "$mac_key"
   done
   rclone copy "$enc_dir" "${remote}/$(basename "$out_dir")/"
-  rm -rf "$enc_dir"
   log "Off-site (encrypted + authenticated) backup pushed to ${remote}/$(basename "$out_dir")/"
-}
+)
 
 cmd_recovery_kit() {
   require_home
@@ -128,93 +142,233 @@ cmd_recovery_kit() {
   cat "${SELLRIGHT_HOME}/recovery-kit.json"
 }
 
-cmd_restore() {
-  kit=""
-  set_file=""
-  yes=0
+# Runs in a disposable API container. No archive path is ever handed to tar:
+# the decoder accepts only regular files/directories beneath the expected root.
+restore_helper_source() {
+  cat <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const crypto = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
+const base = '/tmp/sellright-restore';
+const parts = ['database.dump', 'assets.tar.gz', 'downloads.tar.gz'];
+// Resolve through existing production dependency owners, not an undeclared
+// top-level package: API -> exceljs -> archiver -> tar-stream (lockfile pinned).
+const { createRequire } = require('node:module');
+const appRequire = createRequire('/app/package.json');
+const excelRequire = createRequire(appRequire.resolve('exceljs'));
+const archiveRequire = createRequire(excelRequire.resolve('archiver'));
+const tar = archiveRequire('tar-stream');
+function safeName(name, root) {
+  if (/[\0-\x1f\x7f\\]/.test(name) || name.startsWith('/')) throw Error('unsafe archive path');
+  const bits = name.replace(/\/$/, '').split('/');
+  if (bits[0] !== root || bits.some(s => !s || s === '.' || s === '..')) throw Error('archive path outside expected root');
+  return bits.slice(1).join('/');
+}
+async function extract(root) {
+  const dest = `${base}/next/${root}`;
+  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+  const decoder = tar.extract(), seen = new Set(), directories = [];
+  let entries = 0;
+  decoder.on('entry', (header, entry, next) => {
+    (async () => {
+      if (header.type !== 'file' && header.type !== 'directory') throw Error('archive links/special files forbidden');
+      const relative = safeName(header.name, root), target = path.join(dest, relative);
+      if (seen.has(relative) || (!relative && header.type !== 'directory')) throw Error('duplicate/invalid archive entry');
+      seen.add(relative); entries++;
+      if (header.type === 'directory') {
+        if (header.size) throw Error('directory payload forbidden');
+        fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+        directories.push([target, (header.mode & 0o777) | 0o700]);
+        entry.resume();
+      } else {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
+        // Keep staging readable by this same unprivileged helper. No archive
+        // ownership, setuid bits or special filesystem objects are restored.
+        await pipeline(entry, fs.createWriteStream(target, { flags: 'wx', mode: 0o600 }));
+        fs.chmodSync(target, (header.mode & 0o777) | 0o600);
+      }
+    })().then(() => next(), e => decoder.destroy(e));
+  });
+  await pipeline(fs.createReadStream(`${base}/${root}.tar.gz`), zlib.createGunzip(), decoder);
+  if (!entries) throw Error('empty archive');
+  for (const [directory, mode] of directories) fs.chmodSync(directory, mode);
+}
+function copyContents(from, to) {
+  fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+  for (const name of fs.readdirSync(from)) fs.cpSync(path.join(from, name), path.join(to, name), { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false });
+}
+async function main() {
+  fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+  const [op, part] = process.argv.slice(2);
+  if (op === 'receive') {
+    if (![...parts, 'manifest.json'].includes(part)) throw Error('invalid part');
+    await pipeline(process.stdin, fs.createWriteStream(`${base}/${part}`, { flags: 'wx', mode: 0o600 }));
+  } else if (op === 'stage') {
+    if (fs.existsSync(`${base}/manifest.json`)) {
+      const manifest = JSON.parse(fs.readFileSync(`${base}/manifest.json`, 'utf8'));
+      for (const part of parts) {
+        const expected = manifest.parts?.[part];
+        if (typeof expected !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(expected)) throw Error('missing/invalid manifest hash: ' + part);
+        const hash = crypto.createHash('sha256');
+        for await (const chunk of fs.createReadStream(`${base}/${part}`)) hash.update(chunk);
+        if ('sha256:' + hash.digest('hex') !== expected) throw Error('manifest hash mismatch: ' + part);
+      }
+    }
+    await extract('assets'); await extract('downloads');
+  } else if (op === 'snapshot') {
+    for (const root of ['assets', 'downloads']) copyContents(`/app/var/${root}`, `${base}/previous/${root}`);
+    fs.writeFileSync(`${base}/snapshot-complete`, 'yes');
+  } else if (op === 'promote' || op === 'rollback') {
+    if (!fs.existsSync(`${base}/snapshot-complete`)) throw Error('missing rollback snapshot');
+    for (const root of ['assets', 'downloads']) {
+      const live = `/app/var/${root}`;
+      for (const name of fs.readdirSync(live)) fs.rmSync(path.join(live, name), { recursive: true, force: true });
+      copyContents(`${base}/${op === 'promote' ? 'next' : 'previous'}/${root}`, live);
+    }
+  } else throw Error('invalid operation');
+}
+main().catch(e => { console.error('Restore staging:', e.message); process.exitCode = 1; });
+JS
+}
+
+# Rollback checks the catalog, rather than trusting a successful client return:
+# a connection loss can happen after PostgreSQL commits a database rename.
+restore_rollback() {
+  log "Restore failed; stopping API and recovering original database and files..."
+  compose stop api || return 1
+  previous_exists=$(compose exec -T postgres psql -X -At -v ON_ERROR_STOP=1 -U sellright -d postgres -c "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='${prev_db}');") || return 1
+  live_exists=$(compose exec -T postgres psql -X -At -v ON_ERROR_STOP=1 -U sellright -d postgres -c "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='sellright');") || return 1
+  case "$previous_exists:$live_exists" in t:t|t:f|f:t) : ;; *) return 1 ;; esac
+  if [ "$previous_exists" = t ]; then
+    if [ "$live_exists" = t ]; then
+      compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright ALLOW_CONNECTIONS false;" || return 1
+      compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='sellright';" || return 1
+      compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright RENAME TO ${failed_db};" || return 1
+    fi
+    compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE ${prev_db} RENAME TO sellright;" || return 1
+  fi
+  if [ "$files_changed" -eq 1 ]; then
+    docker exec "$restore_container" node /tmp/restore.js rollback || return 1
+  fi
+  compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright ALLOW_CONNECTIONS true;" || return 1
+  compose up -d --wait --wait-timeout 120 api || { compose stop api; return 1; }
+  log "Original database, assets and downloads recovered; API healthy."
+}
+
+cmd_restore() (
+  umask 077
+  restore_dir=""; restore_container=""; restore_lock=0; temp_created=0
+  live_stopped=0; files_changed=0; retain=0
+  # Called only by the EXIT trap; ShellCheck cannot track that invocation.
+  # shellcheck disable=SC2329
+  restore_cleanup() {
+    status=$?
+    trap - 0 HUP INT TERM
+    if [ "$live_stopped" -eq 1 ]; then
+      if ! restore_rollback; then
+        retain=1
+        compose stop api || true
+        log "ERROR: rollback failed; API left stopped. Retained helper '${restore_container}', databases '${prev_db}', '${failed_db}', '${restore_db}' and safety backup for manual recovery."
+      fi
+    fi
+    if [ "$retain" -eq 0 ]; then
+      if [ -n "$restore_container" ]; then docker rm -f "$restore_container" >/dev/null || true; fi
+      if [ "$temp_created" -eq 1 ]; then compose exec -T postgres dropdb --if-exists -U sellright "$restore_db" || true; fi
+    fi
+    if [ -n "$restore_dir" ]; then rm -rf -- "$restore_dir"; fi
+    if [ "$restore_lock" -eq 1 ]; then rmdir "${SELLRIGHT_HOME}/.restore-lock" || true; fi
+    exit "$status"
+  }
+  trap 'restore_cleanup' 0
+  trap 'exit 1' HUP INT TERM
+  kit=""; set_file=""; yes=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --kit) kit="$2"; shift 2 ;;
-      --set) set_file="$2"; shift 2 ;;
+      --kit) [ $# -ge 2 ] || die "missing --kit value"; kit="$2"; shift 2 ;;
+      --set) [ $# -ge 2 ] || die "missing --set value"; set_file="$2"; shift 2 ;;
       --yes) yes=1; shift ;;
       *) die "unknown restore option: $1" ;;
     esac
   done
-  usage_msg="usage: sellright restore --kit <recovery-kit.json> --set <backup-dir> [--yes]"
-  [ -n "$kit" ] || die "$usage_msg"
-  [ -n "$set_file" ] || die "$usage_msg"
-  [ -f "$kit" ] || die "recovery kit not found: $kit"
-  [ -e "$set_file" ] || die "backup set not found: $set_file"
+  [ -f "$kit" ] && [ -d "$set_file" ] && [ ! -L "$set_file" ] || die "usage: sellright restore --kit <recovery-kit.json> --set <backup-dir> [--yes]"
   require_home
-
+  mkdir -m 700 "${SELLRIGHT_HOME}/.restore-lock" || die "restore lock exists; another restore may be running"
+  restore_lock=1
+  restore_dir=$(mktemp -d)
+  restore_id=$(basename "$restore_dir" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  restore_container="sellright-restore-${restore_id}"
+  restore_db="sellright_restore_${restore_id}"
+  prev_db="sellright_prev_${restore_id}"
+  failed_db="sellright_failed_${restore_id}"
   work_dir="$set_file"
-  if [ -f "${set_file}/database.dump.enc" ]; then
+  if [ -e "${set_file}/database.dump.enc" ] || [ -L "${set_file}/database.dump.enc" ]; then
     log "Backup set is encrypted; verifying integrity and decrypting with the recovery kit..."
     kit_key=$(sed -n 's/.*"masterKey": *"\([^"]*\)".*/\1/p' "$kit")
     kit_id=$(sed -n 's/.*"kitId": *"\([^"]*\)".*/\1/p' "$kit")
     [ -n "$kit_key" ] && [ -n "$kit_id" ] || die "could not read masterKey/kitId from $kit"
     enc_key=$(derive_key enc "$kit_key" "$kit_id")
     mac_key=$(derive_key mac "$kit_key" "$kit_id")
-    work_dir=$(mktemp -d)
-    for f in "${set_file}"/*.enc; do
-      base=$(basename "$f" .enc)
-      decrypt_authenticated "$f" "${work_dir}/${base}" "$enc_key" "$mac_key"
+    work_dir="$restore_dir"
+    for part in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
+      input="${set_file}/${part}.enc"
+      if [ "$part" = manifest.json ] && [ ! -e "$input" ] && [ ! -L "$input" ]; then continue; fi
+      [ -f "$input" ] && [ ! -L "$input" ] && [ -f "$input.hmac" ] && [ ! -L "$input.hmac" ] || die "missing/unsafe encrypted part: $part"
+      decrypt_authenticated "$input" "${work_dir}/${part}" "$enc_key" "$mac_key"
     done
-    # mktemp -d is 0700 owner-only; the assets/downloads restore step below
-    # bind-mounts this dir read-only into the api container's non-root `node`
-    # user, who otherwise can't even traverse into it.
-    chmod 755 "$work_dir"
-    chmod a+r "${work_dir}"/*
   fi
-
   for part in database.dump assets.tar.gz downloads.tar.gz; do
-    [ -f "${work_dir}/${part}" ] || die "backup set is missing ${part} — refusing a partial restore"
+    [ -f "${work_dir}/${part}" ] && [ ! -L "${work_dir}/${part}" ] || die "backup set is missing/unsafe ${part}"
   done
-
-  # This is destructive by design: it replaces the live database, assets, and
-  # downloads. Requires an explicit --yes outside a real terminal (CI, scripts)
-  # rather than silently assuming consent.
+  [ ! -L "${work_dir}/manifest.json" ] || die "unsafe manifest symlink"
+  if [ -e "${work_dir}/manifest.json" ]; then [ -f "${work_dir}/manifest.json" ] || die "invalid manifest"; fi
   if [ "$yes" -ne 1 ]; then
-    if [ -t 0 ]; then
-      printf 'This REPLACES the live database, assets, and downloads with the restored backup.\nA safety backup of the current live data is taken first, but this is still destructive.\nType "yes" to continue: ' >&2
-      read -r confirm
-      [ "$confirm" = "yes" ] || die "aborted (confirmation not given)"
-    else
-      die "refusing to promote a restore without confirmation in a non-interactive session; pass --yes"
-    fi
+    [ -t 0 ] || die "refusing to promote a restore without confirmation in a non-interactive session; pass --yes"
+    printf 'This REPLACES live database, assets and downloads. Type "yes" to continue: ' >&2
+    read -r confirm
+    [ "$confirm" = yes ] || die "aborted (confirmation not given)"
   fi
-
-  log "Taking a pre-restore safety backup of the current live stack..."
+  # Freeze caller-owned plain files before any validation/DB use; all later
+  # consumers see the same bytes, including the manifest-verified dump.
+  if [ "$work_dir" != "$restore_dir" ]; then
+    for part in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
+      [ -f "${work_dir}/${part}" ] || continue
+      cp -- "${work_dir}/${part}" "${restore_dir}/${part}"
+    done
+    work_dir="$restore_dir"
+  fi
+  # Override appliance command; this container never starts API/migrations.
+  compose run -d --no-deps --name "$restore_container" api node -e 'setInterval(() => {}, 3600000)' >/dev/null
+  restore_helper_source | docker exec -i "$restore_container" sh -c 'umask 077; cat > /tmp/restore.js'
+  for part in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
+    [ -f "${work_dir}/${part}" ] || continue
+    docker exec -i "$restore_container" node /tmp/restore.js receive "$part" < "${work_dir}/${part}"
+  done
+  docker exec "$restore_container" node /tmp/restore.js stage
+  compose exec -T postgres pg_restore --list < "${work_dir}/database.dump" >/dev/null
+  compose exec -T postgres createdb -U sellright "$restore_db"
+  temp_created=1
+  compose exec -T postgres pg_restore -U sellright -d "$restore_db" --exit-on-error --single-transaction --no-owner --no-privileges < "${work_dir}/database.dump"
+  log "All backup parts validated and staged; taking pre-restore safety backup..."
   cmd_backup >&2
-
-  log "Restoring database from ${work_dir}/database.dump into disposable database 'sellright_restore'..."
-  compose exec -T postgres dropdb --if-exists -U sellright sellright_restore
-  compose exec -T postgres createdb -U sellright sellright_restore
-  compose exec -T postgres pg_restore -U sellright -d sellright_restore --no-owner --no-privileges < "${work_dir}/database.dump"
-
-  log "Promoting: stopping api, terminating live connections, swapping database..."
+  live_stopped=1
   compose stop api
-  compose exec -T postgres psql -U sellright -d postgres -c \
-    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('sellright','sellright_restore') AND pid <> pg_backend_pid();"
-  prev_db="sellright_prev_$(date -u +%Y%m%dT%H%M%SZ)"
-  compose exec -T postgres psql -U sellright -d postgres -c "ALTER DATABASE sellright RENAME TO ${prev_db};"
-  compose exec -T postgres psql -U sellright -d postgres -c "ALTER DATABASE sellright_restore RENAME TO sellright;"
-
-  log "Promoting: replacing live assets and downloads volumes..."
-  compose run --rm -v "${work_dir}:/backup:ro" -T api sh -c '
-    set -e
-    rm -rf /app/var/assets/* /app/var/assets/.[!.]* 2>/dev/null || true
-    tar xzf /backup/assets.tar.gz -C /app/var/assets --strip-components=1
-    rm -rf /app/var/downloads/* /app/var/downloads/.[!.]* 2>/dev/null || true
-    tar xzf /backup/downloads.tar.gz -C /app/var/downloads --strip-components=1
-  '
-
-  compose up -d api
-  [ "$work_dir" = "$set_file" ] || rm -rf "$work_dir"
-  log "Restore promoted. Previous database preserved as '${prev_db}' — drop it manually once verified:"
-  log "  sellright status  # confirm api is healthy, then:"
-  log "  docker compose ... exec postgres dropdb -U sellright ${prev_db}"
-}
+  docker exec "$restore_container" node /tmp/restore.js snapshot
+  # Block new connections before terminating existing clients and renaming.
+  for db in sellright "$restore_db"; do
+    compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE ${db} ALLOW_CONNECTIONS false;"
+  done
+  compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('sellright','${restore_db}');"
+  compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright RENAME TO ${prev_db};"
+  compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE ${restore_db} RENAME TO sellright;"
+  files_changed=1
+  docker exec "$restore_container" node /tmp/restore.js promote
+  compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright ALLOW_CONNECTIONS true;"
+  compose up -d --wait --wait-timeout 120 api
+  live_stopped=0
+  log "Restore promoted; API healthy. Previous database preserved as '${prev_db}'."
+)
 
 cmd_setup_link() {
   require_home
@@ -354,13 +508,8 @@ cmd_update() {
       log "pull failed; leaving maintenance on, no changes made"
       exit 1
     fi
-    # WS-D's install.sh performs the authoritative cosign keyless-verify (image
-    # digest against the release workflow's OIDC identity) before ever writing
-    # an image ref into compose's env; `compose pull` here re-resolves the exact
-    # digest install.sh already verified for the configured tag. A same-tag
-    # cosign re-check is repeated here defensively so `sellright update` alone
-    # (without re-running install.sh) still never runs an image whose signature
-    # can't be verified.
+    # Installer writes env, then verifies configured tag refs before pulling.
+    # Update independently verifies each locally pulled content digest here.
     cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
   fi
 
@@ -368,7 +517,7 @@ cmd_update() {
   # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
   # must expand inside the container's sh, not here on the host.
   if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
-    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: ${out_dir:-see sellright backup output above}"
+    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: see sellright backup output above"
     exit 1
   fi
 
@@ -446,9 +595,8 @@ ensure_cosign() {
 cosign_verify_images() {
   ensure_cosign || return 1
   # jq resolves the per-service image out of the compose config JSON below.
-  # Not installed by install.sh today (a gap worth fixing there separately);
-  # fail closed with an actionable message rather than falling back to a
-  # less reliable parsing method for a security-critical read.
+  # Installer provisions jq; retain this check for older/manual installs.
+  # Fail closed rather than use an ambiguous security-critical parser.
   command -v jq >/dev/null 2>&1 || { log "jq not found — required to resolve target image refs; install it (e.g. 'apt-get install -y jq') and retry. Refusing to update without it."; return 1; }
   config_json=$(compose config --format json 2>/dev/null) || { log "could not read compose config; refusing to update"; return 1; }
   verified_any=0

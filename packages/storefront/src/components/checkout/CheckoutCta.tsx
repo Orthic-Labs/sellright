@@ -23,8 +23,8 @@ export const CheckoutDesktopCta = component$<CheckoutCtaProps>((props) => {
           props.onPlaceOrder$();
         })}
         disabled={props.isOrderProcessing.value}
-        aria-disabled={!props.checkoutValidation.isAllValid}
-        class={`checkout-cta ${!props.checkoutValidation.isAllValid ? 'checkout-cta-invalid' : ''}`}
+        aria-disabled={props.checkoutValidation.isAllValid ? 'false' : 'true'}
+        class={`checkout-cta btn-ready ${!props.checkoutValidation.isAllValid ? 'checkout-cta-invalid' : ''}`}
       >
         {props.state.loading || props.checkoutState.isLoading ? (
           <span class="flex items-center justify-center">
@@ -88,8 +88,8 @@ export const CheckoutMobileCta = component$<CheckoutCtaProps>((props) => (
         props.onPlaceOrder$();
       })}
       disabled={props.isOrderProcessing.value}
-      aria-disabled={!props.checkoutValidation.isAllValid}
-      class={`sticky-cta-btn ${!props.checkoutValidation.isAllValid ? 'opacity-50' : ''}`}
+      aria-disabled={props.checkoutValidation.isAllValid ? 'false' : 'true'}
+      class="sticky-cta-btn btn-ready"
     >
       {props.state.loading || props.checkoutState.isLoading ? (
         <span class="flex items-center justify-center gap-2">

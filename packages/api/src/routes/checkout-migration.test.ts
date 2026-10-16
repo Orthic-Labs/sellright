@@ -13,6 +13,7 @@
  * The real-card UI confirm (3DS in a browser) is the irreducible HUMAN gate and
  * is NOT covered here.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the Stripe surface used by the payment-intent route. createPaymentIntent
@@ -48,9 +49,7 @@ import { pay } from './pay.js';
 import { orders } from './orders.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`checkout-migration test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'checkout-migration.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'ckmig-test-store';
@@ -167,7 +166,13 @@ describe('POST /v1/shop/orders/{code}/payment-intent', () => {
 
   it('409 when the order is not PendingPayment', async () => {
     const { code, receiptToken } = await makeOrder();
-    await withStore(STORE, async (tx) => { await tx.update(s.order).set({ state: 'Paid' }).where(eq(s.order.code, code)); });
+    // A genuinely paid order: its total is fully covered by a Settled tender. (A
+    // Paid order that still OWES a balance after an order edit is payable — see
+    // orders/order-edit.db.test.ts — so "not payable" needs nothing due.)
+    await withStore(STORE, async (tx) => {
+      const [o] = await tx.update(s.order).set({ state: 'Paid' }).where(eq(s.order.code, code)).returning({ id: s.order.id, grandTotal: s.order.grandTotal });
+      await tx.insert(s.payment).values({ storeId: STORE, orderId: o!.id, amount: o!.grandTotal, method: 'stripe', state: 'Settled', providerRef: `pi_paid_${code}`, gatewayMode: 'test', currency: 'USD' });
+    });
     const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
     expect(res.status).toBe(409);
   });

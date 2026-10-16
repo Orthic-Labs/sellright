@@ -1,29 +1,20 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
-import { routeLoader$ } from '@qwik.dev/router';
-import ProductCard from '~/components/products/ProductCard';
+import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
+import { BrandShopMount } from '~/platform/controllers/shop';
+import { useShopListingOnLoad } from '~/platform/stock-triggers';
+import { liveListingAvailability, readLiveListing as fetchLiveListing } from '~/platform/listing-availability';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
-import Filters from '~/components/Filters';
-import { loadBrowseCatalog } from '~/services/browse-catalog';
 import { theme } from '~/theme/theme.config';
-export { head, onStaticGenerate } from './seo';
+import { useCatalogLoader } from '~/platform/shop';
+import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
+import { productPath } from '~/platform/product-path';
+import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
 
-// ── Catalog manifest loader (SSR) ──────────────────────────────
-// Reads the pre-generated shop-catalog.json at SSR time, normalized to the
-// native CatalogListItem shape regardless of source (manifest or live-API
-// fallback — see services/browse-catalog.ts). SellRight's opt-in publisher
-// refreshes every minute. Stale/foreign snapshots fall back to the live API;
-// stock is rechecked before checkout.
-// Products are in the HTML on first byte — no client-side API call needed.
-export const useCatalogLoader = routeLoader$(async ({ error }) => {
- try {
-  const parsed = await loadBrowseCatalog();
-  return { ...parsed, fallback: false };
- } catch {
-  throw error(503, 'Catalog temporarily unavailable');
- }
-});
+export { useCatalogLoader };
+export { useConfiguratorDetail } from '~/platform/configurator-detail';
+export { head, onStaticGenerate } from '~/platform/shop';
 
 // Category filter labels are generic and store-configurable (VITE_SHOP_CATEGORIES,
 // comma-separated) — matched against product tags client-side. Neutral default
@@ -42,7 +33,7 @@ const FACET_ID_TO_NAME: Record<string, string> = Object.fromEntries(
  theme.shopCategories.map((name, i) => [String(i + 1), name]),
 );
 
-export default component$(() => {
+const BaseShopPage = component$(() => {
  const catalog = useCatalogLoader();
 
  // Fallback API data (only used when manifest is missing or for text search) —
@@ -122,11 +113,11 @@ export default component$(() => {
    }
   }
 
-  // Sort: in-stock first, then by manifest order (position)
+  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then manifest order
   const sorted = [...products].sort((a, b) => {
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
-   return 0; // Preserve manifest order within same stock status
+   return listingRank(a.slug) - listingRank(b.slug); // equal ranks keep manifest order (stable sort)
   });
 
   return { products: sorted, count: sorted.length };
@@ -152,19 +143,27 @@ export default component$(() => {
   searchTerm.value = newTerm;
  });
 
+ // The listing's live read (the toggle, and shop.stockOnLoad = live on load): fail closed per platform/listing-availability.ts, and
+ // only the latest request applies (an older response can never overwrite a newer one).
+ const listingGen = useSignal(0);
+ const readLiveListing = $(async (): Promise<boolean> => {
+  const gen = ++listingGen.value;
+  const live = await fetchLiveListing((p) => searchProducts(p));
+  if (live === null) console.error('[shop] Live stock read failed');
+  if (gen !== listingGen.value) return live !== null;
+  liveStockOverride.value = liveListingAvailability((catalog.value.products || []).map((p) => p.slug), live);
+  return live !== null;
+ });
+
+ // shop.stockOnLoad = live: one live listing read per view on load (platform/stock-triggers.ts). Default manifest: none.
+ useShopListingOnLoad(readLiveListing);
+
  // Toggling the stock filter refreshes availability from SellRight.
  const onInStockChange = $(async (inStock: boolean) => {
   inStockOnly.value = inStock;
+  isSearching.value = true;
   try {
-   isSearching.value = true;
-   const liveSearch = await searchProducts({ term: searchTerm.value || undefined, take: 500 });
-   const override: Record<string, boolean> = {};
-   for (const item of liveSearch.items) {
-    override[item.slug] = item.inStock === true;
-   }
-   liveStockOverride.value = override;
-  } catch (err) {
-   console.error('[shop] Live stock recheck on toggle failed:', err);
+   await readLiveListing();
   } finally {
    isSearching.value = false;
   }
@@ -184,11 +183,11 @@ export default component$(() => {
    <div class="border-b border-[var(--color-card-border)] bg-[var(--color-parchment)]">
     <div class="max-w-[1920px] mx-auto px-4 sm:px-8 lg:px-12 py-4">
      <Filters
-      facetsWithValues={state.facetValues}
-      facetValueIds={facetIds.value}
-      onFilterChange$={onFilterChange}
+      facetsWithValues={projectFacets(state.facetValues)}
+      facetValueIds={projectFacetIds(facetIds.value)}
+      onFilterChange$={platformAction('filters.value', onFilterChange)}
       searchTerm={searchTerm.value}
-      onSearchChange$={onSearchChange}
+      onSearchChange$={platformAction('filters.search', onSearchChange)}
      />
     </div>
    </div>
@@ -290,10 +289,12 @@ export default component$(() => {
       {displayProducts.map((item, index) => (
        <ProductCard
         key={item.slug}
+        href={productPath(item.slug)}
         image={item.image}
         name={item.name}
         slug={item.slug}
         price={item.pricingVariant?.price ?? item.minPrice}
+        maxPrice={SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
         inStock={item.inStock}
         priority={index < 6}
         salePrice={item.pricingVariant?.salePrice ?? null}
@@ -308,3 +309,5 @@ export default component$(() => {
   </div>
  );
 });
+
+export default hasView('route.shop') ? BrandShopMount : BaseShopPage;

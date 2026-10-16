@@ -17,6 +17,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -26,9 +27,7 @@ import { deriveFulfillmentStatus, derivePaymentStatus, type OrderFulfillmentStat
 import { fulfillmentStatusSql, paymentStatusSql } from './status-sql.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`order status test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'status.db.test.ts');
 
 const STORE = 'f0000000-0000-0000-0000-00000000f001';
 
@@ -190,3 +189,27 @@ describe('GET /v1/admin/orders — status/paymentStatus/fulfillmentStatus filter
 // has run, not per-describe (ending it early would break every later test in
 // this file, and potentially sibling test files sharing the same process).
 afterAll(async () => { await pool.end(); });
+
+describe('balance_due (order edit left money owed) — shared by list SQL, detail and public/account facts', () => {
+  beforeEach(async () => { await wipe(); await seedStore(); });
+  afterAll(async () => { await wipe(); });
+
+  it('single + batch loaders and the SQL twin agree; edit-handed-back refunds are not owed', async () => {
+    const { loadOrderStatusFacts, loadOrderStatusFactsBatch } = await import('../routes/order-facts.js');
+    const { paymentStatusWithBalanceSql } = await import('./status-sql.js');
+    const id = await seedOrder({ code: 'BD1', state: 'Paid', payments: ['Settled'] }); // settled 1000
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET grand_total = 1600 WHERE id = ${id}`));
+    const read = () => withStore(STORE, async (tx) => {
+      const o = { id, state: 'Paid' as const, status: 'completed' };
+      const single = await loadOrderStatusFacts(tx, o);
+      const batch = (await loadOrderStatusFactsBatch(tx, [o])).get(id)!;
+      const [row] = await tx.select({ p: paymentStatusWithBalanceSql() }).from(s.order).where(sql`${s.order.id} = ${id}`);
+      return [single.paymentStatus, batch.paymentStatus, row!.p];
+    });
+    expect(await read()).toEqual(['balance_due', 'balance_due', 'balance_due']);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET grand_total = 400 WHERE id = ${id}`)); // edit lowered 1000 -> 400
+    await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO refund (store_id, order_id, payment_id, amount, state, metadata)
+      SELECT ${STORE}, ${id}, p.id, 600, 'Settled', '{"source":"order_edit"}'::jsonb FROM payment p WHERE p.order_id = ${id}`));
+    expect(await read()).toEqual(['paid', 'paid', 'paid']); // 400 - 1000 + 600 = 0 owed
+  });
+});

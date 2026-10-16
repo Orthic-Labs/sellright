@@ -3,7 +3,8 @@
  * templates — no DB, pure rendering.
  */
 import { describe, expect, it } from 'vitest';
-import { orderRefundConfirmation, emailAddressChange, type StoreCtx } from './templates.js';
+import { FEDERATED_LINK_TTL_MS } from '../auth/federated-link.js';
+import { federatedLinkConfirm, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
 
 const store: StoreCtx = {
   name: 'Brand B',
@@ -46,4 +47,39 @@ describe('emailAddressChange (emailAddressChangeHandler parity)', () => {
     expect(m.html).toContain('24 hours');
     expect(m.subject).toContain('Confirm your new email address');
   });
+});
+
+describe('REWARDS-1 templates', () => {
+  it('pointsEarned itemizes the posting and states the new balance', () => {
+    const m = pointsEarned(store, { points: 600, balance: 1234, lines: [{ label: 'Order B-1', points: 100 }, { label: 'First order bonus', points: 500 }], accountUrl: 'https://b-brand.example/account/rewards' });
+    expect(m.subject).toContain('You earned 600 points');
+    expect(m.html).toContain('First order bonus');
+    expect(m.text).toContain('New balance: 1,234 points');
+    expect(m.html).toContain('/account/rewards');
+  });
+  it('pointsEarned escapes caller-supplied labels', () => {
+    expect(pointsEarned(store, { points: 1, balance: 1, lines: [{ label: '<script>x</script>', points: 1 }] }).html).not.toContain('<script>x');
+  });
+  it('reviewApproved mentions points only when a bonus was granted', () => {
+    expect(reviewApproved(store, { productName: 'Knife', points: 50, balance: 150 }).text).toContain('50 points');
+    expect(reviewApproved(store, { productName: 'Knife', points: 0, balance: null }).text).not.toContain('points');
+    expect(reviewApproved(store, { productName: '<b>Knife</b>', points: 0, balance: null }).html).not.toContain('<b>Knife</b>');
+  });
+});
+
+describe('federatedLinkConfirm', () => {
+  for (const provider of ['Google', 'Apple']) {
+    it(`${provider}: names the provider, states the real token TTL, and tells the reader which browser to use (html + text)`, () => {
+      const minutes = FEDERATED_LINK_TTL_MS / 60000;
+      const r = federatedLinkConfirm(store, { url: 'https://s.example/sign-in/confirm?token=t', providerName: provider, providerEmail: 'a@corp.example', ttlMinutes: minutes });
+      expect(minutes).toBe(30);
+      for (const body of [r.html, r.text]) {
+        expect(body).toContain(provider);
+        expect(body).toContain('a@corp.example');
+        expect(body).toContain(`within ${minutes} minutes`);
+        expect(body).toContain("Open this link in the same browser where you started signing in. If you're reading this on a different device, open this email in the browser where you started. Starting again sends a new link and replaces this one.");
+        expect(body).toContain("If you didn't try to sign in with " + provider);
+      }
+    });
+  }
 });

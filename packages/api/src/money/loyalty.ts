@@ -11,8 +11,25 @@
  *   maxRedeemPercentOfSubtotal  optional cap (1–100) on the discount, as a %
  *                               of the post-promotion merchandise subtotal
  *   expiryDays                  optional lifetime of earned points (null = never)
+ *
+ * Bonus rules (every amount is admin-configured; 0 = rule off):
+ *   reviewBonusPoints           granted once per approved product review
+ *   reviewBonusVerifiedOnly     review bonus only for verified-buyer reviews
+ *   signupBonusPoints           granted once when a customer verifies their
+ *                               email (only customers created on/after
+ *                               signupBonusSince, so imported accounts never
+ *                               qualify retroactively)
+ *   firstOrderBonusPoints       granted once on a customer's first paid order
+ *   birthdayBonusPoints         granted once per calendar year on the birthday
+ *   productMultipliers          earn multiplier on chosen products
  */
 import { z } from 'zod';
+
+export const ProductMultiplierSchema = z.object({
+  productId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  multiplier: z.number().min(1).max(100),
+}).strict();
+export type ProductMultiplier = z.infer<typeof ProductMultiplierSchema>;
 
 export const LoyaltySettingsSchema = z.object({
   enabled: z.boolean(),
@@ -21,16 +38,30 @@ export const LoyaltySettingsSchema = z.object({
   minRedeemPoints: z.number().int().min(0).max(100_000_000),
   maxRedeemPercentOfSubtotal: z.number().int().min(1).max(100).nullable(),
   expiryDays: z.number().int().min(1).max(36_500).nullable(),
+  reviewBonusPoints: z.number().int().min(0).max(1_000_000).default(25),
+  reviewBonusVerifiedOnly: z.boolean().default(true),
+  signupBonusPoints: z.number().int().min(0).max(1_000_000).default(0),
+  signupBonusSince: z.string().datetime().nullable().default(null),
+  firstOrderBonusPoints: z.number().int().min(0).max(1_000_000).default(0),
+  birthdayBonusPoints: z.number().int().min(0).max(1_000_000).default(0),
+  productMultipliers: z.array(ProductMultiplierSchema).max(200).default([]),
 }).strict();
 export type LoyaltySettings = z.infer<typeof LoyaltySettingsSchema>;
 
 export const DEFAULT_LOYALTY_SETTINGS: LoyaltySettings = {
   enabled: false,
   earnRatePerDollar: 1,
-  pointsPerDollarOff: 100,
+  pointsPerDollarOff: 10,
   minRedeemPoints: 0,
   maxRedeemPercentOfSubtotal: null,
   expiryDays: null,
+  reviewBonusPoints: 25,
+  reviewBonusVerifiedOnly: true,
+  signupBonusPoints: 0,
+  signupBonusSince: null,
+  firstOrderBonusPoints: 0,
+  birthdayBonusPoints: 0,
+  productMultipliers: [],
 };
 
 /** Read store.config.loyalty. A missing or malformed block is the default
@@ -158,4 +189,30 @@ export function earnableCents(input: { subtotal: number; discountTotal: number; 
   const discounted = Math.max(0, input.subtotal - input.discountTotal);
   if (!input.taxInclusive || input.taxRate <= 0) return discounted;
   return Math.round((discounted * 10000) / (10000 + input.taxRate));
+}
+
+/**
+ * Extra points from product multipliers. Each line's earnable share is its
+ * proportion of the post-discount earnable base, so discounts reduce the
+ * multiplied bonus exactly as they reduce the base earn. The result is the
+ * ADDITIONAL points on top of pointsEarned(earnableCents, rate): a 2x
+ * product earns one extra copy of its base points.
+ */
+export function multiplierBonusPoints(input: {
+  lines: Array<{ productId: string; cents: number }>;
+  subtotal: number;
+  earnableCents: number;
+  earnRatePerDollar: number;
+  multipliers: ProductMultiplier[];
+}): number {
+  if (!(input.subtotal > 0) || !(input.earnableCents > 0) || !(input.earnRatePerDollar > 0) || !input.multipliers.length) return 0;
+  const byProduct = new Map(input.multipliers.map((m) => [m.productId.toLowerCase(), m.multiplier]));
+  let total = 0;
+  for (const l of input.lines) {
+    const m = byProduct.get(l.productId.toLowerCase());
+    if (!m || !(m > 1) || !(l.cents > 0)) continue;
+    const share = Math.floor((l.cents * input.earnableCents) / input.subtotal);
+    total += Math.floor((share * input.earnRatePerDollar * (m - 1)) / 100);
+  }
+  return total;
 }

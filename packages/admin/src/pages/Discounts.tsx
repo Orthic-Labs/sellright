@@ -160,7 +160,7 @@ export function buildPayload(f: FormState) {
   };
 }
 
-const chipCls = 'inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-xs text-ink';
+const chipCls = 'inline-flex items-center gap-1 rounded-sm bg-gray-100 px-2 py-0.5 text-xs text-ink';
 
 export default function Discounts() {
   const { store } = useAuth();
@@ -177,7 +177,12 @@ export default function Discounts() {
   // itself "Discounts"; it was only the wire path that still said promotions.
   const key = ['discounts', store?.slug];
   const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/discounts') });
-  const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  // The edit modal reads GET /discounts/{id} under ['discount', slug, id]. Any write must drop those cached details too,
+  // otherwise re-opening Edit within the global staleTime shows pre-save values and a second save silently reverts them.
+  const invalidate = () => {
+    qc.removeQueries({ queryKey: ['discount', store?.slug] });
+    return qc.invalidateQueries({ queryKey: key });
+  };
 
   const create = useMutation({
     mutationFn: () => api.post('/discounts', buildPayload(form!)),
@@ -191,9 +196,11 @@ export default function Discounts() {
   const del = useMutation({ mutationFn: (id: string) => api.del(`/discounts/${id}`), onSuccess: invalidate });
 
   const editing = useQuery({
-    queryKey: ['discount', form?.id],
+    queryKey: ['discount', store?.slug, form?.id],
     queryFn: () => api.get<PromoDetail>(`/discounts/${form!.id}`),
     enabled: !!form?.id,
+    // Always hydrate the form from a fresh read, never a cached one.
+    staleTime: 0, gcTime: 0, refetchOnMount: 'always',
   });
   // Populate the form once the detail loads (edit mode only) — exactly once
   // per opened discount, tracked by `hydratedFor` so a later re-render (e.g.
@@ -268,7 +275,7 @@ export default function Discounts() {
       {form && (
         <Modal open title={isEdit ? `Edit discount${form.code ? ` — ${form.code}` : ''}` : 'New discount'} onClose={closeForm} width="max-w-lg">
           {isEdit && editing.isLoading ? <Loading /> : (
-            <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); isEdit ? update.mutate() : create.mutate(); }}>
+            <form className="stack-y-3" onSubmit={(e) => { e.preventDefault(); isEdit ? update.mutate() : create.mutate(); }}>
               {form.legacyFacetCondition && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   This discount uses a retired facet condition that no longer applies at checkout — choose a scope and save to replace it.
@@ -309,7 +316,7 @@ export default function Discounts() {
               </Field>
               {form.scope === 'collections' && (
                 <Field label="Collections">
-                  <div className="space-y-2">
+                  <div className="stack-y-2">
                     {form.collectionIds.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {form.collectionIds.map((id) => (
@@ -334,7 +341,7 @@ export default function Discounts() {
               )}
               {form.scope === 'products' && (
                 <Field label="Products" hint="Search by name, then pick.">
-                  <div className="space-y-2">
+                  <div className="stack-y-2">
                     {form.products.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {form.products.map((p) => (
@@ -347,7 +354,7 @@ export default function Discounts() {
                     )}
                     <input className="input" value={productQuery} onChange={(e) => setProductQuery(e.target.value)} placeholder="Search products…" />
                     {(productResults.data?.items ?? []).filter((p) => !form.products.some((x) => x.id === p.id)).slice(0, 8).map((p) => (
-                      <button key={p.id} type="button" className="block w-full text-left rounded px-2 py-1 text-sm hover:bg-gray-50"
+                      <button key={p.id} type="button" className="block w-full text-left rounded-sm px-2 py-1 text-sm hover:bg-gray-50"
                         onClick={() => { setForm({ ...form, products: [...form.products, { id: p.id, name: p.name }] }); setProductQuery(''); }}>
                         {p.name}
                       </button>
@@ -357,7 +364,7 @@ export default function Discounts() {
               )}
               {form.scope === 'tags' && (
                 <Field label="Tags" hint="Press Enter after each tag name.">
-                  <div className="space-y-2">
+                  <div className="stack-y-2">
                     {form.tags.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {form.tags.map((t) => (

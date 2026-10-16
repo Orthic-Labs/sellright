@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Award, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck } from 'lucide-react';
+import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Award, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck, Star, BellRing, Globe } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from './Toast';
@@ -93,10 +93,13 @@ export function CommandPalette() {
     { id: 'go:discounts', label: 'Go to Discounts', section: 'Navigate', keywords: ['discounts','promotions'], to: '/discounts', icon: Percent },
     { id: 'go:gift-cards', label: 'Go to Gift cards', section: 'Navigate', keywords: ['gift cards','vouchers'], to: '/gift-cards', icon: Gift },
     { id: 'go:loyalty', label: 'Go to Points', section: 'Navigate', keywords: ['points','loyalty','rewards'], to: '/loyalty', icon: Award },
+    { id: 'go:reviews', label: 'Go to Reviews', section: 'Navigate', keywords: ['reviews','ratings','moderation'], to: '/reviews', icon: Star },
     { id: 'go:affiliates', label: 'Go to Affiliates', section: 'Navigate', keywords: ['affiliates'], to: '/affiliates', icon: HandCoins },
     { id: 'go:marketing', label: 'Go to Marketing', section: 'Navigate', keywords: ['marketing','listmonk','email'], to: '/marketing', icon: Mail },
     { id: 'go:blog', label: 'Go to Blog', section: 'Navigate', keywords: ['blog','posts'], to: '/blog', icon: FileText },
     { id: 'go:reports', label: 'Go to Reports', section: 'Navigate', keywords: ['reports','analytics','sales'], to: '/reports', icon: BarChart3 },
+    { id: 'go:waitlist', label: 'Go to Waitlist demand', section: 'Navigate', keywords: ['waitlist','back in stock','restock','demand','notify'], to: '/waitlist', icon: BellRing },
+    { id: 'go:seo', label: 'Go to SEO', section: 'Navigate', keywords: ['seo','sitemap','indexnow','robots'], to: '/settings/seo', icon: Globe },
     { id: 'go:activity', label: 'Go to Activity', section: 'Navigate', keywords: ['activity','audit log'], to: '/activity', icon: Activity },
     { id: 'go:settings', label: 'Go to Settings', section: 'Navigate', keywords: ['settings','config'], to: '/settings', icon: Settings },
     { id: 'go:staff', label: 'Go to Staff', section: 'Navigate', keywords: ['staff','team','permissions','roles'], to: '/staff', icon: Shield },
@@ -266,11 +269,11 @@ export function CommandPalette() {
               type="text"
               placeholder="Search orders, products, customers, or run a command…"
               aria-label="Command palette search"
-              className="flex-1 bg-transparent outline-none text-sm"
+              className="flex-1 bg-transparent outline-hidden text-sm"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <kbd className="hidden md:inline text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-200 text-gray-500">esc</kbd>
+            <kbd className="hidden md:inline text-[10px] font-mono px-1.5 py-0.5 rounded-sm border border-gray-200 text-gray-500">esc</kbd>
           </div>
 
           <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-1.5" role="listbox" aria-label="Command results">

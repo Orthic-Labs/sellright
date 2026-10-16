@@ -15,6 +15,9 @@ const config = {
   DEMO_ADMIN_PASSWORD: randomBytes(32).toString('hex'),
   DOWNLOAD_URL_SECRET: randomBytes(32).toString('hex'),
   SMTP_ENABLED: 'false',
+  // No Turnstile site key in the demo: production fails closed on Turnstile-gated
+  // routes without an explicit opt-out (see docs/runbooks/production-compose.md).
+  TURNSTILE_DISABLED: 'true',
   JOBS_ENABLED: '0',
   JOBS_PUSH_ENABLED: '0',
   GATEWAY_ACCOUNTS_JSON: '[]',

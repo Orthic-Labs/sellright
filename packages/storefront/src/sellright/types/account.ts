@@ -17,6 +17,7 @@
  * discriminated union field.
  */
 import type { paths } from '~/sellright/client';
+import type { Live } from './live';
 
 type Json<P extends keyof paths, M extends 'get' | 'post' | 'patch' | 'delete', S extends number> = paths[P] extends {
 	[K in M]: { responses: { [K2 in S]: { content: { 'application/json': infer B } } } };
@@ -31,7 +32,7 @@ type Body<P extends keyof paths, M extends 'get' | 'post' | 'patch' | 'delete'> 
 	: never;
 
 /** The customer record returned by register / login / GET me. */
-export type AuthCustomer = Json<'/v1/shop/auth/me', 'get', 200>;
+export type AuthCustomer = Json<'/v1/shop/auth/me', 'get', 200> & Live;
 
 /** The (slightly narrower) customer record returned by PATCH /account/me. */
 export type ProfileUpdateResult = Json<'/v1/shop/account/me', 'patch', 200>;
@@ -43,7 +44,7 @@ export type LoginResponse = Json<'/v1/shop/auth/login', 'post', 200>;
 export type Session = AuthCustomer | null;
 
 /** One saved address, as the API returns it. */
-export type Address = Json<'/v1/shop/account/addresses', 'get', 200>['items'][number];
+export type Address = Json<'/v1/shop/account/addresses', 'get', 200>['items'][number] & Live;
 
 /** Body for creating a new address. */
 export type NewAddressInput = Body<'/v1/shop/account/addresses', 'post'>;
@@ -52,16 +53,22 @@ export type NewAddressInput = Body<'/v1/shop/account/addresses', 'post'>;
 export type AddressPatch = Body<'/v1/shop/account/addresses/{id}', 'patch'>;
 
 /** One row of the paginated order-history list. */
-export type AccountOrderSummary = Json<'/v1/shop/account/orders', 'get', 200>['items'][number];
+export type AccountOrderSummary = Json<'/v1/shop/account/orders', 'get', 200>['items'][number] & Live;
 
 /** The full paginated order-history response — `total` is the server's real count, not the page length. */
-export type AccountOrderList = Json<'/v1/shop/account/orders', 'get', 200>;
+export type AccountOrderList = Json<'/v1/shop/account/orders', 'get', 200> & Live;
 
 /** A single owned order, in full (payments, fulfillments, lines). */
-export type AccountOrderDetail = Json<'/v1/shop/account/orders/{code}', 'get', 200>;
+export type AccountOrderDetail = Json<'/v1/shop/account/orders/{code}', 'get', 200> & Live;
+
+/** Units still returnable on an owned order + the return requests made so far (each with its status). */
+export type OrderReturns = Json<'/v1/shop/account/orders/{code}/returns', 'get', 200>;
+
+/** One return request on an order. */
+export type OrderReturnRequest = OrderReturns['items'][number];
 
 /** Points balance + recent activity for the current customer. */
-export type LoyaltyBalance = Json<'/v1/shop/account/loyalty', 'get', 200>;
+export type LoyaltyBalance = Json<'/v1/shop/account/loyalty', 'get', 200> & Live;
 
 /** Stable, storefront-facing account error codes. Prefers `SellRightError.code`
  *  when the API supplies one (currently only `not_verified` on login); falls
@@ -78,6 +85,8 @@ export type AccountErrorCode =
 	| 'email_unavailable'
 	| 'unauthenticated'
 	| 'not_found'
+	| 'magic_link_disabled'
+	| 'not_returnable'
 	| 'unknown';
 
 export interface AccountError {
@@ -97,6 +106,8 @@ const DEFAULT_MESSAGE: Record<AccountErrorCode, string> = {
 	email_unavailable: 'That email address is unavailable.',
 	unauthenticated: 'Please sign in and try again.',
 	not_found: 'Not found.',
+	magic_link_disabled: 'Sign-in links are not available right now. Please use your password.',
+	not_returnable: 'Those items cannot be returned.',
 	unknown: 'Something went wrong. Please try again.',
 };
 

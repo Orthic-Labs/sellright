@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_LTS }}
       - name: Check demo consumer and safety boundary
@@ -45,12 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
         with:
           version: ${{ env.PNPM_VERSION }}
           install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_LTS }}
           cache: pnpm
@@ -61,19 +63,23 @@ jobs:
       - name: Install core workspace
         run: pnpm install --frozen-lockfile
 
+      - name: Restore archive staging regressions
+        run: node deploy/tests/test-restore-staging.mjs
+
       - name: Install admin
         run: pnpm --dir packages/admin install --frozen-lockfile
 
       - name: Audit production dependencies
         run: pnpm deps:audit
 
-      - name: Production build (root — exercises the storefront's SSG path)
+      - name: Production build (root — the storefront's full production build; no page is prerendered any more)
+        id: production_build
         # The exact command a real deploy runs: `pnpm -r build` (every
         # workspace package's own `build` script, including packages/
-        # storefront's full production build with static prerendering) then
+        # storefront's full production build) then
         # packages/admin's build. `pnpm verify:static` below also runs
         # `pnpm -r build`, but as one step inside a longer chain — this
-        # dedicated step exists so a regression in the storefront's SSG path
+        # dedicated step exists so a regression in the storefront's build path
         # (PR #96 shipped one: an intermittent Code(Q8) crash rendering
         # /checkout/ during static generation, since fixed by excluding
         # /checkout from SSG and hardening the runtime identity fetch —
@@ -83,7 +89,28 @@ jobs:
         run: pnpm build
 
       - name: Verify core and admin
+        id: verify_static
         run: pnpm verify:static
+
+      - name: Generate client contract repair patch after failed verification
+        id: contract_patch
+        if: ${{ failure() && (steps.production_build.outcome == 'failure' || steps.verify_static.outcome == 'failure') }}
+        run: |
+          # Keep verification failed; export generator output for owner review, never auto-commit.
+          pnpm --filter @sellright/storefront-client generate
+          git diff --binary -- packages/storefront-client/openapi.json packages/storefront-client/src/generated/schema.d.ts > "$RUNNER_TEMP/storefront-client-generated.patch"
+          if test -s "$RUNNER_TEMP/storefront-client-generated.patch"; then
+            echo 'has_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload generated client contract repair patch
+        if: ${{ failure() && steps.contract_patch.outputs.has_patch == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: storefront-client-generated-${{ github.sha }}
+          path: ${{ runner.temp }}/storefront-client-generated.patch
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Password hashing contract
         run: pnpm --filter @sellright/api test src/auth/password.test.ts
@@ -96,8 +123,71 @@ jobs:
         # packages/storefront via `pnpm -r build`/`pnpm -r typecheck` (it's a
         # normal workspace member — only packages/admin is excluded). This
         # adds the one thing that wasn't running anywhere in CI: the
-        # storefront's own vitest suite.
+        # storefront's own vitest suite (unit, then the Qwik render tests in vitest.render.config.ts).
         run: pnpm --filter @sellright/storefront test
+
+      - name: Storefront tooling tests (layers, import and code-shape checks, brand-literal lint)
+        # Plan A14/A19/A22: node --test over packages/storefront/scripts/*.test.mjs. They need the workspace install
+        # above (the TypeScript compiler API); each builds its fixture project in a temp directory.
+        run: pnpm --filter @sellright/storefront run test:scripts
+
+      - name: Storefront layer checks (base)
+        # layers.json must classify every src, public and adapters path without ambiguity; base L2 orchestration calls
+        # are listed in report mode until A13 (layers.json codeShape.baseL2Enforcement); brand-literal lint warns until A20.
+        run: |
+          pnpm --filter @sellright/storefront run check:layers
+          pnpm --filter @sellright/storefront run check:gateway
+          pnpm --filter @sellright/storefront run check:shape:base
+          pnpm --filter @sellright/storefront run lint:brand
+
+      - name: Package verified API and admin runtime
+        run: |
+          bundle="$RUNNER_TEMP/sellright-runtime"
+          mkdir "$bundle"
+          # Tests already passed; omit their two compiled helpers from this runtime package.
+          rm -f packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
+             packages/api/dist/licensing/storekit/jws-fixture.{js,js.map,d.ts}
+          pnpm --filter @sellright/api pack --pack-destination "$bundle"
+          node packages/api/scripts/write-build-info.mjs packages/admin/dist/BUILD-INFO.json
+          python3 - <<'PY'
+          import json, os, shutil, tarfile
+          from pathlib import Path, PurePosixPath
+          bundle = Path(os.environ['RUNNER_TEMP']) / 'sellright-runtime'
+          sha = os.environ['GITHUB_SHA']
+          def identity(info):
+              assert info['sha'] == sha and info['dirty'] is False, 'runtime build identity mismatch'
+          with tarfile.open(bundle / 'sellright-api-0.1.0.tgz', 'r:gz') as archive:
+              names = set()
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  assert not path.is_absolute() and '..' not in path.parts, 'unsafe package path'
+                  assert path.parts[0] == 'package' and (member.isfile() or member.isdir()), 'unsafe package entry'
+                  relative = path.parts[1:]
+                  assert not relative or relative[0] in {'dist', 'drizzle', 'exports', 'package.json', 'BUILD-INFO.json', 'README.md', 'LICENSE', 'LICENSE.md', 'LICENSE.txt'}, 'unexpected package content'
+                  assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in relative), 'non-runtime package content'
+                  assert not any(marker in member.name for marker in ('.test.', '.spec.', 'rls-test-utils.', 'jws-fixture.')), 'test code in runtime package'
+                  names.add(member.name)
+              required = {'package/package.json', 'package/BUILD-INFO.json', 'package/dist/sdk/index.js', 'package/dist/sdk/index.d.ts', 'package/drizzle/meta/_journal.json', 'package/exports/contract.json'}
+              assert required <= names, 'incomplete API runtime package'
+              identity(json.load(archive.extractfile('package/BUILD-INFO.json')))
+          admin = Path('packages/admin/dist')
+          assert (admin / 'index.html').is_file() and (admin / 'admin-static').is_dir(), 'incomplete admin runtime'
+          for path in admin.rglob('*'):
+              assert not path.is_symlink() and (path.is_file() or path.is_dir()), 'unsafe admin entry'
+              assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in path.relative_to(admin).parts), 'non-runtime admin content'
+          identity(json.loads((admin / 'BUILD-INFO.json').read_text()))
+          shutil.copytree(admin, bundle / 'admin-dist')
+          PY
+
+      - name: Upload verified runtime bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sellright-runtime-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/sellright-runtime/sellright-api-0.1.0.tgz
+            ${{ runner.temp }}/sellright-runtime/admin-dist/
+          if-no-files-found: error
+          retention-days: 7
 
   database:
     name: PostgreSQL 17 integration
@@ -128,12 +218,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
         with:
           version: ${{ env.PNPM_VERSION }}
           install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_LTS }}
           cache: pnpm
@@ -179,6 +271,13 @@ jobs:
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
 
+      # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
+      # connections, preserving intentional row-contention tests.
+      - name: Single-advisory-connection manifest & refund regressions
+        env:
+          PGPOOL_MAX: 4
+        run: pnpm --filter @sellright/api exec vitest run --project db src/manifest/manifest-pending.db.test.ts src/manifest/catalog.db.test.ts src/orders/order-edit.db.test.ts src/orders/order-edit-lock.db.test.ts src/payments/refunds.stock-hook.test.ts
+
       - name: Verify database isolation invariants
         run: pnpm verify:db
 
@@ -217,6 +316,9 @@ jobs:
             -e SELLRIGHT_DOMAIN=sellright.example.net \
             -e SELLRIGHT_STOREFRONT_DOMAIN=:8090 \
             caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Verify Caddy visitor identity & spoof rejection
+        run: bash scripts/test-caddy-client-ip.sh
 
       - name: Build production images
         run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml build api admin storefront
@@ -496,12 +598,14 @@ jobs:
           ref: main
           path: old
 
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
         with:
           version: ${{ env.PNPM_VERSION }}
           install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_LTS }}
 
@@ -581,50 +685,33 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: sellright_e2e
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d sellright_e2e"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      NODE_ENV: production
-      # Privileged (superuser) URL: migrate/bootstrap/seed need to create
-      # tables/roles. The compiled server itself refuses to boot on this URL
-      # (SR-01's own-role guard, packages/api/src/db/client.ts) — it gets the
-      # dedicated NOSUPERUSER NOBYPASSRLS app role instead (created below,
-      # same as the `database` job above), which is what DATABASE_URL is set
-      # to for every step after that role exists.
-      MIGRATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_e2e
-      DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_e2e
-      STOREFRONT_URL: http://127.0.0.1:4398
-      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-      SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788'
-      ADMIN_EMAIL: e2e@example.net
-      ADMIN_PASSWORD: e2e-only-long-random-password-12345
-      BOOTSTRAP_STORE_SLUG: e2e
-      BOOTSTRAP_STORE_NAME: E2E Store
-      BOOTSTRAP_STORE_CURRENCY: USD
-      # Bare IP with no port — store-context.ts strips :port before matching
-      # config.hostnames, so this matches both the storefront's own SSR Host
-      # (127.0.0.1:4398) and the browser-side /v1/* calls the e2e fixture
-      # replays directly against the API (127.0.0.1:3300) — same bare host,
-      # different ports, both stripped to this one value.
-      BOOTSTRAP_STORE_HOSTNAMES: 127.0.0.1
-      E2E_STORE_SLUG: e2e
-      PORT: '3300'
-      HOST: '127.0.0.1'
+      # packages/storefront/playwright.config.ts starts everything itself: the mock gateways (NMI / Sezzle / webhook
+      # receiver / SMTP sink), a throwaway API from packages/api/dist (e2e/support/start-api.mjs drops + recreates
+      # `sellright_storefront_e2e`, migrates, bootstraps the e2e store + owner, then serves as the NOSUPERUSER
+      # NOBYPASSRLS role below) and the storefront production build. Money-path specs place real orders against it.
+      E2E_DB_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_storefront_e2e
+      E2E_APP_DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_storefront_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
         with:
           version: ${{ env.PNPM_VERSION }}
           install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_LTS }}
           cache: pnpm
@@ -633,49 +720,11 @@ jobs:
       - name: Install workspace
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared + api + storefront-client + storefront
+      - name: Build shared + api + storefront-client
         run: |
           pnpm --filter @sellright/shared build
           pnpm --filter @sellright/api build
           pnpm --filter @sellright/storefront-client build
-          pnpm --filter @sellright/storefront run generate:placeholder-assets
-          pnpm --filter @sellright/storefront run build.types
-          pnpm --filter @sellright/storefront run build.client
-          pnpm --filter @sellright/storefront run build.server
-
-      - name: Apply migrations
-        env:
-          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
-        run: pnpm --filter @sellright/api db:migrate:runtime
-
-      - name: Bootstrap the e2e store + seed the OOS/in-stock catalog fixture
-        env:
-          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
-        run: |
-          node packages/api/dist/scripts/bootstrap.js
-          node packages/api/dist/scripts/seed-e2e-catalog.js
-
-      - name: Create non-owner RLS app role (same as the `database` job)
-        env:
-          PGPASSWORD: postgres
-        run: |
-          psql -h 127.0.0.1 -U postgres -d sellright_e2e <<'SQL'
-          CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-          GRANT CONNECT ON DATABASE sellright_e2e TO sellright_app;
-          GRANT USAGE ON SCHEMA public TO sellright_app;
-          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
-          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
-          SQL
-
-      - name: Start the API
-        run: |
-          nohup node packages/api/dist/index.js > api.log 2>&1 &
-          echo $! > api.pid
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3300/v1/readyz | grep -q '"status":"ok"'; then exit 0; fi
-            sleep 1
-          done
-          echo "::error::api never became ready"; cat api.log; exit 1
 
       - name: Install Playwright's Chromium
         working-directory: packages/storefront
@@ -683,14 +732,25 @@ jobs:
 
       - name: Run the storefront e2e suite
         working-directory: packages/storefront
+        # `test:e2e` builds the storefront (SSG off) into server-e2e/dist-e2e, then runs the suite.
         env:
-          PLAYWRIGHT_API_URL: http://127.0.0.1:3300
-          PLAYWRIGHT_PORT: '4398'
+          # Enables the A12 loader/action re-export probe: e2e/platform-reexport.spec.ts runs and the probe route answers
+          # (it is a 404 without this variable, in the runner and in the storefront server).
+          E2E_PLATFORM_PROBE: '1'
         run: pnpm run test:e2e
+
+      # The Stripe-enabled harness (E2E_STRIPE=1 seeds Stripe as the checkout card method) is a different checkout from
+      # the default one, so it runs as its own invocation against a freshly recreated database + API. The storefront
+      # build from the step above is reused.
+      - name: Run the Stripe payment-init e2e spec (E2E_STRIPE=1)
+        working-directory: packages/storefront
+        env:
+          E2E_STRIPE: '1'
+        run: pnpm run test:e2e:run e2e/payment-init-browser.spec.ts
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           # test-results/ (traces + only-on-failure screenshots) is where a
@@ -702,15 +762,87 @@ jobs:
             packages/storefront/test-results/
           retention-days: 7
 
-      - name: Stop the API
-        if: always()
-        run: kill "$(cat api.pid)" 2>/dev/null || true
+  e2e-admin:
+    name: Admin e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # packages/admin/playwright.config.ts starts the API (packages/api/dist) and the built admin itself;
+      # e2e/support/start-api.mjs drops + recreates `sellright_admin_e2e`, migrates, bootstraps the e2e store and
+      # owner, then serves as the NOSUPERUSER NOBYPASSRLS role below (the API refuses to serve as a superuser).
+      E2E_DB_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_admin_e2e
+      E2E_APP_DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_admin_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            packages/admin/pnpm-lock.yaml
+
+      - name: Install core workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin
+        run: pnpm --dir packages/admin install --frozen-lockfile
+
+      - name: Build shared + api
+        run: |
+          pnpm --filter @sellright/shared build
+          pnpm --filter @sellright/api build
+
+      - name: Install Playwright's Chromium
+        working-directory: packages/admin
+        run: pnpm exec playwright install --with-deps chromium
+
+      # `test:e2e` builds the admin SPA into dist-e2e (production build, SELLRIGHT_BUILD_SUFFIX=e2e) and runs the
+      # suite; Playwright's webServer entries start the API and `vite preview`, globalSetup seeds + signs in.
+      - name: Run the admin e2e suite
+        working-directory: packages/admin
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: admin-playwright-report
+          path: |
+            packages/admin/playwright-report/
+            packages/admin/test-results/
+          retention-days: 7
 
   shellcheck:
     name: Shellcheck installer + CLI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Backup & restore private-file regressions
+        run: sh deploy/tests/test-backup-restore.sh
       - name: shellcheck
         uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
@@ -733,13 +865,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Keep signing with cosign 2.x: deploy/install.sh + sellright.sh verify with
+          # COSIGN_VERSION 2.4.1, which cannot read cosign 3's new-bundle signatures.
+          cosign-release: 'v2.4.1'
 
       - name: Resolve build context/dockerfile
         id: ctx
@@ -761,7 +897,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
@@ -913,6 +1049,9 @@ jobs:
           test -s "$out_dir/downloads.tar.gz"
           test -s "$out_dir/manifest.json"
           grep -q sha256 "$out_dir/manifest.json"
+          test "$(stat -c %a deploy/backups)" = 700
+          test "$(stat -c %a "$out_dir")" = 700
+          test -z "$(find "$out_dir" -type f ! -perm 600 -print -quit)"
           tar xzOf "$out_dir/assets.tar.gz" assets/.drill-sentinel | grep -qx drill-asset-sentinel
           tar xzOf "$out_dir/downloads.tar.gz" downloads/.drill-sentinel | grep -qx drill-download-sentinel
 
@@ -922,6 +1061,52 @@ jobs:
             test -s "${offsite_dir}/${f}.enc"
             test -s "${offsite_dir}/${f}.enc.hmac"
           done
+
+      - name: Corrupt plain database must leave live appliance unchanged
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          corrupt_dir=$(mktemp -d)
+          trap 'rm -rf "$corrupt_dir"' EXIT
+          cp "$BACKUP_DIR"/* "$corrupt_dir"/
+          printf 'invalid PostgreSQL archive\n' > "$corrupt_dir/database.dump"
+          # Match its manifest hash so rejection exercises PostgreSQL preflight,
+          # rather than stopping at checksum validation.
+          python3 - "$corrupt_dir" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          manifest_path = root / 'manifest.json'
+          manifest = json.loads(manifest_path.read_text())
+          manifest['parts']['database.dump'] = 'sha256:' + hashlib.sha256((root / 'database.dump').read_bytes()).hexdigest()
+          manifest_path.write_text(json.dumps(manifest))
+          PY
+          before=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
+          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$corrupt_dir" --yes \
+              > /tmp/plain-corrupt-restore.log 2>&1; then
+            echo "::error::restore accepted a corrupt PostgreSQL archive"
+            exit 1
+          fi
+          grep -q 'pg_restore:' /tmp/plain-corrupt-restore.log || { cat /tmp/plain-corrupt-restore.log; exit 1; }
+          test "$before" = "$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)"
+          test "$(docker inspect --format='{{.State.Running}}' "$before")" = true
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT name FROM store WHERE slug = 'drill'" | grep -qx 'Drill Store'
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel'
+
+      - name: Restore valid plain set into live appliance
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -v ON_ERROR_STOP=1 -c "UPDATE store SET name = 'changed before plain restore' WHERE slug = 'drill'"
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'printf changed > /app/var/assets/.drill-sentinel; printf changed > /app/var/downloads/.drill-sentinel'
+          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$BACKUP_DIR" --yes
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT name FROM store WHERE slug = 'drill'" | grep -qx 'Drill Store'
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel'
 
       - name: Tampered off-site backup must be rejected, not restored
         env:
@@ -1074,13 +1259,17 @@ jobs:
           ref: ${{ env.OLD_REF }}
           path: old
 
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Keep signing with cosign 2.x: deploy/install.sh + sellright.sh verify with
+          # COSIGN_VERSION 2.4.1, which cannot read cosign 3's new-bundle signatures.
+          cosign-release: 'v2.4.1'
 
       # Unrolled per component/version (6 explicit build-and-push steps) rather
       # than a matrix or a bash loop calling `docker buildx build` directly —
@@ -1090,7 +1279,7 @@ jobs:
       # throwaway tag instead of `:latest`/`:sha`.
       - name: Build + push OLD api (from main)
         id: build_old_api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old
           file: old/packages/api/Dockerfile
@@ -1099,7 +1288,7 @@ jobs:
 
       - name: Build + push OLD admin (from main)
         id: build_old_admin
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old/packages/admin
           file: old/packages/admin/Dockerfile
@@ -1108,7 +1297,7 @@ jobs:
 
       - name: Build + push OLD storefront (from main)
         id: build_old_storefront
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old
           file: old/packages/storefront/Dockerfile
@@ -1117,7 +1306,7 @@ jobs:
 
       - name: Build + push NEW api (from this PR)
         id: build_new_api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new
           file: new/packages/api/Dockerfile
@@ -1126,7 +1315,7 @@ jobs:
 
       - name: Build + push NEW admin (from this PR)
         id: build_new_admin
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new/packages/admin
           file: new/packages/admin/Dockerfile
@@ -1135,7 +1324,7 @@ jobs:
 
       - name: Build + push NEW storefront (from this PR)
         id: build_new_storefront
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new
           file: new/packages/storefront/Dockerfile
@@ -1304,12 +1493,18 @@ jobs:
             psql -U sellright -d sellright -Atc "SELECT email FROM admin_user WHERE is_installation_admin" | grep -qx "${ADMIN_EMAIL}"
           echo "the pre-existing bootstrap admin was promoted to installation admin"
 
-          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qSO- \
             --header="Content-Type: application/json" \
             --post-data="{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            http://127.0.0.1:8080/v1/admin/login)
-          echo "$login_resp" | grep -q '"token"' || { echo "::error::login failed after upgrade: $login_resp"; exit 1; }
-          echo "pre-existing admin login still works after upgrade"
+            http://127.0.0.1:8080/v1/admin/login 2>/tmp/updrill-login-headers)
+          # P2 browser sign-in returns an HttpOnly session cookie, never a raw token.
+          echo "$login_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.admin?.email!==process.env.ADMIN_EMAIL||!r.csrfToken||!r.stores?.length)process.exit(1)})'
+          session_cookie=$(awk 'tolower($1)=="set-cookie:" && $2 ~ /^sr_admin=/ {split($2,c,";");print c[1];exit}' /tmp/updrill-login-headers)
+          test -n "$session_cookie"
+          me_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Cookie: $session_cookie" http://127.0.0.1:8080/v1/admin/me)
+          echo "$me_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.email!==process.env.ADMIN_EMAIL||r.isInstallationAdmin!==true)process.exit(1)})'
+          echo "pre-existing admin login & authenticated installation-admin access work after upgrade"
 
       - name: Tear down update-drill stack
         if: always()

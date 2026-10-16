@@ -39,13 +39,13 @@ export async function reapStuckWebhooks(opts: ReaperOpts): Promise<{ reset: numb
         // DRY-RUN: count only, do NOT mutate. Mirrors the semantics of
         // release-stale-allocations and auto-deliver so --apply is the only
         // path that writes.
-        // webhook_delivery has no updatedAt (only createdAt + deliveredAt +
-        // nextAttemptAt). createdAt is the stuck-since marker: a row is stuck
-        // if it's been 'processing' since creation past the grace window.
+        // De-fork 2.9: stuck-since is the claim time. webhook_delivery.updated_at
+        // is set at claim by the worker; before 0088 this had to fall back to createdAt, which
+        // reaped rows that had only just been claimed.
         const [r] = await tx
           .select({ n: sql<number>`count(*)::int` })
           .from(s.webhookDelivery)
-          .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.createdAt, cutoff)));
+          .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff)));
         return r?.n ?? 0;
       }
       // APPLY: reset stuck rows back to 'pending' so the scheduler retries.
@@ -54,9 +54,11 @@ export async function reapStuckWebhooks(opts: ReaperOpts): Promise<{ reset: numb
         .update(s.webhookDelivery)
         .set({
           status: 'pending',
+          claimedAt: null, // release: the claim is gone (de-fork 2.9)
+          updatedAt: new Date(),
           lastError: sql`coalesce(${s.webhookDelivery.lastError}, '') || ${` [reaped after ${graceMin}m stuck]`}`,
         })
-        .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.createdAt, cutoff)))
+        .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff)))
         .returning({ id: s.webhookDelivery.id });
       return due.length;
     });

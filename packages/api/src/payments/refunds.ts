@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withAdvisoryLock, withStore, type Tx, type HeldAdvisoryLocks } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { resolveGatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
 import { getProvider, type RefundResult } from './provider.js';
@@ -10,6 +11,9 @@ import { enqueueRefundConfirmation, pickEmailAppKey } from '../email/dispatch.js
 import { normalizeEmail } from '../auth/email.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
+import { isEditRefund } from './edit-refund.js';
+import { releaseOnFullRefundInSet } from './reservation.js';
+import { recordSettlementOperation } from './settlement/record.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -25,6 +29,10 @@ export interface RefundRequest {
   // "items X + shipping Y = total Z" instead of one lump sum.
   shippingAmount?: number;
   reason?: string; returnId?: string;
+  /** Server-set provenance. 'order_edit' = difference refund from an admin order
+   *  edit (G13): never accepted from a request body, so a typed reason can never
+   *  change amount-due accounting or order state. */
+  source?: 'order_edit';
 }
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
   const placed = (line.metadata as { vendure?: { placedQuantity?: number } } | null)?.vendure?.placedQuantity;
@@ -35,6 +43,7 @@ function requestFingerprint(input: RefundRequest) {
     orderId: input.orderId, paymentId: input.paymentId ?? null, amount: input.amount ?? null,
     lines: [...(input.lines ?? [])].sort((a,b) => a.orderLineId.localeCompare(b.orderLineId)),
     restock: !!input.restock, reason: input.reason ?? null, returnId: input.returnId ?? null,
+    source: input.source ?? null,
   })).digest('hex');
 }
 async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
@@ -43,11 +52,13 @@ async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
     refunded: row.state === 'Settled' ? row.amount : 0, pending: row.state === 'Pending' ? row.amount : 0 };
 }
 
-export async function requestRefund(input: RefundRequest) {
+export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLocks) {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new RefundError(400, 'A refund idempotency key is required');
   const key = 'refund:' + input.idempotencyKey, fingerprint = requestFingerprint(input);
   return withAdvisoryLock('refund:' + input.storeId + ':' + input.orderId, async () => {
-    const prepared = await withStore(input.storeId, async tx => {
+    // STOREKIT §5.3: the order's lock set (licences L2, order L3, reservations L4) is taken
+    // before any refund row is written; the request path never locks an order outside it.
+    const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId: input.orderId }, async tx => {
       const [order] = await tx.select().from(s.order).where(eq(s.order.id, input.orderId)).for('update');
       if (!order || order.deletedAt) throw new RefundError(404, 'Order not found');
       const [prior] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.idempotencyKey, key));
@@ -130,10 +141,10 @@ export async function requestRefund(input: RefundRequest) {
       await tx.insert(s.refund).values({ id: refundId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
         attemptId, amount, itemsAmount, shippingAmount,
         adjustmentAmount: amount - itemsAmount - shippingAmount, state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
-        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false } });
+        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false, ...(input.source ? { source: input.source } : {}) } });
       for (const line of snapshots) await tx.insert(s.refundLine).values({ storeId: input.storeId, refundId, ...line });
       if (rma) await tx.update(s.returnRequest).set({ status: 'approved', refundId, updatedAt: new Date() }).where(eq(s.returnRequest.id, rma.id));
-      return { attemptId, payment, amount, currency: payment.currency ?? order.currency };
+      return { attemptId, payment, amount, currency: payment.currency ?? order.currency, orderId: order.id };
     });
     if ('existing' in prepared) return prepared.existing!;
     const p = prepared.payment;
@@ -148,7 +159,8 @@ export async function requestRefund(input: RefundRequest) {
         stripeMode: p.gatewayMode as 'test'|'live', storeId: input.storeId, gateway, idempotencyKey: prepared.attemptId,
       }) : { state: 'Settled', providerRef: null };
     } catch { result = { state: 'Pending', providerRef: null, errorMessage: 'Refund requires reconciliation' }; }
-    const finalized = await withStore(input.storeId, async tx => {
+    // Finalize under the same order lock set (licence cascade rows included via the order plan).
+    const finalized = await withLockedSet(input.storeId, { kind: 'order', orderId: prepared.orderId }, async tx => {
       const view = await finalizeRefund(tx, input.storeId, prepared.attemptId, result);
       const [store] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, input.storeId)).limit(1);
       return { view, storeSlug: store?.slug };
@@ -160,7 +172,7 @@ export async function requestRefund(input: RefundRequest) {
     // regeneration, which is safe (never wrong, just occasionally redundant).
     if (finalized.view.refundState === 'Settled' && finalized.storeSlug) onStockChanged(finalized.storeSlug);
     return finalized.view;
-  });
+  }, held);
 }
 
 /**
@@ -197,6 +209,9 @@ export async function enqueueRefundSettledEmail(
       dedupeKey: `refund_confirmation:${refundRow.id}` });
 }
 
+/** CALLER CONTRACT (STOREKIT §5.3): `tx` must be the transaction of a withLockedSet over this
+ *  refund's order (requestRefund, the Sezzle reconcile loop, the gateway refund reconcile). The
+ *  order/licence lock set is then already held; the row locks below are re-takes on rows the set holds. */
 /** Transactional and monotonic: money, stock, RMA, audit and outbox commit together.
  *  THE shared finalizer (SR-04): the synchronous request path and the inbound
  *  webhook reconcile path both converge here, so stock/RMA/gift-card/order-state/
@@ -258,16 +273,13 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     await enqueueRefundSettledEmail(tx, storeId, refund);
     return { refundId: refund.id, refundState: 'Settled' as const, state: order.state, refunded: refund.amount, pending: 0 };
   }
-  const allRefunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
-  const payments = (await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled'))))
-    .filter(p => !isDuplicatePayment(p));
-  const counted = new Set(payments.map(p => p.id));
-  const refunds = allRefunds.filter(r => counted.has(r.paymentId));
-  const refunded = refunds.reduce((n,r) => n+r.amount,0), captured = payments.reduce((n,p) => n+p.amount,0);
+  const { captured, refunded } = await orderRefundBasis(tx, storeId, order.id);
   // LOYALTY-1: restore redeemed points and reverse earned points in
   // proportion to the money refunded so far (cumulative + idempotent per
   // refund; a reversal the balance can't cover is recorded as shortfall).
-  await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
+  // Skipped for an edit difference refund: the edit already posted its own earn
+  // adjustment (order_edit_earn) and redeemed points stay as stored.
+  if (!isEditRefund(refund.metadata)) await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
     actor: details?.actor ?? 'gateway:reconciliation' });
   if (captured > 0 && refunded >= captured) {
     const now = new Date();
@@ -282,8 +294,20 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     }).where(and(eq(s.licenseActivation.storeId, storeId),
       inArray(s.licenseActivation.licenseId, licenses.map(l => l.id)), eq(s.licenseActivation.state, 'active')));
   }
-  const state = order.state === 'Cancelled' ? 'Cancelled' : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
-  await tx.update(s.order).set({ state, updatedAt: new Date() }).where(eq(s.order.id, order.id));
+  // Order editing (G13): a refund that only hands back the difference of a
+  // LOWERED edit total is not an item/return refund — the order keeps its state.
+  // `null` = keep the current state (never writes a state value that could be 'Paid').
+  const state: 'Cancelled' | 'Refunded' | 'PartiallyRefunded' | null = order.state === 'Cancelled' ? 'Cancelled'
+    : isEditRefund(refund.metadata) && refunded < captured ? null
+    : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
+  await tx.update(s.order).set({ updatedAt: new Date(), ...(state ? { state } : {}) }).where(eq(s.order.id, order.id));
+  // PAYMENT-TIMING §3.3 R5: a full refund releases the consumed holds that asked for it (deferred, not aborted, on a projection failure).
+  if (state === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId: order.id, refundId: refund.id });
+  // Entitlement reversal for a full refund (worker effect; never runs in this transaction, X-45). One per order.
+  if (state === 'Refunded') await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: order.id, orderId: order.id, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: order.id, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
     .where(and(eq(s.returnRequest.id, details.returnId), eq(s.returnRequest.orderId, order.id)));
   await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true } }).where(eq(s.refund.id, refund.id));
@@ -300,4 +324,30 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
 /** D4: a Stripe capture recorded as a duplicate of an already-covered order. */
 export function isDuplicatePayment(p: { metadata: unknown }): boolean {
   return (p.metadata as { duplicate?: unknown } | null)?.duplicate === true;
+}
+
+/**
+ * ONE refund-state calculation, shared by the refund finalizer and the
+ * Stripe/Sezzle dashboard reconcilers. Duplicate captures (and their refunds)
+ * are money-only and excluded; order-edit difference refunds are netted out of
+ * `captured` (the edit already lowered grandTotal) and never count as `refunded`.
+ * Order state is Refunded only when merchandise refunds cover the NET captured.
+ */
+export async function orderRefundBasis(tx: Tx, storeId: string, orderId: string): Promise<{ captured: number; refunded: number; editRefunded: number }> {
+  const allRefunds = await tx.select().from(s.refund)
+    .where(and(eq(s.refund.storeId, storeId), eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
+  const payments = (await tx.select().from(s.payment)
+    .where(and(eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled'))))
+    .filter(p => !isDuplicatePayment(p));
+  const counted = new Set(payments.map(p => p.id));
+  const refunds = allRefunds.filter(r => counted.has(r.paymentId));
+  const editRefunded = refunds.filter(r => isEditRefund(r.metadata)).reduce((n, r) => n + r.amount, 0);
+  const refunded = refunds.filter(r => !isEditRefund(r.metadata)).reduce((n, r) => n + r.amount, 0);
+  return { captured: payments.reduce((n, p) => n + p.amount, 0) - editRefunded, refunded, editRefunded };
+}
+
+/** Order state implied by net-captured vs merchandise-refunded; null = nothing refunded. */
+export function refundStateFromBasis(b: { captured: number; refunded: number }): 'Refunded' | 'PartiallyRefunded' | null {
+  if (b.refunded <= 0) return null;
+  return b.captured > 0 && b.refunded >= b.captured ? 'Refunded' : 'PartiallyRefunded';
 }

@@ -14,10 +14,14 @@
  *     shells, removes the lint suppression entirely, and centralizes the IDOR
  *     and "global tables are global" invariants in one auditable file.
  */
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { createHash } from 'node:crypto';
+import { env } from '../env.js';
+import { regenerateRecoveryCodesTx, deleteRecoveryCodes } from './second-factor.js';
 import { normalizeEmail } from './email.js';
+import { openTotpSecret, sealTotpSecret } from './totp-secret.js';
 
 // ── 2FA (admin_user.totpSecret) ───────────────────────────────────────────────
 
@@ -28,25 +32,65 @@ export async function getAdminTotpSecret(adminId: string): Promise<string | null
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u?.totpSecret ?? null;
+  return openTotpSecret(adminId, u?.totpSecret);
 }
 
 /** Both credential facts POST /v1/admin/step-up needs in one query: the
  *  password hash to verify against, and whether TOTP must additionally be
  *  checked (a null/absent totpSecret means 2FA isn't enabled — password
  *  alone is the full step-up, same as login's own rule). */
-export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null } | null> {
+export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null; totpVersion: string | null } | null> {
   const [u] = await db
     .select({ passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u ?? null;
+  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret), totpVersion: u.totpSecret } : null;
 }
 
-/** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). */
+/** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). Sealed at rest
+ *  with the master key (auth/totp-secret.ts). */
 export async function setAdminTotpSecret(adminId: string, secret: string): Promise<void> {
-  await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, adminId));
+  await db.update(s.adminUser).set({ totpSecret: sealTotpSecret(adminId, secret) }).where(eq(s.adminUser.id, adminId));
+}
+
+/** Commit a verified factor mutation only while its credential snapshot & calling session remain current.
+ * Factor, recovery-code replacement & session revocation share one transaction, serialized per admin.
+ * Slow password/factor proof happens before this call; its results cannot resurrect superseded credentials. */
+export async function mutateAdminSecondFactor(input: {
+  adminId: string; token: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null;
+  action: 'enable' | 'disable' | 'recovery'; secret?: string;
+}): Promise<{ recoveryCodes: string[] } | null> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + input.adminId}, 0))`);
+    const [admin] = await tx.select({ passwordHash: s.adminUser.passwordHash, secret: s.adminUser.totpSecret })
+      .from(s.adminUser).where(eq(s.adminUser.id, input.adminId)).for('update').limit(1);
+    if (!admin || admin.passwordHash !== input.passwordHash || admin.secret !== input.totpVersion) return null;
+    const tokenHash = createHash('sha256').update(input.token).digest('hex');
+    const idle = env.ADMIN_SESSION_IDLE_HOURS;
+    const [session] = await tx.select({ id: s.session.id, expiresAt: s.session.expiresAt, lastSeenAt: s.session.lastSeenAt, createdAt: s.session.createdAt }).from(s.session)
+      .where(and(eq(s.session.tokenHash, tokenHash), eq(s.session.adminUserId, input.adminId),
+        sql`${s.session.expiresAt} > clock_timestamp()`,
+        sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`))
+      .for('update').limit(1);
+    if (!session || session.expiresAt.getTime() <= Date.now() || (idle > 0 && (session.lastSeenAt ?? session.createdAt).getTime() <= Date.now() - idle * 3600000)) return null;
+    if (input.action === 'enable') {
+      if (input.totpSecret || !input.secret) return null;
+      await tx.update(s.adminUser).set({ totpSecret: sealTotpSecret(input.adminId, input.secret) }).where(eq(s.adminUser.id, input.adminId));
+      await tx.delete(s.session).where(and(eq(s.session.adminUserId, input.adminId), ne(s.session.id, session.id)));
+    } else if (input.action === 'disable') {
+      await tx.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, input.adminId));
+      await deleteRecoveryCodes(input.adminId, tx);
+      return { recoveryCodes: [] };
+    } else if (!input.totpSecret) return null;
+    return { recoveryCodes: await regenerateRecoveryCodesTx(input.adminId, tx) };
+  });
+}
+
+/** Replace an admin's password hash (POST /v1/admin/password, after the route re-verified the current
+ *  password and a recent step-up). Never called by invite or staff-management flows. */
+export async function setAdminPasswordHash(adminId: string, passwordHash: string): Promise<void> {
+  await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
 }
 
 /** Clear the TOTP secret (called from /v1/admin/2fa/disable). */
@@ -54,11 +98,17 @@ export async function clearAdminTotpSecret(adminId: string): Promise<void> {
   await db.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, adminId));
 }
 
-/** Update an admin's password (used by the staff-invite accept flow when the
- *  inviter-email already has an account; the freshly-supplied password replaces
- *  the prior hash, gated by the invite token's own validation). */
-export async function setAdminPassword(adminId: string, passwordHash: string): Promise<void> {
-  await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
+/** Credential facts for an existing admin, looked up by (normalized) email. Used by the
+ *  staff-invite accept flow: an invite token alone NEVER changes an existing account's
+ *  password or role — the existing admin must prove their current password (+ TOTP) or
+ *  accept from their own session (P0, security audit 2026-10-15). null when no account. */
+export async function findAdminCredentialsByEmail(email: string): Promise<{ id: string; kind: string; passwordHash: string | null; totpSecret: string | null } | null> {
+  const [u] = await db
+    .select({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .from(s.adminUser)
+    .where(eq(s.adminUser.email, normalizeEmail(email)))
+    .limit(1);
+  return u ? { ...u, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
 }
 
 // ── staff (admin_user_store ACL) ──────────────────────────────────────────────
@@ -66,12 +116,13 @@ export async function setAdminPassword(adminId: string, passwordHash: string): P
 /** List staff for a store with email + role + permissions, denormalized via the
  *  admin_user join. UI consumer. */
 export async function listStoreStaff(storeId: string): Promise<
-  Array<{ adminUserId: string; email: string; role: string; createdAt: Date; permissions: unknown }>
+  Array<{ adminUserId: string; email: string; kind: string; role: string; createdAt: Date; permissions: unknown }>
 > {
   return db
     .select({
       adminUserId: s.adminUser.id,
       email: s.adminUser.email,
+      kind: s.adminUser.kind,
       role: s.adminUserStore.role,
       createdAt: s.adminUser.createdAt,
       permissions: s.adminUserStore.permissions,
@@ -90,6 +141,18 @@ export async function findAdminIdByEmail(email: string): Promise<string | null> 
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
   return existing?.id ?? null;
+}
+
+/** Identity kind of an admin by exact (normalized) email, or null when no such admin. Agents are never created or invited through staff paths. */
+export async function adminKindByEmail(email: string): Promise<'human' | 'agent' | null> {
+  const [u] = await db.select({ kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.email, normalizeEmail(email))).limit(1);
+  return u ? (u.kind === 'agent' ? 'agent' : 'human') : null;
+}
+
+/** Identity kind of an admin by id, or null when no such admin. */
+export async function adminKindById(id: string): Promise<'human' | 'agent' | null> {
+  const [u] = await db.select({ kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.id, id)).limit(1);
+  return u ? (u.kind === 'agent' ? 'agent' : 'human') : null;
 }
 
 /** Create a new admin_user row, returning the id. Password has already been

@@ -1,7 +1,4 @@
 import { component$ } from '@qwik.dev/core';
-import type { RequestHandler } from '@qwik.dev/router';
-import { createSEOHead } from '~/utils/seo';
-import { theme } from '~/theme/theme.config';
 
 export default component$(() => {
   // T33: Server-side onGet below handles the redirect.
@@ -28,16 +25,4 @@ export default component$(() => {
 
 });
 
-export const onGet: RequestHandler = async ({ headers, send }) => {
-  // Server-side redirect to avoid any blank page before client hydration
-  headers.set('Location', '/checkout');
-  send(302, '');
-};
-
-export const head = () => {
-  return createSEOHead({
-    title: `Payment - ${theme.storeName}`,
-    description: 'Payment processing page',
-    noindex: true,
-  });
-};
+export { onGet, paymentHead as head } from '~/platform/checkout';

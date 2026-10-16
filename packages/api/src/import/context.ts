@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
 import type { Tx } from '../db/client.js';
+import type { RollbackAuthBaseline } from './rollback-auth.js';
 
 export function migrationId(storeId: string, sourceKey: string, entity: string, sourceId: unknown): string {
   const hash = createHash('sha256').update(JSON.stringify([storeId, sourceKey, entity, String(sourceId)])).digest();
@@ -17,6 +18,10 @@ export interface ManifestExclusion {
   table: string;
   detail: string;
   count?: number;
+  /** A known functional mismatch that prevents port-readiness approval. */
+  blocking?: boolean;
+  /** Recoverable source intent; never session credentials. */
+  sourceValues?: string[];
 }
 
 export interface ImportContext {
@@ -33,4 +38,6 @@ export interface ImportContext {
   sourceColumns: ReadonlyMap<string, ReadonlySet<string>>;
   /** Business records that could not be mapped faithfully (SR-09). */
   exclusions: ManifestExclusion[];
+  /** Complete private account mapping, including customers without sessions. */
+  rollbackAuthBaseline?: RollbackAuthBaseline;
 }

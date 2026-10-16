@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { guardCell } from '../orders/export.js';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -170,8 +171,9 @@ adminReports.openapi(
 );
 
 // ── CSV exports + advanced metrics (P3) ───────────────────────────────────────
-const cell = (v: unknown) => { const x = v == null ? '' : String(v); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
-const csv = (header: string[], rows: unknown[][]) => [header.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\n');
+// Free-text strings pass the same spreadsheet formula-injection guard as the order export (orders/export.ts).
+export const cell = (v: unknown) => { const g = typeof v === 'string' ? guardCell(v) : v; const x = g == null ? '' : String(g); return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+export const csv = (header: string[], rows: unknown[][]) => [header.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\n');
 
 adminReports.openapi(
   createRoute({
@@ -238,6 +240,12 @@ adminReports.openapi(
 );
 
 // ── customers: list / detail ─────────────────────────────────────────────────
+// Hardcoded qualifier on purpose: drizzle renders `${s.customer.id}` as the BARE
+// `"id"` in a single-table select, and inside the correlated subqueries below
+// (`from "order" o`) a bare `"id"` binds to `o.id`, so `o.customer_id = "id"`
+// was always false and every customer showed orders:0 / spent:0 (C1). Same
+// trap documented in orders/status-sql.ts.
+const CUSTOMER_ID = sql.raw('"customer"."id"');
 adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/customers', summary: 'List customers',
@@ -255,8 +263,8 @@ adminReports.openapi(
       const rows = await tx
         .select({
           id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, createdAt: s.customer.createdAt,
-          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}) and o.is_demo = false)::int`,
-          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::int`,
+          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false)::int`,
+          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::int`,
         })
         .from(s.customer)
         .where(where)
@@ -293,7 +301,7 @@ adminReports.openapi(
         .where(eq(s.order.customerId, id));
       const orders = await tx.select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt }).from(s.order).where(eq(s.order.customerId, id)).orderBy(desc(s.order.createdAt)).limit(50);
       return {
-        id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
+        id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, tags: cu.tags ?? [], emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
         orderCount: stats?.orderCount ?? 0, spent: stats?.spent ?? 0,
         addresses: addresses.map((a) => ({ fullName: a.fullName, line1: a.line1, line2: a.line2, city: a.city, province: a.province, postalCode: a.postalCode, country: a.country, phone: a.phone })),
         orders: orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString() })),

@@ -1,7 +1,6 @@
 import { component$ } from '@qwik.dev/core';
-import VerificationButton from '~/components/verification/VerificationButton';
+import { VerificationButton } from '~/platform/views';
 import { theme, policySentence, type StoreTheme } from '~/theme/theme.config';
-import { useStoreIdentityLoader } from '~/routes/layout';
 
 const trustSignals = (policies: StoreTheme['policies']) => [
   policySentence(policies.shipping),
@@ -20,9 +19,8 @@ type HomeReviewsProps = {
   tpData: { score: string; count: string; reviews: Array<{ text: string; name: string }> };
 };
 
-export const HomeTrustBar = component$(() => {
-  const identity = useStoreIdentityLoader().value.identity;
-  const signals = trustSignals(identity.policies);
+export const HomeTrustBar = component$<{ policies: StoreTheme['policies'] }>(({ policies }) => {
+  const signals = trustSignals(policies);
   return (
   <>
       {/* ════════ Trust Bar (scrolling ticker) ════════ */}

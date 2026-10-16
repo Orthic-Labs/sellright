@@ -10,14 +10,17 @@
  * SR-05: sender + storefront URL resolve per store (store.config.storefrontUrl
  * / emailFrom, with per-app env overrides still winning when an appKey is set).
  */
+import { grantSignupBonus } from '../loyalty/bonus.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import { type StoreCtx } from '../store-context.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
+import { orderProvenanceFilter } from '../auth/order-access.js';
 import { normalizeEmail } from '../auth/email.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
@@ -27,6 +30,8 @@ import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { env } from '../env.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
+/** Thrown inside the locked set to roll back a consume whose token customer changed. */
+class TokenCustomerMoved extends Error {}
 const TTL_HOURS = 2;
 const EMAIL_CHANGE_TTL_HOURS = 24; // bounded lifetime for the change link
 
@@ -53,11 +58,9 @@ function turnstileSecret(config: unknown): string | null {
 }
 
 async function turnstileOk(config: unknown, token: string | undefined, remoteIp: string): Promise<boolean> {
-  const secret = turnstileSecret(config);
-  if (!secret) return true;
-  // Fail closed on verification failure — a configured store never proceeds on
-  // a missing/invalid token.
-  return verifyTurnstileToken({ secret, token: token ?? null, remoteIp });
+  // verifyTurnstileToken owns the no-secret policy: dev/test pass, production
+  // fails closed unless TURNSTILE_DISABLED=true. Fail closed on any failure.
+  return verifyTurnstileToken({ secret: turnstileSecret(config), token: token ?? null, remoteIp });
 }
 
 export const customerTokens = new OpenAPIHono();
@@ -86,7 +89,9 @@ customerTokens.openapi(
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     await withStore(st.id, async (tx) => {
-      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      // FOR UPDATE: serialized with an e-mail change on the same row (see magic-link/request) — never mint a reset
+      // link for an address the account has just abandoned.
+      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
       if (!cust) return; // enumeration-safe: no email if no account
       const raw = randomBytes(32).toString('base64url');
       await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust.id, kind: 'password_reset', tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + TTL_HOURS * 3600 * 1000) });
@@ -114,15 +119,26 @@ customerTokens.openapi(
     const st = await resolveStoreFromCtx(c);
     const { token, password } = c.req.valid('json');
     const tokenHash = hashToken(token);
+    const live = () => and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt));
+    // Cheap read first so an unknown token never costs an Argon2 hash; the authoritative claim is below.
+    const [probe] = await withStore(st.id, (tx) => tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken).where(live()).limit(1));
+    if (!probe) return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used');
+    const passwordHash = await hashPassword(password); // outside the transaction (no slow work under row locks)
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
-      const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
-        .where(and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt))).limit(1);
+      // Serialize per customer FIRST (before touching any token row): two resets for the same customer — even with
+      // two different tokens — run one after the other, so they can never deadlock on each other's token rows.
+      await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, probe.customerId)).for('update');
+      // ONE transaction: claim the token atomically under that lock (only one request can flip used_at; the claim
+      // revalidates expiry/kind/unused), then change the password. A failed claim changes nothing.
+      const [row] = await tx.update(s.customerToken).set({ usedAt: new Date() }).where(and(live(), eq(s.customerToken.customerId, probe.customerId)))
+        .returning({ id: s.customerToken.id, customerId: s.customerToken.customerId });
       if (!row) return false;
-      const passwordHash = await hashPassword(password);
+      // Burn every other outstanding reset token for this customer (a second link must not undo this reset).
+      await tx.update(s.customerToken).set({ usedAt: new Date() })
+        .where(and(eq(s.customerToken.customerId, row.customerId), eq(s.customerToken.kind, 'password_reset'), isNull(s.customerToken.usedAt)));
       await tx.update(s.customer).set({ passwordHash, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
-      await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
-      // Invalidate this customer's sessions in THIS store. (session is RLS-exempt
-      // for token lookup, so we must filter by storeId explicitly.)
+      // Revoke all of this customer's sessions in THIS store. (session is RLS-exempt for token lookup, so
+      // filter by storeId explicitly.)
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
       return true;
     });
@@ -160,6 +176,7 @@ customerTokens.openapi(
       if (!row) return false;
       await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
+      await grantSignupBonus(tx, st.id, row.customerId); // REWARDS-1: no-op unless the rule is on
       return true;
     });
     if (!ok) { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }
@@ -244,44 +261,74 @@ customerTokens.openapi(
     const bucket = `verify-change:${ip}`;
     const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-    const out = await withStore(st.id, async (tx): Promise<'invalid' | 'taken' | 'ok'> => {
-      // Atomic consume: used_at flips only when the token is still pending —
-      // a replayed/second click can never win the UPDATE (single-use).
-      const consumed = await tx.execute(sql`UPDATE customer_token SET used_at = now()
-        WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()
-        RETURNING id, customer_id AS "customerId", payload`);
-      const row = consumed.rows[0] as { id: string; customerId: string; payload: { newEmail?: string } | null } | undefined;
-      if (!row) return 'invalid';
-      const newEmail = normalizeEmail(row.payload?.newEmail ?? '');
-      if (!newEmail) return 'invalid';
-      // Re-check availability at consume time — another account may have
-      // claimed the address since the request was minted.
-      const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
-      if (clash) return 'taken';
-      // Capture the OLD address before overwriting it — the security notice
-      // below goes to the address being ABANDONED, and it's gone after the
-      // UPDATE.
-      const [before] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1);
-      const oldEmail = before?.email ?? null;
-      // The customer just proved control of the NEW address — verified by construction.
-      await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
-      // Identifier changed: invalidate all sessions for this account in this
-      // store (session is RLS-exempt for token lookup — filter storeId).
-      await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
-      // Burn any other pending change links so only the consumed one ever worked.
-      await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
-      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
-      // Security notice to the OLD (abandoned) address — unconditional, not
-      // gated on session/consent: if a hijacked session made this change,
-      // the rightful owner needs to know at the address they can still read.
-      if (oldEmail && oldEmail !== newEmail) {
-        await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
-          newEmail,
-          dedupeKey: `email-changed-notice:${row.id}`,
+    // Peek the token's customer unlocked to name the lock subject (STOREKIT §5.3).
+    // The multi-row order update below runs under {customer, scope:'orders'}; the
+    // order ids come from the set's plan and are re-checked under the locks.
+    const peeked = await withStore(st.id, async (tx) => {
+      const r = await tx.execute(sql`SELECT customer_id AS "customerId" FROM customer_token
+        WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()`);
+      return (r.rows[0] as { customerId: string } | undefined)?.customerId ?? null;
+    });
+    let out: 'invalid' | 'taken' | 'ok' = 'invalid';
+    if (peeked !== null) {
+      try {
+        out = await withLockedSet(st.id, { kind: 'customer', customerId: peeked, scope: 'orders' }, async (tx, _held, plan): Promise<'invalid' | 'taken' | 'ok'> => {
+          // Atomic consume: used_at flips only when the token is still pending —
+          // a replayed/second click can never win the UPDATE (single-use).
+          const consumed = await tx.execute(sql`UPDATE customer_token SET used_at = now()
+            WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()
+            RETURNING id, customer_id AS "customerId", payload`);
+          const row = consumed.rows[0] as { id: string; customerId: string; payload: { newEmail?: string } | null } | undefined;
+          if (!row) return 'invalid';
+          // The token's customer never changes; a mismatch means the locked set is not the
+          // customer whose orders would be updated. Throw to roll back the consume.
+          if (row.customerId !== peeked) throw new TokenCustomerMoved();
+          const newEmail = normalizeEmail(row.payload?.newEmail ?? '');
+          if (!newEmail) return 'invalid';
+          // Re-check availability at consume time — another account may have
+          // claimed the address since the request was minted.
+          const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
+          if (clash) return 'taken';
+          // Capture the OLD address before overwriting it — the security notice
+          // below goes to the address being ABANDONED, and it's gone after the
+          // UPDATE.
+          const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1).for('update');
+          const oldEmail = before?.email ?? null;
+          // Preserve guest orders whose OLD mailbox was actually proven before
+          // changing it. Proving the NEW mailbox must never prove the old one.
+          if (before?.emailVerified) {
+            if (plan.orderIds.length) {
+              await tx.update(s.order).set({ metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"linked_via":"verified_email"}'::jsonb` })
+                .where(and(inArray(s.order.id, [...plan.orderIds]), eq(s.order.customerId, row.customerId), sql`${s.order.metadata} ->> 'linked_via' = 'email_match'`, orderProvenanceFilter(before)));
+            }
+          }
+          // Burn all outstanding tokens issued under the OLD identifier, including
+          // magic links. They cannot authorize the account's new mailbox.
+          await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND used_at IS NULL`);
+          // The customer just proved control of the NEW address — verified by construction.
+          await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
+          // Identifier changed: invalidate all sessions for this account in this
+          // store (session is RLS-exempt for token lookup — filter storeId).
+          await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
+          // Burn any other pending change links so only the consumed one ever worked.
+          await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
+          await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
+          // Security notice to the OLD (abandoned) address — unconditional, not
+          // gated on session/consent: if a hijacked session made this change,
+          // the rightful owner needs to know at the address they can still read.
+          if (oldEmail && oldEmail !== newEmail) {
+            await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
+              newEmail,
+              dedupeKey: `email-changed-notice:${row.id}`,
         });
       }
       return 'ok';
-    });
+        });
+      } catch (e) {
+        if (!(e instanceof TokenCustomerMoved)) throw e;
+        out = 'invalid';
+      }
+    }
     if (out !== 'ok') { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }
     return c.json({ ok: true }, 200);
   },

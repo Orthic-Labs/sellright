@@ -9,6 +9,7 @@ import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import type { StoreKitProductEntitlement } from './storekit-config.js';
 import { hashActivationToken, newActivationToken } from './tokens.js';
+import { authorizeEntitlement } from './entitlement-policy.js';
 
 export interface VerifiedStoreKitLicenseSource {
   originalTransactionId: string;
@@ -183,6 +184,7 @@ export type StoreKitActivationResult =
       lic: { id: string; expiresAt: Date | null; metadata: unknown };
     }
   | { kind: 'notfound' }
+  | { kind: 'rejected_platform'; reason: string }
   | { kind: 'full' };
 
 /** Activate a device against a StoreKit-minted license. Self-contained on
@@ -204,6 +206,8 @@ export async function issueStoreKitActivation(
     licenseKey: string;
     deviceIdHash: string;
     deviceLabel?: string | null;
+    /** Platform hint from the link request; the policy sees 'ios' when absent. */
+    platform?: string;
   },
 ): Promise<StoreKitActivationResult> {
   const licResult = await tx.execute(sql`
@@ -224,6 +228,20 @@ export async function issueStoreKitActivation(
   }
   const lic = { id: rawLic.id, expiresAt, metadata: rawLic.metadata };
 
+  // Entitlement authorization policy (plan 3.6): a StoreKit link grants an
+  // activation credential, so it consults the same policy as every other
+  // granting path BEFORE any token is minted or seat consumed.
+  const decision = await authorizeEntitlement({
+    path: 'storekit_link', tx, storeId: input.storeId, platform: input.platform ?? 'ios', pool: 'mobile',
+    ext: {}, now: new Date(),
+    license: { id: rawLic.id, appKey: input.appKey, status: rawLic.status, seats: rawLic.seats, expiresAt, metadata: rawLic.metadata },
+  });
+  if (!decision.allow) {
+    return decision.kind === 'rejected_platform'
+      ? { kind: 'rejected_platform' as const, reason: decision.reason }
+      : { kind: 'notfound' as const };
+  }
+
   const activationToken = newActivationToken();
   const activationTokenHash = hashActivationToken(activationToken);
 
@@ -242,7 +260,7 @@ export async function issueStoreKitActivation(
 
   // seats <= 0 is the unlimited-devices sentinel shared with
   // activateLicenseOnDevice; a positive value caps distinct deviceIdHashes.
-  if (rawLic.seats > 0 && !sameDevice && activeExisting.length >= rawLic.seats) {
+  if (rawLic.seats > 0 && sameDevice?.state !== 'active' && activeExisting.length >= rawLic.seats) {
     return { kind: 'full' as const };
   }
 
@@ -314,6 +332,7 @@ export interface StoreKitNotificationApplyInput {
 export async function applyStoreKitNotification(
   tx: Tx,
   input: StoreKitNotificationApplyInput,
+  opts: { restoreActivations?: boolean } = {},
 ): Promise<'applied' | 'no_purchase' | 'ignored'> {
   if (input.action === 'ignore') return 'ignored';
 
@@ -379,11 +398,14 @@ export async function applyStoreKitNotification(
       // REFUND_REVERSED: un-tombstone activations revoked by the earlier
       // cascade so already-paired devices work again without re-linking.
       // generation stays bumped — stale pre-revoke leases stay rejected.
-      await tx.execute(sql`
-        UPDATE license_activation
-        SET state = 'active', revoked_at = NULL
-        WHERE license_id = ${purchase.licenseId} AND state = 'revoked'
-      `);
+      // Policy seam (STOREKIT §3 cascade): a policy may keep tombstones on restore.
+      if (opts.restoreActivations !== false) {
+        await tx.execute(sql`
+          UPDATE license_activation
+          SET state = 'active', revoked_at = NULL
+          WHERE license_id = ${purchase.licenseId} AND state = 'revoked'
+        `);
+      }
     }
     return 'applied';
   }

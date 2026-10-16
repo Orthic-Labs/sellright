@@ -1,12 +1,6 @@
 import { $, component$, useContext, useOnDocument, useSignal } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
-import { Button } from '~/components/buttons/Button';
-import { HighlightedButton } from '~/components/buttons/HighlightedButton';
-import { ErrorMessage } from '~/components/error-message/ErrorMessage';
-import CheckIcon from '~/components/icons/CheckIcon';
-import PencilSquareIcon from '~/components/icons/PencilSquareIcon';
-import ShieldCheckIcon from '~/components/icons/ShieldCheckIcon';
-import XMarkIcon from '~/components/icons/XMarkIcon';
+import { Button, HighlightedButton, ErrorMessage, PencilSquareIcon, ShieldCheckIcon, SustainabilityBadgeView, hasView, platformAction } from '~/platform/gateway';
 import { Modal } from '~/components/modal/Modal';
 import { LoyaltyBalanceCard } from '~/components/loyalty/LoyaltyBalanceCard';
 import { APP_STATE } from '~/constants';
@@ -21,6 +15,9 @@ import {
 import { ActiveCustomer } from '~/types';
 import { createSEOHead } from '~/utils/seo';
 import { sanitizePhoneNumber } from '~/utils/validation';
+
+// A17 mount point: a badge beside the loyalty balance. No base fallback: absent slot renders nothing.
+const hasSustainabilityBadge = hasView('account.sustainability-badge');
 
 export default component$(() => {
 	const appState = useContext(APP_STATE);
@@ -118,6 +115,7 @@ export default component$(() => {
 
 			{/* Quick Stats Panel */}
 			<LoyaltyBalanceCard />
+			{hasSustainabilityBadge && <SustainabilityBadgeView orderCount={orderCount.value} statsLoaded={statsLoaded.value} />}
 
 			<div class="mb-8">
 				{/* Only what the API can actually report: the account order
@@ -265,21 +263,22 @@ export default component$(() => {
 
 					<div class="flex gap-3 mt-6">
 						<HighlightedButton
-							onClick$={() => {
+							onClick$={platformAction('ui.press', $(() => {
 								appState.customer = { ...appState.customer, ...update.customer };
 								updateCustomer();
-							}}
-						>
-							<CheckIcon /> &nbsp; Save Changes
-						</HighlightedButton>
+							}))}
+							icon="check"
+							text=" &nbsp; Save Changes"
+						/>
 
 						<Button
-							onClick$={() => {
+							onClick$={platformAction('ui.press', $(() => {
 								isEditing.value = false;
-							}}
-						>
-							<XMarkIcon forcedClass="w-4 h-4" /> &nbsp; Cancel
-						</Button>
+							}))}
+							icon="x-mark"
+							iconClass="w-4 h-4"
+							text=" &nbsp; Cancel"
+						/>
 					</div>
 				</div>
 			)}

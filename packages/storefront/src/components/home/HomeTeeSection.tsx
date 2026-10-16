@@ -30,11 +30,13 @@ interface HomeTeeSectionProps {
    * section shows only generic, truthful copy and links to /shop. */
   product?: FeaturedProduct | null;
   variant?: FeaturedVariant | null;
+  /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
+  href?: string;
 }
 
-export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, variant }) => {
+export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, variant, href: productHref }) => {
   const body = product?.description ? stripHtml(product.description).trim() : 'Thoughtfully made. Built to last. Every item in the shop gets the same attention to detail.';
-  const href = product ? `/products/${product.slug}` : '/shop';
+  const href = product ? (productHref ?? `/products/${product.slug}`) : '/shop';
   return (
   <>
       {/* ════════ Featured product section ════════ */}

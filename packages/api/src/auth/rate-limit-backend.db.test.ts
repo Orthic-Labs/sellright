@@ -6,15 +6,14 @@
  * backend twice and never sharing any JS-level state between the two
  * references, only the underlying rate_limit_attempt table.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
 import { createPostgresRateLimitBackend } from './rate-limit-backend.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`rate-limit-backend test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'rate-limit-backend.db.test.ts');
 
 async function wipe() {
   await pool.query('TRUNCATE rate_limit_attempt');

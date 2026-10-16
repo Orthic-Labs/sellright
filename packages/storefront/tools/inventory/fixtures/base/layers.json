@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "layers": {
+    "L1": { "include": ["src/routes/**", "src/services/**", "src/utils/**"] },
+    "L2": { "include": ["src/components/**"] },
+    "L3": { "include": ["src/brand/**", "src/brand-slots/**"] }
+  }
+}

@@ -5,12 +5,20 @@ import {
 import"dotenv/config";
 import express from"express";
 import { randomBytes } from"node:crypto";
-import { join, dirname, basename } from"node:path";
+import { join, dirname, basename, posix } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
+import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
+import { snapshotGuard } from"./utils/snapshot-guard";
+import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
+import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
+import { buildCsp } from"./utils/csp";
+import { analyticsCsp } from"./platform/head-analytics";
+import { BRAND_HEAD } from"./platform/brand-data";
+import { getRouterOrigin, validatedRequestHost } from"./utils/trusted-request.server";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -34,12 +42,18 @@ const PORT = parseInt(process.env.PORT ?? '4100', 10);
 const HOST = process.env.HOST ?? 'localhost';
 
 // Create the Qwik Router Node middleware
+// getOrigin: behind an HTTPS-terminating proxy the socket is plain http, so the framework's own origin never matches a
+// browser form POST's Origin header (newsletter confirm/unsubscribe) and it answers 403. Derive it from the trusted
+// boundary only (utils/trusted-request.server.ts); undefined keeps the framework default.
 const { router, notFound } = createQwikRouter({
  render,
+ getOrigin: getRouterOrigin,
 });
 
 // Create the express server
 const app = express();
+// No framework banner header (the license-flow buy pages never sent one; nothing reads it).
+app.disable('x-powered-by');
 
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both
@@ -47,7 +61,14 @@ const app = express();
 const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
-const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
+// Google Identity origins join the CSP only for a request whose validated host belongs to the pinned store with
+// Google sign-in on (config/google-signin.ts, the same decision the sign-in page makes): per request, never per process.
+if (googleSignInRefusedForMissingPin()) {
+	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Google sign-in is disabled (it is only supported for a deployment pinned to a single store).');
+}
+else if (googleClientId() && googleSignInHosts().length === 0) {
+	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but SELLRIGHT_GOOGLE_SIGNIN_HOSTS is empty: Google sign-in is disabled on every host (list the pinned store\'s public hosts, comma-separated).');
+}
 
 // Set security headers
 app.use((req, res, next) => {
@@ -97,7 +118,8 @@ app.use((req, res, next) => {
 	//               Stripe.js (loadStripe) is loaded from js.stripe.com;
 	//               NMI Collect.js (loadCollectJs) is loaded from
 	//               sandbox.nmi.com (test) / secure.nmi.com (live) — see
-	//               services/NmiCollect.ts's collectJsSrc
+	//               services/NmiCollect.ts's collectJsSrc; Turnstile's api.js is
+	//               injected without a nonce, hence its origin (when configured)
 	//   style-src   'self' 'unsafe-inline'                    — Qwik/Tailwind
 	//               emit inline <style> tags per-component with no nonce
 	//               support today; unsafe-inline is scoped to STYLE only
@@ -105,6 +127,7 @@ app.use((req, res, next) => {
 	//   font-src    'self'                                    — self-hosted webfonts only
 	//   connect-src 'self' https://api.stripe.com
 	//               https://sandbox.nmi.com https://secure.nmi.com <api origin>
+	//               [+ https://ipapi.co when the browser country fallback is on]
 	//                                                          — SellRight API,
 	//               Stripe, and NMI Collect.js's own tokenization XHR calls
 	//   frame-src   https://js.stripe.com https://hooks.stripe.com
@@ -112,26 +135,26 @@ app.use((req, res, next) => {
 	//                                                          — Stripe Payment
 	//               Element / 3DS iframes, NMI Collect.js's hosted card
 	//               number/expiry/cvv iframes (never this app's own PAN input)
+	//               [+ https://challenges.cloudflare.com when a Turnstile site key is set]
 	//   object-src  'none'
 	//   base-uri    'self'
 	//   form-action 'self'
 	//   frame-ancestors 'none'
 	//   upgrade-insecure-requests
-	const cspDirectives = [
-		`default-src 'self'`,
-		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
-		`style-src 'self' 'unsafe-inline'`,
-		`img-src 'self' data: https:`,
-		`font-src 'self'`,
-		`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`,
-		`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
-		`object-src 'none'`,
-		`base-uri 'self'`,
-		`worker-src 'self'`,
-		`form-action 'self'`,
-		`frame-ancestors 'none'`,
-		`upgrade-insecure-requests`
-	].join('; ');
+	// The directive list lives in utils/csp.ts (pure, unit-tested). Two origins are conditional: Cloudflare Turnstile
+	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
+	// is enabled; Google Identity origins (script/style/connect/frame) join only when Google sign-in is on. All read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
+	const cspDirectives = buildCsp({
+		nonce,
+		apiOrigin,
+		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
+		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
+		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
+		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
+		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).
+		analytics: analyticsCsp(BRAND_HEAD.analytics),
+		youtubeEmbed: BRAND_HEAD.embeds?.youtube === true,
+	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);
 
@@ -153,25 +176,42 @@ app.use((req, _res, next) => {
 	sellrightRequestCookie.run(req.headers.cookie, next);
 });
 
-// WS-C: thread the incoming Host (preferring X-Forwarded-Host, set by a
-// reverse proxy/CDN terminating TLS in front of this app — same precedence
+// WS-C: thread the incoming Host (X-Forwarded-Host preferred only behind a declared trusted proxy — same precedence
 // the API's resolveStoreForRequest applies) through to every sr() fetch this
 // request triggers, so SSR data loads resolve the SAME store a browser
 // request to this host would get. Nested inside the cookie ALS.run above is
 // fine — both are independent AsyncLocalStorage instances.
 app.use((req, _res, next) => {
-	const forwardedHost = req.headers['x-forwarded-host'];
-	const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.headers.host;
+	// Same trusted boundary as the Google decision and the form-POST origin: the connection's Host, or X-Forwarded-Host
+	// only when SELLRIGHT_TRUST_FORWARDED_HOST=1 (utils/trusted-request.server.ts). A forged header is never forwarded.
+	const host = validatedRequestHost(req.headers) || undefined;
 	sellrightRequestHost.run(host, next);
 });
+
+// Snapshot guard (utils/snapshot-guard.ts): a document-shaped path is a plain no-store 404, answered before the static
+// handlers and the canonical redirect, so neither a stale prerendered file nor a cacheable 301 can answer it.
+app.use(snapshotGuard);
 
 // Static asset handlers
 app.use(`/build`, express.static(buildDir, { immutable: true, maxAge:"1y" }));
 app.use(`/assets`, express.static(assetsDir, { immutable: true, maxAge:"1y" }));
 // Add specific handler for fonts
 app.use('/fonts', express.static(join(distDir, 'fonts'), { immutable: true, maxAge:"1y" }));
-// Root static assets with custom cache control
-app.use(express.static(distDir, {
+// Root static assets with custom cache control. Documents and route data are never served from disk: an .html file
+// or a loader/route-data JSON left in dist (for example by an older build that prerendered pages) would bypass the
+// router and the no-store policy and carry build-time availability, so those requests skip the static handler.
+// The check runs on the DECODED path (the static handler decodes before it reads the file, so `index%2ehtml` would
+// otherwise slip through) and covers precompressed copies. An undecodable path is not a static file either.
+const NEVER_STATIC = /\.html?(\.(gz|br))?$|(^|\/)q-(data|loader)[^/]*\.json(\.(gz|br))?$/i;
+export const neverServedFromDisk = (rawPath: string): boolean => {
+  let decoded: string;
+  try { decoded = decodeURIComponent(rawPath); } catch { return true; }
+  // Normalise the way the static handler does before it opens a file (dot segments, repeated and trailing slashes),
+  // so `index.html/.` or `x/../index.html` is judged as the file it would resolve to.
+  const normalized = posix.normalize(decoded.replace(/\\/g, '/')).replace(/\/+$/, '');
+  return NEVER_STATIC.test(normalized);
+};
+const rootStatic = express.static(distDir, {
   index: false, // Pages need fresh loaders and the per-request CSP nonce.
   redirect: false,
   dotfiles: 'allow',
@@ -182,7 +222,21 @@ app.use(express.static(distDir, {
       res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     }
   },
-}));
+});
+app.use((req, res, next) => (neverServedFromDisk(req.path) ? next() : rootStatic(req, res, next)));
+
+// Fail-closed default for everything past the static handlers (documents, loader/action data, 404s): the value comes
+// from the one policy file. Routes that are provably stock-free (sitemaps, robots) and the layout's own header
+// override it; Qwik's 404 handler and any route that sets nothing inherit it, so an unknown path is never stored.
+app.use((_req, res, next) => {
+  res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
+  next();
+});
+
+// URL canonicalisation for public sections (STOREFRONT_CANONICAL_SECTIONS, default OFF). It sits after the snapshot guard
+// (documents and route data skip the static handlers above and are never redirected: they carry a file extension) and after
+// every asset handler, and it inherits the no-store default above. Only page GET/HEAD requests are ever redirected.
+app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS)));
 
 // Use Qwik Router's page and endpoint request handler
 app.use(router);
@@ -201,4 +255,6 @@ assertProdApiConfigured(process.env.NODE_ENV, process.env.SELLRIGHT_API_URL);
 // Start the express server
 app.listen(PORT, HOST, () => {
  console.log(`Server started: http://${HOST}:${PORT}/`);
+ // pm2 `wait_ready`: tell the process manager the listener is up (no-op when not forked with an IPC channel). A20/D6.
+ process.send?.('ready');
 });

@@ -9,6 +9,8 @@ import {
   Slot,
 } from '@qwik.dev/core';
 import { CartService, CartError } from '~/services/CartService';
+import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
+import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
 
 /**
@@ -19,7 +21,7 @@ import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/type
  * the full API contract and the fail-closed stock rules.
  */
 
-export interface CartContextState {
+export interface CartContextState extends Live {
   cart: Cart;
   isLoading: boolean;
   lastError: string | null;
@@ -35,7 +37,7 @@ export const CartContextId = createContextId<CartContextState>('cart-context');
 export const CartProvider = component$(() => {
   const cartState = useStore<CartContextState>({
     cart: EMPTY_CART,
-    isLoading: false,
+    isLoading: true,
     lastError: null,
     hasLoadedOnce: false,
     isRefreshingStock: false,
@@ -50,15 +52,17 @@ export const CartProvider = component$(() => {
   useOnDocument(
     'qinit',
     $(() => {
+      // Follow the service mirror for the life of the provider: classified failures change it and then throw.
+      bindCartMirror(cartState);
       if (cartState.hasLoadedOnce) return;
       cartState.cart = CartService.getCart();
-      cartState.hasLoadedOnce = true;
-      CartService.refresh()
-        .then((res) => applyResult(cartState, res))
+      CartService.bootstrap()
+        .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
           console.error('CartContext: initial cart refresh failed:', e);
-          cartState.lastError = 'Failed to load cart';
-        });
+          reportError(cartState, e, 'Failed to load cart');
+        })
+        .finally(() => { cartState.isLoading = false; });
     }),
   );
 
@@ -84,7 +88,8 @@ export const useHasMixedPreOrder = () => {
 };
 
 function applyResult(cartState: CartContextState, res: { cart: Cart; dropped: string[] }): void {
-  cartState.cart = res.cart;
+  // The mirror at commit time, not the returned snapshot: a newer operation may have moved it on since.
+  commitMirror(cartState);
   cartState.notice =
     res.dropped.length > 0
       ? `${res.dropped.length} item${res.dropped.length > 1 ? 's' : ''} in your cart ${res.dropped.length > 1 ? 'are' : 'is'} no longer available and ${res.dropped.length > 1 ? 'were' : 'was'} removed.`
@@ -92,12 +97,15 @@ function applyResult(cartState: CartContextState, res: { cart: Cart; dropped: st
 }
 
 function reportError(cartState: CartContextState, error: unknown, fallback: string): void {
+  // A classified failure already changed the mirror (converted snapshot installed / missing cart retired).
+  commitMirror(cartState);
   cartState.lastError = error instanceof CartError ? error.message : error instanceof Error ? error.message : fallback;
 }
 
 export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
   if (cartState.hasLoadedOnce) return;
-  cartState.cart = CartService.getCart();
+  const result = await CartService.bootstrap();
+  applyResult(cartState, result);
   cartState.hasLoadedOnce = true;
 });
 
@@ -119,6 +127,23 @@ export const refreshCartStock = $(async (cartState: CartContextState) => {
   }
 });
 
+/** Live cart read that does not need lines in the mirror: checkout entry on a freshly loaded document starts with an
+ *  empty mirror, and a converted cart must be recognised before any gate. Same live read as `refreshCartStock`; no
+ *  cache, TTL or debounce. Resolves to `'failed'` when the read failed WITHOUT a definitive outcome (network, timeout,
+ *  5xx): the mirror then proves nothing, and the caller must not pick the normal checkout from it. A classified
+ *  outcome (cart gone / merged / converted) is `'ok'` — the mirror already carries the answer. */
+export const refreshCartLive = $(async (cartState: CartContextState): Promise<'ok' | 'failed'> => {
+  try {
+    const res = await CartService.refresh();
+    applyResult(cartState, res);
+    return 'ok';
+  } catch (error) {
+    console.error('CartContext: Failed to read the live cart:', error);
+    reportError(cartState, error, 'Failed to load cart');
+    return isDefinitiveCartFailure(error) ? 'ok' : 'failed';
+  }
+});
+
 export const addToCart = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment) => {
   await loadCartIfNeeded(cartState);
   cartState.isLoading = true;
@@ -126,12 +151,43 @@ export const addToCart = $(async (cartState: CartContextState, sku: string, quan
   try {
     const res = await CartService.addLine(sku, quantity, enrichment);
     applyResult(cartState, res);
-    if (typeof window !== 'undefined') {
-      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
-      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
-    }
   } catch (error) {
     reportError(cartState, error, 'Failed to add item to cart');
+  } finally {
+    cartState.isLoading = false;
+  }
+});
+
+/** What one configurator add did, from its own server response (brand views PR2 §5). Plain data: the controller maps it to an AddResult. */
+export type AddOutcome =
+  | { kind: 'applied'; line: { quantity: number; available: boolean; availableQuantity: number | null } | null }
+  | { kind: 'not-applied' }
+  | { kind: 'error'; message: string | null };
+
+/** `addToCart` with an outcome: the same state handling (mirror, notice, lastError, isLoading), plus what the add's own response
+ *  says. A thrown cart error, a response for a cart this tab no longer points at, and a missing line never read as success. */
+export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddOutcome> => {
+  await loadCartIfNeeded(cartState);
+  cartState.isLoading = true;
+  cartState.lastError = null;
+  try {
+    const res = await CartService.addLine(sku, quantity, enrichment);
+    applyResult(cartState, res);
+    if (!res.applied) return { kind: 'not-applied' };
+    const l = res.line;
+    return {
+      kind: 'applied',
+      line: l
+        ? {
+            quantity: Number(l.quantity),
+            available: l.available === true,
+            availableQuantity: typeof l.availableQuantity === 'number' && Number.isFinite(l.availableQuantity) ? l.availableQuantity : l.availableQuantity === null ? null : 0,
+          }
+        : null,
+    };
+  } catch (error) {
+    reportError(cartState, error, 'Failed to add item to cart');
+    return { kind: 'error', message: cartState.lastError };
   } finally {
     cartState.isLoading = false;
   }
@@ -144,10 +200,6 @@ export const updateCartLineQuantity = $(async (cartState: CartContextState, sku:
   try {
     const res = await CartService.updateLine(sku, quantity);
     applyResult(cartState, res);
-    if (typeof window !== 'undefined') {
-      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
-      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
-    }
   } catch (error) {
     reportError(cartState, error, 'Failed to update quantity');
   } finally {
@@ -161,32 +213,34 @@ export const removeCartLine = $(async (cartState: CartContextState, sku: string)
   try {
     const res = await CartService.removeLine(sku);
     applyResult(cartState, res);
-    if (typeof window !== 'undefined') {
-      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
-      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
-    }
   } catch (error) {
     reportError(cartState, error, 'Failed to remove item');
   }
 });
 
-/** Discard the cart after a successful order — the server cart is terminal
- *  (converted) at this point, so this drops the local token/mirror rather
- *  than mutating a cart that no longer accepts writes. */
-export const clearCart = $(async (cartState: CartContextState) => {
-  CartService.discard();
-  cartState.cart = CartService.getCart();
-  cartState.lastError = null;
-  cartState.notice = null;
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: 0 } }));
+/** Free the cart slot once the order behind it is finished: under the cart lock, re-read the cookie's cart, look up its
+ *  original order and retire it only if that order is settled or cancelled and — when `expectedCode` is given (the
+ *  confirmation page) — is the order named by that page. Anything else (a newer cart, another order, a failed lookup,
+ *  an unpaid order, no Web Locks) leaves the cart alone. Resolves to whether the cart was retired. */
+export const retireSettledCart = $(async (cartState: CartContextState, expectedCode?: string): Promise<boolean> => {
+  try {
+    const retired = await CartService.retireSettled(expectedCode);
+    commitMirror(cartState);
+    if (retired) {
+      cartState.lastError = null;
+      cartState.notice = null;
+    }
+    return retired;
+  } catch (error) {
+    reportError(cartState, error, 'Failed to update your cart');
+    return false;
   }
 });
 
 export const applyCoupon = $(async (cartState: CartContextState, code: string): Promise<{ valid: boolean; reason?: string }> => {
   try {
     const res = await CartService.applyCoupon(code);
-    cartState.cart = CartService.getCart();
+    commitMirror(cartState);
     return res;
   } catch (error) {
     reportError(cartState, error, 'Failed to validate coupon');

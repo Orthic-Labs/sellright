@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
@@ -9,6 +10,7 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -49,7 +51,7 @@ account.openapi(
           code: z.string(), state: z.string(),
           // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
           status: z.enum(['open', 'completed', 'cancelled', 'archived']),
-          paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+          paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
           fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
           currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int(),
         })),
@@ -70,7 +72,7 @@ account.openapi(
       // victim's email would see the victim's past guest orders.
       const where = and(
         eq(s.order.customerId, cust.id),
-        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        orderProvenanceFilter(cust),
       );
       const [{ total } = { total: 0 }] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.order).where(where);
       const items = await tx
@@ -129,7 +131,7 @@ account.openapi(
           eq(s.license.customerId, cust.id),
           // Same guest-email-match guard as orders: hide licenses from orders
           // auto-linked by unverified email match.
-          ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+          orderProvenanceFilter(cust),
         ))
         .orderBy(desc(s.license.createdAt))
         .limit(100);
@@ -170,10 +172,10 @@ account.openapi(
         code: z.string(), state: z.string(),
         // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
         status: z.enum(['open', 'completed', 'cancelled', 'archived']),
-        paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+        paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
         fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
         currency: z.string(),
-        subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
+        shippingMethodName: z.string().nullable(), subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
         discountTotal: z.number().int(), grandTotal: z.number().int(),
         placedAt: z.string().nullable(),
         shippingAddress: z.any(), billingAddress: z.any(),
@@ -204,7 +206,7 @@ account.openapi(
         eq(s.order.customerId, cust.id),
         // WP9.5: same email-match suppression as the list — an unverified account
         // cannot open a guest order linked to it purely by email match.
-        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        orderProvenanceFilter(cust),
       )).limit(1);
       if (!order) return { kind: 'notfound' as const };
       const lines = await loadOrderLines(tx, order.id);
@@ -217,7 +219,7 @@ account.openapi(
     if (out.kind !== 'ok') return out.kind === 'unauth' ? errJson(c, 404, 'NOT_AUTHENTICATED', 'not authenticated') : errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json({
       code: out.order.code, state: out.order.state, status: out.statusFacts.status, paymentStatus: out.statusFacts.paymentStatus, fulfillmentStatus: out.statusFacts.fulfillmentStatus, currency: out.order.currency,
-      subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
+      shippingMethodName: out.order.shippingMethodName, subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
       discountTotal: out.order.discountTotal, grandTotal: out.order.grandTotal,
       placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,
       shippingAddress: out.order.shippingAddress ?? null, billingAddress: out.order.billingAddress ?? null,
@@ -442,7 +444,7 @@ account.openapi(
       }).from(s.address).where(eq(s.address.customerId, cust.id));
       const orders = await tx.select({
         code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
-      }).from(s.order).where(eq(s.order.customerId, cust.id)).orderBy(desc(s.order.createdAt));
+      }).from(s.order).where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust))).orderBy(desc(s.order.createdAt));
       return { profile, addresses, orders };
     });
     if (out === null || !out.profile) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
@@ -479,9 +481,16 @@ account.openapi(
     // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
     if (!customerToken(c)) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
-    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'active_subscription' | 'ok'> => {
+    // Peek the customer unlocked to name the lock subject (STOREKIT §5.3). The set
+    // re-resolves the session under the locks; a customer that moved restarts as 'unauth'.
+    type ErasureOutcome = 'unauth' | 'unverified' | 'active_subscription' | 'ok';
+    const peekedId = await withStore(st.id, async (tx) => (await me(tx, customerToken(c)))?.id ?? null);
+    const out: ErasureOutcome = peekedId === null ? 'unauth' : await withLockedSet(st.id, { kind: 'customer', customerId: peekedId }, async (tx): Promise<ErasureOutcome> => {
       const cust = await me(tx, customerToken(c));
-      if (!cust) return 'unauth';
+      if (!cust || cust.id !== peekedId) return 'unauth';
+      // Erasure affects email-keyed mail and guest orders, so require proof of
+      // mailbox control before deleting data linked by email alone.
+      if (!cust.emailVerified) return 'unverified';
 
       const activeSub = await tx.select({ id: s.subscription.id })
         .from(s.subscription)
@@ -491,6 +500,8 @@ account.openapi(
 
       // Anonymize orders FIRST (order rows are kept — financial records — but
       // scrubbed of the PII that links them back to this person).
+      const erasedOrderIds = (await tx.select({ id: s.order.id }).from(s.order)
+        .where(and(eq(s.order.storeId, st.id), eq(s.order.customerId, cust.id), orderProvenanceFilter(cust)))).map((o) => o.id);
       await tx.update(s.order)
         .set({
           customerId: null,
@@ -498,7 +509,24 @@ account.openapi(
           billingAddress: null,
           metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('anonymized_at', now())`,
         })
-        .where(eq(s.order.customerId, cust.id));
+        .where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust)));
+
+      // Order-edit history and address audit rows snapshot the same address
+      // PII. Drop the personal fields; amounts/lines/totals stay. Scoped to the
+      // orders just anonymized (proven ownership only), explicit store predicate.
+      if (erasedOrderIds.length) {
+        await tx.update(s.orderEdit)
+          .set({
+            before: sql`(${s.orderEdit.before}::jsonb - 'shippingAddress' - 'billingAddress' - 'addresses')`,
+            after: sql`(${s.orderEdit.after}::jsonb - 'shippingAddress' - 'billingAddress' - 'addresses')`,
+            reason: null,
+          })
+          .where(and(eq(s.orderEdit.storeId, st.id), inArray(s.orderEdit.orderId, erasedOrderIds)));
+        await tx.update(s.auditLog)
+          .set({ data: sql`(coalesce(${s.auditLog.data}::jsonb, '{}'::jsonb) - 'before' - 'after' - 'reason')` })
+          .where(and(eq(s.auditLog.storeId, st.id), eq(s.auditLog.entity, 'order'), eq(s.auditLog.action, 'edit_address'),
+            inArray(s.auditLog.entityId, erasedOrderIds)));
+      }
 
       // Account erasure hardening: tombstone every device lease on every
       // license this account owns BEFORE unlinking the license from the
@@ -513,7 +541,7 @@ account.openapi(
       // every activation is revoked and the customer is deleted, or neither
       // happens (the withStore transaction wraps the whole handler).
       const ownedLicenses = await tx.select({ id: s.license.id })
-        .from(s.license).where(eq(s.license.customerId, cust.id));
+        .from(s.license).leftJoin(s.order, eq(s.order.id, s.license.orderId)).where(and(eq(s.license.customerId, cust.id), orderProvenanceFilter(cust)));
       for (const lic of ownedLicenses) {
         const activeActivations = await tx.select({ id: s.licenseActivation.id })
           .from(s.licenseActivation)
@@ -522,6 +550,19 @@ account.openapi(
           await revokeDeviceRemote(tx, { storeId: st.id, licenseId: lic.id, activationId: activation.id });
         }
       }
+
+      // Contact PII captured at checkout (metadata.contact.email, …) is scrubbed from the erased orders
+      // too, not only addresses/customerId. Done AFTER the licence lookup above: its provenance filter
+      // reads metadata.contact.email. Financial/legal fields (totals, legal_acceptance, loyalty) stay.
+      if (erasedOrderIds.length) {
+        await tx.update(s.order)
+          .set({ metadata: sql`(coalesce(${s.order.metadata}, '{}'::jsonb) - 'contact' - 'email' - 'phone' - 'customerEmail' - 'guestEmail' - 'customerName' - 'customerNote')` })
+          .where(and(eq(s.order.storeId, st.id), inArray(s.order.id, erasedOrderIds)));
+      }
+
+      // Unproven old-mailbox links may still reference this account. Detach
+      // them without scrubbing the real shopper's order/address data.
+      await tx.update(s.order).set({ customerId: null }).where(eq(s.order.customerId, cust.id));
 
       // Null customer refs that are allowed to be null (kept for reporting/
       // audit shape) before deleting rows that hard-require the FK.
@@ -534,6 +575,8 @@ account.openapi(
       // Loyalty points are personal, non-transferable value: erasure forfeits
       // them. The ledger is append-only (UPDATE rejected), so the rows go.
       await tx.delete(s.loyaltyLedger).where(eq(s.loyaltyLedger.customerId, cust.id));
+      // Reviews carry the author's name + email: erasure removes them (REWARDS-1).
+      await tx.delete(s.productReview).where(and(eq(s.productReview.storeId, st.id), or(eq(s.productReview.customerId, cust.id), eq(s.productReview.authorEmail, cust.email))));
       await tx.delete(s.paymentMethod).where(eq(s.paymentMethod.customerId, cust.id));
       await tx.delete(s.customerToken).where(eq(s.customerToken.customerId, cust.id));
       await tx.delete(s.session).where(eq(s.session.customerId, cust.id));
@@ -558,6 +601,7 @@ account.openapi(
       return 'ok';
     });
     if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'unverified') return errJson(c, 403, 'EMAIL_NOT_VERIFIED', 'Verify your email before deleting your account.');
     if (out === 'active_subscription') return errJson(c, 409, 'ACTIVE_SUBSCRIPTION_EXISTS', 'cancel your active subscription before deleting your account');
     clearCustomerCookies(c);
     return c.json({ deleted: true }, 200);

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, jsonb, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, jsonb, timestamp, unique } from 'drizzle-orm/pg-core';
 import { store, ts } from './schema-core.js';
 import { order, payment } from './schema-orders.js';
 
@@ -20,6 +20,11 @@ export const paymentAttempt = pgTable('payment_attempt', {
   providerRef: text(),
   context: jsonb(),
   result: jsonb(),
+  // 0088 (de-fork 2.9): the provider's own status string and when we last
+  // SUCCESSFULLY retrieved it. Advanced only by successful provider retrieval
+  // (payments/provider-observation.ts) — never by webhook payloads or a failed fetch.
+  providerStatus: text(),
+  providerObservedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: ts(),
 }, (t) => [unique('payment_attempt_store_key').on(t.storeId, t.idempotencyKey)]);

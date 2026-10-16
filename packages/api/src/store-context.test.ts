@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEV_DEFAULT_STORE, hostMatchesAny, normalizeHost, stripHostPrefix } from './store-context.js';
+import { devDefaultStore, hostMatchesAny, normalizeHost, stripHostPrefix } from './store-context.js';
 
-describe('DEV_DEFAULT_STORE', () => {
+describe('devDefaultStore', () => {
   it('defaults to "damned" when env.DEV_DEFAULT_STORE_SLUG is unset (identical to the prior hardcoded value)', () => {
-    expect(DEV_DEFAULT_STORE).toBe('damned');
+    expect(devDefaultStore()).toBe('damned');
   });
 });
 

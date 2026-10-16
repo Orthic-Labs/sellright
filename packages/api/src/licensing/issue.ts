@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { buildLicenseGrants, type FulfillmentType } from './entitlements.js';
@@ -9,9 +9,16 @@ export function newLicenseKey(appKey: string): string {
   return `SR-${appKey.toUpperCase()}-${randomBytes(16).toString('hex').toUpperCase()}`;
 }
 
+/**
+ * Optional gate for a top-up that would insert NEW licence rows (order edits). Runs under the order lock, only when
+ * rows are about to be inserted, and before the insert. `ok: false` inserts nothing; `metadataPatch` is merged into
+ * the metadata of exactly the rows inserted by this call (same statement, same transaction).
+ */
+export type IssuanceGate = () => Promise<{ ok: false } | { ok: true; metadataPatch?: Readonly<Record<string, unknown>> }>;
+
 export async function issueLicensesForPaidOrder(
   tx: Tx,
-  opts: { storeId: string; orderId: string; customerId: string | null; paidAt?: Date },
+  opts: { storeId: string; orderId: string; customerId: string | null; paidAt?: Date; gate?: IssuanceGate },
 ): Promise<number> {
   // Serialize concurrent issuance for the same order. issueLicensesForPaidOrder
   // can fire from both the checkout settle path and the Stripe webhook reconcile —
@@ -64,6 +71,10 @@ export async function issueLicensesForPaidOrder(
   });
   if (!toIssue.length) return 0;
 
+  const verdict = opts.gate ? await opts.gate() : null;
+  if (verdict && !verdict.ok) return 0;
+  const patch = verdict?.metadataPatch;
+
   await tx.insert(s.license).values(toIssue.map((grant) => ({
     storeId: opts.storeId,
     customerId: opts.customerId,
@@ -76,7 +87,30 @@ export async function issueLicensesForPaidOrder(
     seats: devicePolicyFor(grant.appKey)?.pooledSeats ? 0 : grant.seats,
     updatesUntil: grant.updatesUntil,
     expiresAt: grant.expiresAt,
-    metadata: withCurrentDevicePolicy(grant.appKey, grant.metadata) as object | null,
+    metadata: (patch
+      ? { ...(withCurrentDevicePolicy(grant.appKey, grant.metadata) as Record<string, unknown> | null ?? {}), ...patch }
+      : withCurrentDevicePolicy(grant.appKey, grant.metadata)) as object | null,
   })));
   return toIssue.length;
+}
+
+/**
+ * Shallow-merges a payment policy's metadata patch into every licence of the order (pre-existing and freshly
+ * issued alike). Runs in the issuance transaction, under the order's lock set. Returns the licences patched.
+ */
+export async function applyLicenseMetadataPatch(
+  tx: Tx,
+  opts: { storeId: string; orderId: string },
+  patch: Readonly<Record<string, unknown>>,
+): Promise<number> {
+  const rows = await tx
+    .select({ id: s.license.id, metadata: s.license.metadata })
+    .from(s.license)
+    .where(and(eq(s.license.storeId, opts.storeId), eq(s.license.orderId, opts.orderId)));
+  for (const row of rows) {
+    const current = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown> : {};
+    await tx.update(s.license).set({ metadata: { ...current, ...patch } as object }).where(eq(s.license.id, row.id));
+  }
+  return rows.length;
 }

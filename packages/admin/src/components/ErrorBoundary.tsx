@@ -22,7 +22,7 @@ function DefaultFallback({ error, resetErrorBoundary, sectionLabel }: FallbackPr
         The rest of the admin is still available. Reload this section to retry.
       </p>
       {import.meta.env.DEV && error instanceof Error && (
-        <pre className="text-xs text-red-900 bg-red-100 p-2 rounded mb-4 overflow-auto max-h-40">
+        <pre className="text-xs text-red-900 bg-red-100 p-2 rounded-sm mb-4 overflow-auto max-h-40">
           {error.message}
           {error.stack ? `\n${error.stack.split('\n').slice(0, 5).join('\n')}` : ''}
         </pre>
@@ -30,7 +30,7 @@ function DefaultFallback({ error, resetErrorBoundary, sectionLabel }: FallbackPr
       <button
         type="button"
         onClick={resetErrorBoundary}
-        className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+        className="px-4 py-2 bg-red-600 text-white rounded-sm hover:bg-red-700 focus:outline-hidden focus:ring-2 focus:ring-red-500"
       >
         Reload
       </button>

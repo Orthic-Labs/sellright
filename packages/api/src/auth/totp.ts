@@ -69,6 +69,16 @@ export function verifyTotp(secretB32: string, code: string, actorId?: string): b
   return false;
 }
 
+/** The time-step (±1 for clock drift) a well-formed code matches for `secretB32`, or null. Pure — the
+ *  durable replay guard lives in auth/second-factor.ts (verifyTotpOnce). */
+export function matchTotpStep(secretB32: string, code: string): number | null {
+  if (!/^\d{6}$/.test(code.trim())) return null;
+  const secret = base32Decode(secretB32);
+  const step = Math.floor(Date.now() / 30000);
+  for (const w of [0, -1, 1]) if (hotp(secret, step + w) === code.trim()) return step + w;
+  return null;
+}
+
 /** otpauth:// URI for QR / manual entry. */
 export function otpauthUri(secretB32: string, account: string, issuer = 'SellRight'): string {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secretB32}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;

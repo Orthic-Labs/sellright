@@ -22,6 +22,7 @@
  *   3. an unknown/garbage signature is rejected with 400 and never reaches
  *      the DB (order untouched)
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Stripe from 'stripe';
 import { eq, sql } from 'drizzle-orm';
@@ -51,9 +52,7 @@ vi.mock('../payments/stripe.js', async (orig) => {
 const { paymentWebhooks } = await import('./payment-webhooks.js');
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment-webhooks.route test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'payment-webhooks.route.test.ts');
 
 const STORE = 'aaaaaaaa-3333-3333-3333-333333333333';
 const SLUG = 'webhook-route-test-store';
@@ -356,4 +355,30 @@ describe('POST /v1/webhooks/stripe — SR-03 subscription settlement persists mo
     expect(payments[0]!.providerRef).toBe('pi_inv_mode_1');
     expect(payments[0]!.gatewayMode).toBe('test');
   });
+});
+
+describe('POST /v1/webhooks/stripe — X-45 mustCommit: a refund waits for a held order row and commits', () => {
+  it('a refund webhook that arrives while another transaction holds the order row for >5s still commits (no 409, no lost refund)', async () => {
+    const { orderId } = await seed('test');
+    await withStore(STORE, (tx) => tx.execute(sql`
+      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_mode, currency)
+      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, 2500, 'stripe', 'Settled', 'pi_hold_1', 'test', 'USD')`));
+    const payload = JSON.stringify({
+      id: 'evt_hold_1', object: 'event', api_version: '2024-06-20',
+      created: Math.floor(Date.now() / 1000), type: 'refund.created',
+      data: { object: { id: 're_hold_1', object: 'refund', amount: 500, status: 'succeeded', payment_intent: 'pi_hold_1' } },
+    });
+    // Another transaction holds the order row longer than the restart budget of a non-mustCommit set (3 restarts x 5s L3 lock timeout) so
+    // it would surface LockSetUnstable. A mustCommit set must wait it out and commit.
+    const holder = withStore(STORE, async (tx) => {
+      await tx.execute(sql`SELECT id FROM ${s.order} WHERE id = ${orderId} FOR UPDATE`);
+      await new Promise((r) => setTimeout(r, 21000));
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    await holder;
+    expect(res.status).toBe(200);
+    const refunds = await withStore(STORE, (tx) => tx.execute(sql`SELECT provider_ref, state FROM refund WHERE order_id = ${orderId}`));
+    expect(refunds.rows).toEqual([{ provider_ref: 're_hold_1', state: 'Settled' }]);
+  }, 45000);
 });

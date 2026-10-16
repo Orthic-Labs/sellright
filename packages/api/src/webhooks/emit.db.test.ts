@@ -14,6 +14,7 @@
  * Runs against sellright_test ONLY (DB guard mirrors the other *db test*
  * files; the guard hard-fails if pointed at a non-test DB).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -26,11 +27,7 @@ vi.mock('../security/outbound-url.js', () => ({
 
 // Hard guard: this test TRUNCATEs — refuse anything but a *_test DB.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `webhooks/emit db test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'emit.db.test.ts');
 
 import { safeOutboundFetch } from '../security/outbound-url.js';
 import { deliverWebhooks } from './emit.js';

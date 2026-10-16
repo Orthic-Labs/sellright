@@ -5,13 +5,17 @@ import { isCheckoutPage } from '~/utils/route-helpers';
 import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
-import { useCart } from '~/contexts/CartContext';
+import { isBrowser } from '@qwik.dev/core/build';
+import { useCart, retireSettledCart } from '~/contexts/CartContext';
+import { CartService } from '~/services/CartService';
+import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShippingMethod } from './cart-shipping';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BRAND_COPY, CART_TRUST_STRIP_WRAP } from '~/platform/brand-data';
 
 export default component$(() => {
 	// WS-C: runtime store identity (policies/trust-bar copy), per-request.
@@ -27,12 +31,25 @@ export default component$(() => {
 	const countryCodeSignal = useSignal(appState.shippingAddress.countryCode);
 	const panelRef = useSignal<Element>();
 
-	// Auto-focus panel when cart opens so Escape key is captured
-	useTask$(({ track }) => {
-		track(() => appState.showCart);
-		if (appState.showCart && typeof document !== 'undefined') {
-			setTimeout(() => (panelRef.value as HTMLElement)?.focus(), 0);
-		}
+	// Auto-focus panel when cart opens so Escape key is captured. The drawer renders after this task, possibly much later (an
+	// async shipping or cart lookup can hold the render): poll each frame while the drawer stays open, no frame budget; a close
+	// or unmount cancels the poll.
+	useTask$(({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		if (!open || typeof document === 'undefined') return;
+		let cancelled = false;
+		let frame = 0;
+		cleanup(() => {
+			cancelled = true;
+			cancelAnimationFrame(frame);
+		});
+		const focusPanel = () => {
+			if (cancelled) return;
+			const panel = panelRef.value as HTMLElement | undefined;
+			if (panel) panel.focus();
+			else frame = requestAnimationFrame(focusPanel);
+		};
+		frame = requestAnimationFrame(focusPanel);
 	});
 
 	const dropdownState = useStore({
@@ -55,6 +72,25 @@ export default component$(() => {
 			appState.availableCountries = countries as any[];
 		}
 	});
+
+	// A converted cart is an order waiting to be paid (or finished): ask the server which, each time the drawer opens on
+	// one. Read-only; a failed lookup just keeps "Continue checkout" and offers no escape.
+	const convertedLookup = useSignal<ConvertedLookupState>(null);
+	useTask$(async ({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		const status = track(() => cartState.cart.status);
+		const token = isBrowser ? CartService.token() : null;
+		if (!open || status !== 'converted' || !token) {
+			convertedLookup.value = null;
+			return;
+		}
+		let cancelled = false;
+		cleanup(() => { cancelled = true; });
+		convertedLookup.value = 'loading';
+		const result = await CartService.lookupConvertedCheckout(token);
+		if (!cancelled) convertedLookup.value = result;
+	});
+	const banner = cartBannerFor(cartState.cart.status, convertedLookup.value);
 
 	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
@@ -185,6 +221,9 @@ export default component$(() => {
 		}, dropdownState.DEBOUNCE_DELAY);
 	});
 
+	// Ready = at least one line, shipping method + country chosen, and in stock. Mirrors the old disabled conditions.
+	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!shippingState.selectedMethod && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
+
 	return (
 		<div>
 			{appState.showCart && (
@@ -209,13 +248,24 @@ export default component$(() => {
 						onKeyDown$={(e) => { if (e.key === 'Escape') appState.showCart = false; }}
 					>
 
-						{/* L8: Trust strip — overflow-hidden + whitespace-nowrap to prevent text wrapping on narrow screens */}
-						<div class="flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden whitespace-nowrap">
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.shipping)}</span>
-							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.returns)}</span>
-							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.payment)}</span>
+						{/* L8: Trust strip — one truncated line on narrow screens, or (routes.json cart.trustStrip "wrap") each item wraps inside its
+						    own column, as rottenhand.com does; items stay on one row with their separators, and the strip never overflows. */}
+						<div class={`relative flex items-center justify-center gap-3 pl-4 pr-11 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden ${CART_TRUST_STRIP_WRAP ? '' : 'whitespace-nowrap'}`}>
+							{/* A visible close control (the backdrop and Escape also close the drawer). */}
+							<button
+								type="button"
+								class="sr-cart-close absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-[#6b6b68] hover:text-[var(--color-ink)] cursor-pointer"
+								aria-label="Close"
+								onClick$={() => (appState.showCart = false)}
+							>
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+							</button>
+							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
+								<div key={i} style="display: contents">
+									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
+									<span class={`text-[10px] tracking-[0.06em] text-[#9A9288] ${CART_TRUST_STRIP_WRAP ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}`}>{text}</span>
+								</div>
+							))}
 						</div>
 
 						<div class="flex-1 overflow-y-auto overscroll-contain px-5 py-1 min-h-0">
@@ -243,15 +293,25 @@ export default component$(() => {
 								</div>
 							)}
 
-							{totalQuantity.value > 0 ? (
+							{banner.message && (
+								<div class="my-2 px-3 py-1.5 bg-[#F0EBE3]" role="status">
+									<span class="text-[11px] text-[#8a6d4a]">{banner.message}</span>
+								</div>
+							)}
+
+							{!cartState.hasLoadedOnce ? (
+								<div class="flex items-center justify-center min-h-[280px] text-[12px] text-[#9A9288]" role="status">
+									{cartState.lastError ?? 'Loading your cart…'}
+								</div>
+							) : totalQuantity.value > 0 ? (
 								<CartContents />
-							) : (
+							) : banner.continueCheckout ? null : (
 								<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center px-4">
 									<svg class="w-10 h-10 text-[#C9C3BA] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
 									</svg>
-									<p class="font-heading text-[12px] tracking-[0.14em] uppercase text-[#1A1A1A] mb-1.5">Your cart is empty</p>
-									<p class="text-[12px] text-[#9A9288] mb-6 leading-relaxed">Browse our collection to find something you'll love.</p>
+									<p class="font-heading text-[12px] tracking-[0.14em] uppercase text-[#1A1A1A] mb-1.5">{BRAND_COPY.cart?.emptyTitle ?? 'Your cart is empty'}</p>
+									<p class="text-[12px] text-[#9A9288] mb-6 leading-relaxed">{BRAND_COPY.cart?.emptyBody ?? "Browse our collection to find something you'll love."}</p>
 									<button
 										class="px-8 py-2.5 bg-[#1A1A1A] text-white text-[11px] tracking-[0.18em] uppercase hover:bg-[#8a6d4a] transition-colors duration-300 cursor-pointer"
 										onClick$={async () => {
@@ -266,7 +326,37 @@ export default component$(() => {
 						</div>
 
 						{/* Compact sticky footer */}
-						{totalQuantity.value > 0 && isInEditableUrl && (
+						{banner.continueCheckout && (
+							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
+								<button
+									onClick$={$(async () => {
+										appState.showCart = false;
+										await navigate('/checkout/');
+									})}
+									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
+									       hover:opacity-90 active:opacity-85 transition-opacity duration-300 cursor-pointer"
+								>
+									Continue checkout
+								</button>
+								{banner.startNewCart && (
+									<button
+										onClick$={$(async () => {
+											await retireSettledCart(cartState);
+										})}
+										class="w-full py-2 mb-1.5 border border-[#141210] bg-transparent text-[#141210] text-[11px] tracking-[0.2em] uppercase cursor-pointer"
+									>
+										Start a new cart
+									</button>
+								)}
+								<button
+									onClick$={() => (appState.showCart = false)}
+									class="w-full text-center text-[11px] tracking-[0.08em] text-[#9A9288] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
+								>
+									Continue Shopping
+								</button>
+							</div>
+						)}
+						{!banner.continueCheckout && totalQuantity.value > 0 && isInEditableUrl && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
 
 								{/* M4: Removed dynamic key to prevent re-mount on country change; M8: Added aria-label for accessibility */}
@@ -364,12 +454,10 @@ export default component$(() => {
 											isNavigatingToCheckout.value = false;
 										}
 									})}
-									disabled={isNavigatingToCheckout.value || !shippingState.selectedMethod ||
-														!appState.shippingAddress.countryCode ||
-														cartState.cart.lines.length === 0 || isOutOfStock.value}
-									class="w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
+									disabled={isNavigatingToCheckout.value || !cartCheckoutReady}
+									aria-disabled={cartCheckoutReady ? 'false' : 'true'}
+									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
 									       hover:opacity-90 active:opacity-85
-									       disabled:opacity-40 disabled:cursor-not-allowed
 									       transition-opacity duration-300 cursor-pointer
 									       flex items-center justify-center gap-2"
 								>

@@ -5,6 +5,9 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
 import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
+import ShippingMethods from '../components/ShippingMethods';
+import { useToast } from '../components/Toast';
+import { TwoFactorEnroll } from '../components/TwoFactorEnroll';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
@@ -30,33 +33,60 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof 
 ];
 
 export default function SettingsPage() {
-  const { me, store, logout } = useAuth();
+  const { me, store, logout, refresh } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const [section, setSection] = useState<SectionId>('store');
   const sk = ['settings-store', store?.slug];
   const { data: cfg, isLoading } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
-  const ship = useQuery({ queryKey: ['shipping', store?.slug], queryFn: () => api.get<{ items: any[] }>('/shipping-methods') });
   const staff = useQuery({ queryKey: ['staff', store?.slug], queryFn: () => api.get<{ items: any[] }>('/staff') });
 
-  const [store2, setStore2] = useState<{ name: string } | null>(null);
-  const saveStore = useMutation({ mutationFn: () => api.patch('/settings/store', { name: store2!.name }), onSuccess: () => { setStore2(null); qc.invalidateQueries({ queryKey: sk }); } });
+  const [store2, setStore2] = useState<{ name: string; storefrontUrl: string } | null>(null);
+  const saveStore = useMutation({
+    mutationFn: () => api.patch('/settings/store', { name: store2!.name, storefrontUrl: store2!.storefrontUrl.trim() }),
+    onSuccess: () => { setStore2(null); qc.invalidateQueries({ queryKey: sk }); },
+    onError: (e) => toast.error('Could not save store profile', (e as Error).message),
+  });
   const [tax, setTax] = useState<string | null>(null);
   const saveTax = useMutation({ mutationFn: () => api.patch('/settings/store', { taxRate: Math.round(parseFloat(tax || '0') * 100) }), onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); } });
   const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
-  const setStripeMode = useMutation({ mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
+  // The API refuses a flip to live (409) until live credentials exist — surface that instead of silently snapping back.
+  const setStripeMode = useMutation({
+    mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }),
+    onSuccess: (_r, mode) => { qc.invalidateQueries({ queryKey: sk }); toast.success(`Stripe is now in ${mode} mode`); },
+    onError: (e) => { qc.invalidateQueries({ queryKey: sk }); toast.error('Could not switch Stripe mode', (e as Error).message); },
+  });
   const [gid, setGid] = useState<string | null>(null);
   const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
 
-  const [sm, setSm] = useState<{ code: string; name: string; rate: string } | null>(null);
-  const addShip = useMutation({ mutationFn: () => api.post('/shipping-methods', { code: sm!.code, name: sm!.name, calculator: { flat: Math.round(parseFloat(sm!.rate || '0') * 100) } }), onSuccess: () => { setSm(null); ship.refetch(); } });
-  const delShip = useMutation({ mutationFn: (id: string) => api.del(`/shipping-methods/${id}`), onSuccess: () => ship.refetch() });
-
-  const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean }>('/2fa') });
-  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean; required: boolean; recoveryCodesRemaining: number }>('/2fa') });
+  const [enrolling, setEnrolling] = useState(false);
   const [code, setCode] = useState('');
-  const startSetup = useMutation({ mutationFn: () => api.post<{ secret: string; otpauthUri: string }>('/2fa/setup'), onSuccess: (r) => setSetup(r) });
-  const enable2fa = useMutation({ mutationFn: () => api.post('/2fa/enable', { secret: setup!.secret, code }), onSuccess: () => { setSetup(null); setCode(''); tfa.refetch(); } });
-  const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code }), onSuccess: () => { setCode(''); tfa.refetch(); } });
+  const [tfaPassword, setTfaPassword] = useState('');
+  const [newCodes, setNewCodes] = useState<string[] | null>(null);
+  const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code, password: tfaPassword }), onSuccess: () => { setCode(''); setTfaPassword(''); tfa.refetch(); void refresh(); } });
+  const regenCodes = useMutation({ mutationFn: () => api.post<{ recoveryCodes: string[] }>('/2fa/recovery-codes', { code, password: tfaPassword }), onSuccess: (r) => { setCode(''); setTfaPassword(''); setNewCodes(r.recoveryCodes); tfa.refetch(); } });
+  // Password change: the API wants a recent step-up AND the current password; one form does both.
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '', totp: '' });
+  const [pwDone, setPwDone] = useState<string | null>(null);
+  const changePassword = useMutation({
+    mutationFn: async () => {
+      if (pw.next.length < 10) throw new Error('The new password must be at least 10 characters.');
+      if (pw.next !== pw.confirm) throw new Error('The new passwords do not match.');
+      await api.post('/step-up', { password: pw.current, totp: pw.totp || undefined });
+      return api.post<{ ok: boolean; revokedSessions: number }>('/password', { currentPassword: pw.current, newPassword: pw.next });
+    },
+    onSuccess: (r) => { setPw({ current: '', next: '', confirm: '', totp: '' }); setPwDone(`Password changed. ${r.revokedSessions} other session(s) signed out.`); },
+  });
+  const security = useQuery({ queryKey: ['settings-security', store?.slug], queryFn: () => api.get<{ requireTotp: boolean; installRequireTotp: string }>('/settings/security') });
+  const [reqPw, setReqPw] = useState({ password: '', totp: '' });
+  const setRequireTotp = useMutation({
+    mutationFn: async (requireTotp: boolean) => {
+      await api.post('/step-up', { password: reqPw.password, totp: reqPw.totp || undefined });
+      return api.patch('/settings/security', { requireTotp });
+    },
+    onSuccess: () => { setReqPw({ password: '', totp: '' }); security.refetch(); void refresh(); },
+  });
 
   const [inv, setInv] = useState<{ email: string; role: string; password: string } | null>(null);
   const addStaff = useMutation({ mutationFn: () => api.post('/staff', inv), onSuccess: () => { setInv(null); staff.refetch(); } });
@@ -87,7 +117,7 @@ export default function SettingsPage() {
           </div>
         </nav>
 
-        <div className="space-y-5 min-w-0">
+        <div className="stack-y-5 min-w-0">
           {section === 'store' && (
             <FormSection title="Store profile" description="Your store's public name and base currency."
               actions={store2 && <>
@@ -95,20 +125,26 @@ export default function SettingsPage() {
                 <button className="btn-primary" disabled={saveStore.isPending || !store2.name.trim()} onClick={() => saveStore.mutate()}>{saveStore.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
               {store2 ? (
-                <Field label="Store name" htmlFor="s-name"><input id="s-name" className="input max-w-md" value={store2.name} onChange={(e) => setStore2({ name: e.target.value })} /></Field>
+                <div className="stack-y-4">
+                  <Field label="Store name" htmlFor="s-name"><input id="s-name" className="input max-w-md" value={store2.name} onChange={(e) => setStore2({ ...store2, name: e.target.value })} /></Field>
+                  <Field label="Storefront URL" htmlFor="s-url" hint="The public address of your storefront (https://…). Used for payment return links and links in emails. Leave empty to clear.">
+                    <input id="s-url" className="input max-w-md" type="url" inputMode="url" placeholder="https://shop.example.com" value={store2.storefrontUrl} onChange={(e) => setStore2({ ...store2, storefrontUrl: e.target.value })} />
+                  </Field>
+                </div>
               ) : (
-                <dl className="space-y-2.5 text-sm">
+                <dl className="stack-y-2.5 text-sm">
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Name</dt><dd className="font-medium">{cfg.name}</dd></div>
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Currency</dt><dd className="font-medium">{cfg.currency}</dd></div>
+                  <div className="flex justify-between max-w-md gap-4"><dt className="text-gray-500">Storefront URL</dt><dd className="font-medium break-all text-right">{cfg.storefrontUrl ?? <span className="text-gray-400 font-normal">Not set</span>}</dd></div>
                 </dl>
               )}
-              {!store2 && canManage && <button className="btn-ghost btn-sm" onClick={() => setStore2({ name: cfg.name })}>Edit profile</button>}
+              {!store2 && canManage && <button className="btn-ghost btn-sm" onClick={() => setStore2({ name: cfg.name, storefrontUrl: cfg.storefrontUrl ?? '' })}>Edit profile</button>}
             </FormSection>
           )}
 
           {section === 'payments' && (
             <FormSection title="Payment providers" description="Enable the methods customers can pay with at checkout.">
-              <div className="divide-y divide-gray-100">
+              <div className="rule-y rule-gray-100">
                 {ADMIN_PAYMENT_PROVIDERS.map((p) => {
                   const on = paymentEnabled(cfg.payments?.[p]);
                   return (
@@ -143,29 +179,7 @@ export default function SettingsPage() {
             </FormSection>
           )}
 
-          {section === 'shipping' && (
-            <FormSection title="Shipping methods" description="Flat-rate methods offered at checkout."
-              actions={canManage && !sm && <button className="btn-ghost btn-sm" onClick={() => setSm({ code: '', name: '', rate: '' })}><Plus size={14} /> Add method</button>}>
-              <div className="divide-y divide-gray-100">
-                {ship.data?.items.map((m) => (
-                  <div key={m.id} className="flex items-center justify-between py-2.5 text-sm">
-                    <span className="font-medium">{m.name} <span className="text-gray-400 text-xs font-normal">{m.code}</span></span>
-                    <span className="flex items-center gap-2"><Badge value={m.enabled ? 'active' : 'draft'} />{canManage && <button className="text-gray-300 hover:text-danger" aria-label="Delete method" onClick={() => delShip.mutate(m.id)}><Trash2 size={15} /></button>}</span>
-                  </div>
-                ))}
-                {ship.data?.items.length === 0 && !sm && <div className="text-sm text-gray-400 py-2">No shipping methods yet.</div>}
-              </div>
-              {sm && (
-                <div className="flex flex-wrap items-end gap-2 pt-1">
-                  <Field label="Code"><input className="input w-24" value={sm.code} onChange={(e) => setSm({ ...sm, code: e.target.value })} /></Field>
-                  <Field label="Name"><input className="input w-40" value={sm.name} onChange={(e) => setSm({ ...sm, name: e.target.value })} /></Field>
-                  <Field label="Rate"><input className="input w-24 tnum" value={sm.rate} onChange={(e) => setSm({ ...sm, rate: e.target.value })} placeholder="0.00" /></Field>
-                  <button className="btn-primary" disabled={addShip.isPending || !sm.code || !sm.name} onClick={() => addShip.mutate()}>{addShip.isPending ? <Spinner className="text-white" /> : 'Add'}</button>
-                  <button className="btn-ghost" onClick={() => setSm(null)}>Cancel</button>
-                </div>
-              )}
-            </FormSection>
-          )}
+          {section === 'shipping' && <ShippingMethods canManage={canManage} />}
 
           {section === 'taxes' && (
             <FormSection title="Taxes" description="A single base tax rate applied to orders."
@@ -177,7 +191,7 @@ export default function SettingsPage() {
                 <Field label="Tax rate %" htmlFor="s-tax" hint="Percentage applied to taxable order subtotals."><input id="s-tax" className="input max-w-[10rem] tnum" inputMode="decimal" value={tax} onChange={(e) => setTax(e.target.value)} /></Field>
               ) : (
                 <>
-                  <dl className="space-y-2.5 text-sm"><div className="flex justify-between max-w-md"><dt className="text-gray-500">Base tax rate</dt><dd className="font-medium tnum">{(cfg.taxRate / 100).toFixed(2)}%</dd></div></dl>
+                  <dl className="stack-y-2.5 text-sm"><div className="flex justify-between max-w-md"><dt className="text-gray-500">Base tax rate</dt><dd className="font-medium tnum">{(cfg.taxRate / 100).toFixed(2)}%</dd></div></dl>
                   {canManage && <button className="btn-ghost btn-sm" onClick={() => setTax((cfg.taxRate / 100).toFixed(2))}>Edit rate</button>}
                 </>
               )}
@@ -203,27 +217,54 @@ export default function SettingsPage() {
           )}
 
           {section === 'security' && (
+            <>
             <FormSection title="Two-factor authentication" description="Protect your account with an authenticator-app code at sign-in.">
               {tfa.data?.enabled ? (
                 <>
-                  <InlineAlert tone="positive" title="2FA is on for your account.">Enter a current code to turn it off.</InlineAlert>
-                  <Field label="Authenticator code"><input className="input tracking-widest text-center max-w-[10rem] tnum" inputMode="numeric" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Field>
+                  <InlineAlert tone="positive" title="2FA is on for your account.">{tfa.data.recoveryCodesRemaining} unused recovery code(s) left.{tfa.data.required ? ' 2FA is required for your account.' : ''}</InlineAlert>
+                  {newCodes && (
+                    <div className="stack-y-2">
+                      <p className="text-sm text-gray-600">New recovery codes (shown once; the old ones no longer work):</p>
+                      <ul aria-label="Recovery codes" className="grid grid-cols-2 gap-1 font-mono text-sm bg-gray-50 border border-gray-200 rounded-sm p-3 max-w-md">{newCodes.map((c) => <li key={c}>{c}</li>)}</ul>
+                      <button className="btn-ghost btn-sm" onClick={() => setNewCodes(null)}>Done</button>
+                    </div>
+                  )}
+                  <Field label="Authenticator or recovery code"><input className="input tracking-widest text-center max-w-[14rem] tnum" autoComplete="one-time-code" maxLength={19} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value.trim())} /></Field>
+                  <Field label="Current password"><input className="input max-w-sm" type="password" autoComplete="current-password" value={tfaPassword} onChange={(e) => setTfaPassword(e.target.value)} /></Field>
                   {disable2fa.error && <InlineAlert tone="critical">{(disable2fa.error as Error).message}</InlineAlert>}
-                  <button className="btn-danger" disabled={code.length !== 6 || disable2fa.isPending} onClick={() => disable2fa.mutate()}>{disable2fa.isPending ? <Spinner /> : 'Disable 2FA'}</button>
+                  {regenCodes.error && <InlineAlert tone="critical">{(regenCodes.error as Error).message}</InlineAlert>}
+                  <div className="flex gap-2">
+                    <button className="btn-ghost" disabled={!code || !tfaPassword || regenCodes.isPending} onClick={() => regenCodes.mutate()}>{regenCodes.isPending ? <Spinner /> : 'New recovery codes'}</button>
+                    <button className="btn-danger" disabled={!code || !tfaPassword || disable2fa.isPending} onClick={() => disable2fa.mutate()}>{disable2fa.isPending ? <Spinner /> : 'Disable 2FA'}</button>
+                  </div>
                 </>
-              ) : setup ? (
-                <>
-                  <p className="text-sm text-gray-600">Add this secret to your authenticator app, then enter the 6-digit code.</p>
-                  <div className="font-mono text-xs bg-gray-50 border border-gray-200 rounded p-2 break-all max-w-lg">{setup.secret}</div>
-                  <a className="text-xs text-brand hover:underline break-all" href={setup.otpauthUri}>otpauth link</a>
-                  <Field label="Verification code"><input className="input tracking-widest text-center max-w-[10rem] tnum" inputMode="numeric" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Field>
-                  {enable2fa.error && <InlineAlert tone="critical">{(enable2fa.error as Error).message}</InlineAlert>}
-                  <div className="flex gap-2"><button className="btn-primary" disabled={code.length !== 6 || enable2fa.isPending} onClick={() => enable2fa.mutate()}>{enable2fa.isPending ? <Spinner className="text-white" /> : 'Enable'}</button><button className="btn-ghost" onClick={() => { setSetup(null); setCode(''); }}>Cancel</button></div>
-                </>
+              ) : enrolling ? (
+                <TwoFactorEnroll onDone={() => { setEnrolling(false); tfa.refetch(); void refresh(); }} onCancel={() => setEnrolling(false)} />
               ) : (
-                <button className="btn-ghost" disabled={startSetup.isPending} onClick={() => startSetup.mutate()}>{startSetup.isPending ? <Spinner /> : 'Enable 2FA'}</button>
+                <button className="btn-ghost" onClick={() => setEnrolling(true)}>Enable 2FA</button>
               )}
             </FormSection>
+
+            <FormSection title="Password" description="Changing your password signs out every other session.">
+              {pwDone && <InlineAlert tone="positive">{pwDone}</InlineAlert>}
+              <Field label="Current password" htmlFor="pw-current"><input id="pw-current" className="input max-w-sm" type="password" autoComplete="current-password" value={pw.current} onChange={(e) => { setPwDone(null); setPw({ ...pw, current: e.target.value }); }} /></Field>
+              {tfa.data?.enabled && <Field label="Authenticator or recovery code" htmlFor="pw-totp"><input id="pw-totp" className="input tracking-widest text-center max-w-[14rem] tnum" autoComplete="one-time-code" maxLength={19} value={pw.totp} onChange={(e) => setPw({ ...pw, totp: e.target.value.trim() })} /></Field>}
+              <Field label="New password" htmlFor="pw-next"><input id="pw-next" className="input max-w-sm" type="password" autoComplete="new-password" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} /></Field>
+              <Field label="Confirm new password" htmlFor="pw-confirm"><input id="pw-confirm" className="input max-w-sm" type="password" autoComplete="new-password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} /></Field>
+              {changePassword.error && <InlineAlert tone="critical">{(changePassword.error as Error).message}</InlineAlert>}
+              <button className="btn-primary" disabled={!pw.current || !pw.next || changePassword.isPending} onClick={() => changePassword.mutate()}>{changePassword.isPending ? <Spinner className="text-white" /> : 'Change password'}</button>
+            </FormSection>
+
+            {store?.role === 'owner' && security.data && (
+              <FormSection title="Require 2FA" description="Owners and managers of this store must use two-factor authentication. Without it they can only set it up.">
+                <InlineAlert tone="neutral">{security.data.requireTotp ? 'Required for owners and managers of this store.' : 'Not required by this store.'}{security.data.installRequireTotp !== 'off' ? ` This installation also requires it (${security.data.installRequireTotp}).` : ''}</InlineAlert>
+                <Field label="Confirm with your password" htmlFor="req-pw"><input id="req-pw" className="input max-w-sm" type="password" autoComplete="current-password" value={reqPw.password} onChange={(e) => setReqPw({ ...reqPw, password: e.target.value })} /></Field>
+                {tfa.data?.enabled && <Field label="Authenticator or recovery code" htmlFor="req-totp"><input id="req-totp" className="input tracking-widest text-center max-w-[14rem] tnum" autoComplete="one-time-code" maxLength={19} value={reqPw.totp} onChange={(e) => setReqPw({ ...reqPw, totp: e.target.value.trim() })} /></Field>}
+                {setRequireTotp.error && <InlineAlert tone="critical">{(setRequireTotp.error as Error).message}</InlineAlert>}
+                <button className="btn-ghost" disabled={!reqPw.password || setRequireTotp.isPending} onClick={() => setRequireTotp.mutate(!security.data!.requireTotp)}>{setRequireTotp.isPending ? <Spinner /> : security.data.requireTotp ? 'Stop requiring 2FA' : 'Require 2FA'}</button>
+              </FormSection>
+            )}
+            </>
           )}
 
           {section === 'team' && (
@@ -231,7 +272,7 @@ export default function SettingsPage() {
               actions={canManage && !inv && <button className="btn-ghost btn-sm" onClick={() => setInv({ email: '', role: 'staff', password: '' })}><Plus size={14} /> Add staff</button>}>
               {!canManage ? <InlineAlert tone="neutral">Only owners and managers can manage staff.</InlineAlert> : (
                 <>
-                  <div className="divide-y divide-gray-100">
+                  <div className="rule-y rule-gray-100">
                     {staff.data?.items.map((u) => (
                       <div key={u.adminUserId} className="flex items-center justify-between py-2.5 text-sm">
                         <span className="font-medium">{u.email}{u.isYou && <span className="text-xs text-gray-400 font-normal"> (you)</span>}</span>
@@ -245,7 +286,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   {inv && (
-                    <div className="space-y-2 pt-1 max-w-lg">
+                    <div className="stack-y-2 pt-1 max-w-lg">
                       <div className="flex gap-2"><input className="input" placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><select className="input w-32" value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['staff', 'manager', 'owner', 'read_only'].map((r) => <option key={r}>{r}</option>)}</select></div>
                       <input className="input" type="password" placeholder="initial password (min 8)" value={inv.password} onChange={(e) => setInv({ ...inv, password: e.target.value })} />
                       <p className="text-xs text-gray-400">The invitee signs in with this email and password; they can change it later.</p>
@@ -260,7 +301,7 @@ export default function SettingsPage() {
 
           {section === 'account' && (
             <FormSection title="Account" description="Your personal sign-in to SellRight.">
-              <dl className="space-y-2.5 text-sm">
+              <dl className="stack-y-2.5 text-sm">
                 <div className="flex justify-between max-w-md"><dt className="text-gray-500">Email</dt><dd className="font-medium">{me?.email}</dd></div>
                 <div className="flex justify-between max-w-md"><dt className="text-gray-500">Your role</dt><dd className="font-medium capitalize">{store?.role}</dd></div>
               </dl>

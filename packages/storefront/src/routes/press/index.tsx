@@ -1,8 +1,10 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { hasContentViewFor } from '~/platform/content-view';
 
-export default component$(() => {
+const BasePressPage = component$(() => {
   return (
     <div style={{
       background: '#0A0A0A',
@@ -38,8 +40,10 @@ export default component$(() => {
   );
 });
 
+export default hasContentViewFor('/press/') ? BrandContentMount : BasePressPage;
+
 export const head = ({ resolveValue }: { resolveValue: any }) => {
-  const identity = resolveValue(useStoreIdentityLoader);
+  const identity = resolveValue(useStoreIdentityLoader).identity;
   return createSEOHead({
     title: `Press — ${identity.storeName}`,
     description: `Press inquiries, media kits, and review samples for ${identity.storeName}.`,

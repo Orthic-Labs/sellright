@@ -10,6 +10,7 @@ import {
   uuid,
   text,
   integer,
+  smallint,
   bigint,
   boolean,
   timestamp,
@@ -92,6 +93,7 @@ export const adminUser = pgTable('admin_user', {
   // nullable so every admin created by earlier flows (seed-admin, invites,
   // bootstrap) keeps working unchanged.
   name: text(),
+  kind: text().notNull().default('human'), // 'agent' = API-token identity (docs/plans/2026-10-10-agent-role-v5.md)
   // One-click install (plan §1.3): install-wide authority, distinct from any
   // per-store `owner` role. Owns system operations (backup/restore trigger,
   // recovery-kit download, add-store, future update trigger). Owning a store
@@ -143,12 +145,43 @@ export const staffInvite = pgTable('staff_invite', {
   createdAt: ts(),
 });
 
+export const adminApiToken = pgTable('admin_api_token', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  name: text().notNull(),
+  tokenHash: text().notNull().unique(),
+  createdBy: text(),
+  lastUsedAt: timestamp({ withTimezone: true }),
+  expiresAt: timestamp({ withTimezone: true }),
+  revokedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
+// One-time 2FA recovery codes (0097). Global registry like admin_user — RLS-exempt, no store_id.
+// Only sha256(code) is stored; used_at marks a spent code. See src/auth/second-factor.ts.
+export const adminRecoveryCode = pgTable('admin_recovery_code', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  codeHash: text().notNull(),
+  usedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
+// Accepted TOTP time-steps per admin (0097): the durable, cross-process replay guard. See auth/second-factor.ts.
+export const adminTotpUsedStep = pgTable('admin_totp_used_step', {
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  step: bigint({ mode: 'number' }).notNull(),
+  usedAt: ts(),
+}, (t) => [primaryKey({ columns: [t.adminUserId, t.step] })]);
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),
   customerId: uuid().references(() => customer.id),
   adminUserId: uuid().references(() => adminUser.id),
   tokenHash: text().notNull().unique(),
+  legacyExpiresAt: timestamp({ withTimezone: true }),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
   // WS-B follow-up: when THIS session last re-verified the admin's password
   // (+ TOTP, if enabled). Step-up-gated routes (GET /v1/admin/system/
@@ -156,6 +189,9 @@ export const session = pgTable('session', {
   // requireStepUp() in routes/admin-helpers.ts. Per-session, not per-admin:
   // stepping up in one browser tab must never grant it to another session.
   stepUpAt: timestamp({ withTimezone: true }),
+  apiTokenId: uuid().references(() => adminApiToken.id, { onDelete: 'cascade' }),
+  // 0098: last use of an ADMIN session (touched at most once a minute) for the idle timeout; null = created_at.
+  lastSeenAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
 });
 
@@ -340,6 +376,9 @@ export const customer = pgTable(
     sheeridVerifications: jsonb(),
     activeVerifications: text().array(),
     verificationMetadata: jsonb(),
+    // Birthday (month/day only — migration 0085) for the optional birthday bonus.
+    birthMonth: smallint(),
+    birthDay: smallint(),
     deletedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),

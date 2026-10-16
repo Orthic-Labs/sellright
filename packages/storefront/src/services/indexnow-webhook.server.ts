@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { productPath } from '~/platform/product-path';
 
 type Config = { host?: string; key?: string; keyLocation?: string; secret?: string; storeId?: string };
 const MAX_BODY = 16 * 1024;
@@ -45,7 +46,7 @@ export async function handleIndexNowWebhook(request: Request, config: Config, su
   try {
     const result = await submit('https://api.indexnow.org/indexnow', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, key, keyLocation, urlList: [`https://${host}/products/${encodeURIComponent(slug)}/`] }),
+      body: JSON.stringify({ host, key, keyLocation, urlList: [`https://${host}${productPath(slug)}`] }),
       signal: AbortSignal.timeout(8000),
     });
     if (result.status !== 200 && result.status !== 202) return reply(502, 'IndexNow did not accept the submission');

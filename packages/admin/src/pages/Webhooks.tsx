@@ -37,9 +37,9 @@ function SecretCallout({ secret, onDismiss }: { secret: string; onDismiss: () =>
   return (
     <div className="mb-4 rounded-lg border border-warning/30 bg-warning-soft p-4">
       <p className="text-sm font-semibold text-amber-800 mb-1">Copy your signing secret — it won't be shown again</p>
-      <p className="text-xs text-warning mb-3">Store this secret somewhere safe. Use it to verify webhook payloads by checking the <code className="font-mono bg-warning-soft px-1 rounded">X-Webhook-Signature</code> header on incoming requests.</p>
+      <p className="text-xs text-warning mb-3">Store this secret somewhere safe. Use it to verify webhook payloads by checking the <code className="font-mono bg-warning-soft px-1 rounded-sm">X-Webhook-Signature</code> header on incoming requests.</p>
       <div className="flex items-center gap-2">
-        <code className="flex-1 font-mono text-xs bg-surface border border-warning/30 rounded px-3 py-2 text-amber-900 break-all select-all">{secret}</code>
+        <code className="flex-1 font-mono text-xs bg-surface border border-warning/30 rounded-sm px-3 py-2 text-amber-900 break-all select-all">{secret}</code>
         <button
           className="btn-ghost flex items-center gap-1.5 text-warning border border-warning/30 hover:bg-warning-soft shrink-0"
           onClick={copy}
@@ -67,7 +67,7 @@ export default function WebhooksPage() {
   const key = ['webhooks', store?.slug];
   const { data, isLoading, error } = useQuery({
     queryKey: key,
-    queryFn: () => api.get<{ items: WebhookEndpoint[] }>('/admin/webhooks'),
+    queryFn: () => api.get<{ items: WebhookEndpoint[] }>('/webhooks'),
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
 
@@ -76,7 +76,7 @@ export default function WebhooksPage() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<CreateResponse>('/admin/webhooks', {
+      api.post<CreateResponse>('/webhooks', {
         url: formUrl.trim(),
         topics: parseTopics(formTopics),
       }),
@@ -91,12 +91,12 @@ export default function WebhooksPage() {
 
   const toggle = useMutation({
     mutationFn: (w: WebhookEndpoint) =>
-      api.patch(`/admin/webhooks/${w.id}`, { enabled: !w.enabled }),
+      api.patch(`/webhooks/${w.id}`, { enabled: !w.enabled }),
     onSuccess: invalidate,
   });
 
   const del = useMutation({
-    mutationFn: (id: string) => api.del(`/admin/webhooks/${id}`),
+    mutationFn: (id: string) => api.del(`/webhooks/${id}`),
     onSuccess: () => { setDeleteConfirm(null); invalidate(); },
   });
 

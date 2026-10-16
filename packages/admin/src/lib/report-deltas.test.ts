@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { halfPeriodDelta, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from './report-deltas.js';
+import { halfPeriodDelta, periodWindows, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from './report-deltas.js';
 
 const series = (xs: { day: string; orders: number; revenue: number }[]): TrendSeries => xs;
 
@@ -37,9 +37,36 @@ describe('halfPeriodDelta', () => {
     expect(halfPeriodDelta(s, (p) => p.revenue)).toBe(-50);
   });
 
+  it('compares equal outer windows for an odd series and omits its middle point', () => {
+    const s = series([10, 10, 1000, 20, 20].map((revenue, i) => ({ day: String(i), orders: 0, revenue })));
+    expect(periodWindows(s)).toEqual({ previous: s.slice(0, 2), current: s.slice(3) });
+    expect(halfPeriodDelta(s, (p) => p.revenue)).toBe(100);
+  });
+
+  it('returns 0% for five constant non-zero points', () => {
+    const s = series([1, 2, 3, 4, 5].map((day) => ({ day: String(day), orders: 1, revenue: 10 })));
+    expect(halfPeriodDelta(s, (p) => p.revenue)).toBe(0);
+  });
+
+  it('preserves even first-half / second-half windows', () => {
+    const s = series([1, 2, 3, 4, 5, 6].map((day) => ({ day: String(day), orders: 0, revenue: day })));
+    expect(periodWindows(s)).toEqual({ previous: s.slice(0, 3), current: s.slice(3) });
+  });
+
   it('handles a short, even-length series with all-zero values', () => {
     expect(halfPeriodDelta([], (p) => p.revenue)).toBeNull();
     expect(halfPeriodDelta(series([{ day: '1', orders: 0, revenue: 0 }]), (p) => p.revenue)).toBeNull();
+  });
+});
+
+describe('period comparison labels', () => {
+  it('uses the normalized windows used by the delta', () => {
+    const s = series([10, 10, 1000, 20, 20].map((revenue, i) => ({ day: String(i), orders: 0, revenue })));
+    const windows = periodWindows(s);
+    const prev = totals(windows.previous).revenue;
+    const cur = totals(windows.current).revenue;
+    const label = trendDeltaLabel(halfPeriodDelta(s, (p) => p.revenue), prev, cur);
+    expect([prev, cur, label.text]).toEqual([20, 40, '▲ 100% vs previous period']);
   });
 });
 

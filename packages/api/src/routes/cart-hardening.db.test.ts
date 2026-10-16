@@ -22,6 +22,7 @@
  * conventions: TRUNCATE store CASCADE wipe, seeds under withStore(),
  * x-store-slug header, real Hono handler via app.request().
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -37,9 +38,7 @@ import { cart } from './cart.js';
 import { checkout } from './checkout.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`cart-hardening test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'cart-hardening.db.test.ts');
 
 const STORE = 'bbbbbbbb-2222-2222-2222-222222222222';
 const STORE_B = 'bbbbbbbb-3333-3333-3333-333333333333';
@@ -183,6 +182,16 @@ describe('CART-01: exactly one order per cart', () => {
     expect(await orderCount()).toBe(1);
   });
 
+  it('persists the chosen shipping method (code + name) on the order', async () => {
+    const { token, revision } = await makeCart([{ sku: SKU_P, quantity: 1 }]);
+    const r = await checkoutReq({ cartToken: token, shippingMethodCode: SHIP_CODE, expectedRevision: revision, items: [{ sku: SKU_P, quantity: 1 }] });
+    expect(r.status).toBe(200);
+    const { code } = await r.json() as { code: string };
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode, n: s.order.shippingMethodName }).from(s.order).where(eq(s.order.code, code)));
+    expect(o!.c).toBe(SHIP_CODE);
+    expect(o!.n).toBeTruthy();
+  });
+
   it('concurrent same-cart checkouts reserve stock exactly once', async () => {
     const { token, revision } = await makeCart([{ sku: SKU_P, quantity: 3 }]);
     const [a, b] = await Promise.all([
@@ -319,6 +328,86 @@ describe('CART-02: a converted cart is terminal', () => {
     const row = await cartRowByToken(token);
     expect(row!.status).toBe('active');
     expect(revision).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ── CART-06: the storefront's read-only converted-checkout lookup ─────────────
+// GET /v1/shop/cart/{token}/checkout is how the storefront finds the original, possibly unpaid, order behind a
+// converted cart. It must never create or change anything, and must never reveal another store's order.
+describe('CART-06: GET /cart/{token}/checkout — read-only, store-scoped', () => {
+  async function convertedCart(): Promise<{ token: string; orderCode: string }> {
+    const { token, revision } = await makeCart([{ sku: SKU, quantity: 1 }]);
+    const res = await checkoutReq({ cartToken: token, expectedRevision: revision });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { code: string };
+    return { token, orderCode: body.code };
+  }
+
+  const lookup = (token: string, slug = SLUG) =>
+    app.request(`/v1/shop/cart/${token}/checkout`, { method: 'GET', headers: hdr({ 'x-store-slug': slug }) });
+
+  async function cartCount(): Promise<number> {
+    return withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT count(*)::int n FROM cart WHERE store_id = ${STORE}`);
+      return Number((r.rows[0] as { n: number }).n);
+    });
+  }
+
+  it('returns the ORIGINAL order of a converted cart, uncached', async () => {
+    const { token, orderCode } = await convertedCart();
+    const res = await lookup(token);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    const body = await res.json() as { code: string; state: string; grandTotal: number; receiptToken: string; currency: string };
+    expect(body.code).toBe(orderCode);
+    expect(typeof body.state).toBe('string');
+    expect(typeof body.grandTotal).toBe('number');
+    expect(typeof body.receiptToken).toBe('string');
+    expect(body.currency).toBe('USD');
+  });
+
+  it("another store's slug cannot read the order behind this store's cart token (404 ORDER_NOT_FOUND)", async () => {
+    const { token, orderCode } = await convertedCart();
+    const res = await lookup(token, SLUG_B);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string }; code?: string };
+    expect(body.error.code).toBe('ORDER_NOT_FOUND');
+    expect(JSON.stringify(body)).not.toContain(orderCode);
+    // The owning store still resolves it: the 404 above was isolation, not a missing order.
+    expect((await lookup(token)).status).toBe(200);
+  });
+
+  it('a cart that is not converted, and an unknown token, are both 404 ORDER_NOT_FOUND and create no order', async () => {
+    const { token } = await makeCart([{ sku: SKU, quantity: 1 }]);
+    const before = { orders: await orderCount(), carts: await cartCount() };
+    for (const t of [token, 'no-such-token']) {
+      const res = await lookup(t);
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('ORDER_NOT_FOUND');
+    }
+    expect(await orderCount()).toBe(before.orders);
+    expect(await cartCount()).toBe(before.carts);
+    expect((await cartRowByToken(token))!.status).toBe('active');
+  });
+
+  it('repeated lookups leave the order and cart counts and the cart row unchanged', async () => {
+    const { token, orderCode } = await convertedCart();
+    const rowBefore = await cartRowByToken(token);
+    const before = { orders: await orderCount(), carts: await cartCount() };
+    expect(before.orders).toBe(1);
+
+    for (let i = 0; i < 3; i++) {
+      const res = await lookup(token);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { code: string }).code).toBe(orderCode);
+    }
+
+    expect(await orderCount()).toBe(before.orders);
+    expect(await cartCount()).toBe(before.carts);
+    const rowAfter = await cartRowByToken(token);
+    expect(rowAfter!.status).toBe('converted');
+    expect(rowAfter!.convertedOrderId).toBe(rowBefore!.convertedOrderId);
+    expect(rowAfter!.revision).toBe(rowBefore!.revision);
   });
 });
 

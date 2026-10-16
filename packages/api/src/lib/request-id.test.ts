@@ -98,4 +98,23 @@ describe('request-id middleware', () => {
     expect(typeof access.durationMs).toBe('number');
     expect(access.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  it('logs the matched route TEMPLATE, never a token carried in the path; unmatched paths are redacted (incl. %-encoding)', async () => {
+    const { requestIdMiddleware, accessLogMiddleware } = await import('./request-id.js');
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.use('*', accessLogMiddleware());
+    app.get('/v1/shop/subscriber/confirm/:token', (c) => c.json({ ok: true }));
+    const secret = 'Zx9secretTOKENvalue1234567890abcdef';
+    await app.request(`/v1/shop/subscriber/confirm/${secret}`, { headers: { 'x-request-id': 'req-tpl-1' } });
+    await app.request(`/v1/nowhere/${encodeURIComponent('tok/en%' + secret)}`, { headers: { 'x-request-id': 'req-tpl-2' } });
+    await app.request('/v1/nowhere/%5A%78%39abc', { headers: { 'x-request-id': 'req-tpl-3' } });
+    const all = captured.join('');
+    expect(all).not.toContain(secret);
+    expect(all).not.toContain('Zx9abc');
+    const parsed = all.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    expect(parsed.find((p) => p.requestId === 'req-tpl-1')!.path).toBe('/v1/shop/subscriber/confirm/:token');
+    expect(parsed.find((p) => p.requestId === 'req-tpl-2')!.path).toBe('/v1/nowhere/:redacted');
+    expect(parsed.find((p) => p.requestId === 'req-tpl-3')!.path).toBe('/v1/nowhere/:redacted');
+  });
 });

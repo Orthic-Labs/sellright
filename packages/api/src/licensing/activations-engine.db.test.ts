@@ -11,8 +11,10 @@
  *
  * Runs against a *_test database (TRUNCATEs). vitest runs DB files serially.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import {
@@ -25,9 +27,7 @@ import {
 import { clearDevicePolicies, registerDevicePolicy } from './device-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`activations-engine test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'activations-engine.db.test.ts');
 
 const STORE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const STORE_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -255,5 +255,39 @@ describe('cross-tenant isolation', () => {
     expect(r.kind).toBe('notfound');
     const inv = await withStore(STORE_B, (tx) => getEntitlementIssuanceInventory(tx, {}));
     expect(inv).toEqual({ canonicalV2: 0, legacyOrUnknown: 0, canRemoveLegacyVerifier: true });
+  });
+});
+
+describe('re-admitting a tombstoned device counts against live capacity (seat-cap bypass)', () => {
+  const act = (licenseKey: string, deviceId: string) => withStore(STORE_A, (tx) => activateLicenseOnDevice(tx, {
+    storeId: STORE_A, appKey: 'testapp', licenseKey, deviceId, activationSource: 'desktop',
+  }));
+  const tombstone = (deviceId: string) => withStore(STORE_A, (tx) => tx.execute(sql`
+    UPDATE license_activation SET state = 'removed', removed_at = now()
+    WHERE device_id_hash = ${createHash('sha256').update(deviceId).digest('hex')}`));
+  const live = () => withStore(STORE_A, async (tx) => Number(((await tx.execute(sql`SELECT count(*)::int AS n FROM license_activation WHERE state = 'active'`)).rows[0] as { n: number }).n));
+
+  it('flat cap: d1,d2 on 2 seats; d1 removed; d3 takes the seat; d1 coming back is full', async () => {
+    await seedLicense({ licenseKey: 'flat-tomb', seats: 2 });
+    for (const d of ['d1', 'd2']) expect((await act('flat-tomb', d)).kind).toBe('ok');
+    await tombstone('d1');
+    expect((await act('flat-tomb', 'd3')).kind).toBe('ok');
+    expect((await act('flat-tomb', 'd1')).kind).toBe('full');
+    expect(await live()).toBe(2);
+  });
+
+  it('pool cap: c1,c2 fill the computer pool; c1 removed; c3 takes the slot; c1 coming back is full', async () => {
+    await seedLicense({ licenseKey: 'pool-tomb', seats: 0, metadata: { device_policy: MARKER } });
+    for (const d of ['c1', 'c2']) expect((await act('pool-tomb', d)).kind).toBe('ok');
+    await tombstone('c1');
+    expect((await act('pool-tomb', 'c3')).kind).toBe('ok');
+    expect((await act('pool-tomb', 'c1')).kind).toBe('full');
+    expect(await live()).toBe(2);
+  });
+
+  it('a LIVE same device re-activating still takes no extra seat', async () => {
+    await seedLicense({ licenseKey: 'flat-live', seats: 1 });
+    expect((await act('flat-live', 'only')).kind).toBe('ok');
+    expect((await act('flat-live', 'only')).kind).toBe('ok');
   });
 });

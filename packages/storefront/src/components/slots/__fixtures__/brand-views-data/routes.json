@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "content": [
+    {
+      "path": "/our/story/",
+      "pageKey": "our-story",
+      "head": {
+        "title": "Our story",
+        "description": "The fixture story."
+      }
+    },
+    {
+      "path": "/care/hidden-page/",
+      "pageKey": "hidden",
+      "head": {
+        "title": "Hidden",
+        "description": "Not indexed.",
+        "noindex": true
+      }
+    },
+    {
+      "path": "/single-story/",
+      "pageKey": "single-story",
+      "head": {
+        "title": "Single story",
+        "description": "A one-segment page."
+      }
+    }
+  ],
+  "pages": {
+    "/blog/": {
+      "head": {
+        "title": "The fixture journal"
+      }
+    }
+  },
+  "blog": {
+    "pageSize": 100
+  },
+  "home": {
+    "spotlight": {
+      "key": "shirt",
+      "slug": "e2e-shirt"
+    }
+  },
+  "productPage": {
+    "related": true,
+    "content": {
+      "e2e-shirt": {
+        "designNote": "A fixture design note.",
+        "faqs": [
+          {
+            "q": "Fixture question?",
+            "a": "Fixture answer."
+          }
+        ]
+      }
+    }
+  }
+}

@@ -8,7 +8,8 @@
  * No key configured → createPayment/refund fail loudly; the route layer gates on
  * isPaymentMethodEnabled so this only runs when a store has stripe turned on.
  */
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
+import { newStripeClient } from './stripe-client.js';
 import { env } from '../env.js';
 import { withStore, unsafeUnscopedDb } from '../db/client.js';
 import { store as storeTable } from '../db/schema-core.js';
@@ -85,7 +86,7 @@ export async function resolveStripeClient(storeId: string, mode: StripeMode): Pr
   const key = (await resolveStripeCreds(storeId, mode)).secretKey;
   if (!key) throw new Error(`Stripe secret key is not configured for this store (${mode} mode)`);
   let client = _clients.get(key);
-  if (!client) { client = new Stripe(key); _clients.set(key, client); }
+  if (!client) { client = newStripeClient(key); _clients.set(key, client); }
   return client;
 }
 
@@ -125,7 +126,7 @@ export async function listAllStoreIds(): Promise<string[]> {
 // secret. A throwaway client is fine for this.
 let _webhookVerifier: Stripe | null = null;
 export function verifyStripeWebhook(rawBody: string, signature: string, webhookSecret: string): Stripe.Event {
-  _webhookVerifier ??= new Stripe('sk_test_webhook_verify_only');
+  _webhookVerifier ??= newStripeClient('sk_test_webhook_verify_only');
   return _webhookVerifier.webhooks.constructEvent(rawBody, signature, webhookSecret);
 }
 
@@ -315,7 +316,8 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
   const pi = await client.paymentIntents.create({
     amount: opts.amount,
     currency: opts.currency.toLowerCase(),
-    metadata: { orderCode: opts.orderCode, storeId: opts.storeId },
+    // mintKey: the mint-loop key (PAYMENT-TIMING §4.2). Lets the orphan sweep match a pre-mint row to its PI.
+    metadata: { orderCode: opts.orderCode, storeId: opts.storeId, ...(opts.idempotencyKey ? { mintKey: opts.idempotencyKey } : {}) },
     automatic_payment_methods: { enabled: true },
   }, opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined);
   return { clientSecret: pi.client_secret ?? '', intentId: pi.id };

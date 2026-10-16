@@ -1,0 +1,2 @@
+# packages/storefront/.gitignore ignores every directory named "lib"; the tool's own lib/ must be tracked or the cold archive lacks it.
+!lib/

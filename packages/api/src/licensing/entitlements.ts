@@ -25,10 +25,21 @@ function addDays(d: Date, days: number | null): Date | null {
   return new Date(d.getTime() + days * 86_400_000);
 }
 
+/** Fulfilment types whose lines are granted licences at issuance (with an appKey). Physical lines never are. */
+const ENTITLEMENT_FULFILLMENT_TYPES: readonly string[] = ['digital_download', 'license', 'update_pass'];
+
+/**
+ * THE predicate for "this variant carries an entitlement": issuance (buildLicenseGrants) and the agent order-edit gate
+ * both use it, so what an agent may not touch is exactly what issuance would grant a licence for.
+ */
+export function isEntitlementBearing(variant: { fulfillmentType: string; appKey: string | null }): boolean {
+  return ENTITLEMENT_FULFILLMENT_TYPES.includes(variant.fulfillmentType) && !!variant.appKey;
+}
+
 export function buildLicenseGrants(lines: LicenseGrantInput[], now = new Date()): LicenseGrant[] {
   const grants: LicenseGrant[] = [];
   for (const line of lines) {
-    if (!['digital_download', 'license', 'update_pass'].includes(line.fulfillmentType) || !line.appKey) continue;
+    if (!isEntitlementBearing(line) || !line.appKey) continue;
     for (let i = 0; i < line.quantity; i++) {
       grants.push({
         orderLineId: line.orderLineId,

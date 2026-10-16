@@ -7,10 +7,12 @@ import { lookupPostalCode } from '~/utils/postal-lookup';
 import { AddressCountrySelect } from './AddressCountrySelect';
 import { AddressTextInput } from './AddressTextInput';
 import { loadGuestShippingAddress, saveGuestShippingAddress } from './address-guest-storage';
+import { guestRestorePatch } from './guest-restore';
 import {
  ValidationErrors,
  isShippingAddressFieldsValid,
  normalizeShippingAddress,
+ postalLookupPatch,
  validateAddressField,
 } from './address-form-utils';
 
@@ -51,30 +53,22 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	});
 
 	const hasUserInteracted = useSignal(false);
+	// Fields the shopper has typed into themselves: a postal lookup must never replace those.
+	const userEdited = useStore<Record<string, boolean>>({});
 	const postalLookupSeq = useSignal(0);
 
+	// Not run-once: the qwikloader re-dispatches `qinit` to any element that re-acquires the listener after boot, so
+	// this fires again when the payment panel re-renders after PLACE ORDER. guestRestorePatch only ever fills empty
+	// fields (+ the remembered country), so a re-run can't blank what the shopper typed.
 	useOnDocument('qinit', $(async () => {
 		if (appState.customer?.id && appState.customer.id !== CUSTOMER_NOT_DEFINED_ID) return;
 
 		const guestData = await loadGuestShippingAddress();
 		if (guestData) {
-			appState.customer = {
-				...appState.customer,
-				firstName: guestData.firstName || '',
-				lastName: guestData.lastName || '',
-				emailAddress: guestData.emailAddress || ''
-			};
-			appState.shippingAddress = {
-				...appState.shippingAddress,
-				streetLine1: guestData.streetLine1 || '',
-				streetLine2: guestData.streetLine2 || '',
-				city: guestData.city || '',
-				province: guestData.province || '',
-				postalCode: guestData.postalCode || '',
-				countryCode: guestData.countryCode || '',
-				phoneNumber: guestData.phoneNumber || ''
-			};
-			localCountryCode.value = guestData.countryCode || '';
+			const patch = guestRestorePatch(appState.customer, appState.shippingAddress, guestData);
+			if (Object.keys(patch.customer).length) appState.customer = { ...appState.customer, ...patch.customer };
+			if (Object.keys(patch.shipping).length) appState.shippingAddress = { ...appState.shippingAddress, ...patch.shipping };
+			if (patch.shipping.countryCode) localCountryCode.value = patch.shipping.countryCode;
 		} else {
 			const storedCountry = CountryPreferenceService.getCountry();
 			if (storedCountry && storedCountry !== appState.shippingAddress.countryCode) {
@@ -197,6 +191,23 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		}, 300) as unknown as number;
 	});
 
+	const scheduleSync$ = $(() => {
+		const hasAllRequiredFields =
+			localFormData.value.streetLine1.trim() &&
+			localFormData.value.city.trim() &&
+			localFormData.value.province.trim() &&
+			localFormData.value.postalCode.trim();
+
+		if (hasAllRequiredFields) {
+			if (validationTimer.value) {
+				clearTimeout(validationTimer.value);
+			}
+			validationTimer.value = setTimeout(() => {
+				validateAndSync$();
+			}, 300) as unknown as number;
+		}
+	});
+
 	const handleInputChange$ = $((fieldName: string, value: string | boolean) => {
 		if (!hasUserInteracted.value && onUserInteraction$) {
 			hasUserInteracted.value = true;
@@ -229,6 +240,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 			}, dropdownState.DEBOUNCE_DELAY) as any;
 		} else {
 			(localFormData.value as any)[fieldName] = value;
+			userEdited[fieldName] = true;
 		}
 
 		if (typeof value === 'string' && touchedFields.value.has(fieldName)) {
@@ -236,35 +248,41 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 			validateField$(fieldName, value, countryCode);
 		}
 
-		const hasAllRequiredFields = 
-			localFormData.value.streetLine1.trim() &&
-			localFormData.value.city.trim() &&
-			localFormData.value.province.trim() &&
-			localFormData.value.postalCode.trim();
-
-		if (hasAllRequiredFields) {
-			if (validationTimer.value) {
-				clearTimeout(validationTimer.value);
-			}
-			validationTimer.value = setTimeout(() => {
-				validateAndSync$();
-			}, 300) as unknown as number;
-		}
+		scheduleSync$();
 	});
 
+	// Fills city + state from the postal code. The lookup answers asynchronously, so by the time it lands the shopper
+	// may already be in (or have typed into) the very field it wants to fill. Writing the field then does two things at
+	// once: the form signal re-renders the <input> with the looked-up value, and that programmatic `value` assignment
+	// moves the caret to the end of a field the shopper has just focused/selected, so their next keystroke is appended
+	// to the looked-up value instead of replacing it ("NV" typed over a looked-up "NV" became "NVNV"). So the patch skips
+	// a focused or shopper-edited field, and the one write that is applied lands on the live <input> in the same tick it
+	// is decided on — the re-render that follows assigns an identical value, which leaves the caret/selection alone.
 	const runPostalLookup$ = $(async (postalValue: string, countryValue: string) => {
 		if (!postalValue || !countryValue) return;
 		const seq = ++postalLookupSeq.value;
 		const result = await lookupPostalCode(countryValue, postalValue);
 		if (seq !== postalLookupSeq.value) return;
 		if (!result) return;
-		handleInputChange$('city', result.city);
-		if (result.province) handleInputChange$('province', result.province);
-		localFormData.value = {
-			...localFormData.value,
-			city: result.city,
-			...(result.province ? { province: result.province } : {}),
+		const live = (field: 'city' | 'province') => {
+			const el = document.getElementById(field) as HTMLInputElement | null;
+			return el ? el.value : localFormData.value[field];
 		};
+		const patch = postalLookupPatch({
+			current: { city: live('city'), province: live('province') },
+			userEdited: { city: !!userEdited.city, province: !!userEdited.province },
+			focusedField: document.activeElement?.id || null,
+			result,
+		});
+		const fields = Object.keys(patch) as Array<'city' | 'province'>;
+		if (fields.length === 0) return;
+		for (const field of fields) {
+			const el = document.getElementById(field) as HTMLInputElement | null;
+			if (el && el.value !== patch[field]) el.value = patch[field]!;
+			if (touchedFields.value.has(field)) validateField$(field, patch[field]!, localCountryCode.value || 'US');
+		}
+		localFormData.value = { ...localFormData.value, ...patch };
+		scheduleSync$();
 	});
 
 	const getFieldClasses = (fieldName: string) => {

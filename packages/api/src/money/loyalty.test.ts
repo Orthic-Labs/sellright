@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_LOYALTY_SETTINGS, centsToPoints, earnableCents, loyaltySettingsFromConfig, planRedemption,
-  pointsEarned, pointsToCents, proportionalTarget, unpostedExpiredPoints, type LoyaltySettings,
+  pointsEarned, pointsToCents, multiplierBonusPoints, proportionalTarget, unpostedExpiredPoints, type LoyaltySettings,
 } from './loyalty.js';
 import { calculateOrderTotals } from './totals.js';
 
@@ -18,7 +18,7 @@ describe('loyalty settings', () => {
   });
   it('merges a partial block over defaults', () => {
     const cfg = loyaltySettingsFromConfig({ loyalty: { enabled: true, earnRatePerDollar: 5 } });
-    expect(cfg).toMatchObject({ enabled: true, earnRatePerDollar: 5, pointsPerDollarOff: 100, expiryDays: null });
+    expect(cfg).toMatchObject({ enabled: true, earnRatePerDollar: 5, pointsPerDollarOff: 10, expiryDays: null });
   });
 });
 
@@ -128,5 +128,50 @@ describe('totals with a points discount', () => {
     const t = calculateOrderTotals({ lines: [{ unitPrice: 500, quantity: 2 }], shipping: 0, taxRate: 0 });
     expect(t.pointsDiscount).toBe(0);
     expect(t.discountTotal).toBe(0);
+  });
+});
+
+describe('REWARDS-1 program defaults', () => {
+  it('earns 1 point per $1, redeems 10 points = $1, never expires; optional bonuses are off', () => {
+    expect(DEFAULT_LOYALTY_SETTINGS).toMatchObject({
+      earnRatePerDollar: 1, pointsPerDollarOff: 10, expiryDays: null,
+      signupBonusPoints: 0, firstOrderBonusPoints: 0, birthdayBonusPoints: 0, productMultipliers: [],
+    });
+    expect(DEFAULT_LOYALTY_SETTINGS.reviewBonusPoints).toBeGreaterThan(0);
+    expect(pointsToCents(10, DEFAULT_LOYALTY_SETTINGS.pointsPerDollarOff)).toBe(100);
+  });
+  it('an older stored block without the bonus fields still parses (defaults fill in)', () => {
+    const cfg = loyaltySettingsFromConfig({ loyalty: { enabled: true, earnRatePerDollar: 2, pointsPerDollarOff: 100, minRedeemPoints: 0, maxRedeemPercentOfSubtotal: null, expiryDays: null } });
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.signupBonusPoints).toBe(0);
+    expect(cfg.productMultipliers).toEqual([]);
+  });
+  it('validates bonus fields', () => {
+    expect(loyaltySettingsFromConfig({ loyalty: { enabled: true, reviewBonusPoints: -1 } }).enabled).toBe(false);
+    expect(loyaltySettingsFromConfig({ loyalty: { enabled: true, productMultipliers: [{ productId: 'nope', multiplier: 2 }] } }).enabled).toBe(false);
+    expect(loyaltySettingsFromConfig({ loyalty: { enabled: true, productMultipliers: [{ productId: 'aaaaaaaa-0000-0000-0000-000000000001', multiplier: 0.5 }] } }).enabled).toBe(false);
+  });
+});
+
+describe('multiplierBonusPoints', () => {
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const B = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const base = { subtotal: 20000, earnableCents: 20000, earnRatePerDollar: 1 };
+  it('adds (multiplier-1) extra copies of the line base points, for chosen products only', () => {
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: A, cents: 10000 }, { productId: B, cents: 10000 }], multipliers: [{ productId: A, multiplier: 3 }] })).toBe(200);
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: B, cents: 20000 }], multipliers: [{ productId: A, multiplier: 3 }] })).toBe(0);
+  });
+  it('discounts shrink the multiplied bonus proportionally; fractional multipliers floor', () => {
+    expect(multiplierBonusPoints({ subtotal: 20000, earnableCents: 10000, earnRatePerDollar: 1, lines: [{ productId: A, cents: 20000 }], multipliers: [{ productId: A, multiplier: 2 }] })).toBe(100);
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: A, cents: 10000 }], multipliers: [{ productId: A, multiplier: 1.5 }] })).toBe(50);
+  });
+  it('is zero with no rate, no subtotal, no multipliers, or multiplier 1', () => {
+    expect(multiplierBonusPoints({ ...base, earnRatePerDollar: 0, lines: [{ productId: A, cents: 100 }], multipliers: [{ productId: A, multiplier: 2 }] })).toBe(0);
+    expect(multiplierBonusPoints({ ...base, subtotal: 0, lines: [{ productId: A, cents: 100 }], multipliers: [{ productId: A, multiplier: 2 }] })).toBe(0);
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: A, cents: 100 }], multipliers: [] })).toBe(0);
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: A, cents: 10000 }], multipliers: [{ productId: A, multiplier: 1 }] })).toBe(0);
+  });
+  it('matches product ids case-insensitively', () => {
+    expect(multiplierBonusPoints({ ...base, lines: [{ productId: A.toUpperCase(), cents: 10000 }], multipliers: [{ productId: A, multiplier: 2 }] })).toBe(100);
   });
 });

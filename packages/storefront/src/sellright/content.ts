@@ -99,10 +99,10 @@ function normalizeTrackedOrder(raw: Record<string, unknown>): TrackedOrder {
  *  untyped in the OpenAPI doc (`content: { "application/json": unknown }`)
  *  — the API doesn't publish a schema for it — so this is the one place that
  *  normalizes the raw payload into `TrackedOrder`. */
-export async function trackOrder(code: string, email: string): Promise<TrackOrderResult> {
+export async function trackOrder(code: string, email: string, turnstileToken?: string): Promise<TrackOrderResult> {
 	try {
 		const { data, error } = await sellright().GET('/v1/shop/track', {
-			params: { query: { code, email } },
+			params: { query: { code, email, turnstileToken: turnstileToken || undefined } },
 		});
 		if (error) return { success: false, error: 'Order not found for that code + email.' };
 		return { success: true, order: normalizeTrackedOrder(data as Record<string, unknown>) };
@@ -120,17 +120,20 @@ export async function trackOrder(code: string, email: string): Promise<TrackOrde
 /** POST /v1/shop/newsletter-signup. `honeypot` is a client-side-only bot trap
  *  (the field storefront forms already render hidden) — the API has no such
  *  field, so a filled honeypot short-circuits here and never calls out. */
-export async function newsletterSignup(email: string, honeypot?: string): Promise<NewsletterSignupResult> {
+export async function newsletterSignup(email: string, honeypot?: string, turnstileToken?: string): Promise<NewsletterSignupResult> {
 	if (honeypot) return { ok: true };
 	try {
 		const { error } = await sellright().POST('/v1/shop/newsletter-signup', {
-			body: { email, source: 'storefront' },
+			body: { email, source: 'storefront', turnstileToken: turnstileToken || undefined },
 		});
 		if (error) return { ok: false, message: 'Subscription failed. Please try again.' };
 		return { ok: true };
 	} catch (err) {
 		if (srErrorStatus(err) === 429) {
 			return { ok: false, message: 'Too many signups from this IP. Try again in an hour.' };
+		}
+		if (srErrorStatus(err) === 403) {
+			return { ok: false, message: 'Security check failed. Please try again.' };
 		}
 		return { ok: false, message: 'Subscription failed. Please try again.' };
 	}

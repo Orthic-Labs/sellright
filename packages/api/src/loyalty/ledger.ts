@@ -15,14 +15,20 @@
  *
  * Callers own the transaction (withStore → RLS scoped to the store).
  */
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
+import { customerOwnsOrder, orderProvenanceFilter } from '../auth/order-access.js';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { lockOrderRowsInTx } from '../db/locks.js';
 import {
+  earnableCents,
   loyaltySettingsFromConfig,
+  multiplierBonusPoints,
+  pointsEarned,
   proportionalTarget,
   unpostedExpiredPoints,
   type LoyaltySettings,
+  type ProductMultiplier,
 } from '../money/loyalty.js';
 
 export type LoyaltyKind = s.LoyaltyLedgerKind;
@@ -33,6 +39,10 @@ export interface OrderLoyaltySnapshot {
   pointsDiscount: number;
   earnPoints: number;
   expiryDays: number | null;
+  /** Earn rate + product multipliers in force at checkout; lets an order edit
+   *  recompute the earn on the order's OWN terms. Absent on older snapshots. */
+  earnRatePerDollar?: number;
+  productMultipliers?: ProductMultiplier[];
 }
 
 export function orderLoyaltySnapshot(metadata: unknown): OrderLoyaltySnapshot | null {
@@ -42,6 +52,8 @@ export function orderLoyaltySnapshot(metadata: unknown): OrderLoyaltySnapshot | 
   return {
     redeemPoints: int(raw.redeemPoints), pointsDiscount: int(raw.pointsDiscount), earnPoints: int(raw.earnPoints),
     expiryDays: Number.isSafeInteger(raw.expiryDays) && (raw.expiryDays as number) > 0 ? raw.expiryDays as number : null,
+    ...(Number.isSafeInteger(raw.earnRatePerDollar) && (raw.earnRatePerDollar as number) > 0 ? { earnRatePerDollar: raw.earnRatePerDollar as number } : {}),
+    ...(Array.isArray(raw.productMultipliers) ? { productMultipliers: (raw.productMultipliers as ProductMultiplier[]).filter((m) => m && typeof m.productId === 'string' && Number(m.multiplier) > 1) } : {}),
   };
 }
 
@@ -54,12 +66,15 @@ export async function lockCustomerLoyalty(tx: Tx, storeId: string, customerId: s
 }
 
 async function customerEntries(tx: Tx, customerId: string) {
+  const [customer] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1);
+  if (!customer) return [];
   // Credits before debits on a timestamp tie: a debit can never precede the
   // credit it spends (balances never go negative), so this is the true order.
   return tx
     .select({ kind: s.loyaltyLedger.kind, points: s.loyaltyLedger.points, expiresAt: s.loyaltyLedger.expiresAt, createdAt: s.loyaltyLedger.createdAt })
     .from(s.loyaltyLedger)
-    .where(eq(s.loyaltyLedger.customerId, customerId))
+    .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
+    .where(and(eq(s.loyaltyLedger.customerId, customerId), or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer)))))
     .orderBy(asc(s.loyaltyLedger.createdAt), sql`(${s.loyaltyLedger.points} < 0)`, asc(s.loyaltyLedger.id));
 }
 
@@ -93,6 +108,10 @@ export async function postExpiry(tx: Tx, storeId: string, customerId: string, no
 /** Lock + expire + read: the balance a redemption/adjustment may spend. */
 export async function lockedAvailable(tx: Tx, storeId: string, customerId: string, now = new Date()): Promise<number> {
   await lockCustomerLoyalty(tx, storeId, customerId);
+  // Edit earn that was held back while an order balance was unpaid becomes
+  // spendable only once that balance is settled; materialize it here so a
+  // spend/adjust always sees it (idempotent per order_edit id).
+  await settleDeferredEditEarns(tx, storeId, customerId, now);
   await postExpiry(tx, storeId, customerId, now);
   return (await loyaltyBalance(tx, customerId, now)).available;
 }
@@ -116,6 +135,8 @@ export async function postEarnForPaidOrder(tx: Tx, storeId: string, orderId: str
     .from(s.order).where(eq(s.order.id, orderId)).limit(1);
   const snap = orderLoyaltySnapshot(order?.metadata);
   if (!order?.customerId || !snap || snap.earnPoints <= 0) return 0;
+  const [customer] = await tx.select({ id: s.customer.id, email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
+  if (!customerOwnsOrder(customer, order)) return 0;
   await lockCustomerLoyalty(tx, storeId, order.customerId);
   const inserted = await tx.insert(s.loyaltyLedger).values({
     storeId, customerId: order.customerId, orderId, kind: 'earn', points: snap.earnPoints,
@@ -149,7 +170,11 @@ export async function reconcileOrderLoyalty(tx: Tx, input: {
   const sum = (f: (r: typeof locked[number]) => number) => locked.reduce((n, r) => n + f(r), 0);
   const redeemed = sum((r) => (r.kind === 'redeem' ? -r.points : 0));
   const restored = sum((r) => (r.kind === 'reverse' && r.reason === 'redeem_restore' ? r.points : 0));
-  const earned = sum((r) => (r.kind === 'earn' ? r.points : 0));
+  // Earned base = the original earn row plus every order-edit earn adjustment
+  // (intended points: posted + shortfall), so a refund after an edit reverses
+  // what the edited order actually earned, never the pre-edit figure.
+  const earned = Math.max(0, sum((r) => (r.kind === 'earn' ? r.points
+    : r.kind === 'adjust' && r.reason === 'order_edit_earn' ? r.points - r.shortfall : 0)));
   const earnReversed = sum((r) => (r.kind === 'reverse' && r.reason === 'earn_reversal' ? -r.points + r.shortfall : 0));
   const now = new Date();
   const out = { ...none };
@@ -200,6 +225,148 @@ export async function reconcileRefundLoyalty(tx: Tx, input: { storeId: string; o
   });
 }
 
+/**
+ * Points an edited order should have earned, on the order's own earn terms
+ * (snapshot rate + multipliers). Null when it cannot be computed exactly: a
+ * snapshot taken before the rate was recorded has no rate to apply.
+ */
+export function editedEarnTarget(snap: OrderLoyaltySnapshot, input: {
+  subtotal: number; discountTotal: number; taxRate: number; taxInclusive: boolean; lines: Array<{ productId: string; cents: number }>;
+}): number | null {
+  if (!snap.earnRatePerDollar) return null;
+  const base = earnableCents(input);
+  return pointsEarned(base, snap.earnRatePerDollar) + multiplierBonusPoints({
+    lines: input.lines, subtotal: input.subtotal, earnableCents: base,
+    earnRatePerDollar: snap.earnRatePerDollar, multipliers: snap.productMultipliers ?? [],
+  });
+}
+
+/**
+ * Order edit changed a PAID order's merchandise: post the earn delta as an
+ * `adjust` row (reason order_edit_earn), idempotent per order_edit id
+ * (source_ref order_edit:<id>:earn). The tracked earn is the original `earn`
+ * row plus every prior edit adjustment (points - shortfall). A reduction larger
+ * than the spendable balance posts only what is available and records the rest
+ * as `shortfall` — the balance never goes negative. No-op when the order never
+ * earned (guest, program off, unpaid at the time) or the snapshot has no rate.
+ */
+export async function postEditEarnAdjustment(tx: Tx, input: {
+  storeId: string; orderId: string; editId: string; targetEarn: number; actor: string;
+}): Promise<{ delta: number; posted: number; shortfall: number }> {
+  const none = { delta: 0, posted: 0, shortfall: 0 };
+  const [order] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, input.orderId)).limit(1);
+  if (!order?.customerId) return none;
+  const snap = orderLoyaltySnapshot(order.metadata);
+  await lockCustomerLoyalty(tx, input.storeId, order.customerId);
+  const rows = await tx.select().from(s.loyaltyLedger).where(eq(s.loyaltyLedger.orderId, input.orderId));
+  if (!rows.some((r) => r.kind === 'earn')) return none;
+  const tracked = rows.reduce((n, r) => n + (r.kind === 'earn' ? r.points : r.kind === 'adjust' && r.reason === 'order_edit_earn' ? r.points - r.shortfall : 0), 0);
+  const delta = Math.max(0, input.targetEarn) - tracked;
+  if (delta === 0) return none;
+  const now = new Date();
+  if (delta > 0) {
+    const ins = await tx.insert(s.loyaltyLedger).values({
+      storeId: input.storeId, customerId: order.customerId, orderId: input.orderId, kind: 'adjust', points: delta,
+      expiresAt: snap?.expiryDays ? new Date(now.getTime() + snap.expiryDays * DAY_MS) : null,
+      sourceRef: `order_edit:${input.editId}:earn`, actor: input.actor, reason: 'order_edit_earn', createdAt: now,
+    }).onConflictDoNothing().returning({ id: s.loyaltyLedger.id });
+    return ins.length ? { delta, posted: delta, shortfall: 0 } : none;
+  }
+  await postExpiry(tx, input.storeId, order.customerId, now);
+  const { available } = await loyaltyBalance(tx, order.customerId, now);
+  const posted = Math.min(-delta, Math.max(0, available));
+  const shortfall = -delta - posted;
+  const ins = await tx.insert(s.loyaltyLedger).values({
+    storeId: input.storeId, customerId: order.customerId, orderId: input.orderId, kind: 'adjust', points: -posted, shortfall,
+    sourceRef: `order_edit:${input.editId}:earn`, actor: input.actor, reason: 'order_edit_earn', createdAt: now,
+  }).onConflictDoNothing().returning({ id: s.loyaltyLedger.id });
+  return ins.length ? { delta, posted: -posted, shortfall } : none;
+}
+
+/** Merge a patch into order.metadata.loyalty (null removes the key). */
+async function patchOrderLoyaltyMeta(tx: Tx, storeId: string, orderId: string, patch: Record<string, unknown>): Promise<void> {
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) {
+      await tx.execute(sql`UPDATE "order" SET metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{loyalty}', (coalesce(metadata->'loyalty', '{}'::jsonb) - ${k}::text), true) WHERE id = ${orderId} AND store_id = ${storeId} AND metadata ? 'loyalty'`);
+    } else {
+      await tx.execute(sql`UPDATE "order" SET metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{loyalty}', coalesce(metadata->'loyalty', '{}'::jsonb) || jsonb_build_object(${k}::text, ${JSON.stringify(v)}::jsonb), true) WHERE id = ${orderId} AND store_id = ${storeId} AND metadata ? 'loyalty'`);
+    }
+  }
+}
+
+export interface EditEarnResult { delta: number; posted: number; shortfall: number; deferred?: boolean; snapshotUpdated?: boolean }
+
+/**
+ * Order edit moved an order's merchandise: bring its earn in line with
+ * `targetEarn`.
+ *  - UNPAID order (PendingPayment, no earn row yet): rewrite the checkout
+ *    snapshot's earnPoints so the eventual payment earns on the EDITED
+ *    merchandise (postEarnForPaidOrder reads the snapshot).
+ *  - Paid order that already earned: post the delta (postEditEarnAdjustment).
+ *    A POSITIVE delta while the balance is still unpaid (`settled` false) is
+ *    not posted: it is parked on order.metadata.loyalty.deferredEarn and
+ *    posted by settleDeferredEditEarnForOrder once the balance clears.
+ *    Reductions always post immediately.
+ */
+export async function syncEditEarn(tx: Tx, input: {
+  storeId: string; orderId: string; editId: string; targetEarn: number; actor: string; settled: boolean;
+}): Promise<EditEarnResult> {
+  const none: EditEarnResult = { delta: 0, posted: 0, shortfall: 0 };
+  const [order] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata, state: s.order.state })
+    .from(s.order).where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1);
+  if (!order?.customerId) return none;
+  const snap = orderLoyaltySnapshot(order.metadata);
+  if (!snap) return none;
+  await lockCustomerLoyalty(tx, input.storeId, order.customerId);
+  const rows = await tx.select().from(s.loyaltyLedger).where(eq(s.loyaltyLedger.orderId, input.orderId));
+  const target = Math.max(0, input.targetEarn);
+  if (!rows.some((r) => r.kind === 'earn')) {
+    if (order.state !== 'PendingPayment' || snap.earnPoints === target) return none;
+    await patchOrderLoyaltyMeta(tx, input.storeId, input.orderId, { earnPoints: target });
+    return { delta: target - snap.earnPoints, posted: 0, shortfall: 0, snapshotUpdated: true };
+  }
+  const tracked = rows.reduce((n, r) => n + (r.kind === 'earn' ? r.points : r.kind === 'adjust' && r.reason === 'order_edit_earn' ? r.points - r.shortfall : 0), 0);
+  const delta = target - tracked;
+  const hadDeferred = !!(order.metadata as { loyalty?: { deferredEarn?: unknown } } | null)?.loyalty?.deferredEarn;
+  if (delta > 0 && !input.settled) {
+    await patchOrderLoyaltyMeta(tx, input.storeId, input.orderId, { deferredEarn: { editId: input.editId, targetEarn: target } });
+    return { delta, posted: 0, shortfall: 0, deferred: true };
+  }
+  if (hadDeferred) await patchOrderLoyaltyMeta(tx, input.storeId, input.orderId, { deferredEarn: null });
+  return postEditEarnAdjustment(tx, { storeId: input.storeId, orderId: input.orderId, editId: input.editId, targetEarn: target, actor: input.actor });
+}
+
+/** Post a held-back edit earn for ONE order if its balance is now settled.
+ *  Idempotent (ledger source_ref per edit id; the marker is cleared after). */
+export async function settleDeferredEditEarnForOrder(tx: Tx, storeId: string, orderId: string): Promise<number> {
+  await lockOrderRowsInTx(tx, storeId, [orderId]); // X-49: order rows before the loyalty advisory
+  const [order] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata, state: s.order.state, grandTotal: s.order.grandTotal })
+    .from(s.order).where(and(eq(s.order.id, orderId), eq(s.order.storeId, storeId))).limit(1);
+  const deferred = (order?.metadata as { loyalty?: { deferredEarn?: { editId?: string; targetEarn?: number } } } | null)?.loyalty?.deferredEarn;
+  if (!order?.customerId || !deferred?.editId || !Number.isSafeInteger(deferred.targetEarn)) return 0;
+  if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return 0;
+  const { amountDueForOrder } = await import('../payments/settle.js'); // lazy: settle → bonus → ledger
+  if ((await amountDueForOrder(tx, storeId, orderId, order.grandTotal)) > 0) return 0;
+  await lockCustomerLoyalty(tx, storeId, order.customerId);
+  const r = await postEditEarnAdjustment(tx, { storeId, orderId, editId: deferred.editId, targetEarn: deferred.targetEarn!, actor: 'system:order-edit-settled' });
+  await patchOrderLoyaltyMeta(tx, storeId, orderId, { deferredEarn: null });
+  return r.posted;
+}
+
+/**
+ * X-49: the orders this updates are locked (or already held by a covering set) BEFORE the loyalty
+ * advisory is taken, so the order rows always precede the customer advisory in lock order (the same
+ * order a refund uses: order set, then reconcileOrderLoyalty's advisory). Same transaction, no nesting.
+ */
+export async function settleDeferredEditEarns(tx: Tx, storeId: string, customerId: string, _now = new Date()): Promise<void> {
+  const rows = await tx.select({ id: s.order.id }).from(s.order).where(and(
+    eq(s.order.storeId, storeId), eq(s.order.customerId, customerId), sql`${s.order.metadata}->'loyalty'->'deferredEarn' is not null`,
+  ));
+  if (!rows.length) return;
+  await lockOrderRowsInTx(tx, storeId, rows.map((r) => r.id));
+  for (const r of rows) await settleDeferredEditEarnForOrder(tx, storeId, r.id);
+}
+
 export class LoyaltyAdjustError extends Error {}
 
 /** Manual admin adjustment (caller enforces permission + writes audit_log).
@@ -220,14 +387,14 @@ export async function adjustPoints(tx: Tx, input: {
   return { id: row?.id ?? null, balance: await loyaltyBalance(tx, input.customerId, now) };
 }
 
-export async function ledgerPage(tx: Tx, customerId: string, limit = 100) {
+export async function ledgerPage(tx: Tx, customerId: string, limit = 100, customer?: { email: string; emailVerified: boolean }) {
   return tx.select({
     id: s.loyaltyLedger.id, kind: s.loyaltyLedger.kind, points: s.loyaltyLedger.points, shortfall: s.loyaltyLedger.shortfall,
     reason: s.loyaltyLedger.reason, actor: s.loyaltyLedger.actor, expiresAt: s.loyaltyLedger.expiresAt,
-    createdAt: s.loyaltyLedger.createdAt, orderCode: s.order.code,
+    createdAt: s.loyaltyLedger.createdAt, orderCode: s.order.code, metadata: s.loyaltyLedger.metadata,
   }).from(s.loyaltyLedger)
     .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
-    .where(and(eq(s.loyaltyLedger.customerId, customerId)))
+    .where(and(eq(s.loyaltyLedger.customerId, customerId), customer ? or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer))) : undefined))
     .orderBy(sql`${s.loyaltyLedger.createdAt} DESC`, sql`${s.loyaltyLedger.id} DESC`)
     .limit(limit);
 }

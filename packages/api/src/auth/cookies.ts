@@ -11,7 +11,7 @@
  * served session cookies without Secure over HTTP.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { env } from '../env.js';
+import { env, peekEnv } from '../env.js';
 
 /** Constant-time double-submit token compare (mirrors the password compare in auth/password.ts). */
 function csrfEqual(header: string | undefined, cooked: string | undefined): boolean {
@@ -37,14 +37,15 @@ function hasValidBearer(header: string | undefined): boolean {
 
 export const SESSION_COOKIE = 'sr_admin';
 export const CSRF_COOKIE = 'sr_csrf';
-const MAX_AGE = 14 * 24 * 3600;
 
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) {
+      try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch { /* Invalid transport is not a credential. */ }
+    }
   }
   return out;
 }
@@ -72,12 +73,13 @@ export function shouldSetSecureCookie(headers: { get: (k: string) => string | un
 }
 
 function secureFlag(c: { req: { header: (k: string) => string | undefined } }): string {
-  return shouldSetSecureCookie({ get: (k) => c.req.header(k) }, process.env.NODE_ENV ?? 'development') ? '; Secure' : '';
+  return shouldSetSecureCookie({ get: (k) => c.req.header(k) }, peekEnv()?.NODE_ENV ?? process.env.NODE_ENV ?? 'development') ? '; Secure' : '';
 }
 
 export function setAuthCookies(c: Ctx, token: string, csrf: string): void {
   const secure = secureFlag(c);
-  const base = `Path=/; Max-Age=${MAX_AGE}; SameSite=Lax${secure}`;
+  // Cookie lifetime tracks the absolute admin session TTL (ADMIN_SESSION_TTL_DAYS); the idle timeout is server-side.
+  const base = `Path=/; Max-Age=${Math.ceil(env.ADMIN_SESSION_TTL_DAYS * 24 * 3600)}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
   c.header('Set-Cookie', `${CSRF_COOKIE}=${csrf}; ${base}`, { append: true });
 }
@@ -109,9 +111,11 @@ export const CUST_CSRF_COOKIE = 'sr_cust_csrf';
  * ttlMs/1000; the default is the env SESSION_TTL_DAYS. (Was the shared 14-day
  * admin MAX_AGE, which expired cookies 16 days before the 30-day session.)
  */
-export const CUSTOMER_COOKIE_MAX_AGE_SECONDS = Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600);
+export function customerCookieMaxAgeSeconds(): number {
+  return Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600);
+}
 
-export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSeconds = CUSTOMER_COOKIE_MAX_AGE_SECONDS): void {
+export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSeconds = customerCookieMaxAgeSeconds()): void {
   const secure = secureFlag(c);
   const base = `Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${CUST_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
@@ -121,6 +125,17 @@ export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSe
 export function clearCustomerCookies(c: Ctx): void {
   c.header('Set-Cookie', `${CUST_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`, { append: true });
   c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`, { append: true });
+}
+
+// ── Federated sign-in link nonce (auth/federated-link.ts) ────────────────────
+// Set on the 202 that mails a confirmation link; the link only redeems in the browser that holds it. HttpOnly (no JS
+// read), Secure (scheme-derived, as above), SameSite=Lax; lives exactly as long as the link.
+export const FEDERATED_NONCE_COOKIE = 'sr_fed_link';
+export function setFederatedNonceCookie(c: Ctx, nonce: string, maxAgeSeconds: number): void {
+  c.header('Set-Cookie', `${FEDERATED_NONCE_COOKIE}=${nonce}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secureFlag(c)}`, { append: true });
+}
+export function clearFederatedNonceCookie(c: Ctx): void {
+  c.header('Set-Cookie', `${FEDERATED_NONCE_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureFlag(c)}`, { append: true });
 }
 
 /** CSRF check for cookie-authenticated customer mutations (bearer is exempt). */
@@ -134,4 +149,25 @@ export function customerCsrfValid(c: { req: { header: (k: string) => string | un
 /** Get the customer session token from the request cookie (or undefined for guests). */
 export function getCustomerSessionToken(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
   return cookie(c, CUST_COOKIE);
+}
+
+/** Vendure carriers are untrusted transport, consumed only by migration bootstrap. */
+export function legacyCustomerToken(c: { req: { header: (k: string) => string | undefined } }): string | null {
+  const headers = parseCookies(c.req.header('cookie'));
+  const bearer = c.req.header('x-vendure-session-token');
+  if (bearer && bearer.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(bearer)) return bearer;
+  const readable = headers.authToken;
+  if (readable && readable.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(readable)) return readable;
+  const wrapped = headers.__vendure_session;
+  if (!wrapped || wrapped.length > 8192) return null;
+  try {
+    const payload: unknown = JSON.parse(Buffer.from(wrapped, 'base64').toString('utf8'));
+    const token = payload && typeof payload === 'object' ? (payload as { token?: unknown }).token : null;
+    return typeof token === 'string' && token.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(token) ? token : null;
+  } catch { return null; }
+}
+
+/** Preserve original signed HttpOnly Vendure cookie throughout rollback window. */
+export function clearReadableLegacyToken(c: Ctx): void {
+  c.header('Set-Cookie', `authToken=; Path=/; Max-Age=0; SameSite=Lax${secureFlag(c)}`, { append: true });
 }

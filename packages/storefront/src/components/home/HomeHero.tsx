@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import { useStoreIdentityLoader } from '~/routes/layout';
+import type { StoreTheme } from '~/theme/theme.config';
 // Responsive hero images with multi-format support
 import HeroImage_768 from '~/media/hero.jpg?format=avif&w=768&quality=75&url';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
@@ -11,8 +11,15 @@ import HeroImageJPEG_768 from '~/media/hero.jpg?format=jpeg&w=768&quality=90&url
 import HeroImageJPEG_1024 from '~/media/hero.jpg?format=jpeg&w=1024&quality=90&url';
 import HeroImageJPEG_1600 from '~/media/hero.jpg?format=jpeg&w=1600&quality=90&url';
 
-export const HomeHero = component$(() => {
-  const identity = useStoreIdentityLoader().value.identity;
+// Plain props (no loader): a brand view can reuse this component without reaching the platform's identity loader.
+export interface HomeHeroProps {
+  storeName: string;
+  tagline: string;
+  policies: Pick<StoreTheme['policies'], 'shipping' | 'returns'>;
+}
+
+export const HomeHero = component$<HomeHeroProps>(({ storeName, tagline, policies }) => {
+  const identity = { storeName, tagline, policies };
   return (
   <>
       {/* ════════ Hero ════════ */}

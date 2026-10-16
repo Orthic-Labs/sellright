@@ -15,6 +15,7 @@ import {
 import { sql } from 'drizzle-orm';
 import {
   adminUser,
+  session,
   customer,
   fulfillmentState,
   fulfillmentType,
@@ -51,6 +52,13 @@ export const order = pgTable(
     // dashboard KPIs — see PAID_STATES/isDemo callers in admin-reports.ts and
     // admin-dashboard.ts. Never true for an order placed after Publish.
     isDemo: boolean().notNull().default(false),
+    // Order editing (migration 0084): true when an admin set a custom/removed
+    // shipping amount, so the amount is not re-derived from a shipping method.
+    shippingOverride: boolean().notNull().default(false),
+    // Migration 0086: the shipping method chosen at checkout / draft / edit (code
+    // + name snapshot). NULL for legacy orders and orders with no shipping line.
+    shippingMethodCode: text(),
+    shippingMethodName: text(),
     // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
     // Same (store, key) -> the same order, so a double-submit can't create two.
     idempotencyKey: text(),
@@ -98,6 +106,37 @@ export const order = pgTable(
     check('order_status_check', sql`${t.status} in ('open', 'completed', 'cancelled', 'archived')`),
   ],
 );
+
+// Order editing (migration 0084). A +/- labelled amount applied to an order's
+// grand total (untaxed). Replaced as a set by each committed edit; the full
+// before/after history lives in `order_edit`. Cascades with the order.
+export const orderAdjustment = pgTable('order_adjustment', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  orderId: uuid().notNull().references(() => order.id, { onDelete: 'cascade' }),
+  label: text().notNull(),
+  amount: integer().notNull(), // cents, may be negative
+  actor: text(),
+  createdAt: ts(),
+});
+
+// One row per committed edit session: the order snapshot before/after, the
+// balance it produced and how it was settled. `idempotencyKey` makes the commit
+// replay-safe; `fingerprint` binds a key to its exact payload.
+export const orderEdit = pgTable('order_edit', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  orderId: uuid().notNull().references(() => order.id, { onDelete: 'cascade' }),
+  idempotencyKey: text(),
+  fingerprint: text(),
+  before: jsonb().notNull(),
+  after: jsonb().notNull(),
+  balance: integer().notNull().default(0), // cents: new total - net paid (+ = customer owes)
+  settlement: jsonb(),
+  reason: text(),
+  actor: text(),
+  createdAt: ts(),
+});
 
 export const orderLine = pgTable('order_line', {
   id: uuid().primaryKey().defaultRandom(),
@@ -369,6 +408,11 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   deliveredAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
+  // 0088 (de-fork 2.9 instrumentation). Written by the workers/reaper only
+  // (no trigger: old workers leave it stale, which projections treat conservatively).
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // REL-4 (DISPATCH.md): email outbox mirroring the webhook pattern. Enqueued
@@ -390,6 +434,9 @@ export const emailOutbox = pgTable('email_outbox', {
   sentAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  // 0088 (de-fork 2.9 instrumentation).
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // APNs device tokens for the admin iOS app (0039). One row per physical device;
@@ -406,6 +453,8 @@ export const adminDeviceToken = pgTable('admin_device_token', {
   kind: text().notNull().default('apns'),
   environment: text().notNull().default('production'), // production | sandbox (APNs host)
   topics: text().array().notNull().default(['order.paid']),
+  // 0099: the admin session that registered this device; deleting the session (logout / revocation) deletes the row.
+  sessionId: uuid().references(() => session.id, { onDelete: 'cascade' }),
   lastSeenAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   createdAt: ts(),
 });
@@ -427,6 +476,9 @@ export const pushOutbox = pgTable('push_outbox', {
   sentAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  // 0088 (de-fork 2.9 instrumentation).
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // Gift cards / store credit. A code carries a redeemable cent balance; checkout
@@ -458,7 +510,7 @@ export const giftCardTransaction = pgTable('gift_card_transaction', {
 // customer's balance is the SUM of their rows — never a stored counter. A DB
 // trigger rejects UPDATE. Program settings live in store.config.loyalty.
 // Store-scoped (FORCE RLS).
-export const loyaltyLedgerKinds = ['earn', 'redeem', 'reverse', 'adjust', 'expire', 'import'] as const;
+export const loyaltyLedgerKinds = ['earn', 'redeem', 'reverse', 'adjust', 'expire', 'import', 'bonus'] as const;
 export type LoyaltyLedgerKind = typeof loyaltyLedgerKinds[number];
 export const loyaltyLedger = pgTable('loyalty_ledger', {
   id: uuid().primaryKey().defaultRandom(),

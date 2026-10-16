@@ -4,22 +4,11 @@
  * a template returns {subject, html, text} and the caller sends/enqueues it
  * via the existing outbox/dispatch API.
  */
-import type { StoreCtx } from './templates.js';
-import { textBody as stripTags } from './text-body.js';
+import { renderEmailShell, colorsOf, type StoreCtx } from './layout.js';
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
-const wrap = (store: StoreCtx, title: string, body: string) => ({
-  // Strip CR/LF from the subject — SMTP header-injection guard (see templates.ts).
-  subject: `[${store.name}] ${title}`.replace(/[\r\n]+/g, ' '),
-  html: `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#222">
-    <h2 style="margin:0 0 16px">${escape(title)}</h2>
-    ${body}
-    <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-    <p style="color:#888;font-size:12px">${escape(store.name)}</p>
-  </body></html>`,
-  text: `${title}\n\n${stripTags(body)}\n\n— ${store.name}`,
-});
+const wrap = (store: StoreCtx, title: string, body: string) => renderEmailShell(store, title, body);
 
 const money = (cents: number | null, currency: string | null) =>
   cents == null ? 'unknown amount' : `${(cents / 100).toFixed(2)} ${currency ?? ''}`.trim();
@@ -39,12 +28,12 @@ export const disputeAlert = (store: StoreCtx, data: {
   wrap(store, `Chargeback/dispute opened — ${data.orderCode ?? data.providerRef}`,
     `<p>A ${escape(data.provider)} dispute was recorded${data.orderCode ? ` against order <strong>${escape(data.orderCode)}</strong>` : ''}. Disputes are never auto-refunded or auto-cancelled — review and respond in the ${escape(data.provider)} dashboard.</p>
      <table style="width:100%;border-collapse:collapse;margin:12px 0">
-       <tr><td style="padding:4px 0;color:#666">Provider</td><td>${escape(data.provider)}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Reference</td><td>${escape(data.providerRef)}</td></tr>
-       ${data.orderCode ? `<tr><td style="padding:4px 0;color:#666">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
-       <tr><td style="padding:4px 0;color:#666">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Reason</td><td>${escape(data.reason ?? 'No reason supplied')}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Status</td><td>${escape(data.status)}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Provider</td><td>${escape(data.provider)}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Reference</td><td>${escape(data.providerRef)}</td></tr>
+       ${data.orderCode ? `<tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Reason</td><td>${escape(data.reason ?? 'No reason supplied')}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Status</td><td>${escape(data.status)}</td></tr>
      </table>`);
 
 /** Affiliate welcome (first onboard) — DD's AffiliateWelcomeEvent mail. */
@@ -53,7 +42,7 @@ export const affiliateWelcome = (store: StoreCtx, data: {
 }) =>
   wrap(store, `Your affiliate dashboard is ready — code ${data.code}`,
     `<p>You're set up as a ${escape(store.name)} affiliate. Share your coupon code <strong>${escape(data.code)}</strong> — you earn commission on every settled order that uses it.</p>
-     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Open your dashboard</a></p>
+     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Open your dashboard</a></p>
      <p>Your dashboard link (keep it private — it IS the credential): ${escape(data.accessUrl)}</p>`);
 
 /** Affiliate recipient changed — the token rotated; the old link is dead. */
@@ -62,7 +51,7 @@ export const affiliateTokenRotated = (store: StoreCtx, data: {
 }) =>
   wrap(store, `Your ${store.name} affiliate link changed — code ${data.code}`,
     `<p>This affiliate coupon (<strong>${escape(data.code)}</strong>) was reassigned to you. For security the previous access link was revoked — use the new one below.</p>
-     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Open your dashboard</a></p>
+     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Open your dashboard</a></p>
      <p>Your new dashboard link: ${escape(data.accessUrl)}</p>`);
 
 /** Operator alert for payment money that needs manual reconciliation
@@ -81,11 +70,11 @@ export const paymentAlert = (store: StoreCtx, data: {
   wrap(store, `${data.title} — ${data.orderCode ?? data.providerRef ?? 'payment'}`,
     `<p>${escape(data.detail)}</p>
      <table style="width:100%;border-collapse:collapse;margin:12px 0">
-       <tr><td style="padding:4px 0;color:#666">Alert</td><td>${escape(data.kind)}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Provider</td><td>${escape(data.provider)}</td></tr>
-       ${data.providerRef ? `<tr><td style="padding:4px 0;color:#666">Reference</td><td>${escape(data.providerRef)}</td></tr>` : ''}
-       ${data.orderCode ? `<tr><td style="padding:4px 0;color:#666">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
-       <tr><td style="padding:4px 0;color:#666">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Alert</td><td>${escape(data.kind)}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Provider</td><td>${escape(data.provider)}</td></tr>
+       ${data.providerRef ? `<tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Reference</td><td>${escape(data.providerRef)}</td></tr>` : ''}
+       ${data.orderCode ? `<tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
      </table>
      <p>It is listed under Payment reconciliation in the admin.</p>`);
 
@@ -103,8 +92,8 @@ export const paymentAfterCancelAlert = (store: StoreCtx, data: {
   wrap(store, `Payment received on ${data.orderState.toLowerCase()} order ${data.orderCode ?? ''}`.trim(),
     `<p>A ${escape(data.method)} payment settled against an order that is <strong>${escape(data.orderState)}</strong>, so it was not marked paid. The money was recorded in the payment ledger. Refund the customer or restore the order, then resolve it under Payment reconciliation.</p>
      <table style="width:100%;border-collapse:collapse;margin:12px 0">
-       ${data.orderCode ? `<tr><td style="padding:4px 0;color:#666">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
-       <tr><td style="padding:4px 0;color:#666">Method</td><td>${escape(data.method)}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Reference</td><td>${escape(data.providerRef ?? 'none')}</td></tr>
-       <tr><td style="padding:4px 0;color:#666">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
+       ${data.orderCode ? `<tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Method</td><td>${escape(data.method)}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Reference</td><td>${escape(data.providerRef ?? 'none')}</td></tr>
+       <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
      </table>`);

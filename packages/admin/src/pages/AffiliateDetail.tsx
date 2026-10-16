@@ -7,6 +7,7 @@ import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { Loading, ErrorNote, Badge, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import { AffiliateSkuStats } from '../components/AffiliateSkuStats';
 
 interface Detail {
   id: string; email: string; code: string; accessToken: string; commissionPct: number;
@@ -52,6 +53,8 @@ export default function AffiliateDetailPage() {
         </div>
       </div>
 
+      <div className="mb-5"><AffiliateSkuStats affiliateId={id} /></div>
+
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 card overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Attributed orders ({a.orders.length})</div>
@@ -65,7 +68,7 @@ export default function AffiliateDetailPage() {
           </table>
         </div>
 
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <div className="card p-4">
             <div className="text-sm font-semibold mb-2">Record payout</div>
             <input className="input mb-2" placeholder="payment reference (optional)" value={txRef} onChange={(e) => setTxRef(e.target.value)} />

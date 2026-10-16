@@ -18,7 +18,7 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { seoConfigFromStore } from '../seo/config.js';
 import { listBlogSitemapEntries, listCollectionSitemapEntries, listProductSitemapEntries, productAvailability } from '../seo/queries.js';
-import { blogSitemapXml, collectionsSitemapXml, mainSitemapXml, productsSitemapXml, sitemapIndexXml } from '../seo/sitemap.js';
+import { blogSitemapXml, collectionsSitemapXml, mainSitemapXml, productsSitemapXml, sitemapIndexNames, sitemapIndexXml } from '../seo/sitemap.js';
 import { robotsTxt } from '../seo/robots.js';
 import { organizationSchema, productSchema, websiteSchema } from '../seo/jsonld.js';
 
@@ -41,7 +41,7 @@ seo.openapi(
     // collections — storefronts without collection pages serve no
     // /sitemap-collections.xml, and a 404 in the index is a crawl error.
     const collections = await withStore(st.id, (tx) => listCollectionSitemapEntries(tx, st.id));
-    return xml(c, sitemapIndexXml(config.siteUrl, ['sitemap-main.xml', 'sitemap-products.xml', ...(collections.length ? ['sitemap-collections.xml'] : []), 'sitemap-blog.xml']));
+    return xml(c, sitemapIndexXml(config.siteUrl, sitemapIndexNames(collections.length > 0)));
   },
 );
 

@@ -24,15 +24,24 @@ import {
   staffInvite,
   passwordReset,
   emailVerify,
+  federatedLinkConfirm,
   emailAddressChange,
   emailAddressChangedNotice,
   orderRefundConfirmation,
   magicLinkAccess,
+  orderUpdated,
+  orderBalanceDue,
+  pointsEarned,
+  reviewApproved,
   trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
+import { afterCommit } from '../db/after-commit.js';
+import { wakeEmailDelivery } from './wake.js';
+import { resolveEmailTheme } from './theme.js';
 import { env } from '../env.js';
 import type { Tx } from '../db/client.js';
+import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 /** Email outbox `kind` values. 'order-refund-confirmation' is the cross-lane
  *  PAR-03 contract key — the payments lane enqueues under exactly this key at
@@ -46,7 +55,15 @@ export const EMAIL_KIND = {
   EMAIL_CHANGE: 'email_change',
   EMAIL_CHANGED_NOTICE: 'email_changed_notice',
   MAGIC_LINK: 'magic_link',
+  FEDERATED_LINK_CONFIRM: 'federated_link_confirm',
   ORDER_REFUND_CONFIRMATION: 'order-refund-confirmation',
+  ORDER_UPDATED: 'order_updated',
+  ORDER_BALANCE_DUE: 'order_balance_due',
+  POINTS_EARNED: 'points_earned',
+  REVIEW_APPROVED: 'review_approved',
+  /** Free-trial Pro key. Production sends it inline via sendTrialKey (apps.ts);
+   *  this outbox kind exists for the health canary (PLAN 7.16) only. */
+  TRIAL_LICENSE_KEY: 'trial_license_key',
 } as const;
 
 export interface StoreEmailCtx {
@@ -126,6 +143,7 @@ function emailCtx(store: StoreEmailCtx) {
     currency: store.currency,
     storefrontUrl: resolveStorefrontUrl(store),
     fromEmail: resolveFromEmail(store),
+    theme: resolveEmailTheme(store.config),
     storeId: store.storeId,
   };
 }
@@ -138,42 +156,49 @@ export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: S
   code: string; grandTotal: number; currency: string;
   lines: Array<{ name: string; quantity: number; lineTotal: number }>;
   dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = orderConfirmation(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.ORDER_CONFIRMATION,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueShippingNotification(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   code: string; trackingCode: string | null; carrier: string | null;
   dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = shippingNotification(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.SHIPPING_NOTIFICATION,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
 }
 
 export async function enqueuePasswordReset(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   url: string; ttlHours: number; dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = passwordReset(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.PASSWORD_RESET,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueEmailVerify(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
@@ -181,12 +206,14 @@ export async function enqueueEmailVerify(tx: Tx, storeId: string, store: StoreEm
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = emailVerify(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.EMAIL_VERIFY,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 /** Passwordless sign-in link. Enqueued inside the request txn so the email
@@ -197,12 +224,30 @@ export async function enqueueMagicLink(tx: Tx, storeId: string, store: StoreEmai
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = magicLinkAccess(ctx, { url: data.url, ttlMinutes: data.ttlMinutes, isNewAccount: data.isNewAccount ?? false });
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.MAGIC_LINK,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
+/** Confirmation link for a federated sign-in the provider could not vouch for (auth/federated-link.ts). */
+export async function enqueueFederatedLinkConfirm(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  url: string; providerName: string; providerEmail: string; ttlMinutes: number; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = federatedLinkConfirm(ctx, data);
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.FEDERATED_LINK_CONFIRM,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueEmailAddressChange(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
@@ -252,6 +297,79 @@ export async function enqueueRefundConfirmation(tx: Tx, storeId: string, store: 
   });
 }
 
+export async function enqueuePointsEarned(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  points: number; balance: number; lines: Array<{ label: string; points: number }>; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = pointsEarned(ctx, { ...data, accountUrl: `${ctx.storefrontUrl}/account/rewards` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.POINTS_EARNED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+export async function enqueueReviewApproved(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  productName: string; productSlug: string; points: number; balance: number | null; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  // The store's own product path (seo.productUrlPattern), as the sitemap and JSON-LD use it.
+  const path = productPath(seoConfigFromStore({ name: store.name, config: store.config }), data.productSlug);
+  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}${path}#reviews` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.REVIEW_APPROVED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Order editing (G13): customer "order updated" summary (diff + pay link when due). */
+export async function enqueueOrderUpdated(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  code: string; currency: string; beforeTotal: number; afterTotal: number; changes: string[];
+  balance: number; payUrl?: string; reason?: string | null; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = orderUpdated(ctx, data);
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.ORDER_UPDATED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Order editing (G13): stand-alone pay link for a balance. */
+export async function enqueueOrderBalanceDue(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  code: string; currency: string; amountDue: number; payUrl: string; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = orderBalanceDue(ctx, data);
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.ORDER_BALANCE_DUE,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
+/** Trial Pro key through the outbox. Canary-only today (see EMAIL_KIND.TRIAL_LICENSE_KEY). */
+export async function enqueueTrialLicenseKey(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  key: string; days: number; pricingUrl?: string;
+}, canary = false): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = trialLicenseKey(ctx, { ...data, pricingUrl: data.pricingUrl ?? `${ctx.storefrontUrl}/pricing` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.TRIAL_LICENSE_KEY,
+    recipient: to,
+    canary,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
 // ── Inline path (legacy; non-durable) ────────────────────────────────────────
 
 export async function sendOrderConfirmation(store: StoreEmailCtx, to: string, data: {
@@ -269,11 +387,13 @@ export async function sendShippingNotification(store: StoreEmailCtx, to: string,
   await sendEmail({ to, from: ctx.fromEmail, ...shippingNotification(ctx, data) }, ctx.storeId);
 }
 
+/** Returns the delivery outcome: the invite route refuses (and discards the invite) when the
+ *  mail was not delivered, because the accept token is never shown to the inviter (P0). */
 export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
   acceptUrl: string; role: string; inviterEmail: string;
-}): Promise<void> {
+}): Promise<{ delivered: boolean; reason?: string }> {
   const ctx = emailCtx(store);
-  await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
+  return sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
 }
 
 export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {

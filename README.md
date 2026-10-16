@@ -1,38 +1,60 @@
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/banner-dark.svg"><img src=".github/banner.svg" alt="SellRight: multi-store commerce admin and REST API on your own PostgreSQL" style="max-width:100%;height:auto"></picture>
+
+<sub>Banner: new-product form in a development store, captured 13 June 2026.</sub>
+
 # SellRight
 
-A self-hosted, multi-store commerce backend with a REST API and browser-based admin.
+A self-hosted, multi-store commerce backend with a REST API, a browser-based admin and a generic storefront.
 
-SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. Production storefronts consume its API independently. An isolated, synthetic demo storefront is included for evaluation, not merchant deployment.
+SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. The included Qwik storefront resolves the store per request host and is still being migrated onto the REST path (see [features](docs/FEATURES.md)); other storefronts consume the API independently. An isolated, synthetic demo storefront is included for evaluation, not merchant deployment.
 
-**Status: pre-1.0.** Suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters are not a claim that every merchant deployment has passed acceptance.
+> **Demo:** Try the synthetic shop at [demo.sellright.cc](https://demo.sellright.cc).
 
-## What Is Included
+> **Status:** Pre-1.0; suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters do not mean every merchant deployment passed acceptance.
 
-- Products, variants, collections, inventory, promotions, shipping and tax.
-- Persistent carts separate from orders, with server-authoritative prices and checkout.
-- Stripe, NMI and Sezzle adapters, payment reconciliation and refunds.
-- Customer accounts, orders, returns, fulfillment and transactional email.
-- Multi-store administration with staff permissions and PostgreSQL row-level security.
-- REST/OpenAPI, static catalog exports, a Vendure importer and software licensing.
+> **License:** Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## What you get
+
+| Area | Included |
+|---|---|
+| Catalog | Products, variants, collections, inventory, promotions, shipping, tax |
+| Checkout | Persistent carts separate from orders; server-authoritative prices |
+| Payments | Stripe, NMI and Sezzle adapters; reconciliation; refunds. Implemented adapters are not a claim that every merchant deployment has passed acceptance |
+| Operations | Customer accounts, orders, returns, fulfillment, transactional email |
+| Multi-store | Staff permissions; PostgreSQL row-level security |
+| Integration | REST/OpenAPI, static catalog exports, Vendure importer, software licensing |
+| Storefront | Generic Qwik storefront, store resolved per request host; typed REST client generated from the OpenAPI contract |
+| Mobile | [SellRight Admin for iOS](ios/README.md) covers store operations; push and Live Activities require APNs setup ([guide](docs/IOS-PUSH-SETUP.md)). Android is planned. |
 
 See [architecture](docs/ARCHITECTURE.md) for boundaries and [features](docs/FEATURES.md) for detail.
 
-## Run With Docker
+## Run it
 
 Use a host with Docker Compose and ports 80/443 available. For an existing reverse proxy, adapt the edge routing rather than taking over those ports.
 
+The supported single-instance path is the installer from the [operations runbook](docs/runbooks/production-compose.md). It installs Docker and cosign, writes `deploy/.env` with generated secrets, pulls pinned, cosign-verified images from GHCR and installs the `sellright` management command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Orthic-Labs/sellright/main/deploy/install.sh | sudo sh
+```
+
+To run the stack by hand instead:
+
 1. Clone this repository and enter its directory.
-2. Copy `deploy/.env.example` to `deploy/.env`. Set the domain, store details and independently generated passwords/secrets.
-3. Create `deploy/gateway-accounts.json` containing `[]` until configuring NMI or Sezzle. Never commit merchant keys. See [gateway account examples](deploy/gateway-accounts.example.json).
+2. Copy `deploy/.env.example` to `deploy/.env`. Set the domain, store details and independently generated passwords/secrets, and add `SELLRIGHT_MASTER_KEY` (a long random secret, for example `openssl rand -hex 32`); `deploy/compose.yaml` refuses to start without it.
+3. Create `deploy/gateway-accounts.json` containing `[]` until configuring NMI or Sezzle. Never commit merchant keys. The profile format is defined in `packages/api/src/payments/gateway-account.ts`.
 4. Point the configured hostname at the host, then run:
 
 ```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
 ```
 
-The stack includes PostgreSQL, the API, admin and TLS proxy. Migrations/bootstrap use the database owner; HTTP requests use a separate non-owner role. Bootstrap is create-only and does not reset existing passwords on restart.
+`deploy/compose.yaml` pulls pinned images from GHCR and has no build contexts. To build from source instead, add `-f deploy/compose.build.yaml` and `--build`.
 
-Read the [operations and restore runbook](docs/runbooks/production-compose.md) before relying on the deployment. This starts the backend/admin, not a customer storefront.
+The stack includes PostgreSQL, the API, admin, the storefront and the Caddy TLS proxy; the storefront is published only when `SELLRIGHT_STOREFRONT_DOMAIN` is set in `deploy/.env`. Migrations/bootstrap use the database owner; HTTP requests use a separate non-owner role. Bootstrap is create-only and does not reset existing passwords on restart.
+
+Read the [operations and restore runbook](docs/runbooks/production-compose.md) before relying on the deployment.
 
 ## Develop
 
@@ -52,7 +74,7 @@ DATABASE_URL='<schema-owner-url>' pnpm --filter @sellright/api db:migrate:runtim
 pnpm --filter @sellright/api dev
 ```
 
-Replace the migration URL placeholder with your development schema-owner connection. Keep the API's package-local `DATABASE_URL` on the runtime role. Run the admin in another terminal with `pnpm --dir packages/admin dev`. The API contract is at `http://localhost:3300/v1/openapi.json`. First-store bootstrap requires `BOOTSTRAP_STORE_SLUG`, `ADMIN_EMAIL` and `ADMIN_PASSWORD`; with those configured, run `pnpm --filter @sellright/api bootstrap:runtime` using the schema-owner connection. See the [deployment example](deploy/.env.example).
+Replace the migration URL placeholder with your development schema-owner connection. Keep the API's package-local `DATABASE_URL` on the runtime role. Run the admin in another terminal with `pnpm --dir packages/admin dev`. The API contract is at `http://localhost:3300/v1/openapi.json`. First-store bootstrap requires `BOOTSTRAP_STORE_SLUG`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` (at least 12 characters); with those configured, run `pnpm --filter @sellright/api bootstrap:runtime` using the schema-owner connection. See the [deployment example](deploy/.env.example).
 
 ## Verify
 
@@ -77,4 +99,8 @@ Database tests require a dedicated disposable `*_test` database. They can trunca
 
 ## License
 
-SellRight is source-available under the **Business Source License 1.1**, not an OSI Open Source license before its Change Date. Production use is free for organizations with no more than **25 Covered Persons**, as defined in [LICENSE](LICENSE); larger organizations require a commercial license. Each version converts to Apache-2.0 on its Change Date. The license text is authoritative.
+SellRight is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+---
+
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/orthic-labs-mark.svg"><img src=".github/orthic-labs-mark-light.svg" alt="Orthic Labs" width="22" style="max-width:100%;height:auto"></picture> **[Orthic Labs](https://orthiclabs.com)** · [github.com/Orthic-Labs](https://github.com/Orthic-Labs) · More: [Legion](https://github.com/Orthic-Labs/legion) · [Ember](https://github.com/Orthic-Labs/ember) · [SwiftRight](https://github.com/Orthic-Labs/swiftright) · [Pulse](https://github.com/Orthic-Labs/pulse) · [RightKit](https://github.com/Orthic-Labs/rightkit) · [RustRight](https://github.com/Orthic-Labs/rustright)

@@ -5,6 +5,7 @@
  * product-detail payload must publish both.
  * Runs against a *_test database ONLY (TRUNCATEs).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -15,9 +16,7 @@ import { invalidateStoreCache } from '../store-context.js';
 import { catalog } from './catalog.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`catalog test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'catalog-variant-metadata.db.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-ddddddddddd1';
 const SLUG = 'catalog-meta-test';
@@ -71,6 +70,11 @@ describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
     expect(body.variants[0]).toMatchObject({ sku: 'LIC-1', options: [{ id: option, code: option, name: 'Red', group: { id: group, code: group, name: 'Color' } }] });
     await withStore(STORE, async tx => { await tx.execute(sql`UPDATE product SET status = 'draft' WHERE id = ${PRODUCT}`); });
     expect((await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } })).status).toBe(404);
+  });
+  it('publishes the product id (keys loyalty multipliers for the manifest-less PDP)', async () => {
+    const res = await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ productId: PRODUCT, slug: 'lic-app' });
   });
   it('publishes variant id + variant-level assets (needed by restock-request and PDP galleries)', async () => {
     const asset1 = 'dddddddd-dddd-dddd-dddd-ddddddddddd6';

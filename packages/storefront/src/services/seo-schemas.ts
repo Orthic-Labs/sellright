@@ -8,6 +8,7 @@ import { identityFromStaticTheme } from '~/theme/theme.config';
 import type { SrStoreIdentity } from '~/utils/sellright';
 import { stripHtml } from '~/utils/sanitize';
 import { formatMinorUnitsAsDecimalString } from '~/utils/currency';
+import { productPath } from '~/platform/product-path';
 
 /**
  * WS-C: every schema generator below takes an optional `identity` — the
@@ -70,7 +71,7 @@ export const generateProductSchema = (product: any, identity: SrStoreIdentity = 
   });
  }
 
- const productUrl = `${SITE}/products/${product.slug}`;
+ const productUrl = `${SITE}${productPath(product.slug)}`;
  const validUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
  return {

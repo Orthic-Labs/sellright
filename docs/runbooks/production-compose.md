@@ -34,6 +34,8 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
 
 The `storefront` service (Qwik SSR, `packages/storefront/Dockerfile`) is included in Compose behind Caddy. Since WS-C, it's a **generic image**: no store identity/theme is baked in at build time — it resolves the store per incoming request `Host` at runtime (`GET /v1/shop/identity` against `SELLRIGHT_API_URL`), so one image serves every store an operator points it at. It's not exposed publicly unless `SELLRIGHT_STOREFRONT_DOMAIN` is set in `deploy/.env`; unset, Caddy binds it to the internal-only `:8090` and only the `admin` domain is public, matching pre-storefront behavior exactly. Multi-store per-Host routing in Caddy itself (so one Caddy instance fronts several storefront hosts) remains a follow-up.
 
+Two runtime variables govern host and origin handling. `SELLRIGHT_TRUST_FORWARDED_HOST=1` (set in `deploy/compose.yaml`) makes the storefront take the store host, scheme and form-POST origin from `X-Forwarded-Host`/`X-Forwarded-Proto`; it is correct only because the storefront is private-network only and Caddy overwrites both headers, so never set it on a storefront reachable without such a proxy. `SELLRIGHT_GOOGLE_SIGNIN_HOSTS` (comma-separated, optional) lists the public hosts of a pinned store that may show Google sign-in; unset means Google sign-in is off everywhere.
+
 ## HTTPS / Caddy IP certificate (spike result)
 
 The plan calls for a Let's Encrypt **IP-address certificate** so HTTPS works before a domain is configured. **This has not been verified against a real public IP** — CI and this workspace have no publicly-routable address to request one against, and claiming success without that evidence would be worse than not claiming it. `deploy/Caddyfile`'s `SELLRIGHT_DOMAIN`/`SELLRIGHT_STOREFRONT_DOMAIN` values accept either a domain or a bare IP unchanged; Caddy 2.10 (pinned in `compose.yaml`) supports ACME IP certificates per its release notes, but that support has only been checked by reading Caddy's own documentation, not by issuing one here.
@@ -101,3 +103,13 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
 ```
 
 Do **not** add `-v` to `down` during normal operations; `down -v` deletes named volumes. CI exercises a full down/up cycle and verifies that the bootstrap store identity plus asset and download sentinels survive.
+
+## Turnstile (anti-bot) policy
+
+Turnstile gates the public routes `POST /v1/shop/auth/forgot-password`, `POST /v1/shop/auth/resend-verification`, `POST /v1/shop/newsletter-signup`, `GET /v1/shop/track`, `POST /v1/shop/contact`, `POST /v1/shop/restock-request`, and the auth paths. The secret comes from the store config (`turnstileSecretKey`) or the env `TURNSTILE_SECRET_KEY`.
+
+- A store with a secret: a missing or invalid token returns `403 BOT_CHECK_FAILED` (contact/restock: `400`). Verification fails closed on any siteverify error.
+- A store with no secret, `NODE_ENV=production`: **fails closed** (the gated routes return 403) unless the operator sets `TURNSTILE_DISABLED=true`. The API logs a startup warning when that opt-out is set in production.
+- Dev/test with no secret: passes (unchanged).
+
+Deploy notes: any environment without a Turnstile secret (demo, staging, self-host without a site key) must set `TURNSTILE_DISABLED=true` or a `TURNSTILE_SECRET_KEY`, or the storefront forms will reject every submission. The demo's `deploy/demo/configure.mjs` sets it; an existing `runtime.json` (written with `wx`) must be updated by hand.

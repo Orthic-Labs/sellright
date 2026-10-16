@@ -17,6 +17,7 @@
  *      issueLicensesForPaidOrder's per-orderLine idempotency.
  *   4. markPaid:false issues no licenses (order stays PendingPayment).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -30,11 +31,7 @@ import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `draft-order license test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-order-draft-license.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'draft-license-test-store';
@@ -164,5 +161,25 @@ describe('draft-orders markPaid issues licenses', () => {
     expect(status).toBe(200);
     expect(body.state).toBe('PendingPayment');
     expect(await licensesForCode(body.code)).toHaveLength(0);
+  });
+});
+
+describe('draft-orders shipping method (migration 0086)', () => {
+  it('persists the chosen method code + name and defaults the amount to its flat rate', async () => {
+    const token = await seedStoreAndAdmin();
+    await withStore(STORE, (tx) => tx.insert(s.shippingMethod).values({ storeId: STORE, code: 'std', name: 'Standard', calculator: { flat: 700 }, enabled: true }));
+    const { status, body } = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }], shippingMethodCode: 'std' });
+    expect(status).toBe(200);
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode, n: s.order.shippingMethodName, ship: s.order.shippingTotal }).from(s.order).where(eq(s.order.code, body.code)));
+    expect(o).toMatchObject({ c: 'std', n: 'Standard', ship: 700 });
+  });
+
+  it('no method => NULLs and a 400 for an unknown code', async () => {
+    const token = await seedStoreAndAdmin();
+    const ok = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }] });
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode }).from(s.order).where(eq(s.order.code, ok.body.code)));
+    expect(o!.c).toBeNull();
+    const bad = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }], shippingMethodCode: 'nope' });
+    expect(bad.status).toBe(400);
   });
 });

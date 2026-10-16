@@ -1,0 +1,32 @@
+{
+  "entries": [
+    {
+      "key": "src/licensing/account-bootstrap.ts::ensurePasswordlessAccountForOrder",
+      "sequence": "L3:order L3:order L2:license",
+      "mixed": true,
+      "orderViolation": true,
+      "why": "STOREKIT §5.8 #6/#21 (settlement effect; set pending step 2)"
+    },
+    {
+      "key": "src/licensing/issue.ts::issueLicensesForPaidOrder",
+      "sequence": "L3:order L2:license",
+      "mixed": true,
+      "orderViolation": true,
+      "why": "STOREKIT §5.8 #6 (settlement -> issue; effect under set pending step 2)"
+    },
+    {
+      "key": "src/licensing/storekit-license.ts::applyStoreKitNotification",
+      "sequence": "L2:license L5:license_activation L2:license L5:license_activation L2:license",
+      "mixed": false,
+      "orderViolation": true,
+      "why": "STOREKIT §5.8 #19: helper only; called exclusively inside withLockedSet({notification}) in routes/storekit-webhooks.ts (plan 3.5)"
+    },
+    {
+      "key": "src/payments/refunds.ts::finalizeRefund",
+      "sequence": "L3:order L5:paymentAttempt L2:license L5:licenseActivation L3:order",
+      "mixed": true,
+      "orderViolation": true,
+      "why": "STOREKIT §5.8 #8 (refund finalize; order before licence; set pending step 2)"
+    }
+  ]
+}

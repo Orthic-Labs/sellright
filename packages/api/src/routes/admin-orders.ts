@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { errJson } from '../lib/api-error.js';
@@ -38,9 +38,11 @@ async function loadOrderForDoc(storeId: string, code: string) {
     const lines = await tx
       .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
       .from(s.orderLine)
-      .where(eq(s.orderLine.orderId, order.id));
+      // Order editing (G13): a line edited down to 0 stays on the order (row preserved) but is not a document line.
+      .where(and(eq(s.orderLine.orderId, order.id), gt(s.orderLine.quantity, 0)));
+    const adjustments = await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, order.id));
     const [storeRow] = await tx.select({ name: s.store.name, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
-    return { order, lines, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
+    return { order, lines, adjustments, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
   });
 }
 
@@ -58,7 +60,9 @@ adminOrders.openapi(
     const data = await loadOrderForDoc(st.storeId, code);
     if (!data) throw new HttpError(404, 'order not found');
     
-    const doc = buildInvoice(data.order as never, data.lines, data.store);
+    // Order-edit adjustments are not line items, but the invoice must add up to the grand total — list them as lines.
+    const invoiceLines = [...data.lines, ...data.adjustments.map((a) => ({ variantSku: '', variantName: a.label, quantity: 1, unitPrice: a.amount, lineTotal: a.amount }))];
+    const doc = buildInvoice(data.order as never, invoiceLines, data.store);
     if (format === 'html') return c.html(renderInvoiceHtml(doc));
     return c.json(doc, 200);
   }),
@@ -252,13 +256,19 @@ adminOrders.openapi(
 
 adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/returns/{id}/approve', summary: 'Approve a return and reserve its refund',
-  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional() })) }, },
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional() })) }, },
   responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
   const { id } = c.req.valid('param'), body = c.req.valid('json');
   const [rma] = await withStore(st.storeId, tx => tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)));
   if (!rma) throw new HttpError(404, 'Return not found');
+  // The Returns page's "Restock" checkbox decides whether the returned units go back on the shelf; it used to be
+  // dropped by the request schema, so the flag set when the request was opened always won. An explicit choice
+  // here overrides every line of an unresolved request (a resolved one is refused by the refund engine below).
+  if (body.restock !== undefined && ['requested', 'approved', 'received'].includes(rma.status) && !rma.refundId) {
+    await withStore(st.storeId, (tx) => tx.update(s.returnLine).set({ restock: body.restock! }).where(eq(s.returnLine.returnId, id)));
+  }
   try {
     const result = await requestRefund({ storeId: st.storeId, orderId: rma.orderId, actor: admin.email,
       idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId });

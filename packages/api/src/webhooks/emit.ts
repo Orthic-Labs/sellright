@@ -9,13 +9,34 @@ import { and, eq, lte, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
+import { CANARY_MARKER, CANARY_TOPIC, assertNotReserved, assertNotReservedTopic } from '../canary/marker.js';
 
-/** Enqueue a delivery for every enabled endpoint subscribed to `topic` (or '*'). */
+/** Enqueue a delivery for every enabled endpoint subscribed to `topic` (or '*').
+ *  The reserved `health.canary` topic is never fanned out here: `'*'`
+ *  subscribers must never receive canary traffic (PLAN 7.16). */
 export async function emitEvent(tx: Tx, storeId: string, topic: string, payload: unknown): Promise<void> {
+  assertNotReservedTopic(`webhook topic ${topic}`, topic, false);
+  assertNotReserved(`webhook topic ${topic}`, payload, false);
   const endpoints = await tx.select({ id: s.webhookEndpoint.id, topics: s.webhookEndpoint.topics }).from(s.webhookEndpoint).where(and(eq(s.webhookEndpoint.storeId, storeId), eq(s.webhookEndpoint.enabled, true)));
   const matched = endpoints.filter((e) => e.topics.includes('*') || e.topics.includes(topic));
   if (!matched.length) return;
   await tx.insert(s.webhookDelivery).values(matched.map((e) => ({ storeId, endpointId: e.id, topic, payload: payload as object })));
+}
+
+/** Canary-only delivery: exactly one endpoint, addressed by id, never fan-out.
+ *  The endpoint must belong to this store and be subscribed to `health.canary`.
+ *  Payload carries the reserved marker. Called only by canary/health-canary.ts. */
+export async function emitCanaryWebhook(tx: Tx, storeId: string, endpointId: string, payload: Record<string, unknown>): Promise<string> {
+  const [ep] = await tx.select({ id: s.webhookEndpoint.id, topics: s.webhookEndpoint.topics })
+    .from(s.webhookEndpoint)
+    .where(and(eq(s.webhookEndpoint.id, endpointId), eq(s.webhookEndpoint.storeId, storeId), eq(s.webhookEndpoint.enabled, true)))
+    .limit(1);
+  if (!ep || !ep.topics.includes(CANARY_TOPIC)) throw new Error('canary webhook endpoint missing or not subscribed to health.canary');
+  const [row] = await tx.insert(s.webhookDelivery).values({
+    storeId, endpointId: ep.id, topic: CANARY_TOPIC,
+    payload: { ...payload, canary: true, marker: CANARY_MARKER } as object,
+  }).returning({ id: s.webhookDelivery.id });
+  return row!.id;
 }
 
 const BACKOFF_S = [30, 120, 600, 3600, 21600]; // 30s, 2m, 10m, 1h, 6h
@@ -45,7 +66,7 @@ async function claimDueWebhooks(storeId: string, limit: number): Promise<Claimed
     // ever delivered; the reaper then recycled every row forever.)
     const claim = await tx.execute(
       sql`UPDATE webhook_delivery wd
-          SET status = 'processing', attempts = wd.attempts + 1
+          SET status = 'processing', attempts = wd.attempts + 1, claimed_at = now(), updated_at = now()
           FROM webhook_endpoint we
           WHERE we.id = wd.endpoint_id
             AND wd.id IN (
@@ -76,7 +97,7 @@ async function finalizeWebhookDelivery(
 ): Promise<'delivered' | 'retry' | 'dead'> {
   return withStore(storeId, async (tx) => {
     if (outcome.ok) {
-      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
+      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
       return 'delivered';
     }
     // `d.attempts` is the post-claim value (incremented at claim time); use it
@@ -87,6 +108,10 @@ async function finalizeWebhookDelivery(
       lastError: String(outcome.error instanceof Error ? outcome.error.message : outcome.error),
       status: giveUp ? 'failed' : 'pending',
       nextAttemptAt: new Date(Date.now() + backoff * 1000),
+      // De-fork 2.9: release the claim; stamp the first failure once.
+      claimedAt: null,
+      firstFailedAt: sql`coalesce(${s.webhookDelivery.firstFailedAt}, now())`,
+      updatedAt: new Date(),
     }).where(eq(s.webhookDelivery.id, d.id));
     return giveUp ? 'dead' : 'retry';
   });

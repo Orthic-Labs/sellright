@@ -1,0 +1,3 @@
+/* expect: brand-font */
+.title { font-family: 'Cormorant Garamond', serif; }
+.mono { font-family: "IBM Plex Mono", monospace; }

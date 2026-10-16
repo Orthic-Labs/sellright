@@ -16,6 +16,38 @@ export interface SezzleOrder {
   dispute?: { id?: number; status?: string };
 }
 
+/**
+ * Normalised provider-status label for a retrieved Sezzle order
+ * (MAINTENANCE-INVENTORY 4.6): `captured` only when the captures exactly cover
+ * the attempt amount with no refund/dispute; `declined` (denied/deleted);
+ * `held` (approved, uncaptured); `open`; anything inconsistent (partial or
+ * excess capture, invalid capture, refund/dispute, expired authorization) is
+ * `unresolved:<reason>`, which is nonterminal. Single source for the verify
+ * path and gateway recovery.
+ */
+export function sezzleObservedStatus(
+  order: Pick<SezzleOrder, 'checkout_status' | 'authorization' | 'dispute'>,
+  expect: { amount: number; currency: string },
+): string {
+  let captured = 0;
+  const refs = new Set<string>();
+  for (const c of order.authorization?.captures ?? []) {
+    if (!c.uuid || refs.has(c.uuid) || !Number.isSafeInteger(c.amount?.amount_in_cents) ||
+        c.amount.amount_in_cents < 0 || c.amount.currency !== expect.currency) return 'unresolved:invalid_capture';
+    refs.add(c.uuid);
+    captured += c.amount.amount_in_cents;
+  }
+  if (order.dispute?.id || order.authorization?.refunds?.length) return 'unresolved:refund_or_dispute';
+  if (captured !== 0 && captured !== expect.amount) return 'unresolved:partial_or_excess_capture';
+  if (captured === expect.amount && captured > 0) return 'captured';
+  if (['denied', 'deleted'].includes(order.checkout_status ?? '')) return 'declined';
+  if (order.authorization?.approved) {
+    const exp = order.authorization.expiration;
+    return exp && Date.parse(exp) < Date.now() ? 'unresolved:authorization_expired' : 'held';
+  }
+  return 'open';
+}
+
 export interface SezzleSessionInput extends CreatePaymentInput {
   customer: Record<string, unknown>;
   items: Array<{ name: string; sku: string; quantity: number; price: Money }>;
@@ -24,6 +56,9 @@ export interface SezzleSessionInput extends CreatePaymentInput {
   discount: number;
   completeUrl: string;
   cancelUrl: string;
+  /** Order-edit balance payments describe themselves and label the credit. */
+  description?: string;
+  discountLabel?: string;
 }
 
 export function verifySezzleSignature(raw: string, signature: string | undefined, key: string): boolean {
@@ -81,7 +116,7 @@ export function normalizeSezzleEvent(payload: unknown): NormalizedSezzleEvent | 
   const orderUuid = str(data?.order_uuid) ?? (isDispute ? null : str(data?.uuid)) ??
     str(data?.sezzle_order_uuid);
   const disputeId = isDispute
-    ? str(data?.dispute_id) ?? (num(data?.dispute_id)?.toString() ?? null) ?? str(data?.id)
+    ? str(data?.dispute_id) ?? num(data?.dispute_id)?.toString() ?? str(data?.id)
     : null;
   const details: Record<string, unknown> = {
     receivedAt: new Date().toISOString(),
@@ -181,9 +216,10 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
           customer: input.customer,
           order: {
             intent: 'CAPTURE', reference_id: input.attemptId,
+            description: input.description ?? `Order ${input.orderCode}`,
             items: input.items, order_amount: money(input.amount),
             shipping_amount: money(input.shipping), tax_amount: money(input.tax),
-            ...(input.discount ? { discounts: [{ name: 'Order discount', amount: money(input.discount) }] } : {}),
+            ...(input.discount ? { discounts: [{ name: input.discountLabel ?? 'Order discount', amount: money(input.discount) }] } : {}),
           },
         });
       if (!result.order?.uuid || !result.order.checkout_url) throw new Error('Sezzle session response is incomplete');
@@ -205,34 +241,41 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
             order.order_amount?.amount_in_cents !== input.amount || order.order_amount.currency !== input.currency) {
           return pending(input.token, 'order_identity_or_amount_mismatch');
         }
-        const captures = order.authorization?.captures ?? [];
-        const refs = new Set<string>();
-        let captured = 0;
-        for (const capture of captures) {
-          if (!capture.uuid || refs.has(capture.uuid) ||
-              !Number.isSafeInteger(capture.amount?.amount_in_cents) || capture.amount.amount_in_cents < 0 ||
-              capture.amount.currency !== input.currency) return pending(input.token, 'invalid_capture');
-          refs.add(capture.uuid);
-          captured += capture.amount.amount_in_cents;
-        }
-        if (captured !== 0 && captured !== input.amount) return pending(input.token, 'partial_or_excess_capture');
-        if (order.dispute?.id || order.authorization?.refunds?.length) {
-          return { ...pending(input.token, 'refund_or_dispute_requires_reconciliation'),
-            metadata: { needsReconciliation: true, reason: 'refund_or_dispute_requires_reconciliation',
-              captureRefs: [...refs], refunds: order.authorization?.refunds ?? [], dispute: order.dispute ?? null } };
-        }
-        if (!captured && ['denied', 'deleted'].includes(order.checkout_status ?? '')) {
-          return { state: 'Declined', providerRef: input.token,
-            metadata: { gateway: gatewayIdentity(input.gateway!), checkoutStatus: order.checkout_status } };
-        }
-        if (!captured && order.authorization?.approved && order.authorization.expiration &&
-            Date.parse(order.authorization.expiration) < Date.now()) {
-          return pending(input.token, 'authorization_expired_requires_reconciliation');
-        }
-        return {
-          state: captured === input.amount ? 'Settled' : order.authorization?.approved ? 'Authorized' : 'Pending',
-          providerRef: input.token, metadata: { gateway: gatewayIdentity(input.gateway!), captureRefs: [...refs] },
+        // De-fork 2.9: from here the retrieved order is bound to this attempt,
+        // so its status is a valid provider observation.
+        const observedStatus = sezzleObservedStatus(order, { amount: input.amount, currency: input.currency });
+        const token: string = input.token as string;
+        const decide = (): PaymentResult => {
+          const captures = order.authorization?.captures ?? [];
+          const refs = new Set<string>();
+          let captured = 0;
+          for (const capture of captures) {
+            if (!capture.uuid || refs.has(capture.uuid) ||
+                !Number.isSafeInteger(capture.amount?.amount_in_cents) || capture.amount.amount_in_cents < 0 ||
+                capture.amount.currency !== input.currency) return pending(token, 'invalid_capture');
+            refs.add(capture.uuid);
+            captured += capture.amount.amount_in_cents;
+          }
+          if (captured !== 0 && captured !== input.amount) return pending(token, 'partial_or_excess_capture');
+          if (order.dispute?.id || order.authorization?.refunds?.length) {
+            return { ...pending(token, 'refund_or_dispute_requires_reconciliation'),
+              metadata: { needsReconciliation: true, reason: 'refund_or_dispute_requires_reconciliation',
+                captureRefs: [...refs], refunds: order.authorization?.refunds ?? [], dispute: order.dispute ?? null } };
+          }
+          if (!captured && ['denied', 'deleted'].includes(order.checkout_status ?? '')) {
+            return { state: 'Declined', providerRef: token,
+              metadata: { gateway: gatewayIdentity(input.gateway!), checkoutStatus: order.checkout_status } };
+          }
+          if (!captured && order.authorization?.approved && order.authorization.expiration &&
+              Date.parse(order.authorization.expiration) < Date.now()) {
+            return pending(token, 'authorization_expired_requires_reconciliation');
+          }
+          return {
+            state: captured === input.amount ? 'Settled' : order.authorization?.approved ? 'Authorized' : 'Pending',
+            providerRef: token, metadata: { gateway: gatewayIdentity(input.gateway!), captureRefs: [...refs] },
+          };
         };
+        return { ...decide(), observedStatus };
       } catch { return pending(input.token, 'verification_unavailable'); }
     },
     async refundPayment(input) {

@@ -76,21 +76,28 @@ export function storeResolutionHeaders(): Record<string, string> {
 
 /**
  * Double-submit CSRF token, browser-side only. packages/api's shop/admin CSRF
- * guards (app.ts) require `x-csrf-token` to match the readable `sr_csrf`
- * cookie for any mutation once a session cookie exists (customer session on
+ * guards (app.ts) require `x-csrf-token` to match the readable `sr_cust_csrf`
+ * (customer session) or `sr_csrf` (admin / isolated demo) cookie for any
+ * mutation once a session cookie exists (customer session on
  * the real API; every visitor on the isolated demo, which has no anonymous
  * "guest checkout" concept — its stricter wrapper CSRF gate checks this on
- * every mutation, session or not). `sr()` never read this cookie at all, so
+ * every mutation, session or not). `sr()` once never read this cookie at all, so
  * every mutating call 403'd the moment a session existed to protect — most
  * visibly, 100% of isolated-demo checkouts. `sr_csrf` is deliberately NOT
  * HttpOnly (that's the whole point of double-submit: same-origin JS must be
  * able to read it back to prove it isn't a cross-site forgery), so this is
  * exactly what it's for.
  */
-function readCsrfCookie(): string | undefined {
+export function readCsrfCookie(): string | undefined {
   if (isServer || typeof document === 'undefined') return undefined;
-  const match = document.cookie.match(/(?:^|;\s*)sr_csrf=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : undefined;
+  // A signed-in customer on the real API gets `sr_cust_csrf` (customerCsrfValid
+  // checks that one); the isolated demo has no customer accounts and uses
+  // `sr_csrf`. Same precedence as the native client (~/sellright/client).
+  for (const name of ['sr_cust_csrf', 'sr_csrf']) {
+    const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+    if (match) return decodeURIComponent(match[1]);
+  }
+  return undefined;
 }
 
 async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -274,8 +281,8 @@ export const srResetPassword = (token: string, password: string) =>
 export const srVerifyEmail = (token: string) =>
   sr<{ ok: boolean }>('/v1/shop/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
 
-export const srResendVerification = (email: string) =>
-  sr<{ ok: boolean }>('/v1/shop/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
+export const srResendVerification = (email: string, turnstileToken?: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/resend-verification', { method: 'POST', body: JSON.stringify(turnstileToken ? { email, turnstileToken } : { email }) });
 
 /** PATCH /v1/shop/account/me — profile (firstName/lastName/phone). */
 export const srUpdateProfile = (body: { firstName?: string | null; lastName?: string | null; phone?: string | null }) =>
@@ -371,8 +378,8 @@ export const srShippingMethods = (country?: string, subtotal = 0) => {
 export const srCurrencies = () =>
   sr<{ base: string; currencies: { currency: string; rate: number }[] }>('/v1/shop/currencies');
 
-export const srNewsletterSignup = (email: string, name?: string) =>
-  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify(name ? { email, name } : { email }) });
+export const srNewsletterSignup = (email: string, name?: string, turnstileToken?: string) =>
+  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify({ email, ...(name ? { name } : {}), ...(turnstileToken ? { turnstileToken } : {}) }) });
 
 export interface SrCreatedOrder {
   code: string; state: string; grandTotal: number; currency: string;
@@ -586,6 +593,7 @@ export interface SrCartLine {
   lineDiscount: number;
   lineTotal: number;
   available: boolean;
+  availableQuantity: number | null;
 }
 
 export interface SrCart {
@@ -771,3 +779,16 @@ export const srContact = (body: {
   sr<{ ok: boolean; message?: string }>('/v1/shop/contact', {
     method: 'POST', body: JSON.stringify(body),
   });
+
+/** Bootstrap transport stays scoped to the initial migration endpoint. */
+export interface SrLegacyCartReceipt {
+  receipt: string;
+  cart: SrCart | null;
+  couponCode: string | null;
+  countryCode: string | null;
+  unresolved: Array<{ variantId: string; quantity: number }>;
+}
+export const srLegacyCartMigration = (body: {
+  claimId: string; items: Array<{ variantId: string; quantity: number }> | null;
+  couponCode?: string | null; countryCode?: string | null;
+}) => sr<SrLegacyCartReceipt>('/v1/shop/cart/legacy-migration', { method: 'POST', body: JSON.stringify(body) });

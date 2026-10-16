@@ -6,6 +6,8 @@
  * and we can drive the exact responses that matter: 200, a retryable 500, and
  * 410 Unregistered (the one with a side effect — token deletion).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apnsCalls: Array<{ deviceToken: string; environment: string }> = [];
@@ -30,12 +32,11 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
+import { adminSettingsAdvanced } from '../routes/admin-settings-advanced.js';
 import { adminPush } from '../routes/admin-push.js';
 import { enqueuePush, buildOrderPushPayload, deliverPushes } from './outbox.js';
 
-if (!/_test(\b|$)/.test(new URL(env.DATABASE_URL).pathname)) {
-  throw new Error('refusing to run: DATABASE_URL must point at a _test database');
-}
+assertTestDatabase(env.DATABASE_URL, 'outbox.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'push-test-store';
@@ -44,6 +45,7 @@ const OTHER_ADMIN = 'eeeeeeee-eeee-eeee-eeee-00000000000b';
 
 const app = new OpenAPIHono();
 app.route('/', adminPush);
+app.route('/', adminSettingsAdvanced);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -222,5 +224,49 @@ describe('buildOrderPushPayload', () => {
     expect(p.aps.alert.body).toContain('159.00');
     expect(p.aps.sound).toBe('default');
     expect(p.orderCode).toBe('SR-1042');
+  });
+});
+
+describe('push authorization remains current', () => {
+  const args = { topic: 'order.paid', payload: { orderCode: 'SR-PRIVATE' } };
+
+  it('migration removes legacy sessionless registrations & queued deliveries never send them', async () => {
+    await register(session, { token: DEVICE_A });
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(1);
+    // Historical registration whose authenticating session cannot be established.
+    await pool.query('UPDATE admin_device_token SET session_id = NULL WHERE token = $1', [DEVICE_A]);
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(0);
+    const migration = readFileSync(new URL('../../drizzle/0099_device_session.sql', import.meta.url), 'utf8');
+    await pool.query(migration);
+    expect(await tokenRows()).toEqual([]);
+    expect((await deliverPushes()).sent).toBe(0);
+    expect(apnsCalls).toEqual([]);
+    expect((await register(session, { token: DEVICE_A })).status).toBe(200);
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(1);
+  });
+
+  it('staff removal atomically deletes registrations & stops queued/new store deliveries', async () => {
+    const other = await createAdminSession(OTHER_ADMIN);
+    await register(other, { token: DEVICE_B });
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(1);
+    const res = await app.request(`/v1/admin/staff/${OTHER_ADMIN}`, { method: 'DELETE', headers: { authorization: `Bearer ${session}`, 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    expect(await tokenRows()).toEqual([]);
+    // Human sessions remain global so another store can still use this identity.
+    expect(Number((await pool.query('SELECT count(*) FROM "session" WHERE admin_user_id = $1', [OTHER_ADMIN])).rows[0].count)).toBe(1);
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(0);
+    expect((await deliverPushes()).sent).toBe(0);
+    expect(apnsCalls).toEqual([]);
+    expect((await register(other, { token: DEVICE_B })).status).not.toBe(200);
+  });
+
+  it('membership predicate rejects historical registrations even when session remains live', async () => {
+    await register(session, { token: DEVICE_A });
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(1);
+    await pool.query('DELETE FROM admin_user_store WHERE admin_user_id = $1 AND store_id = $2', [ADMIN, STORE]);
+    expect(await tokenRows()).toHaveLength(1); // simulate a pre-fix staff removal
+    expect(await withStore(STORE, (tx) => enqueuePush(tx, STORE, args))).toBe(0);
+    expect((await deliverPushes()).sent).toBe(0);
+    expect(apnsCalls).toEqual([]);
   });
 });

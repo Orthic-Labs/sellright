@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -35,18 +35,21 @@ const GROUPS: NavGroup[] = [
     { to: '/discounts', label: 'Discounts', icon: Percent },
     { to: '/gift-cards', label: 'Gift cards', icon: Gift },
     { to: '/loyalty', label: 'Points', icon: Award },
+    { to: '/reviews', label: 'Reviews', icon: Star },
     { to: '/affiliates', label: 'Affiliates', icon: HandCoins },
     { to: '/marketing', label: 'Marketing', icon: Mail },
     { to: '/blog', label: 'Blog', icon: FileText },
   ]},
   { id: 'insights', label: 'Insights', items: [
     { to: '/reports', label: 'Reports', icon: BarChart3 },
+    { to: '/waitlist', label: 'Waitlist', icon: BellRing },
     { to: '/activity', label: 'Activity', icon: Activity },
   ]},
   { id: 'config', label: 'Configuration', items: [
     { to: '/settings', label: 'Settings', icon: Settings },
     { to: '/settings/payments', label: 'Payments', icon: HandCoins },
     { to: '/settings/email', label: 'Email', icon: Mail },
+    { to: '/settings/seo', label: 'SEO', icon: Globe },
     { to: '/staff', label: 'Staff', icon: Shield },
     { to: '/tax-zones', label: 'Taxes', icon: Receipt },
     { to: '/currency-rates', label: 'Currencies', icon: Coins },
@@ -75,6 +78,7 @@ const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/discounts', 'Discounts'],
   ['/gift-cards', 'Gift cards'],
   ['/loyalty', 'Points'],
+  ['/reviews', 'Reviews'],
   ['/affiliates', 'Affiliates'],
   ['/marketing', 'Marketing'],
   ['/blog', 'Blog'],
@@ -82,6 +86,8 @@ const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/activity', 'Activity'],
   ['/settings/payments', 'Payments'],
   ['/settings/email', 'Email'],
+  ['/settings/seo', 'SEO'],
+  ['/waitlist', 'Waitlist'],
   ['/settings', 'Settings'],
   ['/staff', 'Staff'],
   ['/tax-zones', 'Taxes'],
@@ -224,7 +230,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const toggle = (id: string) => setOpenIds((m) => { const v = !m[id]; localStorage.setItem(`sr_nav_${id}`, v ? '1' : '0'); return { ...m, [id]: v }; });
 
   return (
-    <nav className="flex-1 overflow-y-auto p-3 space-y-1" aria-label="Primary">
+    <nav className="flex-1 overflow-y-auto p-3 stack-y-1" aria-label="Primary">
       {GROUPS.map((g) => {
         const hasActive = groupContainsPath(g, loc.pathname);
         const open = openIds[g.id] || hasActive;
@@ -236,7 +242,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
               <ChevronDown size={13} className={`transition-transform ${open ? '' : '-rotate-90'}`} aria-hidden="true" />
             </button>
             {open && (
-              <div className="mt-0.5 space-y-0.5">
+              <div className="mt-0.5 stack-y-0.5">
                 {g.items.map(({ to, label, icon: Icon, end }) => (
                   <NavLink key={to} to={to} end={end} onClick={onNavigate}
                     className={({ isActive }) =>
@@ -306,7 +312,7 @@ export default function Layout() {
 
       {/* Main column */}
       <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur">
+        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur-sm">
           {/* Mobile: menu + store name */}
           <button className="md:hidden grid h-9 w-9 place-items-center rounded-lg text-gray-600 hover:bg-gray-100" aria-label="Open navigation" onClick={() => setDrawer(true)}>
             <Menu size={20} />

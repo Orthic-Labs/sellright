@@ -19,6 +19,7 @@
  * test behavior is controlled via mockResolvedValueOnce / mockResolvedValue
  * inside each test (vi.clearAllMocks in beforeEach).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -31,11 +32,7 @@ vi.mock('./mailer.js', () => ({
 
 // Hard guard: this test TRUNCATEs — refuse anything but a *_test DB.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `outbox test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'outbox.test.ts');
 
 import { sendEmail } from './mailer.js';
 import { deliverEmails, enqueueEmail } from './outbox.js';

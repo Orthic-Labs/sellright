@@ -2,33 +2,72 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
 import { resolveConfiguredGatewayAccount, resolveGatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
-import { queryNmiPayment } from './nmi-query.js';
+import { queryNmiPayment, queryNmiPaymentObserved } from './nmi-query.js';
+import { recordProviderObservationDetached } from './provider-observation.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
+import { orderIdByCode, withLockedSet, type HeldLocks } from '../db/locks.js';
+import { checkPaymentAttempt, PAYMENT_POLICY_VETO_CODE, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from './policy/host.js';
+import type { PaymentProvider, PaymentPurpose, PolicyOrder } from './policy/types.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
+/** Order editing (G13): states where a positive amount due is a balance for an
+ *  edited order rather than an unpaid order (same rule as routes/pay.ts). */
+export const isBalanceState = (state: string) => state === 'Paid' || state === 'PartiallyRefunded';
+
 export class GatewayPaymentError extends Error {
-  constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
+  /** Stable wire code when the call site has one (policy vetoes); otherwise derived from the message. */
+  constructor(public status: 400 | 404 | 409 | 503, message: string,
+    public code?: string, public extra?: { readonly state?: string }) { super(message); }
 }
+
+/** Maps a payment-policy failure to the gateway HTTP error. Anything else passes through. */
+export function gatewayErrorFromPolicy(e: unknown): unknown {
+  if (e instanceof PaymentPolicyVetoError) {
+    return new GatewayPaymentError(409, e.veto.message, e.veto.code || PAYMENT_POLICY_VETO_CODE, e.veto.extra);
+  }
+  if (e instanceof PaymentPolicyUnavailableError) {
+    return new GatewayPaymentError(503, 'Payment is temporarily unavailable; retry shortly', 'PAYMENT_POLICY_UNAVAILABLE');
+  }
+  return e;
+}
+
+/** Runs the beforePaymentAttempt hook for a payment path (policy host, inside the caller's tx). */
+export async function policyBeforeAttempt(
+  tx: Tx, held: HeldLocks,
+  provider: PaymentProvider, purpose: PaymentPurpose, order: PolicyOrder,
+): Promise<void> {
+  try {
+    await checkPaymentAttempt(tx, held, { provider, purpose, order });
+  } catch (e) {
+    throw gatewayErrorFromPolicy(e);
+  }
+}
+
 export function receiptMatches(given: string | undefined, expected: string | null): boolean {
   if (!given || !expected) return false;
   const a = Buffer.from(given), b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 export async function ownedOrder(tx: Tx, code: string, receipt?: string, customerSession?: string | null) {
-  const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+  // Explicit tenant predicate as well as RLS: a BYPASSRLS/superuser pool must
+  // still never resolve another store's order by code + receipt token.
+  const [order] = await tx.select().from(s.order)
+    .where(and(eq(s.order.code, code), sql`${s.order.storeId} = nullif(current_setting('app.current_store', true), '')::uuid`))
+    .limit(1).for('update');
   if (!order || order.deletedAt) throw new GatewayPaymentError(404, 'Order not found');
   let granted = receiptMatches(receipt, order.receiptToken);
   if (!granted && customerSession && order.customerId) {
     const customer = await resolveCustomer(tx, customerSession);
-    granted = customer?.id === order.customerId;
+    granted = customerOwnsOrder(customer, order);
   }
   if (!granted) throw new GatewayPaymentError(404, 'Order not found');
   return order;
@@ -48,9 +87,31 @@ export async function startGatewayPayment(input: {
   catch { throw new GatewayPaymentError(503, 'Payment account is not configured'); }
   const operation = input.method === 'sezzle' ? 'session' : 'charge';
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
-    const prepared = await withStore(input.storeId, async tx => {
+    // Plan → lock → verify (PAYMENT-TIMING §3.5): the order id is read unlocked for planning, then
+    // the order set is taken before ownership, the policy hook and the attempt insert.
+    const orderId = await orderIdByCode(input.storeId, input.code);
+    if (!orderId) throw new GatewayPaymentError(404, 'Order not found');
+    const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const order = await ownedOrder(tx, input.code, input.receiptToken, input.customerSession);
-      const [existing] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.idempotencyKey, input.idempotencyKey)).limit(1);
+      // Order editing (G13): a Paid / PartiallyRefunded order with a positive
+      // amount due is a BALANCE payment for an edit that raised the total. It is
+      // a second payment on the order, so its idempotency key is namespaced by
+      // the number of settled tenders (mirrors routes/pay.ts ':balance:<n>') —
+      // a later balance after another edit gets a fresh key even if a client
+      // reuses one. A raw-key hit still replays the earlier (pre-balance)
+      // attempt, so a retried checkout request keeps its old answer.
+      const balance = isBalanceState(order.state);
+      // Policy veto point (PAYMENT-TIMING §3.6): before the replay lookup, so a replay is vetoed too.
+      await policyBeforeAttempt(tx, held, input.method, balance ? 'balance' : 'checkout', order);
+      let attemptKey = input.idempotencyKey;
+      if (balance) {
+        const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
+          .where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
+        attemptKey = `${input.idempotencyKey}:balance:${n?.n ?? 0}`;
+      }
+      const found = await tx.select().from(s.paymentAttempt)
+        .where(inArray(s.paymentAttempt.idempotencyKey, balance ? [input.idempotencyKey, attemptKey] : [input.idempotencyKey])).limit(2);
+      const existing = found.find((a) => a.idempotencyKey === input.idempotencyKey) ?? found[0];
       if (existing) {
         if (existing.orderId !== order.id || existing.method !== input.method || existing.operation !== operation ||
             existing.accountId !== account.accountId || existing.mode !== account.mode) {
@@ -60,7 +121,7 @@ export async function startGatewayPayment(input: {
         catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
         return { existing };
       }
-      if (order.state !== 'PendingPayment') throw new GatewayPaymentError(409, 'Order is not payable');
+      if (order.state !== 'PendingPayment' && !balance) throw new GatewayPaymentError(409, 'Order is not payable');
       const [active] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt)
         .where(and(eq(s.paymentAttempt.orderId, order.id), inArray(s.paymentAttempt.status, ['processing','unknown','pending']))).limit(1);
       if (active) throw new GatewayPaymentError(409, 'Resolve the existing payment before starting another');
@@ -68,14 +129,17 @@ export async function startGatewayPayment(input: {
       if (amount <= 0) throw new GatewayPaymentError(409, 'Order is already paid');
       if (input.method === 'nmi' && !input.token) throw new GatewayPaymentError(400, 'Payment token required');
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+      const adjustments = input.method === 'sezzle'
+        ? await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment)
+          .where(and(eq(s.orderAdjustment.orderId, order.id), eq(s.orderAdjustment.storeId, input.storeId))) : [];
       const [customer] = order.customerId
         ? await tx.select().from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
       const attemptId = randomUUID();
       let session;
       if (input.method === 'sezzle') {
         try {
-          session = prepareSezzleSession({ order, lines, account, amount, attemptId, customer,
-            storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl });
+          session = prepareSezzleSession({ order, lines, adjustments, account, amount, attemptId, customer,
+            storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl, balance });
         } catch (error) {
           throw new GatewayPaymentError(400, error instanceof Error ? error.message : 'Invalid checkout details');
         }
@@ -87,7 +151,7 @@ export async function startGatewayPayment(input: {
       const [attempt] = await tx.insert(s.paymentAttempt).values({
         id: attemptId, storeId: input.storeId, orderId: order.id, operation, method: input.method,
         accountId: account.accountId, mode: account.mode, amount, currency: order.currency,
-        idempotencyKey: input.idempotencyKey, fingerprint, context,
+        idempotencyKey: attemptKey, fingerprint, context,
       }).returning();
       return { attempt: attempt!, order, session };
     });
@@ -126,7 +190,12 @@ async function markUnknown(storeId: string, id: string, reason: string) {
 }
 
 export async function finishAttempt(storeId: string, id: string, result: PaymentResult) {
-  return withStore(storeId, async tx => {
+  // STOREKIT §5.8 #2: the order (L3) is locked before the attempt (L5). The attempt's
+  // order id is read unlocked for planning; the attempt itself is re-read FOR UPDATE under the set.
+  const [pre] = await withStore(storeId, tx =>
+    tx.select({ orderId: s.paymentAttempt.orderId }).from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1));
+  if (!pre) throw new GatewayPaymentError(404, 'Payment not found');
+  return withLockedSet(storeId, { kind: 'order', orderId: pre.orderId }, async tx => {
     const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
     if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
     if (attempt.status === 'settled') return view(attempt);
@@ -153,7 +222,7 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
       updatedAt: new Date(),
     }).where(eq(s.paymentAttempt.id, id)).returning();
     return view(updated!);
-  });
+  }, { mustCommit: true }); // X-45: every caller runs after the provider has moved money.
 }
 
 export async function verifySezzleAttempt(storeId: string, id: string) {
@@ -170,7 +239,11 @@ export async function verifySezzleAttempt(storeId: string, id: string) {
       attemptId: (attempt.context as { orderReference?: string } | null)?.orderReference ?? id, amount: attempt.amount,
       currency: attempt.currency, gateway: account, token: attempt.providerRef,
     });
-    return finishAttempt(storeId, id, result);
+    // De-fork 2.9: observedStatus is present only after a successful GET whose
+    // identity matched this attempt; it never reaches the ledger.
+    const { observedStatus, ...settlement } = result;
+    if (observedStatus) await recordProviderObservationDetached(storeId, { attemptId: id }, { status: observedStatus });
+    return finishAttempt(storeId, id, settlement);
   });
 }
 
@@ -214,8 +287,10 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
   return withAdvisoryLock('refund:' + storeId + ':' + first.attempt.orderId, async () => {
     // Re-read inside the lock — a concurrent finalize (request retry or
     // webhook) may have settled the reservation while we waited.
+    // Unlocked re-read: the row lock is taken by the order set below (an attempt lock here
+    // would precede the order lock, STOREKIT §5.1).
     const fresh = await withStore(storeId, async tx => {
-      const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
+      const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1);
       const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, id)).limit(1);
       const [payment] = refund ? await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId)).limit(1) : [];
       // Provider refs already claimed by OTHER refund rows on this payment —
@@ -238,7 +313,7 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
       result = { state: 'Pending', providerRef: refund.providerRef ?? attempt.providerRef,
         errorMessage: 'Provider verification unavailable' };
     }
-    const { finalized, storeSlug } = await withStore(storeId, async tx => {
+    const { finalized, storeSlug } = await withLockedSet(storeId, { kind: 'order', orderId: attempt.orderId }, async tx => {
       const view = await finalizeRefund(tx, storeId, id, result);
       const [store] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
       return { finalized: view, storeSlug: store?.slug };
@@ -346,9 +421,12 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
     const account = await resolveGatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
     try { assertGatewayEnvironment(account, attempt.context); }
     catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
-    const result = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
+    const { result, observedStatus } = await queryNmiPaymentObserved({ account, amount: attempt.amount, currency: attempt.currency,
       orderReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
       providerRef: attempt.providerRef });
+    // De-fork 2.9: only a successful, attempt-bound retrieval advances the
+    // observation; an unavailable query leaves the previous one in place.
+    if (observedStatus) await recordProviderObservationDetached(storeId, { attemptId: id }, { status: observedStatus });
     return finishAttempt(storeId, id, result);
   });
 }

@@ -43,7 +43,7 @@ describe('source schema preflight', () => {
     const schema = minimal();
     schema.get('customer')!.add('customFieldsSheeridverifications'); // known
     schema.get('customer')!.add('customFieldsLegacyflag');            // unmapped
-    schema.set('session', new Set(['customFieldsAnything']));         // not imported -> ignored
+    schema.set('unused_extension', new Set(['customFieldsAnything']));         // not imported -> ignored
     expect(unmappedCustomFields(schema)).toEqual([{ table: 'customer', column: 'customFieldsLegacyflag' }]);
   });
 

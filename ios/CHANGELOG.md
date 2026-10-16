@@ -11,6 +11,7 @@ push.
 
 ### Changed
 
+- The `webcredentials` associated domain for the browser admin is now `admin.sellright.cc` (was `admin.spoares.com`).
 - The app icon catalog now ships the complete RGB iOS icon set generated from
   the selected SellRight mark.
 

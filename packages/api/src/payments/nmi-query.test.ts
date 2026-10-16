@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { queryNmiPayment, verifyNmiQuery } from './nmi-query.js';
+import { queryNmiPayment, queryNmiPaymentObserved, readNmiObservation, verifyNmiQuery } from './nmi-query.js';
 import type { GatewayAccount } from './gateway-account.js';
 
 const account: GatewayAccount = { accountId: 'nmi', storeId: 'dd', method: 'nmi', mode: 'test', securityKey: 'test-secret' };
@@ -50,5 +50,43 @@ describe('NMI read-only reconciliation', () => {
     expect(transport).toHaveBeenCalledTimes(1);
     expect(transport.mock.calls[0]![0]).toBe('https://sandbox.nmi.com/api/query.php');
     expect(new URLSearchParams(transport.mock.calls[0]![1]!.body as string).get('order_id')).toBe('attempt');
+  });
+});
+
+describe('NMI provider observation (de-fork 2.9)', () => {
+  it('reports the condition only after a successful query that identifies this transaction', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(xml));
+    const r = await queryNmiPaymentObserved({ ...input, providerRef: '123' }, transport);
+    expect(r.observedStatus).toBe('settled'); // 4.6 label, not the raw condition
+    expect(r.result.state).toBe('Settled');
+  });
+  it('reports nothing when the query itself fails or is unavailable', async () => {
+    const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error('timeout'));
+    expect((await queryNmiPaymentObserved(input, transport)).observedStatus).toBeNull();
+    const bad = vi.fn<typeof fetch>().mockResolvedValue(new Response('<broken>'));
+    expect((await queryNmiPaymentObserved(input, bad)).observedStatus).toBeNull();
+    // Missing security key: no request is made, nothing observed.
+    const noKey = vi.fn<typeof fetch>();
+    expect((await queryNmiPaymentObserved({ ...input, account: { ...account, securityKey: undefined } }, noKey)).observedStatus).toBeNull();
+    expect(noKey).not.toHaveBeenCalled();
+  });
+  it('reports nothing for a response that does not identify this attempt (zero rows, other order, other currency, duplicates)', () => {
+    expect(readNmiObservation('<nm_response/>', input)).toBeNull();
+    expect(readNmiObservation(xml.replace('<order_id>attempt', '<order_id>other'), input)).toBeNull();
+    expect(readNmiObservation(xml.replace('<currency>USD', '<currency>EUR'), input)).toBeNull();
+    expect(readNmiObservation(xml.replace('</nm_response>', transaction + '</nm_response>'), input)).toBeNull();
+    expect(readNmiObservation(xml, { ...input, providerRef: '999' })).toBeNull();
+  });
+  it('labels per 4.6: settled, failed, unresolved:<reason>', async () => {
+    const q = async (body: string) => (await queryNmiPaymentObserved({ ...input, providerRef: '123' }, vi.fn<typeof fetch>().mockResolvedValue(new Response(body)))).observedStatus;
+    expect(await q(xml)).toBe('settled');
+    const failedXml = '<nm_response><transaction><transaction_id>123</transaction_id><order_id>attempt</order_id><currency>USD</currency><condition>failed</condition></transaction></nm_response>';
+    expect(await q(failedXml)).toBe('failed');
+    expect(await q(xml.replace('<condition>pendingsettlement</condition>', '<condition>pending</condition>'))).toBe('unresolved:transaction_not_captured');
+    expect(readNmiObservation(xml.replace('<condition>pendingsettlement</condition>', ''), input)).toBe('unknown');
+  });
+  it('queryNmiPayment keeps its original return shape', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(xml));
+    expect(Object.keys(await queryNmiPayment({ ...input, providerRef: '123' }, transport))).not.toContain('observedStatus');
   });
 });

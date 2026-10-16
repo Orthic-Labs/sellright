@@ -13,12 +13,13 @@ export default function Marketing() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const cfgKey = ['lm-config', store?.slug];
-  const { data: cfg, isLoading } = useQuery({ queryKey: cfgKey, queryFn: () => api.get<{ configured: boolean; url: string | null }>('/marketing/config') });
+  const { data: cfg, isLoading } = useQuery({ queryKey: cfgKey, queryFn: () => api.get<{ configured: boolean; url: string | null; listId: number | null }>('/marketing/config') });
 
-  const [form, setForm] = useState({ url: '', apiUser: '', apiToken: '' });
+  const [form, setForm] = useState({ url: '', apiUser: '', apiToken: '', listId: '' });
+  const validListId = Number.isSafeInteger(Number(form.listId)) && Number(form.listId) > 0;
   const [touched, setTouched] = useState(false);
   const connect = useMutation({
-    mutationFn: () => api.patch<{ ok: boolean; lists: number }>('/marketing/config', form),
+    mutationFn: () => api.patch<{ ok: boolean; lists: number }>('/marketing/config', { ...form, listId: Number(form.listId) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: cfgKey }); qc.invalidateQueries({ queryKey: ['lm-lists', store?.slug] }); },
   });
 
@@ -43,13 +44,13 @@ export default function Marketing() {
       <PageHeader title="Marketing & Email" subtitle="Listmonk — managed right here, no separate login." actions={<Badge value={status} />} />
 
       {!cfg?.configured ? (
-        <div className="max-w-xl space-y-4">
+        <div className="max-w-xl stack-y-4">
           <InlineAlert tone="info" title="Connect your Listmonk instance">
             Once connected, SellRight syncs your customers into Listmonk lists and lets you draft campaigns here. Sending stays in Listmonk for safety.
           </InlineAlert>
           <FormSection title="Connect Listmonk"
-            actions={<button className="btn-primary" form="lm-connect" disabled={connect.isPending || !isUrl(form.url) || !form.apiUser || !form.apiToken}>{connect.isPending ? <><Spinner className="text-white" /> Connecting…</> : <><Mail size={15} /> Connect & verify</>}</button>}>
-            <form id="lm-connect" className="space-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (isUrl(form.url)) connect.mutate(); }}>
+            actions={<button className="btn-primary" form="lm-connect" disabled={connect.isPending || !isUrl(form.url) || !form.apiUser || !form.apiToken || !validListId}>{connect.isPending ? <><Spinner className="text-white" /> Connecting…</> : <><Mail size={15} /> Connect & verify</>}</button>}>
+            <form id="lm-connect" className="stack-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (isUrl(form.url) && form.apiUser && form.apiToken && validListId) connect.mutate(); }}>
               <Field label="Listmonk URL" htmlFor="lm-url" error={urlError} hint="The base URL of your Listmonk install.">
                 <input id="lm-url" className={`input ${urlError ? 'input-invalid' : ''}`} value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} onBlur={() => setTouched(true)} placeholder="https://listmonk.example.com" />
               </Field>
@@ -57,19 +58,23 @@ export default function Marketing() {
                 <Field label="API user" htmlFor="lm-user"><input id="lm-user" className="input" value={form.apiUser} onChange={(e) => setForm({ ...form, apiUser: e.target.value })} /></Field>
                 <Field label="API token" htmlFor="lm-token"><input id="lm-token" className="input" type="password" value={form.apiToken} onChange={(e) => setForm({ ...form, apiToken: e.target.value })} /></Field>
               </div>
+              <Field label="Signup list ID" htmlFor="lm-list" hint="Newsletter signups & paid orders use this existing Listmonk list.">
+                <input id="lm-list" className="input" type="number" min="1" step="1" required value={form.listId} onChange={(e) => setForm({ ...form, listId: e.target.value })} />
+              </Field>
               {connect.error && <InlineAlert tone="critical" title="Connection failed">{(connect.error as Error).message}</InlineAlert>}
             </form>
           </FormSection>
         </div>
       ) : (
-        <div className="space-y-5">
-          <FormSection title="Connection" description="SellRight is syncing customers to this Listmonk instance."
-            actions={<button className="btn-ghost btn-sm" onClick={() => { connect.reset(); qc.setQueryData(cfgKey, { configured: false, url: null }); }}>Reconfigure</button>}>
+        <div className="stack-y-5">
+          <FormSection title="Connection" description={cfg.listId ? `Newsletter signups & paid orders sync to list ${cfg.listId}.` : 'Choose a signup list to enable automatic enrollment.'}
+            actions={<button className="btn-ghost btn-sm" onClick={() => { connect.reset(); setForm({ url: cfg.url ?? '', apiUser: '', apiToken: '', listId: cfg.listId ? String(cfg.listId) : '' }); qc.setQueryData(cfgKey, { configured: false, url: null, listId: null }); }}>Reconfigure</button>}>
             <div className="flex items-center gap-2 text-sm">
               <Badge value={status} />
               <span className="font-mono text-xs text-gray-600">{cfg.url}</span>
             </div>
             {lists.error && <InlineAlert tone="critical" title="Can't reach Listmonk">{(lists.error as Error).message}</InlineAlert>}
+            {!cfg.listId && <InlineAlert tone="attention" title="Signup list required">Reconfigure with your existing Listmonk list ID. Confirmed signups & paid-order enrollments stay queued until then.</InlineAlert>}
           </FormSection>
 
           <div className="panel overflow-hidden">
@@ -84,7 +89,7 @@ export default function Marketing() {
                     <tr key={l.id} className="border-t border-gray-100">
                       <td className="td font-medium truncate">{l.name}</td>
                       <td className="td text-right text-gray-600 tnum"><Users size={13} className="inline mr-1 text-gray-300" />{l.subscribers}</td>
-                      <td className="td text-right space-x-2 whitespace-nowrap">
+                      <td className="td text-right stack-x-2 whitespace-nowrap">
                         <button className="btn-ghost btn-sm" disabled={sync.isPending} onClick={() => sync.mutate(l.id)}>{sync.isPending ? <Spinner /> : <><RefreshCw size={13} /> Sync customers</>}</button>
                         <button className="btn-ghost btn-sm" onClick={() => setCampaign({ name: '', subject: '', listId: l.id, body: '' })}><Send size={13} /> Campaign</button>
                       </td>

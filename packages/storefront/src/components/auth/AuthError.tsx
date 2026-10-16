@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { XCircleIcon } from '~/platform/gateway';
 
 export const AuthError = component$<{ message: string; id?: string }>(({ message, id }) => (
   <div id={id} role="alert" class="rounded-md bg-red-50 p-3">

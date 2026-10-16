@@ -14,6 +14,7 @@
  * rather than vi.mock'ing the module, matching the injectable-isProduction
  * rationale documented in store-context.db.test.ts.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createApp } from '../app.js';
@@ -27,7 +28,7 @@ const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 // split (out of scope for this change), so it self-gates: skip cleanly when
 // DATABASE_URL isn't pointed at a _test database instead of throwing and
 // failing the whole run. Run explicitly with DATABASE_URL=…/sellright_test.
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeee0b00b000';
 const SLUG = 'apps-store-resolution-test-store';

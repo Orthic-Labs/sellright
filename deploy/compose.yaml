@@ -105,6 +105,8 @@ services:
       DATABASE_URL: postgresql://sellright_app:${POSTGRES_APP_PASSWORD}@postgres:5432/sellright
       DATABASE_URL_MIGRATE: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
+      # Admin SPA public URL for e-mailed admin links (staff invites): Caddy serves it at the root of SELLRIGHT_DOMAIN.
+      ADMIN_PUBLIC_URL: https://${SELLRIGHT_DOMAIN:?set SELLRIGHT_DOMAIN in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
       # WS-E: maintenance-mode flag file. Lives on its own named volume (not
@@ -137,6 +139,7 @@ services:
       BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
       BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
       BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}
+      BOOTSTRAP_STORE_URL: ${BOOTSTRAP_STORE_URL:-}
       FUNCTIONAL_CHECK_STORE_SLUG: ${FUNCTIONAL_CHECK_STORE_SLUG:-}
       # Test/CI-only escape hatch (see packages/api/src/env.ts) to deterministically
       # fail `sellright functional-check` without a real broken migration —
@@ -157,6 +160,9 @@ services:
       JOBS_ENABLED: ${JOBS_ENABLED:-1}
       JOBS_PUSH_ENABLED: ${JOBS_PUSH_ENABLED:-0}
       BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-0}
+      # Admin 2FA policy (P1b): off | privileged | all, and the opt-in sweep that seals legacy TOTP secrets.
+      ADMIN_REQUIRE_TOTP: ${ADMIN_REQUIRE_TOTP:-off}
+      ADMIN_TOTP_SEAL_EXISTING: ${ADMIN_TOTP_SEAL_EXISTING:-0}
       TRUSTED_PROXY_HEADER: x-real-ip
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
       PGPOOL_CONNECTION_TIMEOUT_MS: ${PGPOOL_CONNECTION_TIMEOUT_MS:-5000}
@@ -204,6 +210,13 @@ services:
         condition: service_healthy
     environment:
       SELLRIGHT_API_URL: ${SELLRIGHT_API_URL:-http://api:3300}
+      # The storefront is reachable only on the private network, through Caddy, which sets X-Forwarded-Host/-Proto
+      # itself (replacing any client-supplied value). So it is the trusted proxy: forwarded host/proto select the
+      # store and the form-POST origin. Never set this on a storefront that can be reached without such a proxy.
+      SELLRIGHT_TRUST_FORWARDED_HOST: "1"
+      # Runtime, optional: comma-separated public hosts of the pinned store allowed to show Google sign-in (only used
+      # with a build pinned via VITE_SELLRIGHT_STORE_SLUG + VITE_GOOGLE_CLIENT_ID). Unset = Google sign-in off.
+      SELLRIGHT_GOOGLE_SIGNIN_HOSTS: ${SELLRIGHT_GOOGLE_SIGNIN_HOSTS:-}
     networks: [private]
 
   caddy:

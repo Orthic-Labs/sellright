@@ -11,11 +11,14 @@ import sharp from 'sharp';
 import type { Metadata } from 'sharp';
 import { sql, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { afterCommit } from '../db/after-commit.js';
 import { env } from '../env.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import * as s from '../db/schema.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
+/** App-wide body cap for this one route (app.ts): the file limit plus multipart framing / the alt field. */
+export const ASSET_UPLOAD_LIMIT_BYTES = MAX_BYTES + 256 * 1024;
 const ALLOWED = new Set(['jpeg', 'png', 'webp', 'avif', 'gif']);
 
 export const adminAssets = new OpenAPIHono();
@@ -101,7 +104,7 @@ adminAssets.openapi(
     const res = await withStore(st.storeId, async (tx) => {
       const [a] = await tx.select().from(s.asset).where(eq(s.asset.id, id)).limit(1);
       if (!a) return { kind: 'notfound' as const };
-      // Sum the reference counts across the 4 FKs into a single typed scalar.
+      // Sum the reference counts across the 5 FKs into a single typed scalar.
       // Drizzle's `tx.execute` returns a raw driver row which is awkward to cast
       // per-driver, so we collapse this into a typed sum() over a UNION ALL of
       // tiny 1-row subqueries. SQL stays identical, type is `number`.
@@ -114,6 +117,7 @@ adminAssets.openapi(
           + (select count(*) from product_asset where asset_id = ${id})
           + (select count(*) from variant_asset where asset_id = ${id})
           + (select count(*) from collection where image_asset_id = ${id})
+          + (select count(*) from blog_post where featured_asset_id = ${id})
           )::int`,
         })
         .from(s.asset)
@@ -122,7 +126,9 @@ adminAssets.openapi(
       const refCount = refCountRow[0]?.refCount ?? 0;
       if (refCount > 0) return { kind: 'referenced' as const };
       await tx.delete(s.asset).where(eq(s.asset.id, id));
-      fs.rm(path.join(env.ASSET_DIR, a.path), { force: true }).catch(() => { /* best-effort */ });
+      afterCommit(tx, () => {
+        fs.rm(path.join(env.ASSET_DIR, a.path), { force: true }).catch(() => { /* best-effort */ });
+      });
       return { kind: 'ok' as const };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'asset not found');

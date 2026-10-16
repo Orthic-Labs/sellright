@@ -59,7 +59,7 @@ export default function CollectionDetailPage() {
             <input className="input pl-9" placeholder="Search products" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           {search.isFetching && <div className="text-xs text-gray-400">Searching…</div>}
-          <div className="space-y-1">
+          <div className="stack-y-1">
             {search.data?.items.map((p) => (
               <div key={p.id} className="flex items-center justify-between text-sm py-1">
                 <span className="truncate">{p.name}</span>

@@ -9,7 +9,8 @@
  * legacy hand-rolled `sr()` helper and never a legacy shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
-import { CartService } from '~/services/CartService';
+import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
+import type { CheckoutSnapshot } from '~/hooks/pre-submit-stock';
 import type {
 	CheckoutRequest,
 	CheckoutResponse,
@@ -24,7 +25,7 @@ import type {
 } from '~/sellright/types/checkout';
 
 export interface CheckoutForm {
-	/** Fallback line items when no server-cart token exists yet. */
+	/** Bootstrap line items the request schema requires; the server cart's lines win. */
 	items?: { sku: string; quantity: number }[];
 	email?: string;
 	shippingAddress?: Record<string, unknown>;
@@ -35,6 +36,13 @@ export interface CheckoutForm {
 	/** Points to redeem — the server re-validates against the customer's actual balance. */
 	redeemPoints?: number;
 }
+
+/** An HTTP 204 or a JSON `null` body reaches the caller as `data === undefined/null` with no thrown error. For every
+ *  client call checkout depends on that is a FAILED call, never a value to read fields from. */
+const nonEmpty = <T>(data: T | null | undefined, what: string): T => {
+	if (data === null || data === undefined) throw new Error(`Empty ${what} response`);
+	return data;
+};
 
 /**
  * R19-equivalent: one Idempotency-Key per checkout attempt. Retries of the
@@ -49,6 +57,16 @@ const resetAttemptKey = (): void => {
 	checkoutAttemptKey = null;
 };
 
+/** True when POST /checkout was refused because a line's stock is gone (409 OUT_OF_STOCK). `placeOrder` rethrows its
+ *  failures wrapped in a plain Error whose `cause` is the API error, so look at both. The caller must then re-read
+ *  the live cart: its mirror still holds the stock it showed before the sale that emptied the shelf. */
+export const isOutOfStockConflict = (error: unknown): boolean => {
+	for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
+		if (candidate instanceof SellRightError && candidate.status === 409 && candidate.code === 'OUT_OF_STOCK') return true;
+	}
+	return false;
+};
+
 /** True for the 409 shapes the cart itself produced (stale/converted/merged/
  *  revision_required) — as opposed to an unrelated 409 (e.g. out-of-stock or
  *  shipping-unavailable) that also carries a `cart` snapshot for display but
@@ -61,20 +79,31 @@ const isCartConflict = (
 
 /**
  * Create the order (server-priced) from the sr_cart token. The server is
- * authoritative — when a cart token is present its lines win and the client
- * item list is only the bootstrap value the schema requires. Conversion is a
- * non-append mutation: `expectedRevision` echoes the cart's live revision
- * (missing → 409 `revision_required`, mismatched → 409 `stale` + the current
- * cart snapshot, which is adopted into the local mirror).
+ * authoritative — its cart lines win and the client item list is only the
+ * bootstrap value the schema requires. Conversion is a non-append mutation:
+ * `expectedRevision` echoes the revision of `snapshot`, the live read the
+ * pre-submit stock check just validated (mismatch → 409 `stale` + the current
+ * cart snapshot, which is adopted into the local mirror; the next attempt must
+ * run a fresh validation). There is no tokenless submit and no second cart
+ * read here: the validated snapshot is the only source of token and revision.
+ *
+ * Runs inside the cart lock: `scope` is the capability `CartService.withLock`
+ * handed the caller, so conflict handling never re-acquires the lock. Every
+ * local effect is bound to `snapshot.token`, the cart that was submitted.
+ * A converted cart creates no order — it is resumed (see `resumeConverted`),
+ * so it is refused here without a POST and its token is kept.
  */
-export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> => {
-	const cart = await CartService.checkoutSnapshot();
-	if (cart?.status === 'merged') {
+export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot, scope: CartLockScope): Promise<CheckoutResponse> => {
+	if (!snapshot || !snapshot.token || typeof snapshot.revision !== 'number') {
+		throw new Error('Your cart could not be verified — please review it and try again.');
+	}
+	if (snapshot.status === 'merged') {
 		// This token's lines already moved into the customer's cart at login —
 		// falling back to the client item list here would double-submit them.
-		CartService.discard();
+		scope.retire(snapshot.token);
 		throw new Error('Your cart was merged into your account — please re-add your items.');
 	}
+	if (snapshot.status === 'converted') throw new ConvertedCartError();
 
 	const body: CheckoutRequest = {
 		items: form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }],
@@ -85,11 +114,9 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 		couponCode: form.couponCode,
 		giftCardCode: form.giftCardCode,
 		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
+		cartToken: snapshot.token,
+		expectedRevision: snapshot.revision,
 	};
-	if (cart) {
-		body.cartToken = cart.token;
-		body.expectedRevision = cart.revision;
-	}
 
 	try {
 		const { data } = await sellright().POST('/v1/shop/checkout', {
@@ -103,13 +130,17 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 			const conflict = error.body as CheckoutConflictBody | undefined;
 			if (isCartConflict(conflict)) {
 				if (conflict.code === 'stale' || conflict.code === 'revision_required') {
-					CartService.adoptConflict(conflict.cart);
+					scope.adoptConflict(conflict.cart, snapshot.token);
 					throw Object.assign(new Error('Your cart changed — please review it and try again.'), { cause: error });
 				}
-				// converted / merged: the server already replays the original order
-				// for a converted cart before this branch, so reaching it means the
-				// cart itself is unusable — retire the token + mirror.
-				CartService.discard();
+				if (conflict.code === 'converted') {
+					// Keep the token: it is the way back to the unpaid order. The snapshot is adopted (same token) so the
+					// mirror shows `converted` and the page resumes instead of retrying.
+					scope.adoptConflict(conflict.cart, snapshot.token);
+					throw Object.assign(new ConvertedCartError(error.message || undefined), { cause: error });
+				}
+				// merged: the cart itself is unusable — retire exactly the token that was submitted.
+				scope.retire(snapshot.token);
 				throw Object.assign(new Error(error.message || 'This cart can no longer be checked out.'), { cause: error });
 			}
 			if (conflict?.reason === 'payload_mismatch') {
@@ -132,7 +163,7 @@ export const createPaymentIntent = async (code: string, receiptToken?: string): 
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/payment-intent', {
 		params: { path: { code }, header: receiptToken ? { 'x-receipt-token': receiptToken } : {} },
 	});
-	return data as PaymentIntentResponse;
+	return nonEmpty(data, 'payment-intent') as PaymentIntentResponse;
 };
 
 /**
@@ -160,7 +191,7 @@ export const startGatewayPayment = async (
 		},
 		body: { method, ...(opts.token ? { token: opts.token } : {}) },
 	});
-	return data as GatewayAttempt;
+	return nonEmpty(data, 'gateway-payment') as GatewayAttempt;
 };
 
 /**
@@ -173,14 +204,16 @@ export const verifyGatewayPayment = async (
 	code: string,
 	attemptId: string,
 	receiptToken?: string,
+	signal?: AbortSignal,
 ): Promise<GatewayVerifyResult> => {
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment/{attempt}/verify', {
 		params: {
 			path: { code, attempt: attemptId },
 			header: receiptToken ? { 'x-receipt-token': receiptToken } : {},
 		},
+		signal,
 	});
-	return data as GatewayVerifyResult;
+	return nonEmpty(data, 'gateway-payment verify') as GatewayVerifyResult;
 };
 
 /**
@@ -196,7 +229,8 @@ export const settleZeroDueOrder = async (code: string, receiptToken?: string): P
 			params: { path: { code }, header: receiptToken ? { 'x-receipt-token': receiptToken } : {} },
 			body: { method: 'stripe' },
 		});
-		return data as PayResponse;
+		// An empty body is not "settled": the caller falls back to reading the order.
+		return nonEmpty(data, 'pay') as PayResponse;
 	} catch (error) {
 		// 400 'Already covered' — the server settled it first; nothing to do.
 		if (error instanceof SellRightError && error.status === 400) return null;
@@ -207,17 +241,18 @@ export const settleZeroDueOrder = async (code: string, receiptToken?: string): P
 /** Read the order's current state for confirmation / error-recovery reads.
  *  Receipt-token scoped (`rt`, from `placeOrder`) OR the authed owner — a
  *  bare code with neither is denied by the API. */
-export const getOrder = async (code: string, receiptToken?: string): Promise<OrderSummary> => {
+export const getOrder = async (code: string, receiptToken?: string, signal?: AbortSignal): Promise<OrderSummary> => {
 	const { data } = await sellright().GET('/v1/shop/orders/{code}', {
 		params: { path: { code }, query: receiptToken ? { rt: receiptToken } : {} },
+		signal,
 	});
-	return data as OrderSummary;
+	return nonEmpty(data, 'order') as OrderSummary;
 };
 
 /** Public runtime config — decides whether Stripe is wired for this store. */
 export const getShopConfig = async (): Promise<ShopConfig> => {
 	const { data } = await sellright().GET('/v1/shop/config', {});
-	return data as ShopConfig;
+	return nonEmpty(data, 'shop config') as ShopConfig;
 };
 
 /**
@@ -235,5 +270,5 @@ export const getEligibleShippingMethods = async (
 	const { data } = await sellright().GET('/v1/shop/shipping-methods', {
 		params: { query: { country: countryCode, subtotal, discountedSubtotalWithTax } },
 	});
-	return (data?.methods ?? []) as unknown as ShopShippingMethod[];
+	return (nonEmpty(data, 'shipping-methods').methods ?? []) as unknown as ShopShippingMethod[];
 };

@@ -63,6 +63,7 @@ describe('GET/PATCH /v1/admin/seo/config', () => {
     const body = await res.json() as { siteUrl: string | null; indexNowConfigured: boolean; robotsDisallow: string[] };
     expect(body.siteUrl).toBeNull();
     expect(body.indexNowConfigured).toBe(false);
+    expect((body as { indexNowKey?: string | null }).indexNowKey).toBeNull();
     expect(body.robotsDisallow).toContain('checkout');
   });
 
@@ -87,6 +88,15 @@ describe('GET/PATCH /v1/admin/seo/config', () => {
     const body = await (await req(managerToken, 'GET', '/v1/admin/seo/config')).json() as { siteUrl: string; robotsDisallow: string[] };
     expect(body.siteUrl).toBe('https://persisted.example.com');
     expect(body.robotsDisallow).toEqual(['custom-path']);
+  });
+
+  it('GET exposes the IndexNow key for the admin form; PATCH null clears siteUrl and key', async () => {
+    const { managerToken, staffToken } = await seed();
+    await req(managerToken, 'PATCH', '/v1/admin/seo/config', { siteUrl: 'https://keyed.example.com', indexNowKey: 'abcdef0123456789' });
+    const got = await (await req(staffToken, 'GET', '/v1/admin/seo/config')).json() as { siteUrl: string | null; indexNowKey: string | null; indexNowConfigured: boolean };
+    expect(got).toMatchObject({ siteUrl: 'https://keyed.example.com', indexNowKey: 'abcdef0123456789', indexNowConfigured: true });
+    const cleared = await (await req(managerToken, 'PATCH', '/v1/admin/seo/config', { siteUrl: null, indexNowKey: null })).json() as { siteUrl: string | null; indexNowKey: string | null; indexNowConfigured: boolean };
+    expect(cleared).toMatchObject({ siteUrl: null, indexNowKey: null, indexNowConfigured: false });
   });
 
   it('records a durable, secret-free audit_log row on every PATCH', async () => {

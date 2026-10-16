@@ -1,6 +1,7 @@
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
-import { OptimizedImage } from '~/components/ui';
+import { OrderReturnsPanel } from '~/components/account/OrderReturns';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 import { getOrderByCode } from '~/services/customer';
 import type { AccountOrderDetail } from '~/sellright/types/account';
 import { formatPrice } from '~/utils';
@@ -38,13 +39,13 @@ export default component$(() => {
 
 	const o = order.value;
 	const tracking = getTrackingInfo(o?.fulfillments);
-	const status = o ? getStatusDisplay(o.state, o.fulfillments) : undefined;
+	const status = o ? getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus) : undefined;
 
 	return (
 		<div class="max-w-6xl m-auto rounded-lg p-4 space-y-6 text-gray-900">
 			<div>
 				<div class="flex items-center gap-3 mb-2">
-					{o && getStatusIcon(o.state, o.fulfillments)}
+					{o && getStatusIcon(o.state, o.fulfillments, o.fulfillmentStatus)}
 					<h2>
 						{o ? (
 							<>Order <span class="text-xl font-semibold">{o.code}</span></>
@@ -58,13 +59,15 @@ export default component$(() => {
 						</span>
 					)}
 				</div>
-				<p class="mb-4">
+				{/* A <div>, not a <p>: the loading skeleton is a <div>, and a <div> inside a <p> makes the browser close the <p>
+				    early, so the server HTML no longer matches what Qwik resumes (Q27) and the whole order failed to render. */}
+				<div class="mb-4">
 					{o ? (
 						<>Placed on{' '}<span class="text-xl font-semibold">{formatDate(o.placedAt)}</span></>
 					) : (
 						<div class="h-6 w-64 bg-gray-200 rounded animate-pulse" />
 					)}
-				</p>
+				</div>
 				{o && isPreOrder(o.lines) && (
 					<p class="text-sm text-[#645541] font-medium mb-4">
 						This order includes a pre-order item.
@@ -169,6 +172,7 @@ export default component$(() => {
 					))}
 				</div>
 			)}
+			{o && <OrderReturnsPanel code={o.code} />}
 			<div class="w-full bg-gray-100 p-8">
 				<p class="mb-4 text-gray-600">Shipping Address</p>
 				{o ? (

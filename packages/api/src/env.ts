@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isIP } from 'node:net';
 import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
 import { assertAllowedSenders, parseSenderDomainList } from './email/sender-policy.js';
 
@@ -69,6 +70,10 @@ const EnvSchema = z.object({
   ARTIFACT_EXTERNAL_HOST_ALLOWLIST: z.string().default(''),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
+  // Public URL of the admin SPA (origin + mount path, no trailing slash), used for links the
+  // API e-mails to admins (staff invites). Default: STOREFRONT_URL + '/admin' (the sub-path
+  // mount). A separate admin host (deploy/compose.yaml) sets e.g. https://admin.example.com.
+  ADMIN_PUBLIC_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   // Optional per-app overrides for shared stores, e.g.
   // viewright=hello@viewright.cc,heardright=hello@heardright.app
   EMAIL_FROM_BY_APP: optionalEnvString,
@@ -175,6 +180,10 @@ const EnvSchema = z.object({
   COOKIE_SECRET: z.string().optional(),
   CONTACT_EMAIL: z.string().email().optional(),
   TURNSTILE_SECRET_KEY: z.string().optional(),
+  // Explicit opt-out for stores with no Turnstile secret. In NODE_ENV=production a
+  // store with no secret FAILS CLOSED on every Turnstile-gated route unless this is
+  // 'true'. Demo/staging deploys without a site key must set TURNSTILE_DISABLED=true.
+  TURNSTILE_DISABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).optional()),
   // Entitlement token lifetime (licensing/sign.ts). Shorter TTL = tighter
   // revocation window on a compromised/refunded license. Default 7d; override
   // per-deployment if a longer offline grace period is required.
@@ -208,6 +217,8 @@ const EnvSchema = z.object({
   BOOTSTRAP_STORE_NAME: optionalEnvString,
   BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
   BOOTSTRAP_STORE_HOSTNAMES: optionalEnvString,
+  // Public storefront URL written to store.config.storefrontUrl on first-run bootstrap (https; http only for loopback).
+  BOOTSTRAP_STORE_URL: optionalEnvString,
   // Import scripts: Vendure source DB (read-only clone used by catalog/customers/orders importers).
   SOURCE_DATABASE_URL: z.string().url().optional(),
   // Import scripts: TRUNCATE guard override — BOTH --force argv AND ALLOW_FORCE_TRUNCATE=1
@@ -272,6 +283,8 @@ const EnvSchema = z.object({
   JOBS_RELEASE_STALE_APPLY: z.enum(['0', '1']).optional(),
   // release-stale-allocations job: unpaid-order age threshold in minutes.
   JOBS_RELEASE_STALE_TTL_MIN: z.coerce.number().int().positive().optional(),
+  // PAYMENT-TIMING §5.4 (decision X-10): age after which an unconfirmed Stripe PaymentIntent is cancelled at Stripe. Default 60.
+  PAYMENT_INTENT_DEADLINE_MIN: z.coerce.number().int().positive().optional(),
   // webhook-reaper job: actually reset stuck processing rows (default: dry-run).
   JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
   // webhook-reaper job: grace period in minutes before a processing row is considered stuck.
@@ -299,8 +312,49 @@ const EnvSchema = z.object({
   // '1' opts in; default '0' (off) is the safe posture for a fresh deployment.
   BEHIND_CLOUDFLARE: z.enum(['0', '1']).default('0'),
   // Header trusted for client IP when NOT behind Cloudflare (e.g. our own nginx's
-  // X-Real-IP). Must be set by a proxy the deployment actually controls.
+  // X-Real-IP). Must be set by a proxy the deployment actually controls. Honoured
+  // only when the TCP peer is loopback/private (the proxy itself); a request from a
+  // public peer reached the API directly and is identified by its socket address
+  // (auth/rate-limit.ts pickClientIp). '' disables header trust entirely.
   TRUSTED_PROXY_HEADER: z.string().default('x-real-ip'),
+  // P1a: TCP peers whose proxy headers (TRUSTED_PROXY_HEADER, CF-Connecting-IP) are trusted:
+  // comma-separated IPs/CIDRs (IPv4 or IPv6), e.g. a remote reverse proxy on a public
+  // address. Unset = loopback + private/link-local ranges only (a proxy on the same host
+  // or a private network). BEHIND_CLOUDFLARE=1 additionally requires that the edge in
+  // front of the API rejects non-Cloudflare traffic and never forwards a client's own
+  // CF-Connecting-IP (deploy/Caddyfile strips it).
+  TRUSTED_PROXY_CIDRS: z.preprocess(emptyToUndefined, z.string().refine(
+    (v) => v.split(',').map((x) => x.trim()).filter(Boolean).every((x) => /^([^/\s]+)(\/\d{1,3})?$/.test(x) && isIP(x.split('/')[0]!) !== 0
+      && (x.includes('/') ? Number(x.split('/')[1]) <= (isIP(x.split('/')[0]!) === 4 ? 32 : 128) : true)),
+    'TRUSTED_PROXY_CIDRS must be comma-separated IPs or CIDRs (e.g. 203.0.113.0/24, 2001:db8::/32)',
+  ).optional()),
+  // P1b: require TOTP for admins. 'off' (default) = per-store setting only
+  // (store.config.security.requireTotp for owners/managers); 'privileged' = also
+  // every installation admin and every owner/manager; 'all' = every human admin.
+  // Admins without TOTP then get a session that can only enrol.
+  ADMIN_REQUIRE_TOTP: z.enum(['off', 'privileged', 'all']).default('off'),
+  // P1b: '1' = at API start, seal legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY. Off by default:
+  // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
+  // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
+  ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
+  // P2: admin session lifetime. Absolute TTL (also the cookie Max-Age) and idle
+  // timeout: a session unused for ADMIN_SESSION_IDLE_HOURS is refused (0 disables).
+  ADMIN_SESSION_TTL_DAYS: z.coerce.number().positive().default(14),
+  ADMIN_SESSION_IDLE_HOURS: z.coerce.number().nonnegative().default(12),
+  // P2: request body cap for the whole API (bytes); the admin asset upload has its own larger cap.
+  API_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  // P2: exact extra origins allowed to call /v1/admin cross-origin (comma-separated, scheme://host[:port]).
+  // The admin's own origin (ADMIN_PUBLIC_URL) is always allowed; nothing is matched by suffix or wildcard.
+  ADMIN_CORS_ORIGINS: optionalEnvString,
+  // P1c: default lifetime of an agent API token when none is given at creation (and
+  // on rotating a never-expiring legacy token). 0 = never expires.
+  ADMIN_AGENT_TOKEN_TTL_DAYS: z.coerce.number().int().nonnegative().default(90),
+  // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
+  // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
+  // Failures per admin account per hour across ALL IPs:
+  ADMIN_AUTH_ACCOUNT_MAX_FAILURES: z.coerce.number().int().positive().default(20),
+  // Failures per client IP per 15 minutes across ALL accounts:
+  ADMIN_AUTH_IP_MAX_FAILURES: z.coerce.number().int().positive().default(50),
   // SEC-5: expose raw error messages to clients regardless of NODE_ENV. Only ever
   // set '1' for local debugging — a staging box left without NODE_ENV=production
   // must NOT leak internal error text by default.
@@ -354,43 +408,130 @@ const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 export type EnvSource = Record<string, string | undefined>;
 
-const resolvedEnvSource = resolveFileBackedEnv(process.env);
-const parsedEnv: Env = EnvSchema.parse(resolvedEnvSource);
-const productionErrors = productionEnvErrors(parsedEnv, resolvedEnvSource);
-if (productionErrors.length) {
-  throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
+/**
+ * Parse and validate an environment source into the engine `Env`. Pure: it
+ * touches no module state, so `createApp({ env })` (sdk/create-app.ts) and the
+ * lazy singleton below share one code path. File-backed secrets (`KEY_FILE`)
+ * are resolved first; production gates and the sender-domain policy run here.
+ */
+export function parseEnv(source: EnvSource): { env: Env; resolvedSource: EnvSource } {
+  const resolvedSource = resolveFileBackedEnv(source);
+  const parsed: Env = EnvSchema.parse(resolvedSource);
+  const productionErrors = productionEnvErrors(parsed, resolvedSource);
+  if (productionErrors.length) {
+    throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
+  }
+  // Shared sender-domain policy (email/sender-policy.ts) — no-op while
+  // FORBIDDEN_SENDER_DOMAINS is unset (the default).
+  assertAllowedSenders(
+    { SMTP_FROM: parsed.SMTP_FROM, FROM_EMAIL: parsed.FROM_EMAIL, EMAIL_FROM_BY_APP: parsed.EMAIL_FROM_BY_APP },
+    parseSenderDomainList(parsed.FORBIDDEN_SENDER_DOMAINS),
+  );
+  return { env: parsed, resolvedSource };
 }
-// Shared sender-domain policy (email/sender-policy.ts) — no-op while
-// FORBIDDEN_SENDER_DOMAINS is unset (the default).
-assertAllowedSenders(
-  { SMTP_FROM: parsedEnv.SMTP_FROM, FROM_EMAIL: parsedEnv.FROM_EMAIL, EMAIL_FROM_BY_APP: parsedEnv.EMAIL_FROM_BY_APP },
-  parseSenderDomainList(parsedEnv.FORBIDDEN_SENDER_DOMAINS),
-);
 
-export const env: Env = parsedEnv;
+// ---------------------------------------------------------------------------
+// Process-wide env holder. Importing this module parses NOTHING (2.1: env is
+// parsed inside createApp). `initEnv` is called by createApp with its `env`
+// option; code paths that never go through createApp (operator scripts, the
+// test runner, the legacy `buildHttpApp()` builder) keep working because the
+// first read of `env` initialises it implicitly from `process.env`. An implicit
+// init is recorded so createApp can refuse to run after a module touched the
+// env at import time (that would mean the env was NOT parsed inside createApp).
+// ---------------------------------------------------------------------------
+interface EnvState { env: Env; source: EnvSource; origin: 'explicit' | 'implicit'; closed?: boolean }
+let envState: EnvState | undefined;
+
+export function initEnv(source: EnvSource = process.env): Env {
+  const { env: parsed, resolvedSource } = parseEnv(source);
+  envState = { env: parsed, source: resolvedSource, origin: 'explicit' };
+  return parsed;
+}
+
+export function getEnv(): Env {
+  if (envState) return envState.env;
+  const { env: parsed, resolvedSource } = parseEnv(process.env);
+  envState = { env: parsed, source: resolvedSource, origin: 'implicit' };
+  return parsed;
+}
+
+/** The resolved raw source the env was parsed from. INTERNAL: contains secrets; use only to fingerprint them. */
+export function getEnvSource(): EnvSource {
+  getEnv();
+  return envState!.source;
+}
+
+/** The current env if one has been initialised, else undefined (never initialises). */
+export function peekEnv(): Env | undefined {
+  return envState?.env;
+}
+
+/** 'explicit' (createApp), 'implicit' (first-touch from process.env) or undefined. */
+export function envOrigin(): 'explicit' | 'implicit' | undefined {
+  return envState && !envState.closed ? envState.origin : undefined;
+}
+
+/**
+ * Mark the env closed (createApp shutdown). The parsed values stay READABLE so a straggler
+ * (a fire-and-forget promise finishing after shutdown) reads config instead of throwing and
+ * turning a clean shutdown into an unhandled rejection (review F4); `envOrigin()` reports
+ * undefined so the next createApp may initialise afresh.
+ */
+export function closeEnv(): void {
+  if (envState) envState.closed = true;
+}
+
+/** Test-only: forget everything so the next read re-initialises from process.env. */
+export function _resetEnvForTest(): void {
+  envState = undefined;
+}
+
+/**
+ * The engine env. A lazy view over the current holder: reads, writes (tests set
+ * flags), `in`, and enumeration all forward to the live parsed object.
+ */
+export const env: Env = new Proxy({} as Env, {
+  get: (_t, key) => Reflect.get(getEnv(), key),
+  set: (_t, key, value) => Reflect.set(getEnv(), key, value),
+  has: (_t, key) => Reflect.has(getEnv(), key),
+  ownKeys: () => Reflect.ownKeys(getEnv()),
+  getOwnPropertyDescriptor: (_t, key) => {
+    const d = Reflect.getOwnPropertyDescriptor(getEnv(), key);
+    if (d) d.configurable = true;
+    return d;
+  },
+});
 
 /**
  * Extension seam: parse additional, deployment-specific env vars from the
- * same resolved source this file used, without editing this file. A fork
- * defines its own zod shape (and optional boot-time validator) and gets back
- * one merged, frozen object carrying both SellRight's `env` and its own typed
- * extras.
+ * same resolved source the engine env was parsed from, without editing this
+ * file. A fork defines its own zod shape (and optional boot-time validator) and
+ * gets back one merged, frozen object carrying both SellRight's `env` and its
+ * own typed extras.
  *
  * This runs a SEPARATE `z.object(extraShape).parse(...)` over the same
  * resolved source — it never re-runs this file's own `.transform()` — so
  * SellRight's own defaults/normalization above are untouched. `validate`
  * receives the merged object and may return an array of error strings; a
  * non-empty array throws, matching this file's own productionEnvErrors gate.
+ * Inside createApp, plugins reach it as `ctx.extendEnv` (the `configure` phase).
  */
 export function extendEnv<Extra extends z.ZodRawShape>(
   extraShape: Extra,
   validate?: (merged: Readonly<Env & z.infer<z.ZodObject<Extra>>>) => string[] | void,
 ): Readonly<Env & z.infer<z.ZodObject<Extra>>> {
-  const extra = z.object(extraShape).parse(resolvedEnvSource);
-  const merged = Object.freeze({ ...env, ...extra }) as Env & z.infer<z.ZodObject<Extra>>;
+  getEnv();
+  const extra = z.object(extraShape).parse(envState!.source);
+  const merged = Object.freeze({ ...envState!.env, ...extra }) as Env & z.infer<z.ZodObject<Extra>>;
   const errors = validate?.(merged);
   if (errors && errors.length) {
     throw new Error(`Invalid extended environment:\n- ${errors.join('\n- ')}`);
   }
   return merged;
+}
+
+/** Admin SPA public base URL (no trailing slash) for e-mailed admin links: ADMIN_PUBLIC_URL, else
+ *  STOREFRONT_URL + '/admin'. */
+export function adminPublicUrl(): string {
+  return (env.ADMIN_PUBLIC_URL ?? `${env.STOREFRONT_URL.replace(/\/+$/, '')}/admin`).replace(/\/+$/, '');
 }

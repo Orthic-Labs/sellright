@@ -8,6 +8,7 @@
  * admin sessions so auth + withStore + RLS all run as in production.
  * Runs against a *_test database ONLY (TRUNCATEs).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -20,9 +21,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { adminLicenses } from './admin-licenses.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`admin-licenses test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-licenses.db.test.ts');
 
 // App-role pool: exercises FORCE ROW LEVEL SECURITY as the non-owner role.
 const appPool = new Pool({ connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL });

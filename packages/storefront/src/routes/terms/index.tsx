@@ -1,8 +1,10 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { hasContentViewFor } from '~/platform/content-view';
 
-export default component$(() => {
+const BaseTermsPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
@@ -199,8 +201,10 @@ export default component$(() => {
  );
 });
 
+export default hasContentViewFor('/terms/') ? BrandContentMount : BaseTermsPage;
+
 export const head = ({ resolveValue }: { resolveValue: any }) => {
- const identity = resolveValue(useStoreIdentityLoader);
+ const identity = resolveValue(useStoreIdentityLoader).identity;
  return createSEOHead({
  title: 'Terms of Service',
  description: `Terms of Service for ${identity.storeName}. Rules, guidelines, and agreements for using our website and purchasing our products.`,

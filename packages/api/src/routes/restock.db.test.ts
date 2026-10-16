@@ -14,6 +14,7 @@
  *   - re-arm: after being notified, an email may sign up again and is
  *     notified on the NEXT restock cycle
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -23,11 +24,7 @@ import { restockRoutes, notifyRestock, sweepRestockEvents } from './restock.js';
 import { invalidateStoreCache } from '../store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `restock test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'restock.db.test.ts');
 
 // Valid v4-shaped UUIDs — the public schema validates variantId as uuid.
 const A = 'aaaaaaaa-0000-4000-8000-0000000000a1';
@@ -222,6 +219,16 @@ describe('restock request (PAR-05) — notify', () => {
     await seedVariant(B, VARIANT_B, 'B1', 0);
   });
 
+  it('links the product page by the store\'s own seo.productUrlPattern (a /shop/{slug}/ store gets /shop/ links)', async () => {
+    await pool.query(`UPDATE store SET config = jsonb_set(coalesce(config, '{}'::jsonb), '{seo}', '{"productUrlPattern": "/shop/{slug}/"}'::jsonb) WHERE id = $1`, [A]);
+    await subscribe({ variantId: VARIANT_A, email: 'shop@example.com' });
+    await setOnHand(A, VARIANT_A, 5);
+    expect(await notifyRestock(A, VARIANT_A)).toBe(1);
+    const mails = await restockMails(A);
+    expect(mails[0]!.payload.html).toContain('/shop/p-A1/');
+    expect(mails[0]!.payload.html).not.toContain('/products/p-A1');
+  });
+
   it('notifies each pending subscriber once when the variant crosses 0→>0 (sweep path)', async () => {
     await subscribe({ variantId: VARIANT_A, email: 'one@example.com' });
     await subscribe({ variantId: VARIANT_A, email: 'two@example.com' });
@@ -239,7 +246,7 @@ describe('restock request (PAR-05) — notify', () => {
     const mails = await restockMails(A);
     expect(mails.map((m) => m.recipient).sort()).toEqual(['one@example.com', 'two@example.com']);
     expect(mails[0]!.payload.html).toContain('Product A1');
-    expect(mails[0]!.payload.html).toContain('/products/p-A1');
+    expect(mails[0]!.payload.html).toContain('/products/p-A1/');
     expect(mails[0]!.payload.html).toContain('/v1/shop/restock-request/cancel/');
 
     const rows = await requests(A, VARIANT_A);

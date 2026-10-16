@@ -1,8 +1,10 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { hasContentViewFor } from '~/platform/content-view';
 
-export default component$(() => {
+const BaseReturnsPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
@@ -145,8 +147,10 @@ export default component$(() => {
  );
 });
 
+export default hasContentViewFor('/returns/') ? BrandContentMount : BaseReturnsPage;
+
 export const head = ({ resolveValue }: { resolveValue: any }) => {
- const identity = resolveValue(useStoreIdentityLoader);
+ const identity = resolveValue(useStoreIdentityLoader).identity;
  return createSEOHead({
  title: 'Returns & Refund Policy',
  description: `Returns and refund policy for ${identity.storeName}. Learn about our return procedures and conditions.`,

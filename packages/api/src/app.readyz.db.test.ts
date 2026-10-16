@@ -10,15 +10,14 @@
  * path (200 + db:ok); the 503 timeout/error path is timing-dependent and
  * belongs to a separate unit test with a mocked pool.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './db/test-database-url.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { pool } from './db/client.js';
 import { env } from './env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`app readyz db test requires a live pool — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'app.readyz.db.test.ts');
 
 afterAll(async () => {
   await pool.end();

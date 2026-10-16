@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, sql, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -11,7 +11,8 @@ import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
-import { contactRoutes } from './contact.js';
+import { contactRoutes, turnstileSecret } from './contact.js';
+import { verifyTurnstileToken } from '../security/turnstile.js';
 import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
@@ -25,17 +26,25 @@ const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
-    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254) }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(apiErrorSchema()) }, 429: { description: 'Rate limited', content: J(apiErrorSchema()) } },
+    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254), turnstileToken: z.string().max(2048).optional() }) },
+    responses: {
+      200: { description: 'OK', content: J(z.any()) },
+      403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
+      404: { description: 'Not found', content: J(apiErrorSchema()) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
+    },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { code, email } = c.req.valid('query');
+    const { code, email, turnstileToken } = c.req.valid('query');
     const key = JSON.stringify([st.id, clientIp(c), email.toLowerCase()]);
     const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
       return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
+    }
+    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: clientIp(c) }))) {
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -197,6 +206,9 @@ shopExtra.openapi(
       // public route. Other callers (checkout, import) can override.
       source: z.enum(['storefront', 'checkout', 'import', 'api']).optional(),
       meta: z.record(z.string(), z.unknown()).optional(),
+      // Turnstile token from the storefront widget; required when the store has
+      // a secret (or production with no secret and no TURNSTILE_DISABLED).
+      turnstileToken: z.string().max(2048).optional(),
     }).refine(
       // An empty `topic` is the intended value for the general newsletter, but a
       // waitlist with no topic is a waitlist for nothing: it cannot be counted per
@@ -208,6 +220,7 @@ shopExtra.openapi(
     )) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
       429: { description: 'Rate limited', content: J(apiErrorSchema()) },
     },
   }),
@@ -222,10 +235,14 @@ shopExtra.openapi(
     // zod-openapi v1 fails to infer valid('json') for this public POST — same
     // shape as the original comment above the inline-Listmonk block. Cast to
     // the validated schema; the request middleware has already parsed it.
-    const { email, name, kind = 'newsletter', topic = '', source = 'storefront', meta } = c.req.valid('json') as {
+    const { email, name, kind = 'newsletter', topic = '', source = 'storefront', meta, turnstileToken } = c.req.valid('json') as {
       email: string; name?: string; kind?: 'newsletter' | 'waitlist'; topic?: string;
-      source?: 'storefront' | 'checkout' | 'import' | 'api'; meta?: Record<string, unknown>;
+      source?: 'storefront' | 'checkout' | 'import' | 'api'; meta?: Record<string, unknown>; turnstileToken?: string;
     };
+    // 2. Turnstile (fail closed when configured / production without a secret).
+    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: ip }))) {
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
+    }
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedTopic = topic ?? '';
 
@@ -242,7 +259,15 @@ shopExtra.openapi(
     // `{ok: true}`. The per-row work is silent; the public response is
     // enumeration-neutral.
     const CONFIRM_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+    // B2.16: the cooldown used to be per (address, kind, topic), and `topic` is free text — varying it created a new
+    // row (and a new confirmation e-mail) on every request. Confirmations are now also capped per ADDRESS across all
+    // kinds/topics, serialized per (store, address) so concurrent requests cannot all pass the check.
+    const ADDRESS_MAX_CONFIRMS_PER_COOLDOWN = 3;
     const enqueued = await withStore(st.id, async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'subscriber-confirm:' + st.id + ':' + normalizedEmail}, 0))`);
+      const [recent] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.subscriber)
+        .where(and(eq(s.subscriber.storeId, st.id), eq(s.subscriber.email, normalizedEmail), gt(s.subscriber.lastSentAt, new Date(Date.now() - CONFIRM_COOLDOWN_MS))));
+      const addressCapped = (recent?.n ?? 0) >= ADDRESS_MAX_CONFIRMS_PER_COOLDOWN;
       const [existing] = await tx
         .select({
           id: s.subscriber.id,
@@ -270,7 +295,7 @@ shopExtra.openapi(
           status: 'pending',
           source,
           meta: meta ?? null,
-          lastSentAt: now,
+          lastSentAt: addressCapped ? null : now,
         })
           // The SELECT above is not atomic with this INSERT: two concurrent
           // signups for the same (store, email, kind, topic) both see no row
@@ -284,6 +309,7 @@ shopExtra.openapi(
           .onConflictDoNothing()
           .returning({ id: s.subscriber.id, token: s.subscriber.token });
         if (!row) return false; // lost the insert race — winner already enqueued.
+        if (addressCapped) return false; // row kept (pending), no e-mail: this address hit its per-hour cap
         await sendSubscriberConfirmation(tx, st, { email: normalizedEmail, name: name ?? null, kind, topic: normalizedTopic, token: row.token });
         return true;
       }
@@ -311,7 +337,7 @@ shopExtra.openapi(
       // whether an email is due.
       const isReconsent = existing.status === 'unsubscribed';
       const lastSent = existing.lastSentAt?.getTime() ?? 0;
-      const withinCooldown = !isReconsent && now.getTime() - lastSent < CONFIRM_COOLDOWN_MS;
+      const withinCooldown = !isReconsent && (now.getTime() - lastSent < CONFIRM_COOLDOWN_MS || addressCapped);
 
       // Flip unsubscribed back to pending; clear unsubscribed_at. `last_sent_at`
       // only moves when we actually send, otherwise a burst of repeat posts

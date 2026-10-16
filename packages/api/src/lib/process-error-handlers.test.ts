@@ -55,4 +55,22 @@ describe('registerProcessErrorHandlers (REL-2)', () => {
     expect(loggerSpy).toHaveBeenCalledWith('[api:uncaughtException]', err);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+
+  it('logs but does not exit on a late uncaught exception after the engine finished shutdown (review F4)', () => {
+    const exitSpy = vi.fn();
+    const loggerSpy = vi.fn();
+    registerProcessErrorHandlers(exitSpy as unknown as ExitFn, loggerSpy as unknown as LoggerFn, () => true);
+    process.emit('uncaughtException', new Error('late timer'));
+    expect(loggerSpy).toHaveBeenCalledWith('[api:uncaughtExceptionAfterShutdown]', expect.any(Error));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs but does not exit on a late rejection after the engine finished shutdown (review F4)', () => {
+    const exitSpy = vi.fn();
+    const loggerSpy = vi.fn();
+    registerProcessErrorHandlers(exitSpy as unknown as ExitFn, loggerSpy as unknown as LoggerFn, () => true);
+    process.emit('unhandledRejection', new Error('late'), Promise.resolve());
+    expect(loggerSpy).toHaveBeenCalledWith('[api:lateRejectionAfterShutdown]', expect.any(Error));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
 });

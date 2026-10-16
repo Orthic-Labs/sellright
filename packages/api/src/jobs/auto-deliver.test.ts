@@ -11,6 +11,7 @@
  * wipe + seed helpers under withStore(). vitest runs files serially
  * (fileParallelism: false), so the shared DB is safe between files.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -20,11 +21,7 @@ import { withLeaderLock } from './leader-lock.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `auto-deliver test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'auto-deliver.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'auto-deliver-test-store';

@@ -298,6 +298,68 @@ export async function revokeVerification(
 }
 
 /**
+ * G12: clear a customer's SheerID verification — every category, or just one.
+ * Used by the admin "Clear verification" action (fraud, wrong person verified,
+ * customer asked to re-verify). Same mechanics as revokeVerification (success
+ * rows flip to 'revoked', imported row-less entries are stripped, the three
+ * customer fields are recomputed so `verified_customer` coupons stop applying)
+ * but covers all categories at once and records ONE audit entry carrying the
+ * operator's reason. Pending (in-flight) attempts are left alone: they still
+ * have to pass SheerID to grant anything. Idempotent — nothing to clear means
+ * no write and no audit row.
+ */
+export async function clearVerification(
+  tx: Tx,
+  storeId: string,
+  args: { customerId: string; category?: string | null; reason: string },
+  actor: string,
+): Promise<{ cleared: string[]; rowsRevoked: number; importedRemoved: number; active: string[] } | null> {
+  const [cust] = await tx
+    .select({ sheeridVerifications: s.customer.sheeridVerifications })
+    .from(s.customer)
+    .where(and(eq(s.customer.id, args.customerId), eq(s.customer.storeId, storeId)))
+    .limit(1);
+  if (!cust) return null;
+
+  const matches = args.category ? [eq(sheeridVerification.category, args.category)] : [];
+  const revoked = await tx
+    .update(sheeridVerification)
+    .set({ status: 'revoked', updatedAt: new Date() })
+    .where(and(
+      eq(sheeridVerification.storeId, storeId),
+      eq(sheeridVerification.customerId, args.customerId),
+      eq(sheeridVerification.status, 'success'),
+      ...matches,
+    ))
+    .returning({ id: sheeridVerification.id, category: sheeridVerification.category, verificationId: sheeridVerification.verificationId });
+
+  const legacy = Array.isArray(cust.sheeridVerifications) ? (cust.sheeridVerifications as VerificationEntry[]) : [];
+  const keep = args.category ? legacy.filter((e) => e?.category !== args.category) : [];
+  const removed = legacy.length - keep.length;
+  // Entries that merely mirror a row we just revoked are not "imported" data.
+  const revokedVids = new Set(revoked.map((r) => r.verificationId).filter((v): v is string => !!v));
+  const importedRemoved = legacy.filter((e) => (!args.category || e?.category === args.category) && !(e?.verificationId && revokedVids.has(e.verificationId))).length;
+  if (removed > 0) {
+    await tx.update(s.customer).set({ sheeridVerifications: keep as unknown as object })
+      .where(and(eq(s.customer.id, args.customerId), eq(s.customer.storeId, storeId)));
+  }
+  const active = await recomputeCustomerVerifications(tx, storeId, args.customerId);
+
+  const cleared = [...new Set([
+    ...revoked.map((r) => r.category),
+    ...legacy.filter((e) => !args.category || e?.category === args.category).map((e) => e?.category),
+  ].filter((c): c is string => !!c))].sort();
+
+  if (revoked.length > 0 || removed > 0) {
+    await tx.insert(s.auditLog).values({
+      storeId, actor, entity: 'customer', entityId: args.customerId, action: 'verification_cleared',
+      data: { scope: args.category ?? 'all', categories: cleared, rowsRevoked: revoked.length, importedRemoved, reason: args.reason },
+    });
+  }
+  return { cleared, rowsRevoked: revoked.length, importedRemoved, active };
+}
+
+/**
  * Expiry sweep: flip 'success' rows past expires_at to 'expired' and recompute
  * each affected customer. Returns customer ids that lost a category — the
  * scheduler logs the count. Designed to be called per-store by a job.

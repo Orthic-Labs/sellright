@@ -1,13 +1,14 @@
 import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
-import { mergeProductStock, type CatalogProduct, type CatalogVariant } from '~/sellright/types/catalog';
-import type { CartLineEnrichment } from '~/sellright/types/cart';
+import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
-import { findVariant, getOptionGroups } from './product-options';
+import { toCartEnrichment } from '~/platform/controllers/product-model';
+import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
+import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
 /** One gallery image — native shape (no legacy `Asset` object, no `id`;
@@ -17,21 +18,6 @@ export interface GalleryImage {
 }
 
 const PLACEHOLDER_IMAGE: GalleryImage = { preview: '/asset_placeholder.webp' };
-
-/** Cart boundary: translate the native product/variant into the cart's
- *  client-only display enrichment (`~/sellright/types/cart`). This is the
- *  ONLY place in the catalog area that builds it — everything upstream of it
- *  stays native, and the server cart line itself carries only `sku`/`quantity`. */
-function toCartEnrichment(product: CatalogProduct, variant: CatalogVariant, image: GalleryImage | undefined): CartLineEnrichment {
-  return {
-    slug: product.slug,
-    image: image?.preview ?? null,
-    name: variant.name,
-    options: variant.options.map((o) => o.name).join(' / '),
-    isPreOrder: variant.isPreOrder,
-    shipDate: variant.shipDate ?? undefined,
-  };
-}
 
 export const ProductContent = component$(({ loaderResult }: { loaderResult: ProductLoaderResult | { failed: true; message?: string } | null | undefined }) => {
   const appState = useContext(APP_STATE);
@@ -143,11 +129,15 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       case 'ArrowRight': if (orderedAssets.value.length > 1) navigateModal('next'); break;
     }
   }));
+  // Each read carries a generation; only the latest read's result applies (a restore re-read can overlap the load read).
+  const stockReadGen = useSignal(0);
   const refreshLiveStock = $(async () => {
+    const gen = ++stockReadGen.value;
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
       const stock = await getProductStock(product.slug);
+      if (gen !== stockReadGen.value) return;
       if (!stock) return;
       const merged = mergeProductStock(product, stock);
       product.variants = merged.variants;
@@ -168,7 +158,16 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isEnhancing.value = false;
     }
   });
-  useOnDocument('qidle', $(() => { refreshLiveStock(); }));
+  // When the one automatic read starts (pdp.stockRefreshTrigger, default qidle) and the optional back/forward-cache re-read
+  // (pdp.bfcacheRefresh, default off): platform/stock-triggers.ts. Every read is live; nothing is cached.
+  usePdpStockTrigger(refreshLiveStock);
+  // A restored page first drops what it showed (every variant unchecked, fail closed; selections are kept), then reads again: a 404,
+  // a malformed body or a failure leaves it unavailable instead of keeping the stock it had before it was cached.
+  const refreshAfterRestore = $(async () => {
+    product.variants = withUncheckedStock(product).variants;
+    await refreshLiveStock();
+  });
+  useBfcacheStockRefresh(refreshAfterRestore);
   const changeImage = $((newIndex: number) => {
     const newAsset = orderedAssets.value[newIndex];
     if (newAsset) {
@@ -240,8 +239,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     availableVariants.value.find((v) => v.sku === selectedVariantIdSignal.value)
   );
   const isPreOrder = useComputed$(() => {
-    if (selectedVariant.value) return !!selectedVariant.value.isPreOrder;
-    return product.variants.some((v) => !!v.isPreOrder);
+    // Live stock wins: a pre-order flag only presents while the live read is in stock.
+    return isPreOrderPresented(selectedVariant.value, product.variants);
   });
   const hasSale = useComputed$(() => {
     if (selectedVariant.value) {
@@ -249,17 +248,12 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     }
     return product.variants.some((v) => typeof v.salePrice === 'number' && v.salePrice > 0);
   });
-  const allVariantsSoldOut = useComputed$(() =>
-    product.variants.every((v) => !v.isPreOrder && !v.inStock)
-  );
+  const allVariantsSoldOut = useComputed$(() => areAllVariantsSoldOut(product.variants));
   const allGroupsSelected = useComputed$(() =>
     groups.value.length > 0 && selectedValues.value.length === groups.value.length && selectedValues.value.every(v => v !== null)
   );
   const isOutOfStock = useComputed$(() => {
-    if (!allGroupsSelected.value) return false; // incomplete selection — never OOS
-    if (!selectedVariant.value) return false;
-    if (isPreOrder.value) return false;
-    return !selectedVariant.value.inStock;
+    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value);
   });
   const preOrderConsent = useSignal(false);
   const showCtaTooltip = useSignal(false);
@@ -273,6 +267,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         isAddingToCart.value = true;
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
+        // Fail closed on the live read, independent of the pre-order flag.
+        if (!isVariantPurchasable(selectedVar)) throw new Error('Variant is out of stock');
         const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
         const enrichment = toCartEnrichment(product, selectedVar, image);
         await addToCart(cart, selectedVar.sku, 1, enrichment);
@@ -361,6 +357,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       orderedAssets={orderedAssets}
       preOrderConsent={preOrderConsent}
       product={product}
+      productId={loaderResult.productId ?? null}
+      rating={loaderResult.rating ?? null}
       quantitySignal={quantitySignal}
       selectedValues={selectedValues}
       selectedVariant={selectedVariant}

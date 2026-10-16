@@ -15,7 +15,7 @@
  * and never caches them beyond the current in-memory mirror.
  *
  *   CartService.getCart(): Cart                    — current in-memory mirror (sync, never stale-served)
- *   CartService.token(): string | null              — the sr_cart cookie value, if a cart exists
+ *   CartService.token(): string | null              — the sr_cart cookie value, if a cart exists (the cookie only, never the mirror)
  *   CartService.revision(): number                  — optimistic-concurrency counter for the mirror
  *   CartService.refresh(): Promise<CartMutationResult>            — re-fetch live price/stock/coupon
  *   CartService.addLine(sku, qty, enrichment?)       — blind append (commutative, no revision needed)
@@ -27,12 +27,16 @@
  *   CartService.merge(): Promise<CartMutationResult>                — fold the guest cart into the
  *                                                                      logged-in customer; call once, right after auth
  *   CartService.checkoutSnapshot(): Promise<{ token; revision; status } | null>
- *                                                     — live base for checkout; `status` distinguishes
- *                                                       'converted' (replay for payment recovery) from
- *                                                       'merged' (terminal — discard)
- *   CartService.adoptConflict(cart): void            — adopt a cart handed back inside a checkout 409
- *   CartService.discard(): void                      — drop token + mirror locally, no network call
- *                                                       (terminal cart / 404 / explicit logout-style reset)
+ *                                                     — live base read (NOT used by PLACE ORDER, which submits the
+ *                                                       snapshot of its own validated read); `status` distinguishes
+ *                                                       'converted' (resume the original order) from
+ *                                                       'merged' (terminal — retired)
+ *   CartService.withLock(fn(scope)): Promise<T>       — hold the one origin-wide cart lock across `fn` (checkout's live read + POST);
+ *                                                       `scope` = { readFresh, adoptConflict(cart, token), retire(token) }
+ *   CartService.adoptConflict(cart, requestToken)     — adopt a cart handed back inside a checkout 409, only if it still belongs to that token
+ *   CartService.lookupConvertedCheckout(token)        — read-only lookup of the original order behind a converted cart (no lock)
+ *   CartService.retireSettled(expectedCode?)          — under the lock, retire the cookie's cart only if its order is settled/cancelled
+ *                                                       (and is `expectedCode`); there is no unconditional discard
  *   CartService.onChange(cb): () => void             — subscribe to mirror updates; returns an unsubscribe fn
  *
  * Every mutation resolves to `{ cart, dropped }`. `dropped` lists SKUs that
@@ -49,12 +53,18 @@
  * Use `isLineAvailable` / `remainingQuantity` / `canRequestQuantity` below
  * rather than re-deriving these rules at call sites.
  *
+ * Every operation runs under one exclusive Web Lock; without Web Locks the cart-changing flows throw
+ * `CartError('unsupported')` before any request. A 404 CART_NOT_FOUND retires the request's own token, a 409
+ * `converted` keeps it (and the mirror shows `converted`), a 409 `merged` retires it; every other failure leaves
+ * the token and mirror untouched.
+ *
  * On a 409 revision conflict, CartService adopts the server's authoritative
  * snapshot (price/stock/coupon all re-derived from it) and retries the
  * mutation exactly once with the fresh revision before surfacing an error —
  * callers never retry themselves and never loop.
  */
 import type { paths } from '../client';
+import type { Live } from './live';
 
 type CartLinesEndpoint = paths['/v1/shop/cart/{token}/lines']['patch'];
 type CreateCartEndpoint = paths['/v1/shop/cart']['post'];
@@ -85,14 +95,22 @@ export interface CartLineEnrichment {
   shipDate?: string;
 }
 
-export type CartLine = ServerCartLine & CartLineEnrichment;
-export type Cart = Omit<ServerCart, 'lines'> & { lines: CartLine[] };
+export type CartLine = ServerCartLine & CartLineEnrichment & Live;
+export type Cart = Omit<ServerCart, 'lines'> & { lines: CartLine[] } & Live;
 
 export interface CartMutationResult {
   cart: Cart;
   /** SKUs dropped from the cart without the caller requesting their removal.
    *  Always empty on a caller-initiated removal for that same SKU. */
   dropped: string[];
+}
+
+/** `CartService.addLine` (brand views PR2 §5): the mutation result plus the add's own outcome, read from its own server response. */
+export interface AddLineResult extends CartMutationResult {
+  /** True when the response was installed: the response, the request token and the cookie name the same cart. */
+  applied: boolean;
+  /** The response body's own line for the SKU (never the mirror), or null when the response has none. */
+  line: ServerCartLine | null;
 }
 
 /** Fail-closed availability: only an explicit `true` counts as purchasable. */

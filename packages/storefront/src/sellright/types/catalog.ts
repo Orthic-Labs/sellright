@@ -25,7 +25,9 @@ type Json<P extends keyof paths, M extends 'get'> =
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CatalogListResponse = Json<'/v1/shop/catalog/products', 'get'>;
-export type CatalogListItem = CatalogListResponse['items'][number];
+/** A listing item. `maxPrice` (the highest variant price, cents) exists only for catalog-snapshot items (the manifest's priceRange);
+ *  live API items carry the minimum alone. */
+export type CatalogListItem = CatalogListResponse['items'][number] & { maxPrice?: number | null };
 export type CatalogPricingVariant = NonNullable<CatalogListItem['pricingVariant']>;
 
 /** Same item + envelope shape as the products list (search shares the schema). */
@@ -122,6 +124,7 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
     inStock: raw.inStock === true,
     tags: raw.tags ?? [],
     minPrice: min,
+    maxPrice: raw.priceRange?.max ?? null,
     pricingVariant: min == null ? null : {
       sku: raw.slug,
       price: min,
@@ -142,6 +145,10 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
  * normalizer fills the safe native defaults documented inline.
  */
 export interface RawManifestProductDetail {
+  /** Real product UUID (keys loyalty product multipliers). Absent on older snapshots. */
+  productId?: string;
+  /** Approved-review aggregate — present only when the product has reviews. */
+  rating?: { average: number; count: number } | null;
   slug: string;
   name: string;
   description: string | null;
@@ -160,6 +167,42 @@ export interface RawManifestProductDetail {
     shipDate?: string | null;
     isPreOrder?: boolean | null;
   }>;
+}
+
+/** Product-level facts the manifest carries that `CatalogProduct` (the live
+ *  catalog-detail shape) has no field for: the product UUID (loyalty
+ *  multipliers are keyed on it) and the approved-review aggregate (feeds the
+ *  PDP rating link + schema.org AggregateRating). `rating` is null when the
+ *  product is unreviewed — never an empty/zero rating. */
+export interface ManifestProductMeta {
+  productId: string | null;
+  rating: { average: number; count: number } | null;
+}
+
+/** Product-level meta for the live-API (no catalog manifest) PDP path: the
+ *  product UUID comes from the detail response (`productId`, absent on an
+ *  older API), the rating from the public reviews endpoint's aggregate. The
+ *  rating is null — never an empty/zero one — when reviews are switched off,
+ *  the product has no approved reviews, or the reviews read failed
+ *  (`reviews` null). Mirrors `manifestProductMeta` so both paths feed the
+ *  same rating link + AggregateRating JSON-LD. */
+export function liveProductMeta(
+  product: { productId?: string | null },
+  reviews: { enabled?: boolean; average: number; count: number } | null | undefined,
+): ManifestProductMeta {
+  const usable = !!reviews && reviews.enabled !== false && reviews.count > 0 && reviews.average > 0;
+  return {
+    productId: product.productId || null,
+    rating: reviews && usable ? { average: reviews.average, count: reviews.count } : null,
+  };
+}
+
+export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'productId' | 'rating'>): ManifestProductMeta {
+  const r = raw.rating;
+  return {
+    productId: raw.productId ?? null,
+    rating: r && r.count > 0 && r.average > 0 ? { average: r.average, count: r.count } : null,
+  };
 }
 
 /** Normalize a manifest product-detail payload into the native `CatalogProduct`
@@ -181,6 +224,7 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
     .filter((p): p is string => p != null);
 
   return {
+    ...(raw.productId ? { productId: raw.productId } : {}),
     slug: raw.slug,
     name: raw.name,
     description: raw.description,

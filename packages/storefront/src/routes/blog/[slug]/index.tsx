@@ -1,58 +1,13 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
-import { routeLoader$, Link } from '@qwik.dev/router';
+import { Link } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
-import { sanitizeHtml, stripHtml } from '~/utils/sanitize';
-import { getBlogPostBySlug, getBlogPosts } from '~/providers/shop/blog/blog';
-import type { BlogPostFull, BlogPostSummary } from '~/providers/shop/blog/blog';
+import type { BlogPostFull } from '~/providers/shop/blog/blog';
 import { theme, siteUrl } from '~/theme/theme.config';
-
-function fixBodyHtml(html: string): string {
-    return html
-        // <p>---</p> → <hr>
-        .replace(/<p>\s*-{3,}\s*<\/p>/g, '<hr>')
-        // <p>## Heading</p> → <h2>Heading</h2>
-        .replace(/<p>\s*#{6}\s+(.+?)<\/p>/g, '<h6>$1</h6>')
-        .replace(/<p>\s*#{5}\s+(.+?)<\/p>/g, '<h5>$1</h5>')
-        .replace(/<p>\s*#{4}\s+(.+?)<\/p>/g, '<h4>$1</h4>')
-        .replace(/<p>\s*#{3}\s+(.+?)<\/p>/g, '<h3>$1</h3>')
-        .replace(/<p>\s*#{2}\s+(.+?)<\/p>/g, '<h2>$1</h2>')
-        .replace(/<p>\s*#{1}\s+(.+?)<\/p>/g, '<h1>$1</h1>');
-}
-
-// stripHtml (DOMPurify, real HTML parser) instead of the previous hand-rolled
-// implementation: a single-pass `/<[^>]+>/g` tag-strip can leave a
-// reconstructed `<script` behind for crafted input like `<scr<script>ipt>`
-// (CodeQL js/incomplete-multi-character-sanitization), and chaining entity
-// decodes (`&amp;` → `&` before `&lt;`/`&gt;` → `<`/`>`) on the same string can
-// double-unescape a legitimately double-encoded value, e.g. `&amp;lt;` — which
-// should stay literal text `&lt;` — instead reconstructing `<` (CodeQL
-// js/double-escaping). A real HTML parser decodes entities exactly once, in
-// the correct DOM-text-node semantics, with no hand-written regex chain.
-function stripTags(s: string): string {
-    return stripHtml(s).replace(/\s+/g, ' ').trim();
-}
-
-function slugify(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-}
-
-// Inject stable ids onto every <h2> and collect a table of contents.
-function addHeadingIdsAndToc(html: string): { html: string; toc: { id: string; text: string }[] } {
-    const toc: { id: string; text: string }[] = [];
-    const used = new Set<string>();
-    const out = html.replace(/<h2(\s[^>]*)?>([\s\S]*?)<\/h2>/gi, (_m, attrs, inner) => {
-        const text = stripTags(inner);
-        const base = slugify(text);
-        if (!base) return `<h2${attrs || ''}>${inner}</h2>`;
-        let id = base, i = 2;
-        while (used.has(id)) id = `${base}-${i++}`;
-        used.add(id);
-        toc.push({ id, text });
-        return `<h2 id="${id}"${attrs || ''}>${inner}</h2>`;
-    });
-    return { html: out, toc };
-}
+import { useBlogPost, useRelatedPosts } from '~/platform/blog';
+import { buildBlogBody, stripTags } from '~/platform/blog-content';
+import { BrandBlogPostMount } from '~/platform/controllers/content';
+import { hasView } from '~/platform/gateway';
 
 // Heuristically derive FAQ Q&A pairs from the body so we can emit FAQPage schema.
 // Looks for an <h2> labelled FAQ / "frequently asked", then pairs each following
@@ -86,23 +41,8 @@ function extractFaq(html: string): { q: string; a: string }[] {
     }
 }
 
-export const useBlogPost = routeLoader$(async (requestEvent) => {
-    const slug = requestEvent.params.slug;
-    const post = await getBlogPostBySlug(slug);
-    if (!post) { requestEvent.status(404); return null; }
-    if (post.bodyHtml) post.bodyHtml = fixBodyHtml(post.bodyHtml);
-    return post;
-});
-
-export const useRelatedPosts = routeLoader$(async (requestEvent) => {
-    const slug = requestEvent.params.slug;
-    try {
-        const { items } = await getBlogPosts(6, 0);
-        return items.filter((p) => p.slug !== slug).slice(0, 3);
-    } catch {
-        return [] as BlogPostSummary[];
-    }
-});
+// The loaders moved to platform/blog.ts (re-exported here, the A13 pattern).
+export { useBlogPost, useRelatedPosts };
 
 const STYLES = `
     .sr-post { min-height: calc(100vh - 120px); background: var(--color-parchment); padding: 3rem 1.5rem 6rem; }
@@ -155,7 +95,7 @@ const STYLES = `
     @media (max-width: 640px) { .sr-post__related-grid { grid-template-columns: 1fr; } }
 `;
 
-export default component$(() => {
+const BaseBlogPostPage = component$(() => {
     useStyles$(STYLES);
     const postSignal = useBlogPost();
     const related = useRelatedPosts();
@@ -175,7 +115,8 @@ export default component$(() => {
         );
     }
 
-    const { html: bodyWithIds, toc } = addHeadingIdsAndToc(post.bodyHtml || '');
+    // h2 ids and the TOC go through the `blog` sanitiser policy (plan §2.5), so every TOC link points at a rendered id.
+    const { body, toc } = buildBlogBody(post.bodyHtml || '');
 
     return (
         <div class="sr-post">
@@ -206,7 +147,7 @@ export default component$(() => {
                         </ol>
                     </nav>
                 )}
-                <div class="sr-post__body" dangerouslySetInnerHTML={sanitizeHtml(bodyWithIds)} />
+                <div class="sr-post__body" dangerouslySetInnerHTML={body.html} />
 
                 <div class="sr-post__bio">
                     <span class="sr-post__bio-mark" aria-hidden="true">{(post.authorName || theme.storeName).charAt(0)}</span>
@@ -244,6 +185,8 @@ export default component$(() => {
         </div>
     );
 });
+
+export default hasView('route.blog-post') ? BrandBlogPostMount : BaseBlogPostPage;
 
 export const head = ({ resolveValue }: any) => {
     const post = resolveValue(useBlogPost) as BlogPostFull | null;

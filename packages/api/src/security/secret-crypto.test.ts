@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { _resetEnvForTest, envOrigin, initEnv } from '../env.js';
 import { randomBytes } from 'node:crypto';
 import {
   encryptSecret, decryptSecret, rotateSecret, deriveKey, last4, secretsEqual, CURRENT_KEY_VERSION,
@@ -87,5 +88,46 @@ describe('secret-crypto', () => {
     expect(secretsEqual('abc123', 'abc123')).toBe(true);
     expect(secretsEqual('abc123', 'abc124')).toBe(false);
     expect(secretsEqual('abc', 'abcd')).toBe(false);
+  });
+});
+
+
+describe('secret-crypto config source', () => {
+  const explicitKey = Buffer.alloc(32, 0x41);
+  const ambientKey = Buffer.alloc(32, 0x42);
+  beforeEach(() => { _resetEnvForTest(); });
+  afterEach(() => { _resetEnvForTest(); vi.unstubAllEnvs(); });
+
+  it.each([undefined, ambientKey.toString('hex')])('uses parsed engine key when ambient key is %s', (ambient) => {
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', ambient);
+    initEnv({ NODE_ENV: 'test', SELLRIGHT_MASTER_KEY: explicitKey.toString('hex') });
+    const sealed = encryptSecret('synthetic-secret', { purpose });
+    expect(decryptSecret(sealed, purpose)).toBe('synthetic-secret');
+    expect(decryptSecret(sealed, purpose, explicitKey)).toBe('synthetic-secret');
+    expect(() => decryptSecret(sealed, purpose, ambientKey)).toThrow();
+    expect(process.env.SELLRIGHT_MASTER_KEY).toBe(ambient);
+  });
+
+  it('does not fall back to ambient key when explicit engine config omits it', () => {
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', ambientKey.toString('hex'));
+    initEnv({ NODE_ENV: 'test' });
+    const sealed = encryptSecret('synthetic-secret', { purpose, masterKey: ambientKey });
+    expect(() => encryptSecret('synthetic-secret', { purpose })).toThrow(/not configured/);
+    expect(() => decryptSecret(sealed, purpose)).toThrow(/not configured/);
+  });
+
+  it('keeps explicit Buffer injection authoritative even without an engine key', () => {
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', 'invalid-ambient-key');
+    initEnv({ NODE_ENV: 'test' });
+    const sealed = encryptSecret('synthetic-secret', { purpose, masterKey: explicitKey });
+    expect(decryptSecret(sealed, purpose, explicitKey)).toBe('synthetic-secret');
+  });
+
+  it('preserves standalone ambient key behavior without parsing database config', () => {
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', ambientKey.toString('hex'));
+    vi.stubEnv('DATABASE_URL', 'invalid-url');
+    const sealed = encryptSecret('synthetic-secret', { purpose });
+    expect(decryptSecret(sealed, purpose)).toBe('synthetic-secret');
+    expect(envOrigin()).toBeUndefined();
   });
 });

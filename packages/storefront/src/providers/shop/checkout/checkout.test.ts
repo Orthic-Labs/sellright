@@ -9,18 +9,21 @@
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-const snapshot = vi.fn();
 const adoptConflict = vi.fn();
-const discard = vi.fn();
-vi.mock('~/services/CartService', () => ({
+const retire = vi.fn();
+// placeOrder only ever sees the lock SCOPE its caller was handed — never the service. Its read throws: placeOrder must
+// not read the cart a second time. (The real ConvertedCartError class is kept: placeOrder throws it.)
+vi.mock('~/services/CartService', async (importOriginal) => ({
+	...(await importOriginal<typeof import('~/services/CartService')>()),
 	CartService: {
-		checkoutSnapshot: (...a: unknown[]) => snapshot(...a),
-		adoptConflict: (...a: unknown[]) => adoptConflict(...a),
-		discard: (...a: unknown[]) => discard(...a),
+		checkoutSnapshot: () => { throw new Error('placeOrder must not read the cart a second time'); },
+		readFresh: () => { throw new Error('placeOrder must not read the cart a second time'); },
+		refresh: () => { throw new Error('placeOrder must not read the cart a second time'); },
 	},
 }));
 
-import { placeOrder, settleZeroDueOrder, getOrder, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
+import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
+import { isOutOfStockConflict, placeOrder, settleZeroDueOrder, getOrder, getShopConfig, getEligibleShippingMethods, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
 
 // `sellright()` (openapi-fetch + the transport middleware in
 // src/sellright/client.ts) invokes the platform `fetch` as `fetch(request)`
@@ -33,6 +36,12 @@ const respond = (status: number, body: unknown) =>
 	Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
 const enqueue = (...r: Promise<Response>[]) => queue.push(...r);
 
+const snap = { token: 'tok_srv', revision: 5, status: 'active' };
+const scope: CartLockScope = {
+	readFresh: () => { throw new Error('placeOrder must not read the cart a second time'); },
+	adoptConflict: (...a) => adoptConflict(...a),
+	retire: (...a) => retire(...a),
+};
 const form = {
 	email: 'a@b.c',
 	shippingAddress: { fullName: 'A B', streetLine1: '1 St', city: 'X', postalCode: '1', countryCode: 'US' },
@@ -43,9 +52,8 @@ const form = {
 beforeEach(() => {
 	calls.length = 0;
 	queue = [];
-	snapshot.mockReset().mockResolvedValue({ token: 'tok_srv', revision: 5, status: 'active' });
 	adoptConflict.mockReset();
-	discard.mockReset();
+	retire.mockReset();
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (request: Request) => {
@@ -70,18 +78,18 @@ const lastBody = () => calls[calls.length - 1].body as Record<string, unknown>;
 describe('placeOrder → POST /v1/shop/checkout', () => {
 	it('forwards redeemPoints only when points are being spent', async () => {
 		enqueue(respond(200, { code: 'OP', state: 'PendingPayment', grandTotal: 9900, receiptToken: 'rt_p', pointsRedeemed: 1000, pointsDiscount: 1000 }));
-		const res = await placeOrder({ ...form, redeemPoints: 1000 });
+		const res = await placeOrder({ ...form, redeemPoints: 1000 }, snap, scope);
 		expect(lastBody().redeemPoints).toBe(1000);
 		expect(res.pointsDiscount).toBe(1000);
 
 		enqueue(respond(200, { code: 'OQ', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_q' }));
-		await placeOrder({ ...form, redeemPoints: 0 });
+		await placeOrder({ ...form, redeemPoints: 0 }, snap, scope);
 		expect(lastBody()).not.toHaveProperty('redeemPoints');
 	});
 
 	it('sends cartToken + live revision + shippingMethodCode, server cart wins', async () => {
 		enqueue(respond(200, { code: 'O1', state: 'PendingPayment', grandTotal: 5800, receiptToken: 'rt_1' }));
-		const res = await placeOrder(form);
+		const res = await placeOrder(form, snap, scope);
 		expect(calls[0].url).toContain('/v1/shop/checkout');
 		const body = lastBody();
 		expect(body.cartToken).toBe('tok_srv');
@@ -92,19 +100,50 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 		expect(res.receiptToken).toBe('rt_1');
 	});
 
-	it('falls back to a bootstrap line when there is no cart token', async () => {
-		snapshot.mockResolvedValueOnce(null);
+	it('sends the bootstrap line and the snapshot token/revision when the form has no items', async () => {
 		enqueue(respond(200, { code: 'O0', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_0' }));
-		await placeOrder({ items: [] });
+		await placeOrder({ items: [] }, snap, scope);
 		const body = lastBody();
 		expect(body.items).toEqual([{ sku: '__cart__', quantity: 1 }]);
-		expect(body).not.toHaveProperty('cartToken');
+		expect(body.cartToken).toBe('tok_srv');
+		expect(body.expectedRevision).toBe(5);
+	});
+
+	it('uses exactly the snapshot it is given — no second cart read, never a tokenless submit', async () => {
+		enqueue(respond(200, { code: 'O0b', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_0b' }));
+		await placeOrder(form, { token: 'tok_other', revision: 12, status: 'active' }, scope);
+		expect(calls).toHaveLength(1); // only the POST; the mocked CartService throws on any read
+		expect(lastBody().cartToken).toBe('tok_other');
+		expect(lastBody().expectedRevision).toBe(12);
+	});
+
+	it('refuses to submit without a usable snapshot (missing, no token, non-numeric revision)', async () => {
+		for (const bad of [undefined, null, { token: '', revision: 1, status: 'active' }, { token: 't', revision: undefined, status: 'active' }]) {
+			await expect(placeOrder(form, bad as never, scope)).rejects.toThrow(/could not be verified/);
+		}
+		expect(calls).toHaveLength(0);
+	});
+
+	it('a converted snapshot is never POSTed: ConvertedCartError, no request, nothing retired', async () => {
+		const outcome = await placeOrder(form, { token: 'tok_srv', revision: 6, status: 'converted' }, scope).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError);
+		expect(calls).toHaveLength(0);
+		expect(retire).not.toHaveBeenCalled();
+		expect(adoptConflict).not.toHaveBeenCalled();
+	});
+
+	it('after a stale conflict the next attempt needs a new snapshot: the old revision is not resent by the module', async () => {
+		const conflictCart = { token: 'tok_srv', revision: 9, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
+		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, code: 'stale', revision: 9, cart: conflictCart }), respond(200, { code: 'OS', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_s' }));
+		await expect(placeOrder(form, snap, scope)).rejects.toThrow('cart changed');
+		await placeOrder(form, { token: 'tok_srv', revision: 9, status: 'active' }, scope); // caller re-validated with a fresh read
+		expect((calls[1].body as Record<string, unknown>).expectedRevision).toBe(9);
 	});
 
 	it('reuses one Idempotency-Key across retries of the same attempt', async () => {
 		enqueue(respond(500, { error: { code: 'UNKNOWN_ERROR', message: 'blip' } }), respond(200, { code: 'O2', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_2' }));
-		await placeOrder(form).catch(() => {});
-		await placeOrder(form);
+		await placeOrder(form, snap, scope).catch(() => {});
+		await placeOrder(form, snap, scope);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
 		expect(keys[0]).toBeTruthy();
 		expect(keys[0]).toBe(keys[1]);
@@ -112,8 +151,8 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 
 	it('rotates the key only on payload_mismatch', async () => {
 		enqueue(respond(409, { error: { code: 'IDEMPOTENCY_PAYLOAD_MISMATCH', message: 'mismatch' }, reason: 'payload_mismatch' }), respond(200, { code: 'O3', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3' }));
-		await placeOrder(form).catch(() => {});
-		await placeOrder(form);
+		await placeOrder(form, snap, scope).catch(() => {});
+		await placeOrder(form, snap, scope);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
 		expect(keys[0]).toBeTruthy();
 		expect(keys[1]).toBeTruthy();
@@ -122,39 +161,58 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 
 	it('does NOT rotate the key for an unrelated 409 (e.g. out of stock)', async () => {
 		enqueue(respond(409, { error: { code: 'OUT_OF_STOCK', message: 'SKU1 is out of stock' }, skus: ['SKU1'] }), respond(200, { code: 'O3b', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3b' }));
-		await expect(placeOrder(form)).rejects.toThrow('SKU1 is out of stock');
-		await placeOrder(form);
+		await expect(placeOrder(form, snap, scope)).rejects.toThrow('SKU1 is out of stock');
+		await placeOrder(form, snap, scope);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
 		expect(keys[1]).toBe(keys[0]);
+	});
+
+	it('marks an OUT_OF_STOCK refusal (and only that) so the caller re-reads live stock', async () => {
+		enqueue(respond(409, { error: { code: 'OUT_OF_STOCK', message: 'SKU1 is out of stock' }, skus: ['SKU1'] }), respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, reason: 'payload_mismatch' }));
+		const outOfStock = await placeOrder(form, snap, scope).catch((e) => e);
+		expect(isOutOfStockConflict(outOfStock)).toBe(true);
+		const other = await placeOrder(form, snap, scope).catch((e) => e);
+		expect(isOutOfStockConflict(other)).toBe(false);
+		expect(isOutOfStockConflict(new Error('SKU1 is out of stock'))).toBe(false);
+		expect(isOutOfStockConflict(undefined)).toBe(false);
 	});
 
 	it('stale-cart conflict adopts the server snapshot and tells the shopper to review', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 9, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, code: 'stale', revision: 9, cart: conflictCart }));
-		await expect(placeOrder(form)).rejects.toThrow('cart changed');
-		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
-		expect(discard).not.toHaveBeenCalled();
+		await expect(placeOrder(form, snap, scope)).rejects.toThrow('cart changed');
+		expect(adoptConflict).toHaveBeenCalledWith(conflictCart, 'tok_srv'); // bound to the submitted token
+		expect(retire).not.toHaveBeenCalled();
 	});
 
 	it('revision_required conflict adopts the snapshot the same way as stale', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 1, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: { code: 'REVISION_REQUIRED', message: 'revision required' }, code: 'revision_required', revision: 1, cart: conflictCart }));
-		await expect(placeOrder(form)).rejects.toThrow('review it and try again');
-		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
+		await expect(placeOrder(form, snap, scope)).rejects.toThrow('review it and try again');
+		expect(adoptConflict).toHaveBeenCalledWith(conflictCart, 'tok_srv');
 	});
 
-	it('converted/merged conflict discards the local mirror instead of adopting', async () => {
+	it('converted conflict KEEPS the token: the snapshot is adopted for the submitted token and a ConvertedCartError is thrown', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 2, status: 'converted', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart already converted' }, code: 'converted', revision: 2, cart: conflictCart }));
-		await expect(placeOrder(form)).rejects.toThrow('cart already converted');
-		expect(discard).toHaveBeenCalled();
+		const outcome = await placeOrder(form, snap, scope).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError);
+		expect(outcome.message).toBe('cart already converted');
+		expect(adoptConflict).toHaveBeenCalledWith(conflictCart, 'tok_srv');
+		expect(retire).not.toHaveBeenCalled();
+	});
+
+	it('merged conflict retires exactly the submitted token', async () => {
+		const conflictCart = { token: 'tok_srv', revision: 2, status: 'merged', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
+		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart merged' }, code: 'merged', revision: 2, cart: conflictCart }));
+		await expect(placeOrder(form, snap, scope)).rejects.toThrow('cart merged');
+		expect(retire).toHaveBeenCalledWith('tok_srv');
 		expect(adoptConflict).not.toHaveBeenCalled();
 	});
 
 	it('merged local snapshot refuses to place — no double submit of moved lines', async () => {
-		snapshot.mockResolvedValueOnce({ token: 'tok_srv', revision: 5, status: 'merged' });
-		await expect(placeOrder(form)).rejects.toThrow('merged');
-		expect(discard).toHaveBeenCalled();
+		await expect(placeOrder(form, { token: 'tok_srv', revision: 5, status: 'merged' }, scope)).rejects.toThrow('merged');
+		expect(retire).toHaveBeenCalledWith('tok_srv');
 		expect(calls).toHaveLength(0);
 	});
 });
@@ -227,4 +285,29 @@ describe('verifyGatewayPayment → POST /v1/shop/orders/{code}/gateway-payment/{
 		expect(calls[0].headers.get('x-receipt-token')).toBe('rt_1');
 		expect(res.status).toBe('settled');
 	});
+});
+
+// An HTTP 204 or a JSON `null` body is a FAILED read for every call checkout depends on — never a value to read fields
+// from (a null order used to throw outside the guarded read and strand the payment recovery with controls locked).
+describe('empty response bodies are failed reads', () => {
+	const noContent = () => Promise.resolve(new Response(null, { status: 204 }));
+	const reads: [string, () => Promise<unknown>][] = [
+		['getOrder', () => getOrder('O1', 'rt_1')],
+		['getShopConfig', () => getShopConfig()],
+		['getEligibleShippingMethods', () => getEligibleShippingMethods('US', 100, 100)],
+		['createPaymentIntent', () => createPaymentIntent('O1')],
+		['settleZeroDueOrder', () => settleZeroDueOrder('O1')],
+		['startGatewayPayment', () => startGatewayPayment('O1', 'nmi', { token: 't', idempotencyKey: 'k' })],
+		['verifyGatewayPayment', () => verifyGatewayPayment('O1', '11111111-1111-1111-1111-111111111111')],
+	];
+	for (const [name, call] of reads) {
+		it(`${name} rejects on HTTP 204`, async () => {
+			enqueue(noContent());
+			await expect(call()).rejects.toThrow(/Empty .* response/);
+		});
+		it(`${name} rejects on a JSON null body`, async () => {
+			enqueue(respond(200, null));
+			await expect(call()).rejects.toThrow(/Empty .* response/);
+		});
+	}
 });

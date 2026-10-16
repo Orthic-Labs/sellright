@@ -1,25 +1,18 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Truck, CheckCircle2, XCircle, StickyNote } from 'lucide-react';
-import { api, type OrderDetail } from '../api';
+import { ArrowLeft, Truck, CheckCircle2, XCircle, StickyNote, Pencil, FileText, Package } from 'lucide-react';
+import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { money, dateTime } from '../lib/format';
+import { openOrderDocument } from '../lib/order-documents';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
-
-function addr(a: Record<string, unknown> | null): string[] {
-  if (!a) return [];
-  const g = (k: string) => (a[k] != null ? String(a[k]) : '');
-  return [
-    g('fullName'),
-    [g('streetLine1') || g('line1'), g('streetLine2') || g('line2')].filter(Boolean).join(', '),
-    [g('city'), g('province'), g('postalCode')].filter(Boolean).join(' '),
-    g('countryCode') || g('country'),
-    g('phone'),
-  ].filter(Boolean);
-}
+import { OrderEditPanel } from '../components/order-edit/OrderEditPanel';
+import { EditHistory } from '../components/order-edit/EditHistory';
+import { AddressCard } from '../components/order-edit/AddressCard';
+import type { AddressForm, OrderDetailX } from '../components/order-edit/types';
 
 function getErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -45,10 +38,18 @@ export default function OrderDetailPage() {
 
   const { data: o, isLoading, error } = useQuery({
     queryKey: ['order', store?.slug, code],
-    queryFn: () => api.get<OrderDetail>(`/orders/${encodeURIComponent(code)}`),
+    queryFn: () => api.get<OrderDetailX>(`/orders/${encodeURIComponent(code)}`),
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['order', store?.slug, code] });
+
+  // ── order editing (G13) + direct address edit (G5) ───────────────────────
+  const [editing, setEditing] = useState(false);
+  const [pendingAddress, setPendingAddress] = useState<{ form: AddressForm; saveToAddressBook: boolean } | null>(null);
+  const afterEdit = () => {
+    setEditing(false); setPendingAddress(null); invalidate();
+    qc.invalidateQueries({ queryKey: ['order-edit-context', code] });
+  };
 
   const cancel = useMutation({
     mutationFn: () => api.post(`/orders/${encodeURIComponent(code)}/cancel`, {}),
@@ -155,6 +156,13 @@ export default function OrderDetailPage() {
   const unfulfilledLines = o.lines.filter((l) => unfulfilled(l) > 0);
   const latestFulfillment = o.fulfillments[0];
   const canMarkDelivered = latestFulfillment?.state === 'Shipped';
+  const canEditItems = o.state === 'PendingPayment' || o.state === 'Paid' || o.state === 'PartiallyRefunded';
+  const canEditAddress = o.state !== 'Cancelled';
+  const amountDue = o.amountDue ?? 0;
+
+  const openDoc = (kind: 'invoice' | 'packing-slip') => {
+    openOrderDocument(o.code, kind).catch((e) => toast.error(kind === 'invoice' ? 'Could not open the invoice' : 'Could not open the packing slip', getErrorMessage(e)));
+  };
 
   return (
     <>
@@ -163,21 +171,29 @@ export default function OrderDetailPage() {
       <PageHeader
         title={o.code}
         subtitle={dateTime(o.placedAt ?? o.createdAt)}
-        actions={<div className="flex items-center gap-2"><StatusBadge value={o.state} />{latestFulfillment && <StatusBadge value={latestFulfillment.state} />}</div>}
+        actions={<div className="flex items-center gap-2">
+          <StatusBadge value={o.state} />{latestFulfillment && <StatusBadge value={latestFulfillment.state} />}
+          {amountDue > 0 && <StatusBadge value="balance_due" tone="attention" label="Balance due" />}
+          {canEditItems && !editing && <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}><Pencil size={13} /> Edit order</button>}
+          <button className="btn-ghost btn-sm" onClick={() => openDoc('invoice')}><FileText size={13} /> Invoice</button>
+          <button className="btn-ghost btn-sm" onClick={() => openDoc('packing-slip')}><Package size={13} /> Packing slip</button>
+        </div>}
       />
 
       {(fulfill.error || cancel.error || refund.error) && <div className="mb-4"><InlineAlert tone="critical">{getErrorMessage(fulfill.error || cancel.error || refund.error)}</InlineAlert></div>}
 
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Left: items + actions + timeline */}
-        <div className="lg:col-span-2 space-y-5">
-          <FormSection title="Items" description={`${o.lines.length} line${o.lines.length === 1 ? '' : 's'} on this order`}>
+        <div className="lg:col-span-2 stack-y-5">
+          {editing && <OrderEditPanel code={o.code} currency={cur} initialAddress={pendingAddress} onClose={() => { setEditing(false); setPendingAddress(null); }} onCommitted={afterEdit} />}
+          <EditHistory code={o.code} currency={cur} payments={o.payments} onChanged={afterEdit} />
+          {!editing && (<FormSection title="Items" description={`${o.lines.filter((l) => l.quantity > 0).length} line${o.lines.filter((l) => l.quantity > 0).length === 1 ? '' : 's'} on this order`}>
             <table className="w-full">
               <tbody>
                 {o.lines.map((l) => (
                   <tr key={l.id} className="border-t border-gray-100 first:border-0">
                     <td className="td">
-                      <div className="font-medium">{l.name}</div>
+                      <div className={`font-medium ${l.quantity === 0 ? 'line-through text-gray-400' : ''}`}>{l.name}{l.quantity === 0 && <span className="ml-2 text-xs font-normal no-underline text-gray-400">removed by edit</span>}</div>
                       <div className="text-xs text-gray-400">{l.sku} · {money(l.unitPrice, cur)} × {l.quantity}
                         {l.fulfilledQty > 0 && <span className="text-success"> · {l.fulfilledQty} shipped</span>}
                         {l.refundedQty > 0 && <span className="text-danger"> · {l.refundedQty} refunded</span>}
@@ -188,16 +204,17 @@ export default function OrderDetailPage() {
                 ))}
               </tbody>
             </table>
-            <div className="space-y-1 text-sm pt-2">
+            <div className="stack-y-1 text-sm pt-2">
               <Row label="Subtotal" value={money(o.subtotal, cur)} />
               {o.discountTotal > 0 && <Row label="Discount" value={`− ${money(o.discountTotal, cur)}`} />}
-              <Row label="Shipping" value={money(o.shippingTotal, cur)} />
+              <Row label={o.shippingMethodName ? `Shipping (${o.shippingMethodName})` : 'Shipping'} value={money(o.shippingTotal, cur)} />
               {o.taxTotal > 0 && <Row label="Tax" value={money(o.taxTotal, cur)} />}
+              {(o.adjustments ?? []).map((a) => <Row key={a.id} label={a.label} value={`${a.amount < 0 ? '− ' : '+ '}${money(Math.abs(a.amount), cur)}`} />)}
               <div className="flex justify-between pt-1 border-t border-gray-100 mt-1 font-semibold">
                 <span>Total</span><span>{money(o.grandTotal, cur)}</span>
               </div>
             </div>
-          </FormSection>
+          </FormSection>)}
 
           {/* Partial fulfillment */}
           <FormSection
@@ -207,7 +224,7 @@ export default function OrderDetailPage() {
               : o.state === 'PendingPayment' ? 'Order is awaiting payment.' : `Order is ${o.state.toLowerCase()}; no fulfillment actions.`}
           >
             {canFulfill && unfulfilledLines.length > 0 ? (
-              <div className="space-y-3">
+              <div className="stack-y-3">
                 <table className="w-full">
                   <thead><tr><th className="th">Line</th><th className="th text-center" style={{ width: '9rem' }}>Ship qty</th></tr></thead>
                   <tbody>
@@ -266,7 +283,7 @@ export default function OrderDetailPage() {
             )}
 
             {o.fulfillments.length > 0 && (
-              <div className="pt-2 border-t border-gray-100 space-y-2">
+              <div className="pt-2 border-t border-gray-100 stack-y-2">
                 {o.fulfillments.map((f) => {
                   const loc = o.locations.find((l) => l.id === f.locationId);
                   return (
@@ -288,7 +305,7 @@ export default function OrderDetailPage() {
 
           {/* Timeline (audit events + internal notes, same feed) */}
           <FormSection title="Timeline" description="Recent activity for this order, including staff-only notes">
-            <div className="space-y-2">
+            <div className="stack-y-2">
               <div className="flex gap-2">
                 <label className="sr-only" htmlFor="internal-note">Add an internal note</label>
                 <input
@@ -301,13 +318,17 @@ export default function OrderDetailPage() {
                 </button>
               </div>
               {o.events.length > 0 && (
-                <ul className="space-y-2 pt-1">
+                <ul className="stack-y-2 pt-1">
                   {o.events.map((e) => (
                     <li key={e.id} className="flex items-start gap-2 text-sm">
                       <span className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${e.action === 'note' ? 'bg-brand' : 'bg-gray-300'}`} />
                       <span className="text-gray-600">
                         {e.action === 'note' ? (
                           <><span className="font-medium">Note:</span> {e.data?.note}</>
+                        ) : e.action === 'edit' || e.action === 'edit_address' ? (
+                          <><span className="font-medium">{e.action === 'edit' ? 'Order edited' : `${e.data?.kind === 'billing' ? 'Billing' : 'Shipping'} address edited`}</span>
+                            {e.data?.reason ? `: ${e.data.reason}` : ''}
+                            {e.data?.changes && e.data.changes.length > 0 && <span className="block text-xs text-gray-500">{e.data.changes.join(' · ')}</span>}</>
                         ) : (
                           <><span className="font-medium capitalize">{e.action.replace(/_/g, ' ')}</span>{e.toState && ` → ${e.toState}`}</>
                         )}
@@ -322,7 +343,7 @@ export default function OrderDetailPage() {
         </div>
 
         {/* Right: customer + payment + refund + danger */}
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <FormSection title="Customer" description={o.customer ? 'Linked to this store' : 'Guest checkout'}>
             {o.customer ? (
               <Link to={`/customers/${o.customer.id}`} className="text-sm text-brand hover:underline">
@@ -333,11 +354,14 @@ export default function OrderDetailPage() {
             {o.customer?.phone && <div className="text-sm text-gray-500">{o.customer.phone}</div>}
           </FormSection>
 
-          <FormSection title="Shipping address">
-            {addr(o.shippingAddress).length ? addr(o.shippingAddress).map((l, i) => <div key={i} className="text-sm text-gray-600">{l}</div>) : <span className="text-sm text-gray-400">None</span>}
-          </FormSection>
+          <AddressCard code={o.code} kind="shipping" address={o.shippingAddress} canEdit={canEditAddress} hasCustomer={!!o.customer} onSaved={invalidate}
+            onCountryChange={(form, saveToAddressBook) => { setPendingAddress({ form, saveToAddressBook }); setEditing(true); }} />
+          <AddressCard code={o.code} kind="billing" address={o.billingAddress} canEdit={canEditAddress} hasCustomer={!!o.customer} onSaved={invalidate}
+            onCountryChange={() => undefined} />
 
           <FormSection title="Payment">
+            {amountDue > 0 && <InlineAlert tone="attention" title="Balance due">The customer still owes {money(amountDue, cur)} after an edit. Edit the order to send a pay link or record a payment.</InlineAlert>}
+            {amountDue < 0 && <InlineAlert tone="info" title="Credit">{money(-amountDue, cur)} is owed back to the customer. Use Refund to return it.</InlineAlert>}
             {o.payments.length === 0 ? <span className="text-sm text-gray-400">No payments</span> : o.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between text-sm py-1">
                 <span className="capitalize text-gray-600">{p.method}</span>
@@ -348,7 +372,7 @@ export default function OrderDetailPage() {
 
           {canRefund && (
             <FormSection title="Refund" description="Select lines to refund specific items (with per-line restock), or leave everything unchecked to refund the full remaining balance.">
-              <div className="space-y-2">
+              <div className="stack-y-2">
                 {o.lines.filter((l) => unrefunded(l) > 0).map((l) => {
                   const max = unrefunded(l);
                   return (
@@ -396,7 +420,7 @@ export default function OrderDetailPage() {
               </div>
 
               {o.refunds.length > 0 && (
-                <div className="pt-3 mt-1 border-t border-gray-100 space-y-2">
+                <div className="pt-3 mt-1 border-t border-gray-100 stack-y-2">
                   {o.refunds.map((r) => (
                     <div key={r.id} className="text-xs text-gray-500">
                       <div className="flex items-center justify-between">

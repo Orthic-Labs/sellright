@@ -16,6 +16,7 @@
  *   4. a valid coupon is applied and the usage limit is enforced
  *   5. an empty cart (converted/invalid cartToken) returns 409
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -27,9 +28,7 @@ import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`checkout.route test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'checkout.route.test.ts');
 
 const STORE = 'aaaaaaaa-1111-1111-1111-111111111111';
 const SLUG = 'checkout-route-test-store';

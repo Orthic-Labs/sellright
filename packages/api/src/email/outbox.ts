@@ -20,6 +20,7 @@ import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { sendEmail, type SendEmailInput } from './mailer.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { CANARY_MARKER, assertNotReserved } from '../canary/marker.js';
 
 /** Per-attempt backoff in seconds: 1m, 5m, 30m, 2h, 12h. */
 const BACKOFF_S = [60, 300, 1800, 7200, 43200];
@@ -31,7 +32,7 @@ type ClaimedEmail = {
   id: string;
   kind: string;
   recipient: string;
-  payload: SendEmailInput;
+  payload: SendEmailInput & { canary?: boolean; marker?: string };
   attempts: number;
 };
 
@@ -56,7 +57,13 @@ export async function enqueueEmail(tx: Tx, storeId: string, args: {
   recipient: string;
   payload: SendEmailInput;
   dedupeKey?: string;
+  /** Internal health-canary path only (canary/health-canary.ts). Stamps the
+   *  reserved marker on the stored payload; every other caller is refused if
+   *  its payload carries the marker. */
+  canary?: boolean;
 }): Promise<boolean> {
+  assertNotReserved(`email outbox ${args.kind}`, args.payload, args.canary === true);
+  if (args.canary) args = { ...args, payload: { ...args.payload, canary: true, marker: CANARY_MARKER } as SendEmailInput };
   if (args.dedupeKey) {
     // Raw SQL: dedupe_key is added by hand-written migration 0057 and is not on
     // the drizzle schema (schema-orders.ts is owned by another lane).
@@ -81,7 +88,7 @@ async function claimDueEmails(storeId: string, limit: number): Promise<ClaimedEm
   return withStore(storeId, async (tx) => {
     const claim = await tx.execute(
       sql`UPDATE email_outbox eo
-          SET status = 'processing', attempts = eo.attempts + 1, updated_at = now()
+          SET status = 'processing', attempts = eo.attempts + 1, updated_at = now(), claimed_at = now()
           WHERE eo.id IN (
             SELECT id FROM email_outbox
             WHERE (status = 'pending' AND next_attempt_at <= now())
@@ -105,7 +112,7 @@ async function finalizeEmail(
     if (outcome.ok) {
       const rows = await tx
         .update(s.emailOutbox)
-        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null })
+        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null, claimedAt: null })
         .where(and(
           eq(s.emailOutbox.id, delivery.id),
           eq(s.emailOutbox.status, 'processing'),
@@ -125,6 +132,9 @@ async function finalizeEmail(
         status: giveUp ? 'dead' : 'pending',
         nextAttemptAt: new Date(Date.now() + backoff * 1000),
         updatedAt: new Date(),
+        // De-fork 2.9: release the claim; stamp the first failure once.
+        claimedAt: null,
+        firstFailedAt: sql`coalesce(${s.emailOutbox.firstFailedAt}, now())`,
       })
       .where(and(
         eq(s.emailOutbox.id, delivery.id),
@@ -171,7 +181,9 @@ export async function deliverEmails(opts: { limit?: number; log?: (m: string) =>
     for (const d of due) {
       let outcome: { ok: true } | { ok: false; error: unknown };
       try {
-        const res = await sendEmail(d.payload, st.id);
+        // canary/marker are routing metadata for the outbox, not mail headers.
+        const { canary: _canary, marker: _marker, ...mail } = d.payload;
+        const res = await sendEmail(mail, st.id);
         if (!res.delivered) throw new Error(res.reason ?? 'send failed');
         outcome = { ok: true };
       } catch (error) {

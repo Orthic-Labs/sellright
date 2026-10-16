@@ -16,13 +16,16 @@
  */
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
+import { migrationId } from '../import/context.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveGatewayAccount, type GatewayMode } from './gateway-account.js';
 import { sezzleProvider, type SezzleOrder } from './sezzle.js';
-import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
-import { refundTargetState } from './webhook-reconcile.js';
+import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
+import { releaseOnFullRefundInSet } from './reservation.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,6 +85,59 @@ export async function resolveSezzleSessionAttempt(
 
 export interface SezzleRefundReconcile { recorded: number; finalized: number; ambiguous: number }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+/**
+ * Imported settled history has no attempt to finish. Only observe it after
+ * normal attempt resolution found nothing; never feed it into settlement.
+ * Both importer provenance and the provider's original order identity must
+ * agree. Refunds/disputes may have happened since capture: observing an old
+ * authorized/captured event must not restore paid state or replay effects.
+ */
+export async function observeImportedSezzlePayment(
+  ev: SezzleEventRef, provider: Fetcher = sezzleProvider,
+): Promise<typeof s.payment.$inferSelect | null> {
+  if (ev.mode !== 'test' && ev.mode !== 'live') return null;
+  const payments = await withStore(ev.storeId, tx => tx.select().from(s.payment).where(and(
+    eq(s.payment.storeId, ev.storeId), eq(s.payment.method, 'sezzle'),
+    eq(s.payment.gatewayAccount, ev.accountId), eq(s.payment.gatewayMode, ev.mode),
+    eq(s.payment.providerRef, ev.providerRef),
+  )).limit(2));
+  // Never choose one of several candidates or borrow a missing account/mode.
+  if (payments.length !== 1) return null;
+  const pay = payments[0]!;
+  const provenance = record(record(pay.metadata)?.vendure);
+  if (pay.storeId !== ev.storeId || pay.method !== 'sezzle' || pay.gatewayAccount !== ev.accountId ||
+      pay.gatewayMode !== ev.mode || pay.providerRef !== ev.providerRef || pay.state !== 'Settled' ||
+      !Number.isSafeInteger(pay.amount) || pay.amount <= 0 || !pay.currency ||
+      typeof provenance?.vendureMethod !== 'string' ||
+      provenance.vendureMethod.toLowerCase().replace(/-payment$/, '') !== 'sezzle' ||
+      typeof provenance.sourceKey !== 'string' || !provenance.sourceKey ||
+      !['string', 'number'].includes(typeof provenance.sourcePaymentId) || !String(provenance.sourcePaymentId) ||
+      migrationId(ev.storeId, provenance.sourceKey, 'payment', provenance.sourcePaymentId) !== pay.id ||
+      provenance.modeQuarantined != null || (provenance.txnMode != null && provenance.txnMode !== ev.mode)) return null;
+  const orders = await withStore(ev.storeId, tx => tx.select().from(s.order).where(and(
+    eq(s.order.storeId, ev.storeId), eq(s.order.id, pay.orderId),
+  )).limit(2));
+  if (orders.length !== 1) return null;
+  const original = orders[0]!;
+  const source = record(record(original.metadata)?.vendure);
+  if (original.storeId !== ev.storeId || original.id !== pay.orderId || original.currency !== pay.currency ||
+      typeof original.code !== 'string' || !original.code || typeof source?.sourceKey !== 'string' ||
+      source.sourceKey !== provenance.sourceKey || !['string', 'number'].includes(typeof source.id) || !String(source.id) ||
+      migrationId(ev.storeId, source.sourceKey, 'order', source.id) !== original.id) return null;
+  const account = await resolveGatewayAccount(ev.storeId, 'sezzle', ev.accountId, ev.mode as GatewayMode);
+  if (account.storeId !== ev.storeId || account.method !== 'sezzle' ||
+      account.accountId !== ev.accountId || account.mode !== ev.mode) return null;
+  const order = await provider.getOrder(account, ev.providerRef);
+  if (order.uuid !== ev.providerRef || order.reference_id !== original.code ||
+      order.order_amount?.amount_in_cents !== pay.amount || order.order_amount.currency !== pay.currency) return null;
+  return pay;
+}
+
 /**
  * D16: bring every refund Sezzle reports for `orderUuid` into the ledger.
  * Idempotent: an already-Settled row for a provider refund uuid is a no-op.
@@ -106,7 +162,8 @@ export async function reconcileSezzleRefunds(
   const out: SezzleRefundReconcile = { recorded: 0, finalized: 0, ambiguous: 0 };
   let stockChanged = false;
   let storeSlug: string | undefined;
-  await withAdvisoryLock('refund:' + ev.storeId + ':' + pay.orderId, () => withStore(ev.storeId, async (tx) => {
+  // X-45: the refund loop records money Sezzle already moved, so its order set runs with mustCommit.
+  await withAdvisoryLock('refund:' + ev.storeId + ':' + pay.orderId, () => withLockedSet(ev.storeId, { kind: 'order', orderId: pay.orderId }, async (tx) => {
     const [st] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, ev.storeId)).limit(1);
     storeSlug = st?.slug;
     for (const r of refunds) {
@@ -155,7 +212,7 @@ export async function reconcileSezzleRefunds(
       await enqueueRefundSettledEmail(tx, ev.storeId, inserted);
       out.recorded++;
     }
-  }));
+  }, { mustCommit: true }));
   // Zero-cache stock rule: only after the transaction committed.
   if (stockChanged && storeSlug) onStockChanged(storeSlug);
   return out;
@@ -165,13 +222,20 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code })
     .from(s.order).where(eq(s.order.id, orderId)).limit(1).for('update');
   if (!ord) return;
-  const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
-  const refunded = agg?.total ?? 0;
-  const target = refundTargetState(refunded, ord.grandTotal);
+  const basis = await orderRefundBasis(tx, storeId, orderId);
+  const refunded = basis.refunded;
+  const target = refundStateFromBasis(basis);
   if (!target) return;
+  const reachesRefunded = target === 'Refunded' && canTransition(ord.state as OrderState, 'Refunded');
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
+  // PAYMENT-TIMING §3.3 R5 (R2-6): a full refund releases consumed holds that asked for it.
+  if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
+  // Entitlement reversal on the first transition to Refunded (worker effect; identity = order, so replays are no-ops).
+  if (reachesRefunded) await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: orderId, orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'sezzle_dashboard' });
 }

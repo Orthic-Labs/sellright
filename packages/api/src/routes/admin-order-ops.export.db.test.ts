@@ -6,6 +6,7 @@
  * Runs against sellright_test ONLY (these wipe data). Mirrors the pattern in
  * admin-orders.bulk.test.ts.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -17,11 +18,7 @@ import { admin } from './admin.js';
 import { adminOrderOps, ORDER_EXPORT_COLUMNS } from './admin-order-ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `order-export test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-order-ops.export.db.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'export-test-store';
@@ -122,5 +119,50 @@ describe('order export — XLSX', () => {
   it('requires admin auth', async () => {
     const res = await app.request('/v1/admin/export/orders.xlsx', { headers: { 'x-store-slug': SLUG } });
     expect(res.status).toBe(401);
+  });
+});
+
+describe('shipping method (migration 0086) + balance_due', () => {
+  async function seedExtra() {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO "order" (id, store_id, code, state, currency, subtotal, shipping_total, grand_total, placed_at, shipping_method_code, shipping_method_name)
+        VALUES (gen_random_uuid(), ${STORE}, 'O-EXPORT-2', 'Paid'::order_state, 'USD', 2000, 500, 2500, now(), 'exp', 'Express')`);
+      await tx.execute(sql`INSERT INTO payment (store_id, order_id, amount, method, state) SELECT ${STORE}, id, 2000, 'stripe', 'Settled' FROM "order" WHERE code = 'O-EXPORT-2'`);
+      await tx.execute(sql`INSERT INTO payment (store_id, order_id, amount, method, state) SELECT ${STORE}, id, grand_total, 'stripe', 'Settled' FROM "order" WHERE code = 'O-EXPORT-1'`);
+    });
+  }
+  const get = (path: string) => app.request(path, { headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG } });
+
+  it('export filters by shipping method code and exposes a Shipping method column', async () => {
+    await seedExtra();
+    const res = await get('/v1/admin/export/orders?shippingMethod=exp&columns=code,shippingMethod');
+    const lines = (await res.text()).trim().split('\n');
+    expect(lines[0]).toBe('code,shippingMethod');
+    expect(lines.slice(1)).toEqual(['O-EXPORT-2,Express']);
+    const none = (await (await get('/v1/admin/export/orders?shippingMethod=__none__&columns=code')).text()).trim().split('\n');
+    expect(none.slice(1)).toEqual(['O-EXPORT-1']);
+  });
+
+  it('paymentStatus=balance_due filters the list and the export; the row reports balance_due + method name', async () => {
+    await seedExtra(); // grand 2500, settled 2000 -> 500 due
+    const list = await (await get('/v1/admin/orders?paymentStatus=balance_due')).json() as { items: Array<{ code: string; paymentStatus: string; shippingMethodName: string | null }> };
+    expect(list.items.map((i) => i.code)).toEqual(['O-EXPORT-2']);
+    expect(list.items[0]).toMatchObject({ paymentStatus: 'balance_due', shippingMethodName: 'Express' });
+    const paid = await (await get('/v1/admin/orders?paymentStatus=paid')).json() as { items: Array<{ code: string }> };
+    expect(paid.items.map((i) => i.code)).toEqual(['O-EXPORT-1']);
+    const exp = (await (await get('/v1/admin/export/orders?paymentStatus=balance_due&columns=code,paymentStatus')).text()).trim().split('\n');
+    expect(exp.slice(1)).toEqual(['O-EXPORT-2,balance_due']);
+  });
+
+  it('an edit-handed-back refund is not counted as owed', async () => {
+    await seedExtra();
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE "order" SET grand_total = 1500 WHERE code = 'O-EXPORT-2'`);
+      await tx.execute(sql`INSERT INTO refund (store_id, order_id, payment_id, amount, state, metadata)
+        SELECT ${STORE}, o.id, p.id, 500, 'Settled', '{"source":"order_edit"}'::jsonb FROM "order" o JOIN payment p ON p.order_id = o.id WHERE o.code = 'O-EXPORT-2'`);
+    });
+    const list = await (await get('/v1/admin/orders?paymentStatus=balance_due')).json() as { items: unknown[] };
+    expect(list.items).toHaveLength(0); // 1500 - 2000 + 500 = 0
   });
 });

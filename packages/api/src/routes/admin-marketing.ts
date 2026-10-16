@@ -5,7 +5,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
-import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
@@ -47,6 +47,10 @@ function checkPromoValueBound(type: string | undefined, value: number | undefine
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: 'percentage promotion value must be between 0 and 100' });
   }
 }
+// PATCH body: every field optional with NO defaults. Zod 4 keeps `.default()` through `.partial()`, so a bare
+// { enabled: false } used to also write value = 0 / freeShipping = false and a bare { value } re-enabled a disabled
+// discount. Re-declare the defaulted fields as plain schemas before `.partial()` so only fields in the request apply.
+const promoPatchBody = promoBodyBase.extend({ value: money, freeShipping: z.boolean(), enabled: z.boolean() }).partial();
 const promoBody = promoBodyBase.superRefine((val, ctx) => checkPromoValueBound(val.type, val.value, ctx));
 
 for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
@@ -136,7 +140,7 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
     createRoute({
       method: 'patch', path: `${path}/{id}`, summary: 'Update a discount',
       ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for PATCH /v1/admin/discounts/{id} — will be removed in a future release.' } : {}),
-      request: { params: z.object({ id: z.string() }), body: { content: J(promoBodyBase.partial()) } },
+      request: { params: z.object({ id: z.string() }), body: { content: J(promoPatchBody) } },
       responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 400: { description: 'Invalid value', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
     }),
     async (c) => guard(c, async () => {
@@ -194,9 +198,9 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
 }
 
 // ── Listmonk integration (managed IN the admin — no bouncing to Listmonk UI) ──
-// Config lives in store.config.listmonk = { url, apiUser, apiToken }. The API
+// Config lives in store.config.listmonk = { url, apiUser, apiToken, listId? }. The API
 // proxies to the Listmonk REST API server-side (creds never reach the browser).
-interface ListmonkCfg { url: string; apiUser: string; apiToken: string; }
+interface ListmonkCfg { url: string; apiUser: string; apiToken: string; listId?: number; }
 async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
   const [row] = await withStore(storeId, async (tx) =>
     tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1),
@@ -216,20 +220,21 @@ async function lm(cfg: ListmonkCfg, path: string, init: RequestInit = {}): Promi
 adminMarketing.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/marketing/config', summary: 'Listmonk connection status',
-    responses: { 200: { description: 'OK', content: J(z.object({ configured: z.boolean(), url: z.string().nullable() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ configured: z.boolean(), url: z.string().nullable(), listId: z.number().int().positive().nullable() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const cfg = await getCfg(st.storeId);
-    return c.json({ configured: !!cfg, url: cfg?.url ?? null }, 200);
+    const listId = cfg?.listId;
+    return c.json({ configured: !!cfg, url: cfg?.url ?? null, listId: typeof listId === 'number' && Number.isSafeInteger(listId) && listId > 0 ? listId : null }, 200);
   }),
 );
 
 adminMarketing.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/marketing/config', summary: 'Set Listmonk connection',
-    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1), apiToken: z.string().min(1) })) } },
+    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1), apiToken: z.string().min(1), listId: z.number().int().positive().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean(), lists: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Cannot connect', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -241,7 +246,12 @@ adminMarketing.openapi(
     const lists = (await lm(safeCfg, '/api/lists')) as { data?: { total?: number } };
     await withStore(st.storeId, async (tx) => {
       const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1).for('update');
-      const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
+      const previous = (row?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
+      const listId = safeCfg.listId ?? previous?.listId;
+      if (listId === undefined || !Number.isSafeInteger(listId) || listId <= 0) throw new HttpError(409, 'Configure a positive Listmonk list ID');
+      const target = await lm(safeCfg, `/api/lists/${listId}`) as { data?: { id?: number } };
+      if (target.data?.id !== listId) throw new HttpError(409, 'Listmonk list ID was not found');
+      const config = { ...((row?.config as object) ?? {}), listmonk: { ...safeCfg, listId } };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
     await broadcastStoreCacheInvalidation(st.slug); // PERF-2 — match admin-settings.ts pattern
@@ -470,12 +480,13 @@ adminMarketing.openapi(
     const st = requireStore(admin, c); requirePermission(st, 'giftcards');
     const b = c.req.valid('json');
     const code = b.code || giftCode();
+    const enabled = admin.kind !== 'agent'; // D12: a card an agent issues starts disabled; a human enables it
     const res = await withStore(st.storeId, async (tx) => {
       const [dupe] = await tx.select({ id: s.giftCard.id }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
       if (dupe) return { dupe: true as const };
-      const [g] = await tx.insert(s.giftCard).values({ storeId: st.storeId, code, initialBalance: b.balance, balance: b.balance, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning({ id: s.giftCard.id });
+      const [g] = await tx.insert(s.giftCard).values({ storeId: st.storeId, code, initialBalance: b.balance, balance: b.balance, enabled, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning({ id: s.giftCard.id });
       await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: g!.id, amount: b.balance });
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'gift_card', entityId: g!.id, action: 'issue', data: { balance: b.balance } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'gift_card', entityId: g!.id, action: 'issue', data: { balance: b.balance, enabled } });
       return { id: g!.id };
     });
     if ('dupe' in res) throw new HttpError(409, 'gift card code already exists');
@@ -494,6 +505,7 @@ adminMarketing.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    if (b.enabled === true || b.adjust) requireHuman(admin); // D12: enabling or changing balance is a human act; disabling stays allowed
     const res = await withStore(st.storeId, async (tx) => {
       const [g] = await tx.select().from(s.giftCard).where(eq(s.giftCard.id, id)).limit(1);
       if (!g) return null;

@@ -12,6 +12,7 @@
  * buckets are attempt-counted because those routes do not have an equivalent
  * authentication-failure signal and every request is abuse-relevant.
  */
+import { isIP } from 'node:net';
 import { env } from '../env.js';
 import { rateLimitBackend } from './rate-limit-backend.js';
 
@@ -53,37 +54,151 @@ export async function clearLoginAttempts(ip: string, identifier: string): Promis
   await rateLimitBackend().clear(BUCKET, keyFor(ip, identifier));
 }
 
+// ── admin credential checks (P1a, security audit 2026-10-15) ─────────────────
+// Every admin credential check — /v1/admin/login, /step-up, /2fa/enable,
+// /2fa/disable, invite accept with a current password, password change — goes
+// through ONE gate made of three buckets:
+//   1. ip           — ADMIN_AUTH_IP_MAX_FAILURES (default 50) / 15 min across ALL accounts,
+//                     so one address cannot spray passwords over many e-mails;
+//   2. account      — ADMIN_AUTH_ACCOUNT_MAX_FAILURES (default 20) / 1 h across ALL IPs,
+//                     so a botnet rotating addresses cannot grind one account;
+//   3. (ip, account) — the original 8 / 15 min bucket.
+// The attempt is RESERVED (atomically consumed, rate-limit-backend.ts) in all three
+// BEFORE the credential is verified, so a concurrent burst cannot all pass the
+// check while verification is in flight. A successful check clears (ip, account)
+// and the account budget; the per-IP budget keeps the reservation (a shared NAT
+// signing in many admins is still far below its cap). `account` is the
+// normalized admin e-mail on every route, so the routes share one budget.
+const ACCOUNT_BUCKET = 'admin-auth-account';
+const IP_BUCKET = 'admin-auth-ip';
+const ACCOUNT_WINDOW_MS = 60 * 60 * 1000;
+const IP_WINDOW_MS = 15 * 60 * 1000;
+
+const adminKey = (account: string) => `admin:${account.toLowerCase()}`;
+
+/** Reserve one credential attempt. Returns seconds until the caller may try again (>0 = refuse, nothing verified);
+ *  0 = the attempt is counted in all three budgets and verification may proceed. */
+export async function reserveAdminAuthAttempt(ip: string, account: string): Promise<number> {
+  const b = rateLimitBackend();
+  const perIp = await b.consume(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
+  if (perIp > 0) return perIp;
+  const acct = await b.consume(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS, env.ADMIN_AUTH_ACCOUNT_MAX_FAILURES);
+  if (acct > 0) return acct;
+  return b.consume(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS, MAX_FAILURES);
+}
+
+/** After a PASSWORD-verified success: forget the (ip, account) and account budgets. Never call it after a check that
+ *  did not verify the password (a TOTP-only operation must not reset password-guessing budgets). */
+export async function clearAdminAuthFailures(ip: string, account: string): Promise<void> {
+  const b = rateLimitBackend();
+  await Promise.all([b.clear(BUCKET, keyFor(ip, adminKey(account))), b.clear(ACCOUNT_BUCKET, adminKey(account))]);
+}
+
 /**
  * Pure decision logic for client-IP resolution, unit-testable without a Hono
- * context. `cf-connecting-ip` is ONLY trusted when the deployment is actually
- * behind Cloudflare's edge (`behindCloudflare: true`) — otherwise it is a
- * client-forgeable header like any other and honoring it unconditionally lets
- * anyone spoof a distinct IP per request and defeat the login rate limiter.
- * When not behind Cloudflare, fall back to `trustedHeader` (set by a proxy the
- * deployment actually controls, e.g. our own nginx's X-Real-IP) then the raw
- * socket address. X-Forwarded-For is INTENTIONALLY never read anywhere in this
- * chain because it's trivially forgeable and multi-hop. See WP1.4 / SEC-5.
+ * context. Proxy-supplied headers are honoured ONLY when the TCP peer is a
+ * proxy the deployment controls — a loopback / private / link-local address
+ * (our own nginx/Caddy on the box or a Docker bridge) — or when there is no
+ * socket at all (in-process `app.request`, e.g. tests and the demo shell).
+ * A request whose peer is a public address reached the API directly, so any
+ * `cf-connecting-ip` / `x-real-ip` it carries is client-forged: the socket
+ * address is used instead (P1a, security audit 2026-10-15 — previously the
+ * header was trusted from anyone and `remoteAddr` was never populated, so a
+ * directly exposed API let each request pick its own rate-limit identity).
+ *
+ * `cf-connecting-ip` additionally requires `behindCloudflare` (SEC-5).
+ * `trustedHeader` = '' disables header trust entirely. X-Forwarded-For is
+ * INTENTIONALLY never read (trivially forgeable and multi-hop).
  */
 export function pickClientIp(
   headers: { get: (k: string) => string | undefined },
-  opts: { behindCloudflare: boolean; trustedHeader: string; remoteAddr?: string },
+  opts: { behindCloudflare: boolean; trustedHeader: string; remoteAddr?: string; trustedProxies?: readonly string[] },
 ): string {
-  if (opts.behindCloudflare) {
-    const cf = headers.get('cf-connecting-ip');
-    if (cf) return cf;
+  const peer = normalizePeer(opts.remoteAddr);
+  const peerIsProxy = peer === undefined || (opts.trustedProxies?.length ? inCidrs(peer, opts.trustedProxies) : isLocalProxyAddress(peer));
+  if (peerIsProxy) {
+    if (opts.behindCloudflare) {
+      const cf = headers.get('cf-connecting-ip');
+      if (cf) return cf;
+    }
+    const h = opts.trustedHeader ? headers.get(opts.trustedHeader) : undefined;
+    if (h) return h;
   }
-  return headers.get(opts.trustedHeader) ?? opts.remoteAddr ?? 'unknown';
+  return peer ?? 'unknown';
 }
 
-/** Best-effort client IP from proxy headers (Cloudflare / nginx) or fallback.
- *  See {@link pickClientIp} for the trust rules. */
-export function clientIp(c: { req: { header: (k: string) => string | undefined }; env?: { remoteAddr?: string } }): string {
+/** Loopback, RFC 1918, CGNAT (100.64/10), link-local, IPv6 ::1 / ULA fc00::/7 / fe80::/10 —
+ *  the only places a proxy the deployment controls can connect from. */
+export function isLocalProxyAddress(addr: string): boolean {
+  if (isIP(addr) === 4) {
+    const [a, b] = addr.split('.').map(Number) as [number, number];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254);
+  }
+  const v6 = addr.toLowerCase();
+  return v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6);
+}
+
+/** Strict CIDR syntax: an IP, or an IP + '/' + a non-empty decimal prefix within the family width. null otherwise. */
+export function parseCidr(raw: string): { net: string; len: number; family: 4 | 6 } | null {
+  const m = /^([^/\s]+)(?:\/(\d{1,3}))?$/.exec(raw.trim());
+  if (!m) return null;
+  const family = isIP(m[1]!);
+  if (family !== 4 && family !== 6) return null;
+  const width = family === 4 ? 32 : 128;
+  const len = m[2] === undefined ? width : Number(m[2]);
+  if (!Number.isInteger(len) || len < 0 || len > width) return null;
+  return { net: m[1]!, len, family };
+}
+
+/** Whether `addr` falls in any of `cidrs` (exact IP or CIDR, IPv4 / IPv6). Malformed entries never match. */
+export function inCidrs(addr: string, cidrs: readonly string[]): boolean {
+  const v = isIP(addr);
+  if (!v) return false;
+  const toBits = (ip: string, fam: number): bigint | null => {
+    if (fam === 4) return ip.split('.').reduce((acc, o) => (acc << 8n) + BigInt(Number(o)), 0n);
+    const [head, tail] = ip.toLowerCase().split('::');
+    const h = head ? head.split(':') : [];
+    const t = tail !== undefined ? (tail ? tail.split(':') : []) : [];
+    const groups = tail !== undefined ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h;
+    if (groups.length !== 8) return null;
+    return groups.reduce((acc, g) => (acc << 16n) + BigInt(parseInt(g || '0', 16)), 0n);
+  };
+  const a = toBits(addr, v);
+  if (a === null) return false;
+  for (const raw of cidrs) {
+    const parsed = parseCidr(raw);
+    if (!parsed || parsed.family !== v) continue;
+    const { net, len } = parsed;
+    const width = v === 4 ? 32 : 128;
+    const n = toBits(net, v);
+    if (n === null) continue;
+    const shift = BigInt(width - len);
+    if ((a >> shift) === (n >> shift)) return true;
+  }
+  return false;
+}
+
+/** Strip the IPv4-mapped IPv6 prefix node reports for dual-stack sockets. */
+function normalizePeer(addr: string | undefined): string | undefined {
+  if (!addr) return undefined;
+  const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(addr);
+  const out = v4 ? v4[1]! : addr;
+  return isIP(out) ? out : undefined;
+}
+
+type ConnEnv = { remoteAddr?: string; incoming?: { socket?: { remoteAddress?: string } } };
+
+/** Client IP for rate limiting / audit. `@hono/node-server` exposes the raw
+ *  request as `c.env.incoming`; its socket address is the real TCP peer. */
+export function clientIp(c: { req: { header: (k: string) => string | undefined }; env?: unknown }): string {
+  const e = (c.env ?? undefined) as ConnEnv | undefined;
   return pickClientIp(
     { get: (k) => c.req.header(k) },
     {
       behindCloudflare: env.BEHIND_CLOUDFLARE === '1',
       trustedHeader: env.TRUSTED_PROXY_HEADER,
-      remoteAddr: c.env?.remoteAddr,
+      remoteAddr: e?.incoming?.socket?.remoteAddress ?? e?.remoteAddr,
+      trustedProxies: (env.TRUSTED_PROXY_CIDRS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
     },
   );
 }

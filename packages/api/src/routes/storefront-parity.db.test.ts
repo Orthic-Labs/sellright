@@ -1,3 +1,4 @@
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -16,8 +17,7 @@ import { clearTrackingAttempts } from './shop-extra.tracking-limit.js';
 import { emitProductChanged } from '../webhooks/catalog.js';
 
 vi.mock('../security/turnstile.js', () => ({ verifyTurnstileToken: vi.fn(async ({ token }) => token === 'valid-token') }));
-const dbName = decodeURIComponent(new URL(process.env.DATABASE_URL ?? '').pathname.slice(1));
-if (!dbName.endsWith('_test')) throw new Error('Storefront parity tests require a *_test database');
+assertTestDatabase(process.env.DATABASE_URL ?? '', 'storefront-parity.db.test.ts');
 const STORE = 'abcdabcd-1111-4111-8111-111111111111';
 const OTHER = 'abcdabcd-2222-4222-8222-222222222222';
 const ADMIN = 'abcdabcd-3333-4333-8333-333333333333';
@@ -165,7 +165,7 @@ describe('blog parity', () => {
 });
 
 describe('guest tracking', () => {
-  const track = (code: string, email = EMAIL) => app.request(`/v1/shop/track?${new URLSearchParams({ code, email })}`, { headers });
+  const track = (code: string, email = EMAIL) => app.request(`/v1/shop/track?${new URLSearchParams({ code, email, turnstileToken: 'valid-token' })}`, { headers });
   it('returns the same error for an unknown code and a mismatched email', async () => {
     expect(await (await track('unknown')).json()).toEqual(await (await track('IMPORTED-123', 'wrong@parity.test')).json());
   });

@@ -33,6 +33,16 @@ describe('services/customer — native SellRight client', () => {
 		await expect(getMe()).rejects.toThrow();
 	});
 
+	it('getMe and getAddresses treat an empty body (204 / JSON null) as a failed read', async () => {
+		for (const empty of [() => new Response(null, { status: 204 }), () => jsonResponse(200, null)]) {
+			vi.resetModules();
+			vi.stubGlobal('fetch', vi.fn(async () => empty()));
+			const { getMe, getAddresses } = await import('./customer');
+			await expect(getMe()).rejects.toThrow(/Empty auth\/me response/);
+			await expect(getAddresses()).rejects.toThrow(/Empty addresses response/);
+		}
+	});
+
 	it('getOrders carries the server\'s real `total`, not the page length', async () => {
 		const mockedFetch = vi.fn(async () =>
 			jsonResponse(200, {
@@ -84,4 +94,35 @@ describe('services/customer — native SellRight client', () => {
 		expect(urlOf(mockedFetch)).toContain('/v1/shop/account/addresses/addr-1');
 	});
 
+
+	it('getOrderReturns reads the live returns for the order and resolves null for an order that is not the caller\'s', async () => {
+		const mockedFetch = vi.fn(async () => jsonResponse(200, { returnable: [{ sku: 'S1', name: 'Shirt', quantity: 2 }], items: [] }));
+		vi.stubGlobal('fetch', mockedFetch);
+		const { getOrderReturns } = await import('./customer');
+		await expect(getOrderReturns('SR1')).resolves.toEqual({ returnable: [{ sku: 'S1', name: 'Shirt', quantity: 2 }], items: [] });
+		expect(urlOf(mockedFetch)).toContain('/v1/shop/account/orders/SR1/returns');
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, { error: { code: 'ORDER_NOT_FOUND', message: 'nope' } })));
+		vi.resetModules();
+		const again = await import('./customer');
+		await expect(again.getOrderReturns('SR2')).resolves.toBeNull();
+	});
+
+	it('requestOrderReturn posts sku lines + reason and maps a 409 to not_returnable', async () => {
+		const mockedFetch = vi.fn(async () => jsonResponse(201, { id: 'r1', status: 'requested' }));
+		vi.stubGlobal('fetch', mockedFetch);
+		const { requestOrderReturn } = await import('./customer');
+		const ok = await requestOrderReturn('SR1', { lines: [{ sku: 'S1', quantity: 1 }], reason: 'damaged' });
+		expect(ok).toEqual({ ok: true, id: 'r1' });
+		const [req] = mockedFetch.mock.calls[0] as unknown as [Request];
+		expect(req.method).toBe('POST');
+		expect(await req.clone().json()).toEqual({ lines: [{ sku: 'S1', quantity: 1 }], reason: 'damaged' });
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'NOT_RETURNABLE', message: 'only 0 of S1 can be returned' } })));
+		vi.resetModules();
+		const again = await import('./customer');
+		const refused = await again.requestOrderReturn('SR1', { lines: [{ sku: 'S1', quantity: 9 }], reason: 'too many' });
+		expect(refused.ok).toBe(false);
+		if (!refused.ok) expect(refused.code).toBe('not_returnable');
+	});
 });

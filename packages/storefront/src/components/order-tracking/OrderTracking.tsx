@@ -1,9 +1,10 @@
-import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
+import { $, component$, useOnDocument, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import type { TrackedOrder } from '~/sellright/types/content';
 import { OrderDetails } from './OrderDetails';
 import { trackOrderServer } from '~/services/track-order.service';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 
 export default component$(() => {
   const identity = useStoreIdentityLoader().value.identity;
@@ -14,6 +15,11 @@ export default component$(() => {
   const loading = useSignal(false);
   const error = useSignal('');
   const hasSearched = useSignal(false);
+  const turnstileToken = useSignal('');
+
+  useVisibleTask$(() => {
+    mountTurnstile('track-turnstile', (t) => { turnstileToken.value = t; }, () => { turnstileToken.value = ''; });
+  });
 
   // T38: Auto-populate from URL on qinit
   useOnDocument('qinit', $(async () => {
@@ -29,7 +35,9 @@ export default component$(() => {
     }
 
     // If both order code and email are provided, automatically track the order
-    if (urlOrderCode && urlEmail) {
+    // With Turnstile configured the visitor must solve the widget first, so the
+    // prefilled link does not auto-submit; they press Track once the check passes.
+    if (urlOrderCode && urlEmail && !TURNSTILE_SITE_KEY) {
       // Auto-submit after a brief moment to ensure UI is ready
       setTimeout(async () => {
         loading.value = true;
@@ -37,7 +45,7 @@ export default component$(() => {
         hasSearched.value = true;
 
         try {
-          const result = await trackOrderServer(orderCode.value.trim(), email.value.trim());
+          const result = await trackOrderServer(orderCode.value.trim(), email.value.trim(), undefined);
 
           if (result.success && result.order) {
             orderData.value = result.order;
@@ -74,6 +82,13 @@ export default component$(() => {
       error.value = 'Please enter both order number and email address.';
       return;
     }
+    if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
+      error.value = 'Please complete the security check.';
+      return;
+    }
+    const token = turnstileToken.value;
+    turnstileToken.value = '';
+    resetTurnstile();
 
     loading.value = true;
     error.value = '';
@@ -81,7 +96,7 @@ export default component$(() => {
     orderData.value = null;
 
     try {
-      const result = await trackOrderServer(orderCode.value.trim(), email.value.trim());
+      const result = await trackOrderServer(orderCode.value.trim(), email.value.trim(), token || undefined);
 
       if (result.success && result.order) {
         orderData.value = result.order;
@@ -164,10 +179,12 @@ export default component$(() => {
               </div>
             </div>
 
+            <div id="track-turnstile" class="min-h-[65px]"></div>
+
             <div class="flex gap-4">
               <button
                 type="submit"
-                disabled={loading.value}
+                disabled={loading.value || (!!TURNSTILE_SITE_KEY && !turnstileToken.value)}
                 class="flex-1 bg-[#141210] text-[#FDFAF6] px-8 py-4 rounded-[3px] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200 font-medium text-sm tracking-[0.14em] uppercase flex items-center justify-center gap-2"
               >
                 {loading.value ? (

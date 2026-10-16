@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
-import { _resetAppleJwksCache, appleClientIds, verifyAppleIdentityToken } from './apple.js';
+import { _resetAppleJwksCache, appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from './apple.js';
 import { env } from '../env.js';
 
 const AUD = 'com.example.app';
@@ -124,5 +124,26 @@ describe('appleClientIds', () => {
     } finally {
       env.APPLE_CLIENT_IDS = prior;
     }
+  });
+});
+
+describe('appleAuthoritativeForEmail', () => {
+  const a = (email: string | null, emailVerified = true) => ({ email, emailVerified });
+  it('is authoritative for Private Relay and Apple-hosted mail', () => {
+    for (const d of ['privaterelay.appleid.com', 'icloud.com', 'me.com', 'mac.com']) {
+      expect(appleAuthoritativeForEmail(a(`x@${d}`))).toBe(true);
+    }
+    expect(appleAuthoritativeForEmail(a('x@ICLOUD.com'))).toBe(true);
+  });
+  it('is not authoritative for third-party or Google domains', () => {
+    expect(appleAuthoritativeForEmail(a('x@corp.example'))).toBe(false);
+    expect(appleAuthoritativeForEmail(a('x@gmail.com'))).toBe(false);
+  });
+  it('is not authoritative for lookalike / subdomain / unverified / missing email', () => {
+    expect(appleAuthoritativeForEmail(a('x@evil-icloud.com'))).toBe(false);
+    expect(appleAuthoritativeForEmail(a('x@icloud.com.evil.example'))).toBe(false);
+    expect(appleAuthoritativeForEmail(a('x@sub.icloud.com'))).toBe(false);
+    expect(appleAuthoritativeForEmail(a('x@icloud.com', false))).toBe(false);
+    expect(appleAuthoritativeForEmail(a(null))).toBe(false);
   });
 });

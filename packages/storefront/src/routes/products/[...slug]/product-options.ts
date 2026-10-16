@@ -1,61 +1,52 @@
 import type { CatalogVariant } from '~/sellright/types/catalog';
 import { effectiveVariantPrice } from '~/sellright/types/catalog';
 
-/**
- * Unique option groups, in the merchant's own order (API migration 0080:
- * `group.position` orders groups, `option.position` orders values within a
- * group — set via the admin's option-group/value reorder controls).
- *
- * Both are optional at runtime: a manifest snapshot published before this
- * field existed omits them, and this must still render sensibly rather than
- * throw or silently collapse everything to one order. When position data is
- * fully present (the normal case for anything touched after this shipped) it
- * is authoritative and NEVER overridden by name — a merchant who orders
- * values "L, M, S" or groups "Color, Size" must see exactly that, not an
- * alphabetical or size-heuristic re-sort. The size-word heuristic and
- * alphabetical-by-name sort below are legacy fallbacks ONLY for the
- * position-less case.
- */
-export function getOptionGroups(variants: CatalogVariant[]): { groupName: string; values: string[] }[] {
-  const map = new Map<string, { position: number | undefined; values: Map<string, number | undefined> }>();
-  for (const v of variants) {
-    for (const opt of (v.options || [])) {
-      const g = opt.group?.name || 'Option';
-      if (!map.has(g)) map.set(g, { position: opt.group?.position, values: new Map() });
-      const entry = map.get(g)!;
-      if (entry.position === undefined && opt.group?.position !== undefined) entry.position = opt.group.position;
-      if (!entry.values.has(opt.name)) entry.values.set(opt.name, opt.position);
-    }
-  }
-  const SIZE_ORDER = ['xs', 'xsmall', 'x-small', 's', 'sm', 'small', 'm', 'md', 'medium', 'l', 'lg', 'large', 'xl', 'xxl', '2xl', '3xl'];
-  const groups = Array.from(map.entries()).map(([groupName, { position, values }]) => {
-    const names = [...values.keys()];
-    const hasAllValuePositions = names.length > 0 && [...values.values()].every((p) => p !== undefined);
-    let sorted = names;
-    if (hasAllValuePositions) {
-      sorted = [...names].sort((a, b) => values.get(a)! - values.get(b)!);
-    } else if (groupName.toLowerCase() === 'size') {
-      sorted = [...names].sort((a, b) => {
-        const ai = SIZE_ORDER.indexOf(a.toLowerCase());
-        const bi = SIZE_ORDER.indexOf(b.toLowerCase());
-        if (ai === -1 && bi === -1) return a.localeCompare(b);
-        if (ai === -1) return 1;
-        if (bi === -1) return -1;
-        return ai - bi;
-      });
-    }
-    return { groupName, values: sorted, position };
-  });
-  const hasAllGroupPositions = groups.length > 0 && groups.every((g) => g.position !== undefined);
-  const ordered = hasAllGroupPositions
-    ? [...groups].sort((a, b) => a.position! - b.position!)
-    : [...groups].sort((a, b) => a.groupName.localeCompare(b.groupName));
-  return ordered.map(({ groupName, values }) => ({ groupName, values }));
+// getOptionGroups and findVariant live in platform/controllers/product-model.ts (brand views PR2 §5), bodies unchanged.
+import { getOptionGroups, findVariant } from '~/platform/controllers/product-model';
+export { getOptionGroups, findVariant };
+
+type StockFlags = Pick<CatalogVariant, 'inStock' | 'isPreOrder'>;
+
+/** LOCKED stock rule: the live `inStock` read is authoritative. `isPreOrder`
+ *  is catalog metadata and can never make a variant purchasable on its own;
+ *  anything other than `inStock === true` (missing included) fails closed. */
+export function isVariantPurchasable(variant: Pick<CatalogVariant, 'inStock'> | null | undefined): boolean {
+  return variant?.inStock === true;
+}
+
+/** A variant is sold as a pre-order only while the live read says it is in
+ *  stock. A flagged pre-order with `inStock === false` is simply out of stock. */
+export function isActivePreOrder(variant: StockFlags | null | undefined): boolean {
+  return !!variant && variant.isPreOrder === true && variant.inStock === true;
+}
+
+/** Pre-order presentation (label, consent, price): the selected variant when
+ *  one is resolved, otherwise any variant that is an active pre-order. */
+export function isPreOrderPresented(selected: StockFlags | null | undefined, variants: StockFlags[]): boolean {
+  if (selected) return isActivePreOrder(selected);
+  return variants.some(isActivePreOrder);
+}
+
+/** Every variant is out of stock on the live read, pre-order flag or not. */
+export function areAllVariantsSoldOut(variants: Pick<CatalogVariant, 'inStock'>[]): boolean {
+  return variants.every((v) => !isVariantPurchasable(v));
+}
+
+/** Out of stock only for a complete selection that resolved to a variant whose
+ *  live read is not in stock. An incomplete selection is never OOS (it is
+ *  simply not yet purchasable) and is never wiped. */
+export function isSelectionOutOfStock(
+  selectionComplete: boolean,
+  selected: Pick<CatalogVariant, 'inStock'> | null | undefined,
+): boolean {
+  if (!selectionComplete) return false;
+  if (!selected) return false;
+  return !isVariantPurchasable(selected);
 }
 
 /** Values available for groupIndex given prior selections, stock-filtered.
- *  LOCKED stock rule: a pre-order variant is always selectable regardless of
- *  `inStock`; every other variant needs `inStock === true`. */
+ *  LOCKED stock rule: every variant needs a live `inStock === true`; the
+ *  pre-order flag never makes an out-of-stock variant selectable. */
 export function availableForGroup(
   variants: CatalogVariant[],
   groups: { groupName: string; values: string[] }[],
@@ -73,27 +64,11 @@ export function availableForGroup(
       if (opt?.name !== sel) { ok = false; break; }
     }
     if (!ok) continue;
-    if (!v.isPreOrder && !v.inStock) continue;
+    if (!isVariantPurchasable(v)) continue;
     const opt = v.options.find(o => o.group?.name === groups[groupIndex].groupName);
     if (opt) out.add(opt.name);
   }
   return out;
-}
-
-/** Find the resolved variant from all selected values */
-export function findVariant(
-  variants: CatalogVariant[],
-  groups: { groupName: string; values: string[] }[],
-  selected: (string | null)[],
-): CatalogVariant | undefined {
-  // Single variant with no option groups — return it directly
-  if (groups.length === 0) return variants[0];
-  if (selected.some(v => !v)) return undefined;
-  return variants.find(v =>
-    v.options && groups.every((g, i) =>
-      v.options!.find(o => o.group?.name === g.groupName)?.name === selected[i]
-    )
-  );
 }
 
 /** Price delta for a value in group 0 vs cheapest overall (effective prices). */
@@ -106,6 +81,21 @@ export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName:
   const delta = groupMin - allMin;
   if (delta === 0) return null;
   return delta > 0 ? `+$${(delta / 100).toFixed(0)}` : `-$${(Math.abs(delta) / 100).toFixed(0)}`;
+}
+
+/** The unit price (cents) the PDP is currently quoting: the pre-order price
+ *  on a pre-order, the sale price on a sale variant, otherwise `regular`
+ *  (the displayed base/"from" price). Mirrors what the price row renders. */
+export function liveUnitPrice(
+  variant: Pick<CatalogVariant, 'salePrice' | 'preOrderPrice'> | null | undefined,
+  isPreOrder: boolean,
+  regular: number,
+): number {
+  const sale = typeof variant?.salePrice === 'number' && variant.salePrice > 0 ? variant.salePrice : null;
+  const pre = typeof variant?.preOrderPrice === 'number' && variant.preOrderPrice > 0 ? variant.preOrderPrice : null;
+  if (isPreOrder && pre) return pre;
+  if (!isPreOrder && sale) return sale;
+  return regular;
 }
 
 /** Derive a CSS color from a swatch value name */

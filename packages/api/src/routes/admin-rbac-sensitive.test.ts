@@ -19,6 +19,7 @@
  * all run exactly as in production. vitest runs files serially
  * (fileParallelism: false), so the shared DB is safe between files.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -29,14 +30,11 @@ import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
 import { apps } from './apps.js';
 import { adminAffiliate } from './admin-affiliate.js';
+import { releaseRegistrationRoutes } from '../releases/release-registration.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `RBAC-sensitive test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-rbac-sensitive.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'rbac-sensitive-store';
@@ -49,6 +47,7 @@ app.route('/', admin);
 app.route('/', adminOrders);
 app.route('/', apps);
 app.route('/', adminAffiliate);
+app.route('/', releaseRegistrationRoutes);
 
 let ownerToken = '';
 let staffToken = '';

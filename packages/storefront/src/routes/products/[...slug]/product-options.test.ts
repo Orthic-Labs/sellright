@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { availableForGroup, findVariant, getOptionGroups, priceDeltaLabel } from './product-options';
+import {
+	areAllVariantsSoldOut,
+	availableForGroup,
+	findVariant,
+	getOptionGroups,
+	isActivePreOrder,
+	isPreOrderPresented,
+	isSelectionOutOfStock,
+	isVariantPurchasable,
+	liveUnitPrice,
+	priceDeltaLabel,
+} from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
 // Loose option literals: `position`/`group.position` are required on the wire
@@ -113,11 +124,76 @@ describe('availableForGroup — LOCKED stock rule', () => {
 		expect(availableForGroup(variants, groups, 0, [])).toEqual(new Set(['Blue']));
 	});
 
-	it('includes an out-of-stock pre-order variant (pre-order is always selectable)', () => {
+	it('excludes an out-of-stock pre-order variant (live stock wins over the pre-order flag)', () => {
 		const variants = [
 			variant({ sku: 'red', inStock: false, isPreOrder: true, options: [{ id: 'red', code: 'red', name: 'Red', group: colorGroup('color') }] }),
 		];
+		expect(availableForGroup(variants, groups, 0, [])).toEqual(new Set());
+	});
+
+	it('includes an in-stock pre-order variant', () => {
+		const variants = [
+			variant({ sku: 'red', inStock: true, isPreOrder: true, options: [{ id: 'red', code: 'red', name: 'Red', group: colorGroup('color') }] }),
+		];
 		expect(availableForGroup(variants, groups, 0, [])).toEqual(new Set(['Red']));
+	});
+});
+
+describe('PDP stock state — live stock is authoritative over the pre-order flag', () => {
+	const preOOS = variant({ sku: 'pre-oos', inStock: false, isPreOrder: true, options: [] });
+	const preLive = variant({ sku: 'pre-live', inStock: true, isPreOrder: true, options: [] });
+	const plainOOS = variant({ sku: 'plain-oos', inStock: false, isPreOrder: false, options: [] });
+	const plainLive = variant({ sku: 'plain-live', inStock: true, isPreOrder: false, options: [] });
+
+	it('pre-order + inStock=false -> out of stock, not purchasable, no pre-order presentation', () => {
+		expect(isSelectionOutOfStock(true, preOOS)).toBe(true);
+		expect(isVariantPurchasable(preOOS)).toBe(false);
+		expect(isActivePreOrder(preOOS)).toBe(false);
+		expect(isPreOrderPresented(preOOS, [preOOS])).toBe(false);
+	});
+
+	it('pre-order + inStock=true -> purchasable with pre-order presentation', () => {
+		expect(isSelectionOutOfStock(true, preLive)).toBe(false);
+		expect(isVariantPurchasable(preLive)).toBe(true);
+		expect(isActivePreOrder(preLive)).toBe(true);
+		expect(isPreOrderPresented(preLive, [preLive])).toBe(true);
+	});
+
+	it('non-pre-order + inStock=false -> out of stock', () => {
+		expect(isSelectionOutOfStock(true, plainOOS)).toBe(true);
+		expect(isVariantPurchasable(plainOOS)).toBe(false);
+		expect(isActivePreOrder(plainOOS)).toBe(false);
+	});
+
+	it('non-pre-order + inStock=true -> purchasable, not a pre-order', () => {
+		expect(isSelectionOutOfStock(true, plainLive)).toBe(false);
+		expect(isVariantPurchasable(plainLive)).toBe(true);
+		expect(isPreOrderPresented(plainLive, [plainLive])).toBe(false);
+	});
+
+	it('missing stock fails closed (never purchasable)', () => {
+		const missing = { isPreOrder: true } as unknown as CatalogVariant;
+		expect(isVariantPurchasable(missing)).toBe(false);
+		expect(isSelectionOutOfStock(true, missing)).toBe(true);
+		expect(isActivePreOrder(missing)).toBe(false);
+		expect(isVariantPurchasable(undefined)).toBe(false);
+	});
+
+	it('incomplete or unresolved selection is never reported out of stock', () => {
+		expect(isSelectionOutOfStock(false, preOOS)).toBe(false);
+		expect(isSelectionOutOfStock(true, undefined)).toBe(false);
+	});
+
+	it('allVariantsSoldOut ignores the pre-order flag', () => {
+		expect(areAllVariantsSoldOut([preOOS, plainOOS])).toBe(true);
+		expect(areAllVariantsSoldOut([preOOS])).toBe(true);
+		expect(areAllVariantsSoldOut([preOOS, preLive])).toBe(false);
+		expect(areAllVariantsSoldOut([plainOOS, plainLive])).toBe(false);
+	});
+
+	it('with no variant selected, pre-order presents only if some pre-order variant is live in stock', () => {
+		expect(isPreOrderPresented(undefined, [preOOS, plainLive])).toBe(false);
+		expect(isPreOrderPresented(undefined, [preOOS, preLive])).toBe(true);
 	});
 });
 
@@ -156,5 +232,17 @@ describe('priceDeltaLabel — effective price, not raw price', () => {
 		// L (1000) vs the overall min (S's effective 500) — delta should reflect
 		// the sale price, not S's raw $1000 price (which would give +$0).
 		expect(priceDeltaLabel([s, l], groups, 'L')).toBe('+$5');
+	});
+});
+
+describe('liveUnitPrice', () => {
+	it('quotes the pre-order price on a pre-order, the sale price on a sale, else the regular price', () => {
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: null }, false, 1000)).toBe(800);
+		expect(liveUnitPrice({ salePrice: null, preOrderPrice: 700 }, true, 1000)).toBe(700);
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: 700 }, true, 1000)).toBe(700);
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: 700 }, false, 1000)).toBe(800);
+		expect(liveUnitPrice({ salePrice: null, preOrderPrice: null }, false, 1000)).toBe(1000);
+		expect(liveUnitPrice({ salePrice: 0, preOrderPrice: 0 }, true, 1000)).toBe(1000);
+		expect(liveUnitPrice(undefined, false, 1000)).toBe(1000);
 	});
 });

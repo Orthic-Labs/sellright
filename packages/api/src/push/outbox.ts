@@ -11,6 +11,7 @@ import * as s from '../db/schema.js';
 import { sendApns, apnsConfigured, type ApnsEnvironment } from './apns.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
+import { CANARY_MARKER, CANARY_TOPIC, assertNotReserved, assertNotReservedTopic } from '../canary/marker.js';
 
 /** Per-attempt backoff in seconds: 1m, 5m, 30m, 2h, 12h. Mirrors email. */
 const BACKOFF_S = [60, 300, 1800, 7200, 43200];
@@ -110,6 +111,8 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
   payload: object;
   kind?: 'apns' | 'live_activity';
 }): Promise<number> {
+  assertNotReservedTopic(`push topic ${args.topic}`, args.topic, false);
+  assertNotReserved(`push topic ${args.topic}`, args.payload, false);
   const kind = args.kind ?? 'apns';
   const devices = await tx
     .select({
@@ -119,7 +122,7 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
       kind: s.adminDeviceToken.kind,
     })
     .from(s.adminDeviceToken)
-    .where(eq(s.adminDeviceToken.kind, kind));
+    .where(and(eq(s.adminDeviceToken.kind, kind), liveRegistration()));
   const matched = devices.filter((d) => d.topics.includes('*') || d.topics.includes(args.topic));
   if (!matched.length) return 0;
 
@@ -135,11 +138,28 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
   return matched.length;
 }
 
+/** Canary-only push: one row to the configured test token (PLAN 7.16). Never
+ *  fans out to registered devices. Returns the outbox row id. */
+export async function enqueueCanaryPush(tx: Tx, storeId: string, args: {
+  deviceToken: string;
+  environment: string;
+  payload: object;
+}): Promise<string> {
+  const [row] = await tx.insert(s.pushOutbox).values({
+    storeId,
+    topic: CANARY_TOPIC,
+    deviceToken: args.deviceToken,
+    environment: args.environment,
+    payload: { ...args.payload, canary: true, marker: CANARY_MARKER },
+  }).returning({ id: s.pushOutbox.id });
+  return row!.id;
+}
+
 async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPush[]> {
   return withStore(storeId, async (tx) => {
     const claim = await tx.execute(
       sql`UPDATE push_outbox po
-          SET status = 'processing', attempts = po.attempts + 1, updated_at = now()
+          SET status = 'processing', attempts = po.attempts + 1, updated_at = now(), claimed_at = now()
           WHERE po.id IN (
             SELECT id FROM push_outbox
             WHERE (status = 'pending' AND next_attempt_at <= now())
@@ -157,6 +177,7 @@ async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPu
 type PushOutcome =
   | { kind: 'sent' }
   | { kind: 'unregistered'; error: string }
+  | { kind: 'cancelled'; error: string }
   | { kind: 'failed'; error: unknown };
 
 async function finalizePush(
@@ -173,16 +194,29 @@ async function finalizePush(
     if (outcome.kind === 'sent') {
       const rows = await tx
         .update(s.pushOutbox)
-        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null })
+        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null, claimedAt: null })
         .where(currentAttempt)
         .returning({ id: s.pushOutbox.id });
       return { result: rows.length ? 'sent' : 'stale', pruned: 0 };
     }
 
+    if (outcome.kind === 'cancelled') {
+      // The registration (or its session) ended after enqueue: drop this delivery, touch no device row.
+      const rows = await tx.update(s.pushOutbox)
+        .set({ status: 'dead', lastError: outcome.error, updatedAt: new Date(), claimedAt: null, firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())` })
+        .where(currentAttempt)
+        .returning({ id: s.pushOutbox.id });
+      return { result: rows.length ? 'dead' : 'stale', pruned: 0 };
+    }
+
     if (outcome.kind === 'unregistered') {
       const rows = await tx
         .update(s.pushOutbox)
-        .set({ status: 'dead', lastError: outcome.error, updatedAt: new Date() })
+        .set({
+          status: 'dead', lastError: outcome.error, updatedAt: new Date(),
+          // De-fork 2.9: release the claim; stamp the first failure once.
+          claimedAt: null, firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())`,
+        })
         .where(currentAttempt)
         .returning({ id: s.pushOutbox.id });
       if (!rows.length) return { result: 'stale', pruned: 0 };
@@ -202,11 +236,31 @@ async function finalizePush(
         status: giveUp ? 'dead' : 'pending',
         nextAttemptAt: new Date(Date.now() + backoff * 1000),
         updatedAt: new Date(),
+        // De-fork 2.9: release the claim; stamp the first failure once.
+        claimedAt: null,
+        firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())`,
       })
       .where(currentAttempt)
       .returning({ id: s.pushOutbox.id });
     if (!rows.length) return { result: 'stale', pruned: 0 };
     return { result: giveUp ? 'dead' : 'retry', pruned: 0 };
+  });
+}
+
+/** A push registration requires a live session & current membership of its store. Never refresh activity. */
+function liveRegistration() {
+  const idle = env.ADMIN_SESSION_IDLE_HOURS;
+  return sql`(${s.adminDeviceToken.sessionId} IS NOT NULL AND EXISTS (
+    SELECT 1 FROM "session" ss WHERE ss.id = ${s.adminDeviceToken.sessionId} AND ss.admin_user_id = ${s.adminDeviceToken.adminUserId} AND ss.expires_at > now()
+      AND EXISTS (SELECT 1 FROM admin_user_store aus WHERE aus.admin_user_id = ss.admin_user_id AND aus.store_id = ${s.adminDeviceToken.storeId})
+      AND (${idle}::float8 <= 0 OR coalesce(ss.last_seen_at, ss.created_at) > now() - make_interval(secs => ${idle}::float8 * 3600))))`;
+}
+
+async function registrationStillLive(storeId: string, deviceToken: string): Promise<boolean> {
+  return withStore(storeId, async (tx) => {
+    const rows = await tx.select({ id: s.adminDeviceToken.id }).from(s.adminDeviceToken)
+      .where(and(eq(s.adminDeviceToken.token, deviceToken), liveRegistration())).limit(1);
+    return rows.length === 1;
   });
 }
 
@@ -227,6 +281,16 @@ export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ se
     const due = await claimDuePushes(st.id, limit);
     for (const d of due) {
       let outcome: PushOutcome;
+      // B2.16 review: a queued push is only delivered while its device registration (and the admin session that made
+      // it) is still live — a logout, revocation or session expiry after enqueue cancels it.
+      if (d.topic !== CANARY_TOPIC && !(await registrationStillLive(st.id, d.device_token))) {
+        // Cancel the push only; never delete by token here — the device may have re-registered under a new session
+        // between the check and this write (finalizePush's unregistered branch would delete that fresh row).
+        const finalized = await finalizePush(st.id, d, { kind: 'cancelled', error: 'device registration or its session ended' });
+        if (finalized.result === 'dead') failed++;
+        pruned += finalized.pruned;
+        continue;
+      }
       try {
         const isLive = d.topic.endsWith('#live');
         const res = await sendApns({

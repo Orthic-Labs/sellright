@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "shop": {
+    "detailProducts": [
+      {
+        "key": "shirt",
+        "slug": "e2e-shirt",
+        "head": {
+          "title": "The fixture shirt",
+          "description": "A fixture product head."
+        },
+        "breadcrumbName": "Fixture shirt",
+        "schemas": [
+          {
+            "@context": "https://schema.org",
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "Q?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "A."
+                }
+              }
+            ]
+          }
+        ],
+        "facts": {
+          "material": "Fixture cotton"
+        }
+      },
+      {
+        "key": "oos",
+        "slug": "e2e-out-of-stock-tee"
+      }
+    ],
+    "productQuery": {
+      "params": [
+        "style"
+      ],
+      "values": {
+        "shirt": "shirt",
+        "oos": "oos"
+      }
+    }
+  },
+  "operational": {
+    "cartSeedPath": "/checkout/fixture-link/",
+    "analyticsPath": "/api/analytics/fixture-sink/"
+  },
+  "copy": {
+    "cart": {
+      "emptyTitle": "Your fixture bag is empty",
+      "trust": ["Fixture returns", "Fixture shipping"]
+    }
+  },
+  "cart": {
+    "openAfterAddMs": 300
+  }
+}

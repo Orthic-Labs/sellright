@@ -4,6 +4,8 @@ import {
   effectiveVariantPrice,
   normalizeManifestListItem,
   normalizeManifestProductDetail,
+  manifestProductMeta,
+  liveProductMeta,
   mergeProductStock,
   withUncheckedStock,
   UNCHECKED_STOCK,
@@ -52,7 +54,7 @@ describe('normalizeManifestListItem', () => {
     });
     expect(out).toEqual({
       slug: 'edc-knife', name: 'EDC Knife', status: 'active', inStock: true,
-      tags: ['Bestseller', 'New'], minPrice: 12000,
+      tags: ['Bestseller', 'New'], minPrice: 12000, maxPrice: 15000,
       pricingVariant: { sku: 'edc-knife', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null },
       image: '/assets/edc.jpg',
     });
@@ -62,7 +64,7 @@ describe('normalizeManifestListItem', () => {
     const out = normalizeManifestListItem({ slug: 'bare', name: 'Bare' });
     expect(out).toEqual({
       slug: 'bare', name: 'Bare', status: 'active', inStock: false,
-      tags: [], minPrice: null, pricingVariant: null, image: null,
+      tags: [], minPrice: null, maxPrice: null, pricingVariant: null, image: null,
     });
   });
 
@@ -149,5 +151,55 @@ describe('withUncheckedStock / UNCHECKED_STOCK', () => {
     const checked = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 3 }] });
     const reset = withUncheckedStock(checked);
     expect(reset.variants[0]).toMatchObject(UNCHECKED_STOCK);
+  });
+});
+
+describe('manifestProductMeta', () => {
+  it('carries the product id and an approved-review aggregate', () => {
+    expect(manifestProductMeta({ productId: 'p-1', rating: { average: 4.5, count: 3 } })).toEqual({
+      productId: 'p-1',
+      rating: { average: 4.5, count: 3 },
+    });
+  });
+  it('never invents a rating: absent, zero-count and zero-average all read as null', () => {
+    expect(manifestProductMeta({})).toEqual({ productId: null, rating: null });
+    expect(manifestProductMeta({ rating: null })).toEqual({ productId: null, rating: null });
+    expect(manifestProductMeta({ rating: { average: 5, count: 0 } }).rating).toBeNull();
+    expect(manifestProductMeta({ rating: { average: 0, count: 2 } }).rating).toBeNull();
+  });
+});
+
+describe('liveProductMeta (no catalog manifest)', () => {
+  it('takes the product id from the detail response and the rating from the reviews summary', () => {
+    expect(liveProductMeta({ productId: 'p-1' }, { enabled: true, average: 4.5, count: 3 })).toEqual({
+      productId: 'p-1',
+      rating: { average: 4.5, count: 3 },
+    });
+  });
+  it('has a null id against an older API that does not send one', () => {
+    expect(liveProductMeta({}, null).productId).toBeNull();
+    expect(liveProductMeta({ productId: '' }, null).productId).toBeNull();
+  });
+  it('never invents a rating: no reviews, zero count, zero average, reviews off, or a failed read are all null', () => {
+    expect(liveProductMeta({ productId: 'p' }, null).rating).toBeNull();
+    expect(liveProductMeta({ productId: 'p' }, undefined).rating).toBeNull();
+    expect(liveProductMeta({ productId: 'p' }, { enabled: true, average: 0, count: 0 }).rating).toBeNull();
+    expect(liveProductMeta({ productId: 'p' }, { enabled: true, average: 5, count: 0 }).rating).toBeNull();
+    expect(liveProductMeta({ productId: 'p' }, { enabled: true, average: 0, count: 2 }).rating).toBeNull();
+    expect(liveProductMeta({ productId: 'p' }, { enabled: false, average: 4, count: 2 }).rating).toBeNull();
+  });
+  it('feeds AggregateRating JSON-LD only when count > 0', async () => {
+    const { withAggregateRating } = await import('~/utils/rewards');
+    const base = { '@type': 'Product' };
+    expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 0 }).rating)).toEqual(base);
+    expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 2 }).rating)).toHaveProperty('aggregateRating');
+  });
+});
+
+describe('normalizeManifestProductDetail productId', () => {
+  it('carries the manifest product id through when present and omits it otherwise', () => {
+    const raw = { slug: 's', name: 'n', description: null, assets: [], variants: [] };
+    expect(normalizeManifestProductDetail({ ...raw, productId: 'p-9' }).productId).toBe('p-9');
+    expect('productId' in normalizeManifestProductDetail(raw)).toBe(false);
   });
 });

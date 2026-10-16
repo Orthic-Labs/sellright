@@ -19,6 +19,7 @@
  *   5. Idempotency-Key replay → same order, same receipt
  *   6. cart-token path (expectedRevision contract) still works with acceptance
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -31,9 +32,7 @@ import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`checkout-legal test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'checkout-legal.db.test.ts');
 
 const STORE = 'bbbbbbbb-2222-2222-2222-222222222222';
 const SLUG = 'checkout-legal-test-store';

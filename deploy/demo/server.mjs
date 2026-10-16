@@ -5,6 +5,7 @@ import { resolve, extname, sep } from 'node:path';
 import { allowedDemoRequest, allowedDemoBody, demoBindHost, demoSessionCookie } from './policy.mjs';
 import { assertDemoData, cleanDemo, demoCounts } from './safety.mjs';
 import { createHash } from 'node:crypto';
+import { verifyDemoMigrations } from './migration-gate.mjs';
 
 const database = new URL(process.env.DATABASE_URL ?? '');
 if (database.pathname !== '/sellright_demo' || process.env.SELLRIGHT_DEMO !== '1') {
@@ -24,6 +25,8 @@ if (process.env.GATEWAY_ACCOUNTS_JSON_FILE ||
 const { createApp } = await import('../../packages/api/dist/app.js');
 const { pool, assertRuntimeRoleUnprivileged } = await import('../../packages/api/dist/db/client.js');
 await assertRuntimeRoleUnprivileged();
+// Refuse to start against an old schema: the legacy app below never verifies migrations itself.
+await verifyDemoMigrations(pool);
 const { rows: stores } = await pool.query('SELECT slug, config FROM store');
 if (stores.length !== 1 || stores[0].slug !== 'demo' || stores[0].config?.demo !== true) {
   throw new Error('Refusing to expose a database without exactly one marked demo tenant');
@@ -96,7 +99,7 @@ const server = createServer(async (req, res) => {
       if (counts.sessions >= 100) return json(429, 'Demo visitor capacity reached; try again later');
       const login = await app.request('/v1/admin/login', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'visitor@demo.example', password: process.env.DEMO_ADMIN_PASSWORD }),
+        body: JSON.stringify({ email: 'visitor@demo.example', password: process.env.DEMO_ADMIN_PASSWORD, returnToken: true }),
       });
       if (!login.ok) return json(503, 'Demo sign-in temporarily unavailable');
       const { token } = await login.json();

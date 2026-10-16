@@ -18,18 +18,24 @@ import { ActiveCustomer, AppState } from '~/types';
 import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
 import Footer from '../components/footer/footer';
+import { BrandFooterMount, BrandHeaderMount } from '~/platform/controllers/shell';
+import { hasView, ComingSoon, MaintenanceScreen } from '~/platform/gateway';
 import { CartProvider } from '~/contexts/CartContext';
 import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/contexts/LoginModalContext';
 import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache-policy';
+import { CACHE_POLICY_VERSION, resolveRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
-import { identityFromStaticTheme } from '~/theme/theme.config';
+import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
+import { theme, identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
-import ComingSoon from '~/components/coming-soon/ComingSoon';
-import MaintenanceScreen from '~/components/maintenance/MaintenanceScreen';
+import { AnalyticsMount } from '~/platform/controllers/analytics-mount';
+import { BRAND_HEAD } from '~/platform/brand-data';
+
+/** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
+const HAS_ANALYTICS = !!BRAND_HEAD.analytics;
 
 /** WS-C: cookie that remembers a valid preview token across navigation, once
  *  presented on any request via ?preview_token=. Not HttpOnly — the value is
@@ -72,18 +78,20 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 		// an outage that has nothing to do with publish state.
 		return { identity: identityFromStaticTheme(), notPublished: false };
 	}
+}, {
+	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
+	// params unless allow-listed, so the preview token must be declared.
+	search: ['preview_token'],
 });
 
-export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {
-	const pathname = url.pathname;
-	const profile = getRouteCacheProfile(pathname);
-	cacheControl(profile.cacheControl);
+// onRequest (not onGet): the policy must cover actions (POST) as well as documents and loader data (GET).
+export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => {
+	// Loader/action data requests arrive with the page pathname (router trims q-loader-*.json): they must not
+	// inherit a page profile. Every profile is private no-store; no cacheControl() call, no CDN header.
+	const profile = resolveRouteCacheProfile(url.pathname, sharedMap);
 	headers.set('x-route-class', profile.routeClass);
 	headers.set('x-cache-policy-version', CACHE_POLICY_VERSION);
-
-	if (profile.responseCacheControl) {
-		headers.set('Cache-Control', profile.responseCacheControl);
-	}
+	headers.set('Cache-Control', profile.responseCacheControl);
 };
 
 /**
@@ -95,14 +103,26 @@ export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {
  */
 export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
 
-// Lightweight auth check only - NO backend calls
-export const useAuthLoader = routeLoader$(({ cookie }) => {
-	const authToken = cookie.get(AUTH_TOKEN)?.value;
+/** Resolve imported credentials before SSR can paint a signed-out account state. */
+export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
 	const countryCode = cookie.get(COUNTRY_COOKIE)?.value;
-	return {
-		isAuthenticated: !!authToken,
-		countryCode,
-	};
+	const hasLegacyTransport = !!(cookie.get('authToken')?.value || cookie.get('__vendure_session')?.value);
+	if (theme.isDemo || (!cookie.get(AUTH_TOKEN)?.value && !hasLegacyTransport)) {
+		return { isAuthenticated: false, countryCode, customer: null };
+	}
+	// HttpOnly legacy transport is invisible to JS. Presence prompts one proof-checked cart request, never authentication.
+	if (!cookie.get(AUTH_TOKEN)?.value && hasLegacyTransport) {
+		cookie.set('sr_legacy_cart', '1', { path: '/', maxAge: 3600, sameSite: 'lax', secure: url.protocol === 'https:' });
+	}
+	try {
+		const data = await bootstrapCustomer(headers);
+		return { isAuthenticated: true, countryCode, customer: {
+			id: data.id, firstName: data.firstName ?? '', lastName: data.lastName ?? '', emailAddress: data.email,
+		} };
+	} catch (error) {
+		if (srErrorStatus(error) !== 401) throw error;
+		return { isAuthenticated: false, countryCode, customer: null };
+	}
 });
 
 
@@ -146,7 +166,7 @@ export default component$(() => {
 		showUserMenu: false,
 		showMobileUserMenu: false,
 		isLoading: false,
-		customer: { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' } as ActiveCustomer,
+		customer: (authData.value.customer ?? { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' }) as ActiveCustomer,
 		availableCountries: [],
 		shippingAddress: {
 			id: '',
@@ -297,14 +317,15 @@ export default component$(() => {
 		<CartProvider>
 		<LoginModalProvider>
 			<div>
-				{!isAffiliateSurface && <Header />}
+				{!isAffiliateSurface && (hasView('shell.header') ? <BrandHeaderMount /> : <Header />)}
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
 				{!isAffiliateSurface && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
-					<main id="main-content" class={`flex-1 bg-[var(--color-parchment)] ${isHomePage || isAffiliateSurface ? '' : 'pt-16'}`}>
+					<main id="main-content" class={`flex-1 bg-[var(--color-page)] ${isHomePage || isAffiliateSurface ? '' : 'pt-[var(--header-offset)]'}`}>
 						<Slot />
 					</main>
-					{!isAffiliateSurface && <Footer />}
+					{!isAffiliateSurface && (hasView('shell.footer') ? <BrandFooterMount /> : <Footer />)}
+					{HAS_ANALYTICS && <AnalyticsMount />}
 				</div>
 				{/* Global Login Modal */}
 				<LoginModalComponent />

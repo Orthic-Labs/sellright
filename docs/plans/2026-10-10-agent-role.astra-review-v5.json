@@ -1,0 +1,118 @@
+{
+  "verdict": "reject",
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "critical",
+      "area": "Refund boundary",
+      "claim": "Two permitted routes bypass the hard refund block.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:342 denies explicit refund routes but omits POST /returns/:id/approve and POST /orders/:code/edit/commit. packages/api/src/routes/admin-orders.ts:258-275 calls requestRefund during return approval. packages/api/src/routes/admin-order-edit.ts:80-105 accepts settlement.type='refund_now'; packages/api/src/orders/order-edit-service.ts:738-750 executes that refund. A manager agent, or staff agent granted refunds, passes their existing guards.",
+      "fix": "Deny return approval and enforce the human boundary on refund settlement within order-edit commit, including replayed edits. Preserve ordinary reversible order edits. Add valid paid-order regression cases for both bypasses."
+    },
+    {
+      "id": "F02",
+      "severity": "critical",
+      "area": "Entitlement boundary",
+      "claim": "Blocking /licenses does not prevent agents from issuing licences or restarting entitlement operations.",
+      "evidence": "The entitlement deny list at docs/plans/2026-10-10-agent-role-v5.md:344 omits draft-orders and payment-reconciliation/effects/:id/retry. packages/api/src/routes/admin-order-ops.ts:105-132 queues and executes license_issue when markPaid=true. packages/api/src/routes/admin-gateway-payments.ts:92-104 permits effect retries with the refunds grant; packages/api/src/payments/settlement/effects.ts:355-362 excludes only admin_review. The handlers issue licences at packages/api/src/payments/settlement/handlers.ts:199 and extend entitlements at :388-390.",
+      "fix": "Enforce human authorization at entitlement-producing operations, including licensed paid drafts and entitlement retries. Keep ordinary draft creation and mark-paid behavior allowed. Add licence fixtures and assertions that agent requests cannot issue or extend entitlements."
+    },
+    {
+      "id": "F03",
+      "severity": "critical",
+      "area": "Credential boundary",
+      "claim": "Manager agents can change credentials through settings routes absent from both the deny set and its regex.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:350-364 covers payment/e-mail settings but not these routes: PATCH /sheerid/config accepts webhookSecret and clientSecret and persists them (packages/api/src/routes/sheerid.ts:133-189); PATCH /marketing/config replaces Listmonk apiUser/apiToken (packages/api/src/routes/admin-marketing.ts:235-249); POST /settings/preview-token replaces the previous access-token hash (packages/api/src/routes/admin-settings.ts:657-667); PATCH /settings/google changes the OAuth client ID (packages/api/src/routes/admin-settings.ts:331-342). Each admits managers.",
+      "fix": "Include these credential mutations in the human boundary and invariant coverage. Split mixed settings operations if necessary to retain access to ordinary reversible settings."
+    },
+    {
+      "id": "F04",
+      "severity": "critical",
+      "area": "Public-route exemption",
+      "claim": "The middleware explicitly skips a route that AGENT_DENIED promises to block.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:348 denies POST /staff/accept, but :389-411 returns before resolving the agent on that path. Task 5c at :655 checks the invite target's kind, not the caller's. With a valid human invitation token, an authenticated agent can therefore reach the password write and membership grant in packages/api/src/routes/admin-settings-advanced.ts:374-394 without an agent denial or denial audit.",
+      "fix": "Apply the agent deny check when an agent credential accompanies a public request. Preserve unauthenticated human invitation acceptance. Test an agent bearer and agent cookie against a valid human invitation."
+    },
+    {
+      "id": "F05",
+      "severity": "high",
+      "area": "Identity immutability",
+      "claim": "Existing provisioning scripts can give an agent a password, owner grants, and memberships in additional stores.",
+      "evidence": "The plan promises immutable identities at docs/plans/2026-10-10-agent-role-v5.md:1118, but its file map and Task 5c omit bootstrap.ts and seed-admin.ts. packages/api/src/scripts/bootstrap.ts:81-105 initializes a missing password and upserts owner by e-mail. packages/api/src/scripts/seed-admin.ts:24-41 overwrites the password and grants owner on every store. Both can target a retained agent identity after removal. Token resolution rejects owner access, but the claimed identity invariant is still violated.",
+      "fix": "Make both scripts reject existing kind='agent' identities before any password or membership write. Add regressions for active and removed agents, and include these files in the execution packet."
+    },
+    {
+      "id": "F06",
+      "severity": "high",
+      "area": "Boundary invariant script",
+      "claim": "The proposed invariant gate fails immediately and misses the bulk irreversible verbs it claims to protect.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:358-364 omits cache/purge from exceptions although /purge matches IRREVERSIBLE_PATH. POST /v1/admin/cache/purge is registered at packages/api/src/routes/admin-cache.ts:39-43, so the check at plan :474 fails. Conversely, the slash-delimited cancel/purge alternatives do not match bulk-cancel or bulk-purge; removing either existing deny entry would escape the checks at :469-476.",
+      "fix": "Add the explicitly allowed cache-purge exception and recognize bulk irreversible path segments. Add focused invariant tests proving that removal of either bulk deny entry fails the gate."
+    },
+    {
+      "id": "F07",
+      "severity": "high",
+      "area": "Migration integration",
+      "claim": "The migration introduces an RLS-exempt table without updating the existing RLS test exemption registry.",
+      "evidence": "Task 1d at docs/plans/2026-10-10-agent-role-v5.md:134 updates assert-force-rls.ts only. packages/api/src/db/rls-tables.test.ts:37 maintains a separate EXEMPT set; :45-54 discovers every table with store_id, and :127-133 requires a tenant policy for each non-exempt table. admin_api_token will be discovered and fail that assertion because the migration intentionally creates no RLS policy.",
+      "fix": "Update or share the exemption registry used by rls-tables.test.ts, and add explicit application-level isolation tests for admin_api_token."
+    },
+    {
+      "id": "F08",
+      "severity": "high",
+      "area": "Cross-tenant test execution",
+      "claim": "Task 7 serves its tenancy requests through CI's superuser connection, bypassing the isolation it intends to verify.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:703-724 uses the same runtime pool for fixtures and buildHttpApp requests, then expects a foreign-product PATCH to return 404 at :866. .github/workflows/ci.yml:122-123 sets DATABASE_URL to postgres and provides DATABASE_URL_NONOWNER separately. packages/api/src/db/client.ts:27-28 uses DATABASE_URL; packages/api/src/routes/admin-products.ts:123-126 relies on RLS rather than a store predicate for that lookup/update.",
+      "fix": "Use a privileged fixture pool and an explicitly unprivileged API runtime pool. Assert the runtime role before tenancy cases and verify both stores' rows and audit records."
+    },
+    {
+      "id": "F09",
+      "severity": "medium",
+      "area": "Task 7 fixtures and controls",
+      "claim": "Several supplied test requests cannot produce their asserted results.",
+      "evidence": "The export request at docs/plans/2026-10-10-agent-role-v5.md:767 uses /export/orders.csv, while packages/api/src/sdk/route-inventory.golden.json:47-49 registers /export/orders and /export/orders.xlsx. The webhook body at plan :829 uses events instead of required topics (packages/api/src/routes/admin-settings-advanced.ts:67); its example.invalid hostname also reaches DNS validation at packages/api/src/security/outbound-url.ts:191-193. The owner cancel control targets the Paid fixture at plan :735/:774, but packages/api/src/routes/admin.ts:608 permits only PendingPayment. Bulk cancellation can return 200 with every item rejected (packages/api/src/routes/admin-order-ops.ts:524-550), which the status-only control would incorrectly accept.",
+      "fix": "Correct the export path and webhook body, provide deterministic outbound-URL validation, and use a pending-order cancellation fixture. Assert bulk per-item outcomes and persisted effects, not only HTTP success."
+    },
+    {
+      "id": "F10",
+      "severity": "medium",
+      "area": "UI/e2e selectors",
+      "claim": "The e2e test searches for the badge and Remove button in the wrong table row.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:1049 and :1065 locate a row containing 'E2E bot'. That name appears in AgentAccess at :1011, whose row contains Rotate only at :1017. Task 8c adds the badge and removal to the Staff row, which displays the synthetic e-mail rather than the agent name (packages/admin/src/pages/Staff.tsx:139 and :178-189).",
+      "fix": "Capture the returned agent identity and target the Staff row by e-mail or a stable adminUserId selector. Scope AgentAccess assertions separately and use a unique agent name for retries."
+    },
+    {
+      "id": "F11",
+      "severity": "high",
+      "area": "Audit guarantee",
+      "claim": "The implementation cannot guarantee attribution of every allowed mutation as documented.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:1115 promises attribution for every allowed mutation, but :426-428 writes the request audit after the handler commits and silently discards failures. Some permitted handlers have no entity audit fallback: customer creation at packages/api/src/routes/admin-reports.ts:22-29 inserts the customer and returns without an audit row.",
+      "fix": "Provide durable attribution coupled to successful mutations, such as transactional audit records or a durable audit outbox. Add a failure-injection case for a permitted handler without an existing entity audit."
+    },
+    {
+      "id": "F12",
+      "severity": "high",
+      "area": "Token/session binding",
+      "claim": "The resolver accepts token-bound human sessions and treats them as human authority.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:238-241 permits createAdminSessionTx to bind any admin ID to a token. At :247-255, a matching live token/store binding is accepted for kind='human'; the agent-only checks do not run. The migration's token foreign key at :108-111 likewise permits a human owner. This is an invalid-state acceptance gap, not a demonstrated ordinary HTTP path for creating that state.",
+      "fix": "Reject every apiTokenId-bearing session unless its identity is an agent with an allowed role. Validate token minting/session creation inputs and test a deliberately seeded human/token binding."
+    },
+    {
+      "id": "F13",
+      "severity": "medium",
+      "area": "Concurrency assurance",
+      "claim": "The rotate/remove race test can pass when browser-session fails unexpectedly and does not establish the intended interleavings.",
+      "evidence": "docs/plans/2026-10-10-agent-role-v5.md:919-927 discards the rotate/remove response and never checks the bootstrap status. A bootstrap 500 with no cookie satisfies the remaining assertions if rotation/removal succeeds. Promise.all alone does not force either operation to pause at the grant/token lock boundary.",
+      "fix": "Assert all response statuses and force both lock orderings with deterministic barriers. Check session rows and subsequent authentication after each ordering, including removal through the existing staff DELETE route."
+    }
+  ],
+  "missing_tasks": [
+    "Add enforcement for mixed reversible/irreversible operations: refund settlement inside edits and entitlement effects inside otherwise allowed commerce actions.",
+    "Expand boundary tests from deny-group coverage to every denied route, using bearer and cookie principals, valid bodies, owner controls, and persisted-state assertions.",
+    "Add route-identity tests for static/parameter overlaps, mounted sub-apps, plugin registrations, and 404 fallthrough; ensure the checked route corresponds to the responding handler.",
+    "Add provisioning and invalid-binding tests covering seed/bootstrap scripts, removed identities, multiple memberships, human token-bound sessions, and invite acceptance.",
+    "Add the missing RLS-test registry update and separate privileged fixture access from unprivileged API requests.",
+    "Update the file map, generated-contract allowance, and execution ceilings to include the required remediation."
+  ],
+  "riskiest_unaddressed": "An agent with the refunds grant can execute real refunds through return approval or order-edit commit while the proposed deny-set gate reports those routes as permissible."
+}

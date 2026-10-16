@@ -1,8 +1,17 @@
 import { component$ } from '@qwik.dev/core';
-import { Link, useLocation, routeLoader$, type RequestHandler } from '@qwik.dev/router';
+import { Link, useLocation, routeLoader$, type DocumentHead, type DocumentHeadValue, type RequestHandler } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
+import { useStoreIdentityLoader } from '~/routes/layout';
+import { DECLARED_CONTENT } from '~/platform/brand-data';
+import { matchDeclaredPath } from '~/platform/content-routes';
+import { contentHead } from '~/platform/head-resolve';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { hasContentViewFor } from '~/platform/content-view';
+import { PRODUCT_PREFIX } from '~/platform/product-path';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
+	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
+	if (hasContentViewFor(url.pathname) && matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return;
 	// Return proper 404 status for catchall routes (prevents Google soft 404s)
 	// Skip for legacy redirect paths — they throw redirect() before reaching here
 	if (!url.pathname.startsWith('/order-status')) {
@@ -33,19 +42,41 @@ export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
                 }
                 throw redirect(301, '/track-order');
         }
+}, {
+        // Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+        search: ['orderCode', 'trackOrder', 'email'],
 });
 
-export const head = createSEOHead({
+// Today's 404 head, byte for byte.
+const NOT_FOUND_HEAD = createSEOHead({
 	title: '404 - Page Not Found',
 	description: 'The page you are looking for could not be found.',
 	noindex: true,
 });
+
+// A declared content path takes its declaration's head (never the 404 title or noindex); every other path keeps NOT_FOUND_HEAD.
+export const head: DocumentHead = ({ resolveValue, url }) => {
+	const declared = hasContentViewFor(url.pathname) ? matchDeclaredPath(DECLARED_CONTENT, url.pathname) : null;
+	if (!declared) return NOT_FOUND_HEAD as DocumentHeadValue;
+	return contentHead(declared, resolveValue(useStoreIdentityLoader).identity) as DocumentHeadValue;
+};
 
 export default component$(() => {
         useLegacyRedirects();
         const location = useLocation();
         const currentPath = location.url.pathname;
 
+	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
+	if (hasContentViewFor(currentPath) && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
+
+	return notFoundMarkup(currentPath);
+});
+
+/**
+ * Today's 404 page markup as a plain function (no component boundary, so the rendered bytes are what this route always rendered),
+ * loader-free, so the single-segment `[key]` route can render it without exporting this route's loader.
+ */
+export function notFoundMarkup(currentPath: string) {
 	return (
 		<div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
 			<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -67,7 +98,7 @@ export default component$(() => {
 							Sorry, we couldn't find the page you're looking for.
 						</p>
 
-						{currentPath.startsWith('/products/') && (
+						{currentPath.startsWith(`/${PRODUCT_PREFIX}/`) && (
 							<p class="text-xs text-gray-400 mb-6">
 								The product you're looking for may have been moved or is no longer available.
 							</p>
@@ -101,4 +132,4 @@ export default component$(() => {
 			</div>
 		</div>
 	);
-});
+}

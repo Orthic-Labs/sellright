@@ -25,11 +25,13 @@ function storefrontOrigin(storeSlug: string): string | null {
  * standard set" means the same thing whether it fires automatically or on
  * request.
  */
-export function standardPurgeUrls(storeSlug: string, opts: { productSlug?: string } = {}): string[] | null {
+export function standardPurgeUrls(storeSlug: string, opts: { productPath?: string } = {}): string[] | null {
   const base = storefrontOrigin(storeSlug);
   if (!base) return null;
   const urls = [`${base}/`, `${base}/shop/`, `${base}/sitemap.xml`, `${base}/sitemap-products.xml`];
-  if (opts.productSlug) urls.push(`${base}/products/${opts.productSlug}/`);
+  // The product page path comes from the store's own SEO config (seo/config.ts productPath): `/products/{slug}/` by default,
+  // `/shop/{slug}/` for a store whose storefront serves products there. Never rebuilt here from a hard-coded prefix.
+  if (opts.productPath) urls.push(`${base}${opts.productPath}`);
   return urls;
 }
 
@@ -43,7 +45,7 @@ export function standardPurgeUrls(storeSlug: string, opts: { productSlug?: strin
  * purge, and does not report success/failure back to the caller — for that,
  * use the admin purge route instead.
  */
-export function onCatalogCacheChanged(storeSlug: string, opts: { productSlug?: string } = {}): void {
+export function onCatalogCacheChanged(storeSlug: string, opts: { productPath?: string } = {}): void {
   try {
     const urls = standardPurgeUrls(storeSlug, opts);
     if (!urls) return; // no configured origin for this store — nothing to purge against

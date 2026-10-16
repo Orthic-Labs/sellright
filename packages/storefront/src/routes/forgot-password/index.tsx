@@ -1,16 +1,32 @@
-import { $, component$, useSignal } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
+import { XCircleIcon } from '~/platform/gateway';
 import { requestPasswordReset } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';
+import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 
 export default component$(() => {
 	const email = useSignal('');
 	const error = useSignal('');
 	const success = useSignal(false);
+	const turnstileToken = useSignal('');
+
+	// The API verifies Turnstile on forgot-password when it is enforced; no-op without a site key.
+	useVisibleTask$(() => {
+		mountTurnstile('forgot-turnstile', (t) => { turnstileToken.value = t; }, () => { turnstileToken.value = ''; });
+	});
+
 	const reset = $(async () => {
+		if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
+			error.value = 'Please complete the security check.';
+			return;
+		}
+		// Tokens are single-use: take it and re-arm the widget for the next attempt.
+		const token = turnstileToken.value;
+		turnstileToken.value = '';
+		if (TURNSTILE_SITE_KEY) resetTurnstile();
 		// Enumeration-safe on the API side — always resolves ok.
-		await requestPasswordReset(email.value);
+		await requestPasswordReset(email.value, token || undefined);
 		success.value = true;
 	});
 	return (
@@ -45,6 +61,7 @@ export default component$(() => {
 								/>
 							</div>
 						</div>
+						{TURNSTILE_SITE_KEY && <div id="forgot-turnstile" class="min-h-[65px] flex justify-center"></div>}
 						{error.value !== '' && (
 							<div class="rounded-md bg-red-50 p-4">
 								<div class="flex">

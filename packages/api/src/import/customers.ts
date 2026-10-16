@@ -6,6 +6,7 @@ import { optionalColumn } from './source-schema.js';
 import { isLegacyBcryptHash } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
 import type { ImportContext } from './context.js';
+import { captureRollbackAuthBaseline } from './rollback-auth.js';
 
 export async function importCustomers(ctx: ImportContext): Promise<void> {
   const { tx, q } = ctx;
@@ -19,9 +20,13 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
     // Required core columns are already preflight-verified; each optional
     // column selects NULL when absent so the row shape stays constant.
     const cf = (column: string, alias: string) => optionalColumn(ctx.sourceColumns, 'customer', column, 'c', alias);
-    const custRows = (
+    const sourceCustomerRows = (
       await q(
-        `SELECT c.id, c."emailAddress" AS email, c."firstName" AS fn, c."lastName" AS ln,
+        `SELECT c.id, c.id::text AS source_customer_id, c."userId"::text AS source_user_id,
+                ${optionalColumn(ctx.sourceColumns, 'user', 'identifier', 'u', 'user_identifier')},
+                ${optionalColumn(ctx.sourceColumns, 'user', 'deletedAt', 'u', 'source_user_deleted_at')},
+                EXISTS (SELECT 1 FROM administrator a WHERE a."userId"=c."userId") AS has_administrator_identity,
+                c."emailAddress" AS email, c."firstName" AS fn, c."lastName" AS ln,
                 c."phoneNumber" AS phone, ${cf('customFieldsListmonksubscribedat', 'listmonk')},
                 ${cf('customFieldsSheeridverifications', 'sheerid')},
                 ${cf('customFieldsActiveverifications', 'active')},
@@ -32,10 +37,14 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
          LEFT JOIN authentication_method am ON am."userId"=c."userId" AND am.type='NativeAuthenticationMethod'
          WHERE c."deletedAt" IS NULL`,
       )
-    ).map((c) => {
+    );
+    const rollbackBaseline = await captureRollbackAuthBaseline(ctx, sourceCustomerRows);
+    const sourceAccounts = new Map(rollbackBaseline.sourceAccounts.map(row => [row.sourceCustomerId, row.account]));
+    const custRows = sourceCustomerRows.map((c) => {
       const id = ctx.id('customer', c.id);
       if (c.password && !isLegacyBcryptHash(c.password)) throw new Error('Unsupported password hash for source customer ' + c.id);
       customerMap.set(c.id, id);
+      const providers = sourceAccounts.get(c.source_customer_id)?.providers ?? [];
       return {
         id,
         storeId: ctx.storeId,
@@ -50,6 +59,10 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
         listmonkSubscribedAt: parseDate(c.listmonk),
         stripeCustomerId: c.stripecid ?? null,
         emailVerified: c.verified ?? false,
+        googleSub: providers.filter(provider => provider.provider === 'google').length === 1
+          ? providers.find(provider => provider.provider === 'google')!.subject : null,
+        appleUserId: providers.filter(provider => provider.provider === 'apple').length === 1
+          ? providers.find(provider => provider.provider === 'apple')!.subject : null,
         sheeridVerifications: parseJson(c.sheerid),
         activeVerifications: parseStrArray(c.active),
         verificationMetadata: parseJson(c.vmeta),

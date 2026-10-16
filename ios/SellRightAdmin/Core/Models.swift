@@ -17,6 +17,9 @@ struct LoginRequest: Encodable {
     let email: String
     let password: String
     var totp: String?
+    /// The app authenticates with a bearer token, so it asks the API to return it in the body
+    /// (cookie clients never get it there).
+    var returnToken: Bool = true
 }
 
 struct LoginResponse: Decodable {

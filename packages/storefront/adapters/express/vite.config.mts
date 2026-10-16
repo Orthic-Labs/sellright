@@ -9,8 +9,10 @@ import baseConfig from "../../vite.config.ts"; // Adjusted path
 // browser has one (see deploy/demo/interactive-server.mjs), and prerendered
 // HTML would otherwise get served to every visitor regardless of whose store
 // it is. SELLRIGHT_DISABLE_SSG turns prerendering off so every route is
-// rendered live per-request instead — required for that build, a no-op for
-// every other one (SSG stays on by default).
+// rendered live per-request instead.
+//
+// Since the stock no-store change, prerendering is OFF FOR EVERY BUILD (see the adapter options below); the
+// variable is still accepted so existing build commands keep working.
 //
 // WS-C (runtime storefront configuration): the SAME reasoning now applies to
 // the generic one-image build (packages/storefront/Dockerfile,
@@ -21,7 +23,6 @@ import baseConfig from "../../vite.config.ts"; // Adjusted path
 // to every visitor of every host that image is later pointed at. Any build
 // meant to serve more than one store from the same image MUST set
 // SELLRIGHT_DISABLE_SSG=1.
-const ssgDisabled = process.env.SELLRIGHT_DISABLE_SSG === '1';
 const outDirSuffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
 
 // nodeServerAdapter always embeds the client manifest from the literal
@@ -44,10 +45,19 @@ if (outDirSuffix) {
 
 export default extendConfig(baseConfig, () => {
   return {
+    // Qwik Router 2.0.0-beta.38+ prerenders in a dedicated `ssg` Vite environment
+    // (run via builder.buildApp()); it needs the same tailwindcss bundling as the
+    // base `ssr.noExternal`. Ported from the Rotten Hand / Damned storefronts.
+    environments: {
+      ssg: {
+        resolve: { noExternal: ['tailwindcss'] },
+      },
+    },
     build: {
       ssr: true,
       outDir: `server${outDirSuffix}`,
-      rollupOptions: {
+      // Vite 8 / Rolldown: `rolldownOptions` replaces the deprecated `rollupOptions`.
+      rolldownOptions: {
         input: ["src/entry.express.tsx", "@qwik-router-config"],
         output: {
           entryFileNames: "entry.express.js",
@@ -59,17 +69,11 @@ export default extendConfig(baseConfig, () => {
     plugins: [
       nodeServerAdapter({
         name: "express",
-        ssg: ssgDisabled ? { include: [] } : {
-          include: ["/*"],
-          // /checkout is excluded on its own merits, independent of WS-C: it
-          // reflects live cart contents, live stock, and live payment-method
-          // configuration — a statically prerendered checkout page would be
-          // stale the moment it's built, regardless of which store's identity
-          // it carries. (Observed as the trigger for a build-time SSG crash —
-          // see routes/checkout — but it should never have been a static
-          // candidate either way.)
-          exclude: ["/account/*", "/search/*", "/blog", "/blog/*", "/affiliate", "/affiliate/*", "/checkout", "/checkout/*"],
-        },
+        // No document is prerendered. Every page carries live data (stock and price on catalog pages, per-request
+        // CSP nonce and store identity on all of them), and a prerendered file would be served by the static handler
+        // ahead of the router, bypassing the no-store policy and freezing availability at build time
+        // (CLAUDE.md "Stock Architecture (LOCKED)"). SELLRIGHT_DISABLE_SSG is kept as an accepted no-op.
+        ssg: { include: [] },
       }),
     ],
   };

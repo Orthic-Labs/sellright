@@ -1,7 +1,9 @@
 import { createContextId, useContext, useContextProvider, useStore, Slot, component$ } from '@qwik.dev/core';
 
+import type { Live } from '~/sellright/types/live';
+
 // Define the checkout address state structure
-export interface CheckoutAddressState {
+export interface CheckoutAddressState extends Live {
   addressSubmissionComplete: boolean;
   addressSubmissionInProgress: boolean;
 }

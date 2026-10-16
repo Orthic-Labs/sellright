@@ -1,5 +1,5 @@
 import { maybeMock } from './qa-mocks.js';
-import { adminHref, currentAdminPath } from './lib/base-path';
+import { adminHref, isPublicAdminPath } from './lib/base-path';
 
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
 // can't read it, so XSS can't steal it. We send `credentials: 'include'` so the
@@ -19,7 +19,21 @@ function readCookie(name: string): string | null {
 }
 
 export class ApiError extends Error {
+  /** Stable machine code from the structured error envelope (e.g. PREVIEW_STALE), when present. */
+  public code?: string;
+  /** The parsed JSON error body (sibling fields such as `grandTotal` on a stale preview). */
+  public body?: Record<string, unknown>;
   constructor(public status: number, message: string) { super(message); }
+}
+
+/** The API returns `{ error: { code, message } }` (older routes: `{ error: string }`). */
+function apiError(status: number, json: Record<string, unknown> | null | undefined, fallback: string): ApiError {
+  const e = json?.error as unknown;
+  const message = typeof e === 'string' ? e : (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string' ? (e as { message: string }).message : fallback);
+  const err = new ApiError(status, message);
+  if (e && typeof e === 'object' && typeof (e as { code?: unknown }).code === 'string') err.code = (e as { code: string }).code;
+  err.body = json ?? undefined;
+  return err;
 }
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -39,10 +53,10 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
   const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
-  if (res.status === 401 && !path.startsWith('/login') && currentAdminPath() !== '/login') location.assign(adminHref('/login'));
+  if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
   return json as T;
 }
 
@@ -82,24 +96,25 @@ export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
   const res = await fetch('/v1/admin/assets', { method: 'POST', headers, credentials: 'include', body: fd });
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, json?.error ?? `upload failed (${res.status})`);
+  if (!res.ok) throw apiError(res.status, json, `upload failed (${res.status})`);
   return json as AssetRow;
 }
 
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
-export interface Me { email: string; isInstallationAdmin: boolean; stores: StoreAccess[]; }
-export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
+export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; totpEnabled?: boolean; totpEnrollmentRequired?: boolean; }
+export interface AgentRow { id: string; adminUserId: string; name: string; email: string; role: string; createdBy: string | null; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; }
+export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; totpEnrollmentRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
-export interface OrderRow { code: string; state: string; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
+export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; firstName?: string | null; lastName?: string | null; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
   recentOrders: OrderRow[];
 }
 export interface OrderDetail {
-  code: string; state: string; currency: string;
+  code: string; state: string; currency: string; shippingMethodCode?: string | null; shippingMethodName?: string | null;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   placedAt: string | null; createdAt: string;
   shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
@@ -126,6 +141,8 @@ export interface ProductDetail { id: string; slug: string; name: string; descrip
 export interface CustomerRow { id: string; email: string; firstName: string | null; lastName: string | null; createdAt: string; orders: number; spent: number; }
 export interface CustomerDetail {
   id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null; emailVerified: boolean; createdAt: string;
+  /** Absent on older API builds; the edit form never sends tags it did not load. */
+  tags?: string[] | null;
   orderCount: number; spent: number;
   addresses: { fullName: string | null; line1: string; line2: string | null; city: string; province: string | null; postalCode: string | null; country: string; phone: string | null }[];
   orders: OrderRow[];
@@ -148,4 +165,18 @@ export interface RecoveryKit { kitId: string | null; generatedAt: string; master
 export function assetUrl(path: string | null): string | null {
   if (!path) return null;
   return path.startsWith('http') ? path : `/assets/${path.replace(/^\/+/, '')}`;
+}
+
+/** GET a non-JSON body (e.g. the invoice's ?format=html) with the session cookie + active-store header. */
+export async function apiText(path: string): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const text = await res.text();
+  if (!res.ok) {
+    let json: Record<string, unknown> | null = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+    throw apiError(res.status, json, `HTTP ${res.status}`);
+  }
+  return text;
 }

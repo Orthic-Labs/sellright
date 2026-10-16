@@ -2,24 +2,28 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { hasUnresolvedPayment } from '../payments/hold.js';
 import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
+import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
-import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
+import { cancelOrderStripeIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
+import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
-import { verifyPassword } from '../auth/password.js';
-import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
+import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
+import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
-import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
-import { verifyTotp } from '../auth/totp.js';
+import { verifySecondFactor } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
+import { resolveOrderRecipient } from '../orders/recipient.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
-import { fulfillmentStatusSql, paymentStatusSql } from '../orders/status-sql.js';
+import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 
 export const admin = new OpenAPIHono();
 
@@ -29,18 +33,21 @@ const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.st
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/login', summary: 'Admin login',
-    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional() })) } },
+    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional(),
+      // P2: explicit API clients ask for the bearer token in the body; browser (cookie) clients never get it.
+      returnToken: z.boolean().optional() })) } },
     responses: {
-      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
+      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), totpEnrollmentRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
       401: { description: 'Invalid', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
-    const { email: rawEmail, password, totp } = c.req.valid('json');
+    const { email: rawEmail, password, totp, returnToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = await loginRetryAfter(ip, `admin:${email}`);
+    // P1a: (ip, account) + per-account (all IPs) + per-IP (all accounts) budgets.
+    const retry = await reserveAdminAuthAttempt(ip, email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
     // WP1.5: do NOT confirm password validity to unauthenticated callers. The
@@ -49,17 +56,37 @@ admin.openapi(
     // enabled" via the response. The fix: treat a 2FA-enabled account with a
     // missing TOTP as a single incomplete login attempt (401, generic message).
     // The UI must always send both password and TOTP together.
-    if (!u || !(await verifyPassword(password, u.passwordHash))) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    // P1a: an unknown address (or an agent identity) still pays one full Argon2id
+    // verification, so timing does not reveal which admin e-mails exist.
+    const passwordOk = u && u.kind !== 'agent' && u.passwordHash ? await verifyPassword(password, u.passwordHash) : await verifyPasswordAgainstDummy(password);
+    if (!u || !passwordOk) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
-      if (!totp) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
-      if (!verifyTotp(u.totpSecret, totp, u.id)) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!totp) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      // P1b: a 6-digit TOTP code or a one-time recovery code (consumed on success).
+      if (!(await verifySecondFactor(u.id, u.totpSecret, totp))) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     }
-    await clearLoginAttempts(ip, `admin:${email}`);
-    const token = await createAdminSession(u.id);
+    await clearAdminAuthFailures(ip, email);
+    // Upgrade a legacy hash (pre-Argon2id scrypt — e.g. RightSites admins — or outdated Argon2 parameters)
+    // now that the plaintext has just been verified. Best-effort: a failure never blocks the sign-in.
+    // Conditional on the stored hash still being the one just verified, so a concurrent password change is never undone.
+    let currentHash = u.passwordHash!;
+    if (passwordNeedsRehash(currentHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        if (await rehashAdminPasswordIfUnchanged(u.id, currentHash, upgraded)) currentHash = upgraded;
+      } catch { /* retried on the next sign-in */ }
+    }
+    // The session is created only if the password verified above is still the account's password (P1b review).
+    const token = await createAdminSessionIfCredential(u.id, currentHash, !!u.totpSecret);
+    if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
     const admin = await resolveAdmin(token);
-    return c.json({ token, csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [] }, 200);
+    // P1b: when policy requires TOTP and none is enrolled, the session can only enrol (admin-agent-guard).
+    const totpEnrollmentRequired = !!admin && admin.totpRequired === true && !admin.totpEnabled;
+    // P2: the session token is in the httpOnly cookie; it is only echoed in the body for an explicit API client
+    // (`returnToken: true`), so page script (or an XSS) in a cookie client never sees it.
+    return c.json({ ...(returnToken === true ? { token } : {}), csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
   }),
 );
 
@@ -84,13 +111,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), stores: z.array(StoreAccess) })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, stores: admin.stores }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, totpEnrollmentRequired: admin.totpRequired === true && !admin.totpEnabled }, 200);
   }),
 );
 
@@ -99,11 +126,15 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
     request: { query: z.object({
-      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false),
+      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), excludeDemo: z.enum(['1']).optional(), trashed: z.coerce.boolean().default(false),
       // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
       // top of the legacy combined `state` filter above.
-      status: z.enum(['open', 'completed', 'cancelled', 'archived']).optional(),
-      paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']).optional(),
+      // 'active' = open + completed (the owner-facing "Open": not cancelled, not archived).
+      status: z.enum(['open', 'completed', 'cancelled', 'archived', 'active']).optional(),
+      // Inclusive YYYY-MM-DD bounds (UTC) on the order date (placed, else created).
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']).optional(),
+      shippingMethod: z.string().max(120).optional(), // shipping_method_code; '__none__' = no recorded method
       fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']).optional(),
       page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
     }) },
@@ -112,15 +143,20 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, trashed, status, paymentStatus, fulfillmentStatus, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
       // shows only live ones. Without this, trashed orders leak into every list.
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
+      if (excludeDemo === '1') conds.push(eq(s.order.isDemo, false) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
-      if (status) conds.push(eq(s.order.status, status) as never);
-      if (paymentStatus) conds.push(sql`${paymentStatusSql()} = ${paymentStatus}` as never);
+      if (status === 'active') conds.push(sql`${s.order.status} in ('open', 'completed')` as never);
+      else if (status) conds.push(eq(s.order.status, status) as never);
+      if (from) conds.push(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= ${`${from}T00:00:00Z`}::timestamptz` as never);
+      if (to) conds.push(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) < (${`${to}T00:00:00Z`}::timestamptz + interval '1 day')` as never);
+      if (paymentStatus) conds.push(sql`${paymentStatusWithBalanceSql()} = ${paymentStatus}` as never);
+      if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
@@ -128,8 +164,9 @@ admin.openapi(
       const base = tx
         .select({
           code: s.order.code, state: s.order.state, status: s.order.status,
-          paymentStatus: paymentStatusSql(), fulfillmentStatus: fulfillmentStatusSql(),
+          paymentStatus: paymentStatusWithBalanceSql(), shippingMethodName: s.order.shippingMethodName, fulfillmentStatus: fulfillmentStatusSql(),
           isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email,
+          firstName: s.customer.firstName, lastName: s.customer.lastName,
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -181,13 +218,20 @@ admin.openapi(
         const [cu] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
         customer = cu ?? null;
       }
-      const paymentStatus = derivePaymentStatus(o.state, payments);
+      // Order editing (G13): what the customer still owes after an edit (+) or is
+      // owed back (-); a positive amount reads as paymentStatus `balance_due`.
+      const amountDue = await amountDueForOrder(tx, st.storeId, o.id, o.grandTotal);
+      const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
+      const paymentStatus = derivePaymentStatus(o.state, payments, amountDue);
       const fulfillmentStatus = deriveFulfillmentStatus(lines, fulfillments);
       return {
+        amountDue, shippingOverride: o.shippingOverride,
+        shippingMethodCode: o.shippingMethodCode, shippingMethodName: o.shippingMethodName,
+        adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount })),
         code: o.code, state: o.state, status: o.status, paymentStatus, fulfillmentStatus, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
-        shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null,
+        shippingAddress: o.shippingAddress ?? null, billingAddress: admin.kind === 'agent' ? null : (o.billingAddress ?? null), // D6: billing address stripped for agents
         customer,
         // `id` is the order_line id the refund/return endpoints key their
         // `lines[].orderLineId` on — without it no consumer of this response can
@@ -210,10 +254,11 @@ admin.openapi(
           lines: refundLines.filter((rl) => rl.refundId === r.id).map((rl) => ({ orderLineId: rl.orderLineId, quantity: rl.quantity, amount: rl.amount, restock: rl.restock })),
         })),
         locations: locations.map((l) => ({ id: l.id, name: l.name, code: l.code, isDefault: l.isDefault })),
-        // `data` carries internal-note text (action === 'note') — everything
+        // `data` carries internal-note text (action === 'note') and the order-edit
+        // summary (edit / edit_address / record_payment / edit_refund) — everything
         // else ignores it. Reusing audit_log keeps notes in the SAME timeline
         // as every other order event instead of a second, disconnected feed.
-        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: e.action === 'note' ? e.data : undefined })),
+        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund'].includes(e.action) ? e.data : undefined })),
       };
     });
     if (!out) throw new HttpError(404, 'order not found');
@@ -264,13 +309,16 @@ admin.openapi(
     const { state, trackingCode, carrier } = c.req.valid('json');
     let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      // Shared with bulk/partial fulfillment: serialize before reading shipment
+      // state or remaining quantities, including the first fulfillment row.
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
       const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
       // Fulfillment state only advances: Pending -> Shipped -> Delivered. Block
       // a backward move (e.g. re-shipping an already-Delivered order).
       if (existing && existing.state === 'Delivered' && state === 'Shipped') return { kind: 'regress' as const, state: existing.state };
+      if (state === 'Delivered' && (!existing || existing.state !== 'Shipped')) return { kind: 'badstate' as const, state: existing?.state ?? 'Unfulfilled' };
       const advancingToShipped = state === 'Shipped' && (!existing || existing.state === 'Pending');
       let fid: string;
       if (existing) {
@@ -308,19 +356,19 @@ admin.openapi(
       // the notification can no longer be lost to an SMTP blip after the state
       // committed (the old inline send failed silently).
       // Webhook fires for ALL orders (3rd-party fulfillment/analytics subscribers);
-      // the customer email is gated on customerId (nullable FK → eq() needs guard).
+      // the customer email goes to the resolved recipient (contact email, else account).
       if (state === 'Shipped' && advancingToShipped) {
         await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null });
-        if (o.customerId) {
-          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-          if (cust?.email) {
-            const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-            // SR-05: per-store sender + storefront URL from store.config.
-            await enqueueShippingNotification(tx, st.storeId,
-              { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-              cust.email,
-              { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null, dedupeKey: `shipping_notification:${o.id}:Shipped` });
-          }
+        // Guests have no customerId: resolveOrderRecipient falls back to the
+        // checkout contact email, exactly like the refund email.
+        const recipient = await resolveOrderRecipient(tx, o);
+        if (recipient) {
+          const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+          // SR-05: per-store sender + storefront URL from store.config.
+          await enqueueShippingNotification(tx, st.storeId,
+            { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+            recipient,
+            { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null, dedupeKey: `shipping_notification:${o.id}:Shipped` });
         }
       }
       return { kind: 'ok' as const, fid, state };
@@ -428,15 +476,13 @@ admin.openapi(
       // shipment on the same order must send its own email, not be treated as
       // a duplicate of the first.
       await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, partial: true });
-      if (body.notifyCustomer && o.customerId) {
-        const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-        if (cust?.email) {
-          const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-          await enqueueShippingNotification(tx, st.storeId,
-            { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-            cust.email,
-            { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, dedupeKey: `shipping_notification:${fulfillmentId}:Shipped` });
-        }
+      const recipient = body.notifyCustomer ? await resolveOrderRecipient(tx, o) : null;
+      if (recipient) {
+        const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+        await enqueueShippingNotification(tx, st.storeId,
+          { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+          recipient,
+          { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, dedupeKey: `shipping_notification:${fulfillmentId}:Shipped` });
       }
       return { kind: 'ok', fulfillmentId };
     });
@@ -497,7 +543,9 @@ admin.openapi(
     for (const o of deduped) {
       let stockChanged = false;
       const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string }> => {
-        const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1);
+        // Match single/partial fulfillment's order lock before shipment reads.
+        // Each order commits separately, preserving the batch's lock ordering.
+        const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
         if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return { kind: 'badstate', state: order.state };
         const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
@@ -530,15 +578,13 @@ admin.openapi(
         // Shipped transition (durable retry, no post-commit silent drop).
         if (o.state === 'Shipped' && advancingToShipped) {
           await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null });
-          if (order.customerId) {
-            const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
-            if (cust?.email) {
-              const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-              await enqueueShippingNotification(tx, st.storeId,
-                { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-                cust.email,
-                { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null, dedupeKey: `shipping_notification:${order.id}:Shipped` });
-            }
+          const recipient = await resolveOrderRecipient(tx, order);
+          if (recipient) {
+            const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+            await enqueueShippingNotification(tx, st.storeId,
+              { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+              recipient,
+              { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null, dedupeKey: `shipping_notification:${order.id}:Shipped` });
           }
         }
         return { kind: 'ok', state: o.state };
@@ -573,7 +619,15 @@ admin.openapi(
     requirePermission(st, 'cancel_orders');
     const { code } = c.req.valid('param');
     let stockChanged = false;
-    const res = await withStore(st.storeId, async (tx) => {
+    // Unlocked id lookup, then the order set (STOREKIT §5.8 #11): the order is
+    // re-read FOR UPDATE under the set, so a concurrent edit cannot slip between.
+    const orderId = await orderIdByCode(st.storeId, code);
+    // PAYMENT-TIMING §3.4: quiescence is evaluated with the stripe discovery flag computed before the transaction (no I/O inside it).
+    const [cancelStore] = orderId ? await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1)) : [];
+    const stripeDiscover = orderId ? await stripeDiscoverable(st.storeId, cancelStore?.config ?? {}) : false;
+    // X-46: the L0 pay advisory (same key as /pay and gateway recovery) is taken before the order set,
+    // so a cancel serialises with an in-flight payment or capture for this order.
+    const res = !orderId ? { kind: 'notfound' as const } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       // Only unpaid orders can be cancelled directly — cancelling releases stock
@@ -601,8 +655,10 @@ admin.openapi(
       // LOYALTY-1: release points reserved by this order (idempotent).
       await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
+      // PAYMENT-TIMING §5.2 (R3/R4): request the release; it takes effect now if provider work is quiescent, else the sweep settles it.
+      await release(tx, held, { storeId: st.storeId, orderId: o.id, reason: 'order_cancelled', stripeDiscoverable: stripeDiscover });
       return { kind: 'ok' as const, orderId: o.id };
-    });
+    }));
     if (stockChanged) onStockChanged(st.slug);
     // After commit: cancel the order's open Stripe intents (best-effort, audited).
     if (res.kind === 'ok') await cancelOrderStripeIntents(st.storeId, res.orderId, admin.email);

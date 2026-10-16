@@ -1,7 +1,9 @@
-import { $, component$, type Signal } from '@qwik.dev/core';
+import { $, component$, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import CartContents from '~/components/cart-contents/CartContents';
 import CartTotals from '~/components/cart-totals/CartTotals';
-import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
+import { LoyaltyRedemptionView, platformAction } from '~/platform/gateway';
+import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
+import type { ActionResult } from '~/platform/views';
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
@@ -10,9 +12,27 @@ interface CheckoutOrderSummaryProps {
   pageLoading: Signal<boolean>;
   promoExpanded: Signal<boolean>;
   shippingCents: Signal<number | null>;
-  /** Loyalty points the shopper chose to spend (0 = none). */
-  redeemPoints: Signal<number>;
+  /** The loyalty offer projection (platform/controllers/loyalty.ts): null for a guest, a program that is off, or until the account is read. */
+  loyalty: ReadonlySignal<LoyaltyViewData | null>;
+  /** The only way to change the points the shopper spends; the checkout route owns the redemption signal. */
+  onRedeemToggle$: QRL<(on: boolean) => Promise<ActionResult>>;
 }
+
+/**
+ * A17 mount point: the brand's points-redemption control; the base LoyaltyRedeem is the fallback (both through the gateway handle,
+ * which resolves the slot at render time: a module-level slot lookup `?? LoyaltyRedeem` constant was `undefined` inside this
+ * component's lazy chunk in the client build). Reads both signals in its own render (an inline `&&` over them in the summary's JSX
+ * never re-rendered once the account loaded).
+ */
+const CheckoutLoyalty = component$<{
+  pageLoading: Signal<boolean>;
+  loyalty: ReadonlySignal<LoyaltyViewData | null>;
+  onRedeemToggle$: QRL<(on: boolean) => Promise<ActionResult>>;
+}>((props) => {
+  const view = props.loyalty.value;
+  if (props.pageLoading.value || !view) return null;
+  return <LoyaltyRedemptionView {...view} onRedeemToggle$={platformAction('loyalty.redeem-toggle', props.onRedeemToggle$)} />;
+});
 
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => (
   <div class="checkout-left order-2 lg:order-1 mb-8 lg:mb-0 lg:basis-[42%]">
@@ -105,13 +125,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             />
           )}
         </div>
-        {!props.pageLoading.value && (
-          <LoyaltyRedeem
-            redeemPoints={props.redeemPoints}
-            discountableCents={Math.max(0, (props.localCart?.cart?.subtotal || 0) - (props.localCart?.cart?.discountTotal || 0))}
-            currencyCode={props.localCart?.cart?.currency || 'USD'}
-          />
-        )}
+        <CheckoutLoyalty pageLoading={props.pageLoading} loyalty={props.loyalty} onRedeemToggle$={props.onRedeemToggle$} />
       </div>
     </div>
   </div>

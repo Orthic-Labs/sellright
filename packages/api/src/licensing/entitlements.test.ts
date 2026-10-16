@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLicenseGrants, canAccessDownload, canReceiveUpdate } from './entitlements.js';
+import { buildLicenseGrants, canAccessDownload, canReceiveUpdate, isEntitlementBearing } from './entitlements.js';
 
 describe('license entitlement planning', () => {
   it('issues one license per purchased software seat and carries update eligibility', () => {
@@ -104,3 +104,15 @@ describe('license entitlement planning', () => {
     expect(canAccessDownload({ status: 'revoked', expiresAt: null }, new Date('2026-06-12T00:00:00Z'))).toBe(false);
   });
 });
+
+describe('isEntitlementBearing is the predicate issuance uses', () => {
+  it('agrees with buildLicenseGrants for every fulfilment type, with and without an appKey', () => {
+    for (const fulfillmentType of ['physical', 'digital_download', 'license', 'update_pass'] as const) {
+      for (const appKey of [null, 'app']) {
+        const grants = buildLicenseGrants([{ orderLineId: 'l', quantity: 1, fulfillmentType, appKey, licenseSeats: null, updatesDurationDays: null, licenseDurationDays: null, metadata: null }]);
+        expect(isEntitlementBearing({ fulfillmentType, appKey }), `${fulfillmentType}/${appKey}`).toBe(grants.length > 0);
+      }
+    }
+  });
+});
+

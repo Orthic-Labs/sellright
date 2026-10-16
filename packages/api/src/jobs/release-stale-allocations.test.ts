@@ -9,6 +9,7 @@
  * helpers under withStore(). vitest runs files serially (fileParallelism:
  * false), so the shared DB is safe between files.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Zero-cache stock rule (this task): releasing allocated stock must trigger an
@@ -20,6 +21,22 @@ vi.mock('../manifest/stock-hook.js', () => ({
   onStockChanged: (storeSlug: string) => { onStockChangedCalls.push(storeSlug); },
 }));
 
+// STOREKIT §5.4 (F1): one order's lock set can be made unstable on demand, to prove
+// the job skips that order instead of failing the pass.
+const lockHook = vi.hoisted(() => ({ failFor: null as string | null }));
+vi.mock('../db/locks.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/locks.js')>();
+  return {
+    ...actual,
+    withLockedSet: (...args: Parameters<typeof actual.withLockedSet>) => {
+      const subject = args[1];
+      const orderId = !Array.isArray(subject) && (subject as { kind?: string }).kind === 'order' ? (subject as { orderId: string }).orderId : null;
+      if (orderId && orderId === lockHook.failFor) return Promise.reject(new actual.LockSetUnstable());
+      return actual.withLockedSet(...args);
+    },
+  };
+});
+
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -28,11 +45,7 @@ import { withLeaderLock } from './leader-lock.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `release-stale test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'release-stale-allocations.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'release-stale-test-store';
@@ -166,5 +179,22 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
     // returns, so it's safe to fire the hook synchronously afterwards.
     await releaseStaleAllocations({ apply: true, ttlMin: 60 });
     expect(onStockChangedCalls).toEqual([SLUG]);
+  });
+
+  it('skips an order whose lock set is unstable and still releases the rest of the batch', async () => {
+    await seedStoreAndStock(10);
+    const blocked = await seedStaleOrder('STALE-SKIP-A', 5);
+    await seedStaleOrder('STALE-SKIP-B', 5);
+    lockHook.failFor = blocked;
+    try {
+      const r = await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+      expect(r.skipped).toBe(1);
+      expect(r.orders).toBe(1);
+      expect(r.released).toBe(5);
+      expect(await orderStates()).toEqual(['PendingPayment', 'Cancelled']);
+      expect(await stockAllocated()).toBe(5);
+    } finally {
+      lockHook.failFor = null;
+    }
   });
 });

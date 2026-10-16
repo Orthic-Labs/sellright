@@ -21,11 +21,11 @@ Replaced the Shopify-green clone with a **runtime-swappable, multi-theme, light/
 ## Architecture (how it works / how to extend)
 
 - `packages/admin/src/theme-tokens.css` — **generated** by `.audit/themes/gen-tokens.cjs`. Per-theme CSS variables as **RGB channels** (`--accent: 203 61 20`) on `:root` / `[data-theme="x"]` / `.dark[data-theme="x"]`.
-- `tailwind.config.js` — maps every token via `rgb(var(--x) / <alpha-value>)`, so opacity modifiers (`bg-accent/20`, `ring-accent/35`) work. The **`gray` scale is remapped to a per-theme neutral ramp that inverts in dark** — this is why existing `text-gray-500` / `border-gray-100` / `bg-gray-50` across 34 files re-theme with **zero component edits**. `brand` is repointed to the active accent (so all `bg-brand`/`text-brand`/`bg-brand-light` re-theme too).
+- `src/index.css` `@theme inline` block (Tailwind 4; replaced `tailwind.config.js`) — maps every token to `rgb(var(--x))`, so opacity modifiers (`bg-accent/20`, `ring-accent/35`) work. The **`gray` scale is remapped to a per-theme neutral ramp that inverts in dark** — this is why existing `text-gray-500` / `border-gray-100` / `bg-gray-50` across 34 files re-theme with **zero component edits**. `brand` is repointed to the active accent (so all `bg-brand`/`text-brand`/`bg-brand-light` re-theme too).
 - `packages/admin/src/theme.tsx` — `useTheme()` hook + `ThemeMenu` + `applyTheme()` (flips `data-theme` + `.dark` on `<html>`).
 - **To add a theme:** add one entry to `THEMES` in `gen-tokens.cjs` (light + dark palette + neutral ramp), run it, add a row to `THEMES` in `theme.tsx`. Re-verify with `check.cjs`.
 
-Files touched: `packages/admin/tailwind.config.js`, `packages/admin/src/index.css`, `packages/admin/src/theme-tokens.css` (new), `packages/admin/src/theme.tsx` (new), `packages/admin/src/components/ui.tsx` (badges/alerts/deltas/title), `packages/admin/src/components/Layout.tsx` (switcher), `packages/admin/src/pages/Dashboard.tsx` (op-card tints), `packages/admin/index.html` (no-flash init), + `bg-white`→`bg-surface` swap.
+Files touched: `packages/admin/src/index.css`, `packages/admin/src/theme-tokens.css` (new), `packages/admin/src/theme.tsx` (new), `packages/admin/src/components/ui.tsx` (badges/alerts/deltas/title), `packages/admin/src/components/Layout.tsx` (switcher), `packages/admin/src/pages/Dashboard.tsx` (op-card tints), `packages/admin/index.html` (no-flash init), + `bg-white`→`bg-surface` swap.
 
 ## Evidence (real admin, mock data)
 

@@ -23,7 +23,8 @@
         "src/import/restore.ts",
         "src/import/preflight.ts",
         "src/manifest/generate.ts",
-        "src/scripts/seed-admin.ts"
+        "src/scripts/seed-admin.ts",
+        "src/scripts/effects-worker.ts"
       ],
       "project": ["src/**/*.ts"],
       "ignoreExportsUsedInFile": true

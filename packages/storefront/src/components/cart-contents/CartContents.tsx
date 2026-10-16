@@ -1,15 +1,19 @@
 import { component$, useContext, useSignal, useTask$, $ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import { OptimizedImage, QuantityDropdown } from '~/components/ui';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 import { APP_STATE } from '~/constants';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { formatPrice } from '~/utils';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
-import TrashIcon from '../icons/TrashIcon';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
+import { FreeShippingProgressView, QuantityDropdown, TrashIcon, platformAction } from '~/platform/gateway';
+import { projectQuantityOptions } from '~/platform/controllers/project';
+import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
+import { productPath } from '~/platform/product-path';
+
 
 // Image preloading function for cart product links
 const handleProductLinkClick = $((productSlug: string, featuredAssetPreview?: string) => {
@@ -29,7 +33,9 @@ export default component$(() => {
 	const cartState = useCart();
 	const currentOrderLineSignal = useSignal<{ id: string; value: number }>();
 	const isCheckoutView = isCheckoutPage(location.url.toString());
-	const isInEditableUrl = !isCheckoutView;
+	// A converted cart is an order, not a cart: its lines are read-only.
+	const isConverted = cartState.cart.status === 'converted';
+	const isInEditableUrl = !isCheckoutView && !isConverted;
 	const currencyCode = cartState.cart.currency || 'USD';
 
 	const productNameCache = useSignal<Record<string, string>>({});
@@ -118,18 +124,6 @@ export default component$(() => {
 		return stripped.startsWith('-') ? stripped.substring(1).trim() : stripped;
 	};
 
-	// Helper: derive quantity options for cart lines. `remaining === null` is
-	// the fail-closed-safe "uncapped" case — bounded to a sane dropdown size,
-	// never treated as literally infinite.
-	const qtyOptions = (remaining: number | null, currentQty: number, sku: string) => {
-		const maxQty = remaining === null ? Math.max(currentQty, 99) : Math.max(remaining, currentQty);
-		const expanded = expandedDropdowns.value.has(sku);
-		if (maxQty <= 10) return Array.from({ length: maxQty }, (_, i) => i + 1);
-		return expanded
-			? Array.from({ length: maxQty }, (_, i) => i + 1)
-			: [...Array.from({ length: 9 }, (_, i) => i + 1), '10+'];
-	};
-
 	return (
 		<div class="flow-root w-full">
 			<ul class={`divide-y w-full ${isCheckoutView ? 'divide-[rgba(var(--color-accent-rgb),0.25)]' : 'divide-[rgba(17,17,17,0.08)]'}`}>
@@ -141,9 +135,13 @@ export default component$(() => {
 						productSlug.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
 					const linePrice = line.lineSubtotal;
-					const isOOS = !isLineAvailable(line);
+					// Availability of an existing order's lines is not a purchase precondition (it excludes the order's own allocation).
+					const isOOS = !isConverted && !isLineAvailable(line);
 					const remaining = remainingQuantity(line);
-					const quantityOpts = qtyOptions(remaining, line.quantity, line.sku);
+					// Quantity options for the dropdown (a project*() result: plain data for the L2 component). `remaining === null` is the
+					// fail-closed-safe "uncapped" case — bounded to a sane dropdown size, never treated as literally infinite.
+					const maxQty = remaining === null ? Math.max(line.quantity, 99) : Math.max(remaining, line.quantity);
+					const quantityOpts = projectQuantityOptions(maxQty, expandedDropdowns.value.has(line.sku));
 					const vLabel = line.options ?? variantLabel(line.name, productName);
 
 					return (
@@ -167,7 +165,7 @@ export default component$(() => {
 									<h3 class={`text-[15px] font-normal leading-snug truncate font-heading ${isCheckoutView ? 'text-[#FDFAF6]' : 'text-[#1A1A1A]'}`}>
 										{productSlug ? (
 											<Link
-												href={`/products/${productSlug}/`}
+												href={productPath(productSlug)}
 												data-slug={productSlug}
 								data-preview={line.image || ''}
 								onClick$={handleLinkClick$}
@@ -194,11 +192,13 @@ export default component$(() => {
 								</div>
 
 								{/* Stock warning */}
-								<StockWarning
-									line={line}
-									sku={line.sku}
-									onRemove$={handleStockRemove$}
-								/>
+								{!isConverted && (
+									<StockWarning
+										line={line}
+										sku={line.sku}
+										onRemove$={handleStockRemove$}
+									/>
+								)}
 
 								{/* Qty — hidden for OOS */}
 								{!isOOS && (
@@ -210,7 +210,7 @@ export default component$(() => {
 												options={quantityOpts}
 												theme={isCheckoutView ? 'dark' : 'light'}
 												disabled={!isInEditableUrl}
-												onChange$={handleQtyChange$}
+												onChange$={platformAction('cart.quantity-select', handleQtyChange$)}
 											/>
 										) : (
 											<span class={`text-[12px] ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>Qty {line.quantity}</span>
@@ -240,6 +240,15 @@ export default component$(() => {
 				})}
 
 			</ul>
+			{/* A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing. */}
+			<FreeShippingProgressView
+				currencyCode={currencyCode}
+				subtotalCents={cartState.cart.subtotal}
+				lineCount={cartState.cart.lines.length}
+				isCheckoutView={isCheckoutView}
+				countryCode={shippingCountry(appState.shippingAddress.countryCode)}
+				discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+			/>
 		</div>
 	);
 });

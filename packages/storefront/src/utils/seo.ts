@@ -39,6 +39,8 @@ interface SEOConfig {
    * that static theme (offline/dev, or a caller not yet threaded through).
    */
   identity?: SrStoreIdentity;
+  /** Open Graph product tags (product:price:amount, :currency, :brand, :condition, :availability), product pages only. */
+  productMeta?: { price?: string; currency?: string; brand?: string; condition?: string; availability?: string };
 }
 
 export const createSEOHead = ({
@@ -53,6 +55,7 @@ export const createSEOHead = ({
   links = [],
   schemas = [],
   identity = identityFromStaticTheme(),
+  productMeta,
 }: SEOConfig): DocumentHead => {
   const SITE_DOMAIN = identity.siteOrigin;
   const DEFAULT_IMAGE = `${SITE_DOMAIN}${identity.ogImageUrl}`;
@@ -87,8 +90,9 @@ export const createSEOHead = ({
       { property: 'og:site_name', content: identity.storeName },
       ...(ogUrl ? [{ property: 'og:url', content: ogUrl }] : []),
       ...(optimizedImage ? [{ property: 'og:image', content: optimizedImage }] : []),
-      ...(optimizedImage ? [{ property: 'og:image:width', content: '1200' }] : []),
-      ...(optimizedImage ? [{ property: 'og:image:height', content: '630' }] : []),
+      // The alt text is the page title (as the Rotten store publishes it). No og:image:width/height: they were a fixed
+      // 1200x630 for every image, product photos included; the tags are optional and crawlers read the real size.
+      ...(optimizedImage ? [{ property: 'og:image:alt', content: title }] : []),
       { name: 'twitter:card', content: 'summary_large_image' },
       { name: 'twitter:title', content: title },
       { name: 'twitter:description', content: description },
@@ -98,6 +102,11 @@ export const createSEOHead = ({
       ...(articleMeta?.section ? [{ property: 'article:section', content: articleMeta.section }] : []),
       ...(articleMeta?.author ? [{ property: 'article:author', content: articleMeta.author }] : []),
       ...((articleMeta?.tags || []).map((t) => ({ property: 'article:tag', content: t }))),
+      ...(productMeta?.price ? [{ property: 'product:price:amount', content: productMeta.price }] : []),
+      ...(productMeta?.price && productMeta.currency ? [{ property: 'product:price:currency', content: productMeta.currency }] : []),
+      ...(productMeta?.availability ? [{ property: 'product:availability', content: productMeta.availability }] : []),
+      ...(productMeta?.condition ? [{ property: 'product:condition', content: productMeta.condition }] : []),
+      ...(productMeta?.brand ? [{ property: 'product:brand', content: productMeta.brand }] : []),
       // Discourage gen-AI training on our content/images (advisory). Does NOT block
       // AI-search citation — that is governed by crawler access in robots.txt, which stays open.
       { name: 'robots', content: noindex ? 'noindex, nofollow, noai, noimageai' : 'noai, noimageai' },

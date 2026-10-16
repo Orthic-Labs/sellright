@@ -14,6 +14,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createHash } from 'node:crypto';
@@ -30,14 +31,13 @@ vi.mock('../security/turnstile.js', () => ({
 }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`customer-tokens test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'customer-tokens.db.test.ts');
 
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { customerTokens } from './customer-tokens.js';
 import { auth } from './auth.js';
 import { hashPassword } from '../auth/password.js';
+import * as passwordAuth from '../auth/password.js';
 import { createSession } from '../auth/session.js';
 
 const STORE_A = 'aaaaaaaa-1111-1111-1111-111111111111';
@@ -343,5 +343,84 @@ describe('email-address-change flow (emailAddressChangeHandler parity)', () => {
       method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ token: tokenFrom(second) }),
     });
     expect(secondVerify.status).toBe(200);
+  });
+});
+
+describe('POST /v1/shop/auth/reset-password — atomic claim (security audit 2026-10-15)', () => {
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+  async function plantReset(customerId: string, raw: string) {
+    await withStore(STORE_A, (tx) => tx.insert(s.customerToken).values({ storeId: STORE_A, customerId, kind: 'password_reset', tokenHash: sha(raw), expiresAt: new Date(Date.now() + 3600_000) }));
+  }
+  const reset = (token: string, password: string) => app.request('/v1/shop/auth/reset-password', { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ token, password }) });
+  const login = (email: string, password: string) => app.request('/v1/shop/auth/login', { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ email, password }) });
+
+  it('two concurrent redemptions of ONE token: exactly one succeeds, and the password is the winner\'s', async () => {
+    const c = await seedCustomer(STORE_A, 'race@a.test');
+    const raw = 'r'.repeat(40);
+    await plantReset(c.id, raw);
+    const [a, b] = await Promise.all([reset(raw, 'first-new-password'), reset(raw, 'second-new-password')]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const winner = a.status === 200 ? 'first-new-password' : 'second-new-password';
+    const loser = a.status === 200 ? 'second-new-password' : 'first-new-password';
+    expect((await login('race@a.test', winner)).status).toBe(200);
+    expect((await login('race@a.test', loser)).status).toBe(401);
+  });
+
+  it('a reset burns the customer\'s OTHER outstanding reset tokens and revokes their sessions', async () => {
+    const c = await seedCustomer(STORE_A, 'siblings@a.test');
+    const t1 = 's'.repeat(40); const t2 = 't'.repeat(40);
+    await plantReset(c.id, t1); await plantReset(c.id, t2);
+    const session = await withStore(STORE_A, (tx) => createSession(tx, STORE_A, c.id));
+    expect((await reset(t1, 'brand-new-password-1')).status).toBe(200);
+    expect((await reset(t2, 'attacker-password-2')).status).toBe(409); // an older link cannot undo the reset
+    expect((await login('siblings@a.test', 'brand-new-password-1')).status).toBe(200);
+    const live = await pool.query('SELECT 1 FROM "session" WHERE token_hash = $1', [sha(session)]);
+    expect(live.rowCount).toBe(0);
+  });
+
+  it('two DIFFERENT reset tokens for the same customer redeemed concurrently: one 200, one 409, never a 500/deadlock', async () => {
+    const c = await seedCustomer(STORE_A, 'pair@a.test');
+    const t1 = 'p'.repeat(40); const t2 = 'q'.repeat(40);
+    await plantReset(c.id, t1); await plantReset(c.id, t2);
+    for (let round = 0; round < 3; round++) {
+      if (round > 0) { await plantReset(c.id, `${t1}${round}`); await plantReset(c.id, `${t2}${round}`); }
+      const sfx = round > 0 ? String(round) : '';
+      const [a, b] = await Promise.all([reset(`${t1}${sfx}`, 'pair-new-password-a'), reset(`${t2}${sfx}`, 'pair-new-password-b')]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    }
+  });
+
+  it('rechecks expiry after slow password hashing before the locked claim', async () => {
+    const customer = await seedCustomer(STORE_A, 'expiry-wait@a.test');
+    const raw = 'expires-while-customer-is-locked';
+    await plantReset(customer.id, raw);
+    let entered!: () => void;
+    let resume!: () => void;
+    const blocked = new Promise<void>((r) => { entered = r; });
+    const release = new Promise<void>((r) => { resume = r; });
+    const original = passwordAuth.hashPassword;
+    const spy = vi.spyOn(passwordAuth, 'hashPassword').mockImplementationOnce(async (...args) => {
+      const hash = await original(...args);
+      entered();
+      await release;
+      return hash;
+    });
+    const pending = reset(raw, 'changed-after-token-expiry');
+    try {
+      await blocked;
+      // The cheap probe has completed, but token expiry changes before the locked claim.
+      await pool.query('UPDATE customer_token SET expires_at = $1 WHERE token_hash = $2', [new Date(Date.now() - 1), sha(raw)]);
+      const before = (await pool.query('SELECT password_hash FROM customer WHERE id = $1', [customer.id])).rows;
+      resume();
+      expect((await pending).status).toBe(409);
+      expect((await pool.query('SELECT password_hash FROM customer WHERE id = $1', [customer.id])).rows).toEqual(before);
+      expect((await pool.query('SELECT used_at FROM customer_token WHERE token_hash = $1', [sha(raw)])).rows[0].used_at).toBeNull();
+    } finally { resume(); spy.mockRestore(); await pending; }
+  });
+
+  it('an invalid or used token changes nothing', async () => {
+    await seedCustomer(STORE_A, 'nochange@a.test', 'original-password-1');
+    expect((await reset('u'.repeat(40), 'whatever-password')).status).toBe(409);
+    expect((await login('nochange@a.test', 'original-password-1')).status).toBe(200);
   });
 });

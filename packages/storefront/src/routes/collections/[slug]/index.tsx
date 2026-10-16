@@ -9,11 +9,12 @@
 // consumers after this route stops using it).
 import { component$ } from '@qwik.dev/core';
 import { Link, routeLoader$ } from '@qwik.dev/router';
-import ProductCard from '~/components/products/ProductCard';
+import { ProductCard } from '~/platform/gateway';
 import { fetchCollectionDetail } from '~/sellright/catalog';
 import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { siteUrl, theme } from '~/theme/theme.config';
+import { productPath } from '~/platform/product-path';
 
 export const useCollectionLoader = routeLoader$(async ({ params, status }) => {
   const collection = await fetchCollectionDetail(params.slug, { pageSize: 60 });
@@ -58,6 +59,7 @@ export default component$(() => {
           {c.products.map((p, index) => (
             <ProductCard
               key={p.slug}
+              href={productPath(p.slug)}
               image={p.image}
               name={p.name}
               slug={p.slug}

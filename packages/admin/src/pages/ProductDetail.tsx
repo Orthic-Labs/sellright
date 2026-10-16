@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Package, Trash2, Plus, X, Upload, ChevronUp, ChevronDown } from 'lucide-react';
-import { api, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
+import { api, auth, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
@@ -24,8 +24,35 @@ function toDraft(p: ProductDetail): Draft {
 }
 const toCents = (s: string) => Math.round(parseFloat(s) * 100);
 
+// Refresh untouched fields, retaining edits relative to the last accepted baseline.
+// Match variants by ID so additions, removals & reordering cannot move edits.
+function rebaseDraft(current: Draft, baseline: Draft, incoming: Draft): Draft {
+  const keepEdit = <T,>(value: T, previous: T, next: T): T => value === previous ? next : value;
+  return {
+    name: keepEdit(current.name, baseline.name, incoming.name),
+    status: keepEdit(current.status, baseline.status, incoming.status),
+    description: keepEdit(current.description, baseline.description, incoming.description),
+    variants: Object.fromEntries(Object.entries(incoming.variants).map(([id, next]) => {
+      const value = current.variants[id];
+      const previous = baseline.variants[id];
+      if (!value || !previous) return [id, next];
+      const merged = { ...next };
+      for (const key of Object.keys(next) as (keyof typeof next)[]) {
+        // Assign each key separately to preserve its string/boolean field type.
+        Object.assign(merged, { [key]: keepEdit(value[key], previous[key], next[key]) });
+      }
+      return [id, merged];
+    })),
+  };
+}
+
 export default function ProductDetailPage() {
   const { id = '' } = useParams();
+  const { store } = useAuth();
+  return <ProductDetailEditor key={JSON.stringify([store?.slug, id])} id={id} />;
+}
+
+function ProductDetailEditor({ id }: { id: string }) {
   const { store } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
@@ -37,14 +64,38 @@ export default function ProductDetailPage() {
     queryFn: () => api.get<ProductDetail>(`/products/${id}`),
   });
 
-  const [draft, setDraft] = useState<Draft | null>(null);
-  useEffect(() => { if (p) setDraft(toDraft(p)); }, [p]);
+  const [draftState, setDraftState] = useState<{ current: Draft; baseline: Draft } | null>(null);
+  const draft = draftState?.current ?? null;
+  const setDraft = (update: Draft | null | ((current: Draft | null) => Draft | null)) => {
+    setDraftState((state) => {
+      const current = typeof update === 'function' ? update(state?.current ?? null) : update;
+      return state && current ? { ...state, current } : state;
+    });
+  };
+  const saving = useRef(false);
+  const active = useRef(true);
+  const transportStore = useRef(auth.store).current;
+  // The transport store changes synchronously, before React may unmount this editor.
+  const isCurrentIdentity = () => active.current && auth.store === transportStore;
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!p || saving.current) return;
+    const baseline = toDraft(p);
+    setDraftState((state) => ({ current: state ? rebaseDraft(state.current, state.baseline, baseline) : baseline, baseline }));
+  }, [p]);
 
   const save = useMutation({
-    mutationFn: async () => {
-      if (!p || !draft) return;
+    mutationFn: async ({ product: p, submitted: draft }: { product: ProductDetail; submitted: Draft }) => {
+      saving.current = true;
+      const checkIdentity = () => { if (!isCurrentIdentity()) throw new Error('Product changed while saving'); };
+      const patch = (path: string, body: Record<string, unknown>) => { checkIdentity(); return api.patch(path, body); };
+      // Reads started before/during PATCHes must not restore pre-save values.
+      await qc.cancelQueries({ queryKey: ['product', store?.slug, id], exact: true });
       if (draft.name !== p.name || draft.status !== p.status || (draft.description ?? '') !== (p.description ?? '')) {
-        await api.patch(`/products/${p.id}`, { name: draft.name, status: draft.status, description: draft.description });
+        await patch(`/products/${p.id}`, { name: draft.name, status: draft.status, description: draft.description });
       }
       for (const v of p.variants) {
         const d = draft.variants[v.id];
@@ -64,16 +115,29 @@ export default function ProductDetailPage() {
         if (preOrderPrice !== (v.preOrderPrice ?? null)) vp.preOrderPrice = preOrderPrice;
         if (d.shipDate !== dateInput(v.shipDate)) vp.shipDate = d.shipDate ? new Date(`${d.shipDate}Z`).toISOString() : null;
         if (d.enabled !== v.enabled) vp.enabled = d.enabled;
-        if (Object.keys(vp).length) await api.patch(`/variants/${v.id}`, vp);
-        if (onHand !== v.onHand) await api.patch(`/variants/${v.id}/stock`, { onHand });
+        if (Object.keys(vp).length) await patch(`/variants/${v.id}`, vp);
+        if (onHand !== v.onHand) await patch(`/variants/${v.id}/stock`, { onHand });
       }
+      await qc.cancelQueries({ queryKey: ['product', store?.slug, id], exact: true });
+      checkIdentity();
+      return api.get<ProductDetail>(`/products/${p.id}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['product', store?.slug, id] }); toast.success('Product saved'); },
-    onError: (e) => toast.error('Save failed', (e as Error).message),
+    onSuccess: (product, { submitted }) => {
+      if (!isCurrentIdentity()) { qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: 'none' }); return; }
+      const baseline = toDraft(product);
+      setDraftState((state) => state && ({ current: rebaseDraft(state.current, submitted, baseline), baseline }));
+      qc.setQueryData(['product', store?.slug, id], product);
+      toast.success('Product saved');
+    },
+    onError: (e) => {
+      qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: isCurrentIdentity() ? 'active' : 'none' });
+      if (isCurrentIdentity()) toast.error('Save failed', (e as Error).message);
+    },
+    onSettled: () => { saving.current = false; },
   });
 
   const nav = useNavigate();
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: isCurrentIdentity() ? 'active' : 'none' });
   const del = useMutation({ mutationFn: () => api.del(`/products/${id}`), onSuccess: () => { toast.success('Product archived'); nav('/products'); }, onError: (e) => toast.error('Archive failed', (e as Error).message) });
   const delVariant = useMutation({ mutationFn: (vid: string) => api.del(`/variants/${vid}`), onSuccess: () => { invalidate(); toast.success('Variant deleted'); }, onError: (e) => toast.error('Delete failed', (e as Error).message) });
   const [nv, setNv] = useState<{ sku: string; name: string; price: string; onHand: string } | null>(null);
@@ -93,24 +157,34 @@ export default function ProductDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   async function onPickImage(file: File) {
+    if (!isCurrentIdentity()) return;
     setUploadErr(null); setUploading(true);
     try {
       const asset = await uploadAsset(file);
+      if (!isCurrentIdentity()) return;
       await api.patch(`/products/${id}`, { featuredAssetId: asset.id });
+      if (!isCurrentIdentity()) return;
       invalidate();
       toast.success('Featured image updated');
-    } catch (e) { setUploadErr((e as Error).message); }
-    finally { setUploading(false); }
+    } catch (e) { if (isCurrentIdentity()) setUploadErr((e as Error).message); }
+    finally { if (isCurrentIdentity()) setUploading(false); }
   }
-  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: () => { invalidate(); toast.success('Featured image removed'); }, onError: (e) => toast.error('Remove failed', (e as Error).message) });
+  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Featured image removed'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Remove failed', (e as Error).message); } });
   // WP8c gallery (product_asset): upload → attach, remove, promote-to-featured.
   async function addToGallery(file: File) {
+    if (!isCurrentIdentity()) return;
     setUploadErr(null); setUploading(true);
-    try { const a = await uploadAsset(file); await api.post(`/products/${id}/assets`, { assetId: a.id }); invalidate(); toast.success('Added to gallery'); }
-    catch (e) { setUploadErr((e as Error).message); } finally { setUploading(false); }
+    try {
+      const a = await uploadAsset(file);
+      if (!isCurrentIdentity()) return;
+      await api.post(`/products/${id}/assets`, { assetId: a.id });
+      if (!isCurrentIdentity()) return;
+      invalidate(); toast.success('Added to gallery');
+    } catch (e) { if (isCurrentIdentity()) setUploadErr((e as Error).message); }
+    finally { if (isCurrentIdentity()) setUploading(false); }
   }
-  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: () => { invalidate(); toast.success('Removed from gallery'); }, onError: (e) => toast.error('Remove failed', (e as Error).message) });
-  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: () => { invalidate(); toast.success('Featured image updated'); }, onError: (e) => toast.error('Update failed', (e as Error).message) });
+  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Removed from gallery'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Remove failed', (e as Error).message); } });
+  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Featured image updated'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Update failed', (e as Error).message); } });
 
   if (isLoading) return <Loading />;
   if (error) return <ErrorState title="Couldn't load this product" message={(error as Error).message} onRetry={invalidate} />;
@@ -118,7 +192,7 @@ export default function ProductDetailPage() {
 
   const img = assetUrl(p.assetPath);
   const serverDraft = toDraft(p);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(serverDraft);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(draftState?.baseline);
   const setV = (vid: string, patch: Partial<Draft['variants'][string]>) =>
     setDraft((d) => d && ({ ...d, variants: { ...d.variants, [vid]: { ...d.variants[vid]!, ...patch } } }));
 
@@ -136,7 +210,7 @@ export default function ProductDetailPage() {
             <button className="btn-danger" disabled={del.isPending || save.isPending} onClick={async () => { if (await confirm({ title: `Archive product "${p.name}"?`, description: 'Its variants will be archived too. Order history is preserved.', tone: 'danger', confirmLabel: 'Archive' })) del.mutate(); }}>
               {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Archive</>}
             </button>
-            <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate({ product: p, submitted: draft })}>
               {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
             </button>
           </div>
@@ -147,7 +221,7 @@ export default function ProductDetailPage() {
       )}
 
       <div className="grid lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-5 min-w-0">
+        <div className="lg:col-span-2 stack-y-5 min-w-0">
           <FormSection title="Basics" description="Title, description, and core metadata shown to customers.">
             <Field label="Title"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
             <Field label="Description" hint="Markdown is not supported. Plain text only."><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
@@ -204,7 +278,7 @@ export default function ProductDetailPage() {
           <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
         </div>
 
-        <div className="space-y-5 min-w-0">
+        <div className="stack-y-5 min-w-0">
           <FormSection title="Status" description="Only active products appear in your storefront and search.">
             <select className="input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
               <option value="active">Active</option>
@@ -228,11 +302,11 @@ export default function ProductDetailPage() {
             {p.images.length > 0 && (
               <div className="grid grid-cols-3 gap-1.5 mt-3">
                 {p.images.map((im) => (
-                  <div key={im.assetId} className="group relative aspect-square rounded bg-gray-100 overflow-hidden ring-1 ring-gray-100">
+                  <div key={im.assetId} className="group relative aspect-square rounded-sm bg-gray-100 overflow-hidden ring-1 ring-gray-100">
                     <img src={assetUrl(im.path) ?? im.url} alt="" className="h-full w-full object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5">
-                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
-                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-[color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter] flex items-center justify-center gap-1.5">
+                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
+                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
                     </div>
                   </div>
                 ))}
@@ -308,7 +382,7 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Options</div>
-      <div className="p-4 space-y-3">
+      <div className="p-4 stack-y-3">
         {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g, gi) => (
           <div key={g.id} className="rounded-lg border border-gray-100 p-3">
             <div className="flex items-center gap-1 mb-2">

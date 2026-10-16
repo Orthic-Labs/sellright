@@ -2,13 +2,19 @@
  * Cross-lane seam for the launch-audit fixes (PAR-06).
  * Implemented by the par-customer lane; consumed wherever server-side
  * anti-bot verification is configured (contact form, auth paths).
- * Returns true when no secret is configured (feature disabled).
+ * No secret configured:
+ *   - TURNSTILE_DISABLED=true (explicit operator opt-out) → true
+ *   - NODE_ENV=production → false (FAIL CLOSED: a production store cannot
+ *     silently run without anti-bot verification)
+ *   - any other NODE_ENV (dev/test) → true (feature off, today's behaviour)
  *
  * Fail-closed contract: with a secret configured, ANY failure — missing
  * token, network error, non-2xx from siteverify, a malformed JSON body, or
  * `success !== true` — returns false. The only true path is Cloudflare
  * explicitly answering success for the presented token.
  */
+import { peekEnv } from '../env.js';
+
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 // Bounded wait: a slow/stuck siteverify must not hold the request open (or
 // stall a queue of public-form submissions). 5s is generous for a same-
@@ -16,14 +22,35 @@ const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverif
 // wedge the endpoint.
 const VERIFY_TIMEOUT_MS = 5_000;
 
+// Read parsed engine config when present; standalone helpers never initialize it.
+function runtimeNodeEnv(): string | undefined {
+  return peekEnv()?.NODE_ENV ?? process.env.NODE_ENV;
+}
+
+/** Explicit operator opt-out (TURNSTILE_DISABLED=true). Read at call time. */
+export function turnstileOperatorDisabled(): boolean {
+  const configured = peekEnv();
+  return (configured ? configured.TURNSTILE_DISABLED : process.env.TURNSTILE_DISABLED) === 'true';
+}
+
+/** Startup hook: warn loudly when production runs with the opt-out set. */
+export function warnIfTurnstileDisabled(log: (msg: string) => void = (m) => console.warn(m)): void {
+  if (runtimeNodeEnv() === 'production' && turnstileOperatorDisabled()) {
+    log('[turnstile] WARNING: TURNSTILE_DISABLED=true in production — anti-bot verification is OFF for stores without a secret');
+  }
+}
+
 export async function verifyTurnstileToken(args: {
   secret: string | null | undefined;
   token: string | null | undefined;
   remoteIp?: string | null;
 }): Promise<boolean> {
   const secret = args.secret?.trim();
-  // Feature disabled: no secret configured → the check passes unconditionally.
-  if (!secret) return true;
+  if (!secret) {
+    // No secret: explicit opt-out passes; production fails closed; dev/test pass.
+    if (turnstileOperatorDisabled()) return true;
+    return runtimeNodeEnv() !== 'production';
+  }
   const token = args.token?.trim();
   // Configured but the client presented nothing → fail closed.
   if (!token) return false;

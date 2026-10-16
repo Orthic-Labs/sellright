@@ -12,7 +12,7 @@ describe('server-rendered browse catalog', () => {
     vi.mocked(readCatalogSnapshot).mockResolvedValue({
       products: [{
         slug: 'snapshot', name: 'Snapshot', inStock: true,
-        priceRange: { min: 1200, max: 1200 },
+        priceRange: { min: 1200, max: 1500 },
         tags: ['EDC'],
         featuredImage: { url: '/assets/snapshot.jpg' },
         salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false,
@@ -24,7 +24,7 @@ describe('server-rendered browse catalog', () => {
       totalItems: 1,
       products: [{
         slug: 'snapshot', name: 'Snapshot', status: 'active', inStock: true,
-        tags: ['EDC'], minPrice: 1200,
+        tags: ['EDC'], minPrice: 1200, maxPrice: 1500,
         pricingVariant: { sku: 'snapshot', price: 1200, salePrice: null, preOrderPrice: null, isPreOrder: false, shipDate: null },
         image: '/assets/snapshot.jpg',
       }],
@@ -54,5 +54,25 @@ describe('server-rendered browse catalog', () => {
     vi.mocked(readCatalogSnapshot).mockRejectedValue(new Error('missing'));
     vi.mocked(searchCatalog).mockResolvedValue({ total: 50, items: [{ slug: 'a', name: 'A', status: 'active', inStock: true, minPrice: 100, image: null, tags: [], pricingVariant: null }] });
     await expect(loadBrowseCatalog()).rejects.toThrow('Catalog exceeds browse snapshot limit');
+  });
+
+  it('falls back to the live API when the snapshot is invalid (not an array), and never reports IN_STOCK it did not read', async () => {
+    vi.mocked(readCatalogSnapshot).mockResolvedValue({ products: 'broken' } as never);
+    vi.mocked(searchCatalog).mockResolvedValue({
+      total: 1,
+      items: [{ slug: 'live', name: 'Live', status: 'active', inStock: false, minPrice: 500, image: null, tags: [], pricingVariant: null }],
+    });
+    const result = await loadBrowseCatalog();
+    expect(searchCatalog).toHaveBeenCalledTimes(1);
+    expect(result.products.map((p) => [p.slug, p.inStock])).toEqual([['live', false]]);
+  });
+
+  it('reads the snapshot on every load and keeps nothing between loads (no reader cache)', async () => {
+    vi.mocked(readCatalogSnapshot)
+      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: true, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false }] })
+      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: false, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false }] });
+    expect((await loadBrowseCatalog()).products[0].inStock).toBe(true);
+    expect((await loadBrowseCatalog()).products[0].inStock).toBe(false);
+    expect(readCatalogSnapshot).toHaveBeenCalledTimes(2);
   });
 });

@@ -8,9 +8,10 @@ import { resolveConfiguredGatewayAccount, nmiEnvironment } from '../payments/gat
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { stripeModeFromConfig, resolveStripePublishableForClient, resolveStripeUsable } from '../payments/stripe.js';
 import { loyaltySettingsFromConfig } from '../money/loyalty.js';
-import { PublicLoyaltySettings } from './loyalty.js';
+import { PublicLoyaltySettings, publicLoyalty } from './loyalty.js';
 import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../store-publish.js';
 import { storeIdentityFromConfig, StoreIdentitySchema } from './store-identity.js';
+import { magicLinkPolicy } from '../auth/magic-link.js';
 
 export const shopConfig = new OpenAPIHono();
 
@@ -37,6 +38,8 @@ shopConfig.openapi(
           // Points program terms (null while the program is off) — lets the
           // storefront show points-to-earn and the redeem control.
           loyalty: PublicLoyaltySettings.nullable(),
+          // Which optional sign-in methods this store has switched on (so the storefront only offers what works).
+          auth: z.object({ magicLink: z.boolean() }),
         }) } },
       },
     },
@@ -54,7 +57,8 @@ shopConfig.openapi(
     const loyalty = loyaltySettingsFromConfig(st.config);
     return c.json({
       gateways: { nmi, sezzle },
-      loyalty: loyalty.enabled ? loyalty : null,
+      loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
+      auth: { magicLink: magicLinkPolicy(st.config).enabled },
       stripeMode: mode,
       stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
       stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),

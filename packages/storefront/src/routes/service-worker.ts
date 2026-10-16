@@ -7,28 +7,42 @@
  * Qwik uses a service worker to speed up your site and reduce latency, ie, not used in the traditional way of offline.
  *
  * Custom caching strategy:
- * - Qwik prefetching (built-in) — handles JS/CSS module prefetch
+ * - Qwik module prefetching is built into the Qwik 2 core preloader (no service worker needed)
  * - Image caching (cache-first) — /assets/ images cached indefinitely
  *
- * NOT cached here (handled by in-memory caches + SSE invalidation instead):
- * - GraphQL API responses — productCache handles this with SSE invalidation
- * - Page HTML — routeLoader$ with staleWhileRevalidate HTTP headers handles this
+ * NEVER cached here: documents, loader and action data, and API responses. They are sent `private, no-store`
+ * and this worker only handles image requests.
  */
-import { setupServiceWorker } from '@qwik.dev/router/service-worker';
+// Qwik 2 embeds its own preloader, so `setupServiceWorker()` is a no-op and the
+// `@qwik.dev/router/service-worker` export was removed (2.0.0-beta.41). This
+// file stays only for the custom image cache below; <ServiceWorkerRegister />
+// in root.tsx still registers it.
 
-// Qwik's built-in module prefetching
-setupServiceWorker();
+// Keep this file a module (no imports left) so its top-level consts stay out of the global scope.
+export {};
 
-const IMAGE_CACHE = 'storefront-images-v3';
+// v4: earlier versions matched any path containing /assets/ or /media/ and could store a document or loader data
+// (for example a collection whose handle is "assets"). Bumping the name makes activation delete those entries.
+const IMAGE_CACHE = 'storefront-images-v4';
 
-// Cache-first for image assets (safe to cache indefinitely — URLs change when images update)
-const isImageRequest = (url: string): boolean => {
+// Cache-first for image assets only (safe to cache indefinitely — URLs change when images update). Cache Storage
+// does not honour HTTP no-store, so this worker must never touch a document or data response: only requests the
+// browser makes FOR AN IMAGE, under an asset path, are handled (CLAUDE.md "Stock Architecture (LOCKED)").
+const isImageRequest = (request: { url: string; destination?: string }): boolean => {
+	if (request.destination !== 'image') return false;
 	try {
-		const pathname = new URL(url).pathname;
+		const pathname = new URL(request.url).pathname;
 		return pathname.includes('/assets/') || pathname.includes('/media/');
 	} catch {
 		return false;
 	}
+};
+
+// Only an image body that the server did not mark no-store may be stored.
+const isStorableImage = (response: { ok: boolean; headers: { get(name: string): string | null } }): boolean => {
+	if (!response.ok) return false;
+	if (!/^image\//i.test(response.headers.get('content-type') ?? '')) return false;
+	return !/no-store/i.test(response.headers.get('cache-control') ?? '');
 };
 
 // In-flight fetch map to prevent duplicate concurrent requests for the same asset
@@ -39,7 +53,7 @@ addEventListener('fetch', (event: any) => {
 
 	const url = event.request.url;
 
-	if (isImageRequest(url)) {
+	if (isImageRequest(event.request)) {
 		event.respondWith(
 			caches.open(IMAGE_CACHE).then(async (cache) => {
 				const cached = await cache.match(event.request);
@@ -49,7 +63,7 @@ addEventListener('fetch', (event: any) => {
 				let fetchPromise = inFlightFetches.get(url);
 				if (!fetchPromise) {
 					fetchPromise = fetch(event.request).then((response) => {
-						if (response.ok) {
+						if (isStorableImage(response)) {
 							cache.put(event.request, response.clone());
 						}
 						return response;

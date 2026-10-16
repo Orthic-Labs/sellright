@@ -4,9 +4,10 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost} from './interactive-policy.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
+import {verifyDemoMigrations} from './migration-gate.mjs';
 
 // The generic Qwik storefront (packages/storefront), built root-mounted
 // exactly like any other deployment and served as its own process — see
@@ -29,6 +30,8 @@ const {env}=await import('../../packages/api/dist/env.js');
 const assetDir=resolve(env.ASSET_DIR);
 const require=createRequire(new URL('../../packages/api/package.json',import.meta.url));
 const {eq,and,sql}=require('drizzle-orm');
+// Refuse to start against an old schema: the legacy app below never verifies migrations itself.
+await verifyDemoMigrations(pool);
 // Shared synthetic product photography for the seeded demo catalog — not
 // committed (repo hook blocks binary images), rendered on disk once per
 // unique assetDir. Non-fatal: a rendering failure just leaves the built-in
@@ -67,7 +70,7 @@ async function settle(visitor,code){
     return result.orderState;
   });
 }
-const syntheticAddress={fullName:'Alex Morgan',line1:'1 Demo Avenue',city:'Sample City',province:'CA',postalCode:'90001',country:'US'};
+const syntheticAddress=syntheticDemoAddress;
 async function call(visitor,path,method='GET',body,extra={}){
   return app.request(path,{method,headers:{'content-type':'application/json','x-store-slug':visitor.slug,'x-real-ip':visitor.id,...extra},body:body===undefined?undefined:JSON.stringify(body)});
 }
@@ -114,8 +117,8 @@ async function bounded(visitor){
   const result=await scoped(pool,visitor.id,async c=>(await c.query(`SELECT
     (SELECT count(*) FROM "order")::int AS orders,(SELECT count(*) FROM cart)::int AS carts,
     (SELECT count(*) FROM promotion)::int AS promotions,(SELECT count(*) FROM audit_log)::int AS changes,
-    (SELECT count(*) FROM product)::int AS products,(SELECT count(*) FROM product_variant)::int AS variants`)).rows[0]);
-  if(result.orders>=25||result.carts>=50||result.promotions>=25||result.changes>=250||result.products>=20||result.variants>=60)throw Error('This demo has reached its activity limit. Reset your demo to continue.');
+    (SELECT count(*) FROM product)::int AS products,(SELECT count(*) FROM product_variant)::int AS variants,(SELECT count(*) FROM blog_post)::int AS posts`)).rows[0]);
+  if(result.orders>=25||result.carts>=50||result.promotions>=25||result.changes>=250||result.products>=20||result.variants>=60||result.posts>=20)throw Error('This demo has reached its activity limit. Reset your demo to continue.');
 }
 await cleanVisitors(pool);
 const listenHost=demoBindHost(process.env.DEMO_BIND_HOST);
@@ -200,17 +203,21 @@ const server=createServer(async(req,res)=>{
           if(!shipping)return json(400,{error:'Unknown delivery method'});
           body={items:cart.lines.map(line=>({sku:line.sku,quantity:line.quantity})),shipping:shipping.calculator.flat,couponCode:body.couponCode,shipCountry:'US'};
         }
+        // Order edits never notify the (synthetic) customer: no email is queued
+        // even though SMTP is off and no dispatcher runs. The admin UI sends
+        // notifyCustomer:true by default, so this is overridden, not rejected.
+        if(/^\/v1\/admin\/orders\/[a-zA-Z0-9_-]+\/edit\/commit$/.test(url.pathname))body={...body,notifyCustomer:false};
         if(url.pathname==='/v1/shop/checkout'){
           if(!headers['idempotency-key'])return json(400,{error:'Checkout idempotency key required'});
           const cartResponse=await call(visitor,'/v1/shop/cart/'+body.cartToken);
           if(!cartResponse.ok)return json(cartResponse.status,{error:'Demo cart not found'});
           const cart=await cartResponse.json();
-          body={...body,items:cart.lines.map(line=>({sku:line.sku,quantity:line.quantity})),email:'sample0@demo.invalid',shippingAddress:syntheticAddress};
+          body=demoCheckoutBody(body,cart.lines);
         }
         const response=await call(visitor,url.pathname+url.search,method,body,headers);
-        const data=await response.json();
-        if(url.pathname==='/v1/shop/checkout'&&response.ok){data.state=await settle(visitor,data.code);data.simulated=true;}
-        return json(response.status,data);
+        return forwardInteractiveResponse(response,res,url.pathname==='/v1/shop/checkout'?async data=>{
+          data.state=await settle(visitor,data.code);data.simulated=true;return data;
+        }:undefined);
       };
       return await serial(visitor.id,execute);
     }
@@ -245,6 +252,12 @@ const server=createServer(async(req,res)=>{
       // Only for document navigations (no file extension): asset requests
       // (/build/*.js etc.) never trigger an SSR data load and firing
       // provision() once per script tag would be wasteful and racy.
+      // A cookie-less probe (HEAD, monitor, crawler, CLI) gets a static page instead: it never provisions a visitor tenant.
+      if(!visitor&&!extname(url.pathname)&&probeRequest(method,req.headers)){
+        res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-robots-tag':'noindex, nofollow'});
+        res.end(method==='HEAD'?undefined:'<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>SellRight demo</title><p>SellRight demo. Open this page in a web browser to start a demo session.</p>');
+        return;
+      }
       if(!visitor&&!extname(url.pathname)){
         try{visitor=await provision();setVisitorCookies(res,visitor,url);}
         catch(e){return json(503,{error:e.message||'Could not start a demo session'});}

@@ -24,6 +24,7 @@
  * seed helpers under withStore(). vitest runs files serially
  * (fileParallelism: false), so the shared DB is safe between files.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, and, sql } from 'drizzle-orm';
@@ -58,9 +59,7 @@ vi.mock('../payments/provider.js', async (importOriginal) => {
 import { pay } from './pay.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`pay-idempotency test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'pay-idempotency.test.ts');
 
 const STORE_A = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
 const SLUG_A = 'money1-store-a';

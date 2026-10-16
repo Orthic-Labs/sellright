@@ -1,3 +1,4 @@
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { refundStateFromStripe, refundTargetState, reconcileStripeRefund } from './webhook-reconcile.js';
@@ -41,7 +42,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 const STORE = '11111111-1111-1111-1111-111111111111';
 const SLUG = 'webhook-reconcile-test-store';

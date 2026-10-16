@@ -41,14 +41,30 @@ export function mainSitemapXml(siteUrl: string, staticPaths: string[]): string {
   return urlsetXml(siteUrl, staticPaths.map((path) => ({ path })));
 }
 
+// Path builders — shared by the XML serializers below and the admin sitemap
+// preview (seo/sitemap-preview.ts), so what the admin sees is exactly what is served.
+export type SitemapPath = { path: string; lastmod?: string | null };
+export const mainSitemapPaths = (staticPaths: string[]): SitemapPath[] => staticPaths.map((path) => ({ path }));
+export const productsSitemapPaths = (entries: SitemapEntry[], productUrlPattern: string = DEFAULT_PRODUCT_URL_PATTERN): SitemapPath[] =>
+  entries.map((e) => ({ path: productPath({ productUrlPattern }, e.slug), lastmod: e.lastmod }));
+export const collectionsSitemapPaths = (entries: SitemapEntry[]): SitemapPath[] =>
+  entries.map((e) => ({ path: `/collections/${encodeURIComponent(e.slug)}/`, lastmod: e.lastmod }));
+export const blogSitemapPaths = (entries: SitemapEntry[]): SitemapPath[] =>
+  entries.map((e) => ({ path: `/blog/${encodeURIComponent(e.slug)}/`, lastmod: e.lastmod }));
+
+/** Filenames listed in the sitemap index. The collection sitemap is only
+ *  advertised when the store publishes collections — a 404 in the index is a crawl error. */
+export const sitemapIndexNames = (hasCollections: boolean): string[] =>
+  ['sitemap-main.xml', 'sitemap-products.xml', ...(hasCollections ? ['sitemap-collections.xml'] : []), 'sitemap-blog.xml'];
+
 export function productsSitemapXml(siteUrl: string, entries: SitemapEntry[], productUrlPattern: string = DEFAULT_PRODUCT_URL_PATTERN): string {
-  return urlsetXml(siteUrl, entries.map((e) => ({ path: productPath({ productUrlPattern }, e.slug), lastmod: e.lastmod })));
+  return urlsetXml(siteUrl, productsSitemapPaths(entries, productUrlPattern));
 }
 
 export function collectionsSitemapXml(siteUrl: string, entries: SitemapEntry[]): string {
-  return urlsetXml(siteUrl, entries.map((e) => ({ path: `/collections/${encodeURIComponent(e.slug)}/`, lastmod: e.lastmod })));
+  return urlsetXml(siteUrl, collectionsSitemapPaths(entries));
 }
 
 export function blogSitemapXml(siteUrl: string, entries: SitemapEntry[]): string {
-  return urlsetXml(siteUrl, entries.map((e) => ({ path: `/blog/${encodeURIComponent(e.slug)}/`, lastmod: e.lastmod })));
+  return urlsetXml(siteUrl, blogSitemapPaths(entries));
 }

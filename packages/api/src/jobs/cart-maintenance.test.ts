@@ -9,6 +9,7 @@
  * Runs against a dedicated *_test DB ONLY (these wipe data). vitest runs
  * files serially (fileParallelism: false).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -17,9 +18,7 @@ import * as s from '../db/schema.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`cart-maintenance test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'cart-maintenance.test.ts');
 
 const STORE = 'cccccccc-4444-4444-4444-444444444444';
 const STORE_B = 'cccccccc-5555-5555-5555-555555555555';

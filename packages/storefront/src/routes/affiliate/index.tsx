@@ -40,6 +40,9 @@ export const useAffiliateData = routeLoader$(async ({ url }) => {
     if (!token) return { token: null, result: null };
     const result = await fetchAffiliateStatsByToken(token);
     return { token, result };
+}, {
+    // Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+    search: ['t'],
 });
 
 export default component$(() => {
@@ -47,7 +50,7 @@ export default component$(() => {
         :root .aff-scope { --aff-accent: var(--color-accent); --aff-ink: var(--color-ink); --aff-muted: var(--color-ink-soft); --aff-bg: var(--color-parchment); --aff-surface: #ffffff; --aff-border: var(--color-card-border); --aff-soft: var(--color-parchment-hover); }
         @keyframes aff-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-        .aff-scope { background: var(--aff-bg); padding: 2rem 1.25rem 4rem; font-family: var(--font-body), 'IBM Plex Sans', system-ui, sans-serif; color: var(--aff-ink); animation: aff-fade-in 240ms ease-out; }
+        .aff-scope { background: var(--aff-bg); padding: 2rem 1.25rem 4rem; font-family: var(--font-body), system-ui, sans-serif; color: var(--aff-ink); animation: aff-fade-in 240ms ease-out; }
         .aff-page { max-width: 1024px; margin: 0 auto; }
 
         .aff-kicker { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--aff-muted); margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }

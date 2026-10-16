@@ -1,13 +1,11 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
-import { routeLoader$, Link } from '@qwik.dev/router';
-import { createSEOHead } from '~/utils/seo';
-import { getBlogPosts } from '~/providers/shop/blog/blog';
+import { Link } from '@qwik.dev/router';
 import type { BlogPostSummary } from '~/providers/shop/blog/blog';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { useBlogPosts, head } from '~/platform/blog';
+import { BrandBlogMount } from '~/platform/controllers/content';
+import { hasView } from '~/platform/gateway';
 
-export const useBlogPosts = routeLoader$(async () => {
-    return getBlogPosts(20, 0);
-});
+export { useBlogPosts, head };
 
 const STYLES = `
     .sr-blog { min-height: calc(100vh - 120px); background: var(--color-parchment); padding: 4rem 1.5rem 6rem; }
@@ -36,7 +34,7 @@ const STYLES = `
     .sr-blog__empty-text { font-family: var(--font-body); font-size: 15px; color: #6B6560; line-height: 1.7; }
 `;
 
-export default component$(() => {
+const BaseBlogPage = component$(() => {
     useStyles$(STYLES);
     const blogData = useBlogPosts();
     const posts = blogData.value.items;
@@ -86,33 +84,4 @@ export default component$(() => {
     );
 });
 
-export const head = ({ resolveValue }: any) => {
-    const blogData = resolveValue(useBlogPosts);
-    const isEmpty = blogData.totalItems === 0;
-
-    return createSEOHead({
-        title: `Journal — ${theme.storeName}`,
-        description: `Stories and updates from ${theme.storeName}.`,
-        ogUrl: `${siteUrl}/blog/`,
-        canonical: `${siteUrl}/blog/`,
-        noindex: isEmpty,
-        schemas: [
-            {
-                '@context': 'https://schema.org',
-                '@type': 'Blog',
-                name: `${theme.storeName} Journal`,
-                description: `Stories and updates from ${theme.storeName}.`,
-                url: `${siteUrl}/blog/`,
-                publisher: { '@type': 'Organization', name: theme.storeName, url: siteUrl },
-            },
-            {
-                '@context': 'https://schema.org',
-                '@type': 'BreadcrumbList',
-                itemListElement: [
-                    { '@type': 'ListItem', position: 1, name: 'Home', item: `${siteUrl}/` },
-                    { '@type': 'ListItem', position: 2, name: 'Journal', item: `${siteUrl}/blog/` },
-                ],
-            },
-        ],
-    });
-};
+export default hasView('route.blog') ? BrandBlogMount : BaseBlogPage;

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +12,95 @@ if (!new URL(env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Cata
 afterAll(() => pool.end());
 
 describe('native catalog generation', () => {
+  it('publishes opted-in disabled choices only as display metadata, never availability', async () => {
+    const store = randomUUID(), product = randomUUID(), enabled = randomUUID(), disabled = randomUUID();
+    const slug = `manifest-display-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-display-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency, config) VALUES (${store}, ${slug}, 'Fixture', 'USD', '{"catalog":{"showDisabledVariants":true}}')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${product}, ${store}, 'fixture', 'Fixture', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, enabled, is_pre_order) VALUES
+          (${enabled}, ${store}, ${product}, 'ACTIVE', 'Active', 2500, true, false),
+          (${disabled}, ${store}, ${product}, 'DISABLED', 'Disabled preorder', 1500, false, true)`);
+      });
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      const readDetail = async () => JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+      const detail = await readDetail();
+      expect(detail.variants.map((v: { id: string }) => v.id)).toEqual([enabled]);
+      expect(detail.displayOnlyVariants.map((v: { id: string }) => v.id)).toEqual([disabled]);
+      expect(detail.priceRange.min.amount).toBe(2500);
+      expect(detail.displayPriceRange).toMatchObject({ min: { amount: 1500 }, max: { amount: 2500 } });
+      expect(detail.inStock).toBe(false);
+      expect(detail.hasPreOrder).toBe(false);
+      const listing = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8')).products[0];
+      expect(listing.displayPriceRange).toEqual(detail.displayPriceRange);
+      expect(listing.inStock).toBe(false);
+      // An admin enabling a choice moves it out of display-only metadata on regeneration.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product_variant SET enabled = true WHERE id = ${disabled}`); });
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [disabled] });
+      expect((await readDetail()).displayOnlyVariants).toEqual([]);
+      expect((await readDetail()).variants).toHaveLength(2);
+      // Deletion must remove the choice entirely, including display metadata.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product_variant SET enabled = false, deleted_at = now() WHERE id = ${disabled}`); });
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [disabled] });
+      expect((await readDetail()).displayOnlyVariants).toEqual([]);
+      expect((await readDetail()).displayPriceRange.min.amount).toBe(2500);
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes ordered variant images without leaking another variant gallery', async () => {
+    const store = randomUUID(), product = randomUUID();
+    const red = randomUUID(), blue = randomUUID(), plain = randomUUID();
+    const front = randomUUID(), back = randomUUID(), blueImage = randomUUID();
+    const slug = `manifest-images-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-images-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${product}, ${store}, 'fixture', 'Fixture', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES
+          (${red}, ${store}, ${product}, 'RED', 'Red', 1000),
+          (${blue}, ${store}, ${product}, 'BLUE', 'Blue', 1000),
+          (${plain}, ${store}, ${product}, 'PLAIN', 'Plain', 1000)`);
+        await tx.execute(sql`INSERT INTO asset (id, store_id, type, path) VALUES
+          (${front}, ${store}, 'image', 'fixture/red-front.webp'),
+          (${back}, ${store}, 'image', '/assets/fixture/red-back.webp'),
+          (${blueImage}, ${store}, 'image', 'https://images.example.invalid/blue.webp')`);
+        // Insert the back first: gallery order must come from position.
+        await tx.execute(sql`INSERT INTO variant_asset (store_id, variant_id, asset_id, position) VALUES
+          (${store}, ${red}, ${back}, 1), (${store}, ${red}, ${front}, 0),
+          (${store}, ${blue}, ${blueImage}, 0)`);
+      });
+      const verifyImages = async () => {
+        const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
+        expect(detail.hasVariantAssets).toBe(true);
+        expect(detail.variants.find((v: { id: string }) => v.id === 'RED').assets).toEqual([
+          { preview: '/assets/fixture/red-front.webp' }, { preview: '/assets/fixture/red-back.webp' },
+        ]);
+        const native = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+        expect(native.variants.find((v: { id: string }) => v.id === red).images).toEqual([
+          { url: '/assets/fixture/red-front.webp', alt: null, position: 0 },
+          { url: '/assets/fixture/red-back.webp', alt: null, position: 1 },
+        ]);
+        expect(native.variants.find((v: { id: string }) => v.id === blue).images).toEqual([
+          { url: 'https://images.example.invalid/blue.webp', alt: null, position: 0 },
+        ]);
+        expect(native.variants.find((v: { id: string }) => v.id === plain).images).toEqual([]);
+        expect(native.images).toEqual([]);
+      };
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      await verifyImages();
+      // Scoped publishes must preserve variant galleries too.
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [red] });
+      await verifyImages();
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('publishes native prices, options, assets and current enabled products without closing the shared pool', async () => {
     const store = randomUUID(), product = randomUUID(), variant = randomUUID(), group = randomUUID(), option = randomUUID(), asset = randomUUID();
     const slug = `manifest-${store}`;
@@ -51,6 +140,8 @@ describe('native catalog generation', () => {
       expect(detailV2.id).toBe(product);
       expect(detailV2.tags).toEqual(['edc']);
       expect(detailV2.variants).toHaveLength(1);
+      expect(detailV2.displayOnlyVariants).toBeUndefined();
+      expect(detailV2.displayPriceRange).toBeUndefined();
       expect(detailV2.variants[0]).toMatchObject({
         id: variant, sku: 'FIXTURE',
         price: { amount: 3000, currency: 'USD', taxInclusive: false }, // preorder rule active, preOrderPrice wins
@@ -146,6 +237,8 @@ describe('native catalog generation', () => {
       const first = await publishCatalogManifest({ outDir, storeSlug: slug });
       expect(first.products).toBe(2);
       const firstGenB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
+      const firstNativeB = await readFile(join(outDir, 'current/products-v2/prod-b.json'), 'utf8');
+      const firstFileB = await stat(join(outDir, 'current/products-v2/prod-b.json'));
 
       // Only A's stock changes — B's entry must be byte-for-byte reused.
       await withStore(store, async tx => { await tx.execute(sql`UPDATE stock SET on_hand = 0 WHERE variant_id = ${variantA}`); });
@@ -161,23 +254,33 @@ describe('native catalog generation', () => {
       const detailB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
       expect(detailB).toEqual(firstGenB); // reused verbatim — proves it was NOT re-queried/re-serialized
 
-      // v2 doesn't share v1's incremental-reuse optimization (always a full
-      // scan — see catalog.ts's buildEntries doc comment), so a SCOPED v1
-      // publish must still produce a CORRECT, COMPLETE v2 for both products,
-      // stock included, not just the explicitly-scoped one.
+      // Both formats keep unchanged details byte-for-byte; immutable files
+      // share storage where hard links are supported.
       const manifestV2 = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8'));
       expect(manifestV2.products).toHaveLength(2);
       const av2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-a');
       const bv2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-b');
       expect(av2.inStock).toBe(false);
       expect(bv2.inStock).toBe(true);
+      expect(await readFile(join(outDir, 'current/products-v2/prod-b.json'), 'utf8')).toBe(firstNativeB);
+      const reusedFileB = await stat(join(outDir, 'current/products-v2/prod-b.json'));
+      if (reusedFileB.nlink > 1) expect(reusedFileB.ino).toBe(firstFileB.ino);
+
+      // An affected slug rename must remove its former name in both formats.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET slug = 'renamed-a' WHERE id = ${productA}`); });
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
+      for (const folder of ['products', 'products-v2']) {
+        await expect(readFile(join(outDir, 'current', folder, 'prod-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(JSON.parse(await readFile(join(outDir, 'current', folder, 'renamed-a.json'), 'utf8')).slug).toBe('renamed-a');
+      }
 
       // Archiving the affected product's owner must DROP its entry, not
       // leave a stale one behind, even on the scoped path.
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET deleted_at = now() WHERE id = ${productA}`); });
       const afterDelete = await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
       expect(afterDelete.products).toBe(1);
-      await expect(readFile(join(outDir, 'current/products/prod-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(outDir, 'current/products/renamed-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(outDir, 'current/products-v2/renamed-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(outDir, { recursive: true, force: true });
     }

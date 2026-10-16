@@ -131,3 +131,25 @@ test.describe('checkout', () => {
 		).toBeVisible({ timeout: 15_000 });
 	});
 });
+
+test.describe('balance-pay page (/orders/{code})', () => {
+	test('a link with no receipt token is rejected without exposing any order data', async ({ apiProxyPage: page }) => {
+		await page.goto('/orders/E2E-NO-SUCH-ORDER/?pay=balance');
+		await expect(page.getByTestId('balance-state-error')).toBeVisible();
+		await expect(page.getByText(/payment link is not valid/i)).toBeVisible();
+		await expect(page.getByTestId('balance-amount')).toHaveCount(0);
+	});
+
+	test('an unknown order with a receipt token reads as an invalid link, never a pay form', async ({ apiProxyPage: page }) => {
+		await page.goto('/orders/E2E-NO-SUCH-ORDER/?rt=not-a-real-token&pay=balance');
+		await expect(page.getByTestId('balance-state-error')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('balance-pay-button')).toHaveCount(0);
+	});
+});
+
+test.describe('account rewards', () => {
+	test('the rewards page is behind the account sign-in guard', async ({ apiProxyPage: page }) => {
+		await page.goto('/account/rewards/');
+		await page.waitForURL('**/sign-in**');
+	});
+});

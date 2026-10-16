@@ -1,0 +1,9 @@
+# Exact one-time compatibility identifiers: path|identifier (never imports or live API coupling).
+# Historical bare paths remain supported for downstream migration-history overlays.
+src/providers/shop/account/bootstrap.test.ts|__vendure_session
+src/routes/account/layout.tsx|__vendure_session
+src/routes/layout.tsx|__vendure_session
+src/services/CartService.test.ts|vendure_local_cart
+src/services/CartService.ts|vendure_local_cart
+src/services/CountryPreferenceService.ts|vendure_local_cart
+src/services/legacy-cart.test.ts|vendure_local_cart

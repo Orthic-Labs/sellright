@@ -16,19 +16,35 @@
  * execute exactly once. Dashboard-initiated refunds (no reservation) are
  * recorded money-only as before.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { type Tx } from '../db/client.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { type Tx, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
-import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
+import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
 import { recordStripeDisputeAlert } from '../disputes/disputes.js';
 import { STRIPE_REFUND_ATTEMPT_KEY, stripeRefundState } from './stripe.js';
+import { releaseOnFullRefundInSet } from './reservation.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const piId = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
 const subIdOf = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
+
+/** X-48: unlocked plan input for a Stripe refund or dispute event. Returns the order id(s) of the
+ *  stored payment(s) whose provider ref is one of `piIds`. Reads only and never locks; an empty result
+ *  means no stored payment yet, and the caller keeps the existing pay advisory path. */
+export async function orderIdsForStripePayments(
+  storeId: string, piIds: ReadonlyArray<string | null | undefined>,
+): Promise<string[]> {
+  const refs = [...new Set(piIds.filter((p): p is string => typeof p === 'string' && p.length > 0))];
+  if (!refs.length) return [];
+  const rows = await withStore(storeId, (tx) => tx.select({ orderId: s.payment.orderId }).from(s.payment).where(and(
+    eq(s.payment.storeId, storeId), eq(s.payment.method, 'stripe'), inArray(s.payment.providerRef, refs),
+  )));
+  return [...new Set(rows.map((r) => r.orderId))];
+}
 
 export interface StripeEventObj {
   id?: string;
@@ -107,7 +123,7 @@ export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | '
 
 /** Order state implied by total settled refunds vs the order total. null = no
  *  transition (nothing settled yet). Pure — money-critical, so it's unit-tested. */
-export function refundTargetState(refundedTotal: number, grandTotal: number): OrderState | null {
+export function refundTargetState(refundedTotal: number, grandTotal: number): 'Refunded' | 'PartiallyRefunded' | null {
   if (refundedTotal <= 0) return null;
   return refundedTotal >= grandTotal ? 'Refunded' : 'PartiallyRefunded';
 }
@@ -289,14 +305,9 @@ export async function reconcileStripeRefund(
 async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: string): Promise<void> {
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
   if (!ord) return;
-  const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).innerJoin(s.payment, eq(s.payment.id, s.refund.paymentId))
-    // D4: refunds of a duplicate capture are money-only — never order state.
-    .where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled'),
-      sql`coalesce((${s.payment.metadata}->>'duplicate')::boolean, false) = false`));
-  const refunded = agg?.total ?? 0;
-  if (!refunded) return;
-  const target = refundTargetState(refunded, ord.grandTotal);
+  const basis = await orderRefundBasis(tx, storeId, orderId);
+  const refunded = basis.refunded;
+  const target = refundStateFromBasis(basis);
   if (!target) return; // nothing settled yet — no state write, no event
   // FIX (second partial refund suppresses order.refunded): the FSM has no
   // PartiallyRefunded->PartiallyRefunded self-edge (canTransition(X, X) is
@@ -308,9 +319,17 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   // reconcileStripeRefund actually recorded; only gate the state WRITE on
   // canTransition (writing a state the order is already in would be a
   // meaningless no-op update, not an error).
+  const reachesRefunded = target === 'Refunded' && canTransition(ord.state as OrderState, 'Refunded');
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
+  // PAYMENT-TIMING §3.3 R5: a full refund releases consumed holds that asked for it (no-op unless the order is Refunded).
+  if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
+  // Entitlement reversal on the first transition to Refunded (worker effect; identity = order, so replays are no-ops).
+  if (reachesRefunded) await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: orderId, orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'stripe_dashboard' });
 }
 
@@ -322,7 +341,14 @@ export interface DisputeDescriptor { disputeId: string; amount: number; reason: 
  *  audit + order.dispute_opened event + operator email, all idempotent on
  *  (store, provider, disputeId) so provider retries are no-ops. */
 export async function recordStripeDispute(tx: Tx, storeId: string, d: DisputeDescriptor): Promise<void> {
-  await recordStripeDisputeAlert(tx, storeId, d);
+  const res = await recordStripeDisputeAlert(tx, storeId, d);
+  // Fork parity: a chargeback that is OPENED reverses the order's entitlement (not only a lost one). Only the first
+  // observation of the dispute reaches here (res.created); the operation identity makes a replay add nothing.
+  // The order is in moneyOrderIds(charge.dispute.created), so the webhook's lock set already covers it.
+  if (res.created && res.orderId) await recordSettlementOperation(tx, {
+    storeId, kind: 'dispute_opened', operationId: `stripe_dispute:${d.disputeId}`, orderId: res.orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: res.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
+  });
 }
 
 export { STRIPE_REFUND_ATTEMPT_KEY };

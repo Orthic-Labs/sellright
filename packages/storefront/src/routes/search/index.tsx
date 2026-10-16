@@ -1,12 +1,12 @@
 import { $, component$, useStore, useTask$ } from '@qwik.dev/core';
 import { routeLoader$, useLocation, routeAction$, zod$, z } from '@qwik.dev/router';
-import Filters from '~/components/facet-filter-controls/Filters';
-import FiltersButton from '~/components/filters-button/FiltersButton';
-import ProductCard from '~/components/products/ProductCard';
+import { SearchFilters as Filters, FiltersButton, ProductCard, platformAction } from '~/platform/gateway';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListResponse } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { createSEOHead } from '~/utils/seo';
+import { projectFacets } from '~/platform/controllers/project';
+import { productPath } from '~/platform/product-path';
 
 // SellRight's catalog search has no facet/facet-value aggregation (unlike the
 // old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
@@ -21,6 +21,9 @@ export const useSearchLoader = routeLoader$(async ({ query }) => {
 	const term = query.get('q') || '';
 	const search = await executeQuery(term);
 	return { search, query };
+}, {
+	// Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+	search: ['q', 'f'],
 });
 
 // SSR-friendly search action
@@ -111,9 +114,9 @@ export default component$(() => {
 				</h2>
 				{!!state.facetValues.length && (
 					<FiltersButton
-						onToggleMenu$={async () => {
+						onToggleMenu$={platformAction('ui.press', $(async () => {
 							state.showMenu = !state.showMenu;
-						}}
+						}))}
 					/>
 				)}
 			</div>
@@ -122,12 +125,12 @@ export default component$(() => {
 				{!!state.facetValues.length && (
 					<Filters
 						showMenu={state.showMenu}
-						facetsWithValues={state.facetValues}
-						onToggleMenu$={async () => {
+						facetsWithValues={projectFacets(state.facetValues)}
+						onToggleMenu$={platformAction('ui.press', $(async () => {
 							state.showMenu = !state.showMenu;
-						}}
-						onFilterChange$={onFilterChange}
-						onOpenCloseFilter$={onOpenCloseFilter}
+						}))}
+						onFilterChange$={platformAction('filters.value', onFilterChange)}
+						onOpenCloseFilter$={platformAction('filters.value', onOpenCloseFilter)}
 					/>
 				)}
 				<div class="sm:col-span-5 lg:col-span-4">
@@ -135,6 +138,7 @@ export default component$(() => {
 						{(state.search.items || []).map((item) => (
 							<ProductCard
 						key={item.slug}
+						href={productPath(item.slug)}
 						image={item.image}
 						name={item.name}
 						slug={item.slug}

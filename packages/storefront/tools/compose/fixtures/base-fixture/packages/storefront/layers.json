@@ -1,0 +1,222 @@
+{
+	"version": 1,
+	"platformApi": {
+		"alias": "~/platform/",
+		"dir": "src/platform/",
+		"public": {
+			"~/platform/views": "*",
+			"~/platform/head": [
+				"BrandHeadSpec",
+				"StaticSchema"
+			]
+		},
+		"reexports": {
+			"Link": "@qwik.dev/router"
+		}
+	},
+	"layers": {
+		"L1": {
+			"include": [
+				"src/platform/**",
+				"src/entry.express.tsx",
+				"src/routes/layout.tsx",
+				"src/routes/products/**/ProductPageView.tsx",
+				"src/contexts/**",
+				"src/components/header/**",
+				"src/components/cart-totals/**",
+				"src/components/address-form/**",
+				"src/components/billing-address-form/**",
+				"src/components/slots/**"
+			]
+		},
+		"L2": {
+			"include": [
+				"src/components/**"
+			],
+			"exclude": [
+				"src/components/header/**",
+				"src/components/cart-totals/**",
+				"src/components/address-form/**",
+				"src/components/billing-address-form/**",
+				"src/components/slots/**"
+			]
+		},
+		"L3": {
+			"include": [
+				"src/brand/**",
+				"src/brand-slots/**",
+				"public/brand/**"
+			]
+		}
+	},
+	"assetExceptions": [
+		{
+			"path": "public/sezzle-color.svg",
+			"layer": "L3"
+		}
+	],
+	"imports": {
+		"forbidden": [
+			"@sellright/storefront-client",
+			"~/sellright/client"
+		],
+		"codeExtensions": [
+			".ts",
+			".tsx",
+			".js",
+			".jsx",
+			".mjs",
+			".cjs",
+			".mts",
+			".cts"
+		],
+		"assetExtensions": [
+			".css",
+			".scss",
+			".svg",
+			".png",
+			".jpg",
+			".jpeg",
+			".gif",
+			".webp",
+			".avif",
+			".ico",
+			".woff",
+			".woff2",
+			".ttf",
+			".otf",
+			".json",
+			".txt",
+			".md",
+			".mp4",
+			".webm"
+		],
+		"framework": {
+			"@qwik.dev/core": [
+				"component$",
+				"$",
+				"useSignal",
+				"useStore",
+				"useComputed$",
+				"useTask$",
+				"type:QRL",
+				"type:Signal"
+			],
+			"@qwik.dev/router": [
+				"Link",
+				"useLocation",
+				"type:DocumentHead"
+			]
+		},
+		"typeOnlyAllow": [
+			"~/components/slots/registry"
+		],
+		"transitiveL1Allow": [
+			"src/utils/**",
+			"src/types/**",
+			"src/types.ts",
+			"src/constants*.ts"
+		]
+	},
+	"codeShape": {
+		"baseL2Enforcement": "report",
+		"definitionCalls": [
+			"routeLoader$",
+			"routeAction$",
+			"globalAction$",
+			"server$",
+			"routeLoaderQrl",
+			"routeActionQrl",
+			"globalActionQrl",
+			"serverQrl"
+		],
+		"networkGlobals": [
+			"fetch",
+			"XMLHttpRequest",
+			"WebSocket"
+		],
+		"networkMethods": [
+			"sendBeacon"
+		],
+		"globalObjects": [
+			"window",
+			"globalThis",
+			"self",
+			"global"
+		],
+		"orchestrationCalls": [
+			"refreshCartStock",
+			"placeOrder",
+			"loadStripe",
+			"confirmPayment",
+			"getProductStockLevelsOnly",
+			"getProductStockStatus"
+		],
+		"orchestrationPatterns": [
+			"^refresh.*Stock",
+			"^(get|fetch|load|check).*Stock(Level|Levels|Status)"
+		],
+		"gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)",
+		"injectionProps": [
+			"dangerouslySetInnerHTML",
+			"innerHTML",
+			"outerHTML",
+			"srcdoc"
+		],
+		"injectionCalls": [
+			"insertAdjacentHTML",
+			"createContextualFragment",
+			"write",
+			"writeln",
+			"eval",
+			"Function",
+			"importScripts",
+			"parseFromString"
+		],
+		"createElementAllow": [
+			"div",
+			"span",
+			"p",
+			"a",
+			"img",
+			"picture",
+			"source",
+			"ul",
+			"ol",
+			"li",
+			"button",
+			"input",
+			"label",
+			"canvas"
+		],
+		"qrlIntrospection": [
+			"getCaptured",
+			"getSymbol",
+			"getHash",
+			"resolve",
+			"$captureRef$",
+			"$capture$",
+			"$chunk$",
+			"$symbol$"
+		],
+		"workerCalls": [
+			"register",
+			"Worker",
+			"SharedWorker"
+		],
+		"forbiddenJsxTags": [
+			"script",
+			"iframe",
+			"object",
+			"embed",
+			"base",
+			"frame",
+			"meta",
+			"link"
+		],
+		"brandStockFlags": [
+			"^(stock|availability|inventory).*(Loaded|Checked|Fresh|Cached)$",
+			"^(skip|cache).*Stock"
+		]
+	}
+}

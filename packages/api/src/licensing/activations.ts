@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashActivationToken, newActivationToken } from './tokens.js';
+import { authorizeEntitlement, type EntitlementPath, type RequestExtensions } from './entitlement-policy.js';
 import { activationSourceDefaults, devicePolicyFor, poolCap, usesBoundedDevicePools, type ActivationPool } from './device-policy.js';
 
 // cs-7: not exported — only used internally within this module.
@@ -64,6 +65,8 @@ export async function activateLicenseOnDevice(
     deviceClass?: string | null;
     /** Trusted route/proof classification supplied by the server, never raw HTTP input. */
     activationSource?: string;
+    /** Policy-declared typed request extensions (entitlement-policy.ts). */
+    ext?: RequestExtensions;
   },
 ) {
   // ra-001: Re-select the license row FOR UPDATE inside the transaction so that
@@ -87,6 +90,19 @@ export async function activateLicenseOnDevice(
   `);
   const rawLic = (licResult as unknown as { rows: LicRow[] }).rows[0];
   if (!rawLic || rawLic.status !== 'active') return { kind: 'notfound' as const };
+
+  // Entitlement authorization policy (plan 3.6): sandbox / scope / upgrade
+  // rules live in the registered policy, not here. Default policy: allow.
+  const decision = await authorizeEntitlement({
+    path: 'activate', tx, storeId: input.storeId, ext: input.ext ?? {}, now: new Date(),
+    license: { id: rawLic.id, appKey: rawLic.app_key, status: rawLic.status, seats: rawLic.seats,
+      expiresAt: rawLic.expires_at != null ? new Date(rawLic.expires_at) : null, metadata: rawLic.metadata },
+  });
+  if (!decision.allow) {
+    return decision.kind === 'rejected_platform'
+      ? { kind: 'rejected_platform' as const, reason: decision.reason }
+      : { kind: 'notfound' as const };
+  }
 
   // ra-009: Also reject if the license has a hard expiry in the past (second
   // precision — a license expiring within the current second is already out).
@@ -130,7 +146,10 @@ export async function activateLicenseOnDevice(
   // seats <= 0 means UNLIMITED devices (no flat device cap by policy; the license date
   // is the only limit). A positive seats value still enforces the per-license device cap.
   const unlimited = lic.seats <= 0;
-  if (!unlimited && !sameDevice && activeExisting.length >= lic.seats) return { kind: 'full' as const };
+  // Only a LIVE same-device row already holds a seat. Re-admitting a tombstoned device ('removed'/'revoked')
+  // takes a new seat, so it must fit the live flat cap like a brand-new device.
+  const sameDeviceLive = !!sameDevice && existing.some((row) => row.id === sameDevice.id && row.state === 'active');
+  if (!unlimited && !sameDeviceLive && activeExisting.length >= lic.seats) return { kind: 'full' as const };
 
   // Bounded device pools (registered per-app device policy). The route/proof
   // source, not request deviceClass, picks the pool.
@@ -145,7 +164,8 @@ export async function activateLicenseOnDevice(
       ? storedPool(existing.find((row) => row.id === sameDevice.id) ?? { pool: null, deviceClass: null })
       : null;
     const movingPool = sameDevicePool !== pool;
-    if ((!sameDevice || movingPool)
+    // Same rule for the pool: a tombstoned same-device row frees its pool slot, so re-admission counts.
+    if ((!sameDeviceLive || movingPool)
       && activeExisting.filter((row) => row.id !== sameDevice?.id && storedPool(row) === pool).length >= poolCap(input.appKey, pool)) {
       return { kind: 'full' as const };
     }
@@ -192,6 +212,9 @@ export async function findActivationByToken(
     appKey: string;
     activationToken: string;
     deviceId?: string | null;
+    /** Which caller is asking; both are consulted through the same policy. Default 'refresh'. */
+    path?: Extract<EntitlementPath, 'refresh' | 'update_feed'>;
+    ext?: RequestExtensions;
   },
 ) {
   const activationTokenHash = hashActivationToken(input.activationToken);
@@ -199,6 +222,7 @@ export async function findActivationByToken(
     .select({
       activationId: s.licenseActivation.id,
       deviceIdHash: s.licenseActivation.deviceIdHash,
+      pool: s.licenseActivation.pool,
       license: s.license,
     })
     .from(s.licenseActivation)
@@ -215,6 +239,14 @@ export async function findActivationByToken(
     .limit(1);
 
   if (!row || row.license.status !== 'active') return null;
+
+  const decision = await authorizeEntitlement({
+    path: input.path ?? 'refresh', tx, storeId: row.license.storeId, ext: input.ext ?? {}, now: new Date(),
+    pool: row.pool,
+    license: { id: row.license.id, appKey: row.license.appKey, status: row.license.status, seats: row.license.seats,
+      expiresAt: row.license.expiresAt, metadata: row.license.metadata },
+  });
+  if (!decision.allow) return null;
 
   // ra-009: Reject tokens whose license has passed its hard expiry date.
   if (row.license.expiresAt != null

@@ -14,4 +14,11 @@ onlyBuiltDependencies:
   - esbuild
 
 overrides:
-  esbuild: 0.28.1
+  esbuild: 0.28.2
+  # @tiptap/react optionally pulls these with ^3.31.3; keep them on 3.31.3 (same
+  # release as every other @tiptap/* pin; 3.31.4 published 2026-09-30).
+  '@tiptap/extension-bubble-menu': 3.31.4
+  '@tiptap/extension-floating-menu': 3.31.4
+
+minimumReleaseAgeExclude:
+  - lucide-react@1.55.0

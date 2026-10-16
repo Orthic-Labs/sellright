@@ -1,16 +1,19 @@
-import { component$, Signal } from '@qwik.dev/core';
-import { formatPrice } from '~/utils';
+import { component$ } from '@qwik.dev/core';
+import { formatPrice } from '~/utils/price-format';
+import { priceParts } from './price-parts';
 
 interface PriceProps {
   /** Regular unit price, integer cents. Native primary prop. */
   price?: number | null;
-  variantSig?: Signal<unknown>;
   forcedClass?: string;
   salePrice?: number | null;
   preOrderPrice?: number | null;
   isPreOrder?: boolean;
   originalPriceClass?: string;
   currencyCode?: string;
+  /** The highest regular price of the product's variants, cents: shown as `min - max` when above `price` and no sale or
+   *  pre-order price applies (routes.json shop.priceDisplay "range"). */
+  maxPrice?: number | null;
   /** @deprecated legacy alias for `price` — kept only for routes/index.tsx and
    *  components/home/HomeTeeSection.tsx (out of scope for this conversion),
    *  which still pass a legacy `priceWithTax` (plain number or, from the
@@ -22,7 +25,6 @@ interface PriceProps {
 export default component$<PriceProps>(
   ({
     price,
-    variantSig,
     forcedClass,
     salePrice,
     preOrderPrice,
@@ -30,6 +32,7 @@ export default component$<PriceProps>(
     originalPriceClass,
     currencyCode,
     priceWithTax,
+    maxPrice,
   }) => {
     const renderPrice = (valueInCents: number) => {
       if (typeof valueInCents !== 'number' || valueInCents <= 0) return null;
@@ -38,25 +41,11 @@ export default component$<PriceProps>(
 
     const regularCents = price ?? legacyToNumber(priceWithTax);
 
-    const sale = typeof salePrice === 'number' && salePrice > 0 ? salePrice : null;
-    const pre = typeof preOrderPrice === 'number' && preOrderPrice > 0 ? preOrderPrice : null;
-
-    let liveCents: number | null = regularCents;
-    let strikeCents: number | null = null;
-    if (isPreOrder && pre) {
-      liveCents = pre;
-      if (regularCents !== null && regularCents !== pre) strikeCents = regularCents;
-    } else if (!isPreOrder && sale) {
-      liveCents = sale;
-      if (regularCents !== null && regularCents !== sale) strikeCents = regularCents;
-    }
-
-    const liveNode = liveCents && liveCents > 0 ? renderPrice(liveCents) : null;
+    const { liveCents, strikeCents, rangeMaxCents } = priceParts({ regularCents, salePrice, preOrderPrice, isPreOrder, maxPrice });
+    const liveNode = liveCents && liveCents > 0 ? (rangeMaxCents !== null ? `${renderPrice(liveCents)} - ${renderPrice(rangeMaxCents)}` : renderPrice(liveCents)) : null;
 
     return (
       <div class="flex items-center justify-center" style={{ fontVariantNumeric: 'tabular-nums' }}>
-        {variantSig?.value != null && <div class="hidden">{JSON.stringify(variantSig.value)}</div>}
-
         {strikeCents !== null && (
           <div class={`text-sm line-through mr-2 ${originalPriceClass || 'text-white/90'}`}>
             {renderPrice(strikeCents)}

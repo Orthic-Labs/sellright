@@ -55,7 +55,7 @@ export function SkeletonBlock({ className = '' }: { className?: string }) {
 }
 
 export function SkeletonText({ w = 'w-24' }: { w?: string }) {
-  return <span className={`skeleton inline-block h-3.5 ${w} rounded`} />;
+  return <span className={`skeleton inline-block h-3.5 ${w} rounded-sm`} />;
 }
 
 export function PageHeader({ title, subtitle, actions, stackOnMobile = false }: { title: string; subtitle?: ReactNode; actions?: ReactNode; stackOnMobile?: boolean }) {
@@ -410,7 +410,7 @@ export function ResourceTable<T>({
               const key = rowKey(row);
               const isSelected = !!selection?.selectedKeys.has(key);
               return (
-                <tr key={key} className={`${onRowClick ? 'row-link' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+                <tr key={key} className={`${onRowClick ? 'row-link hover:bg-surface-2' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
                   {selection && (
                     <td className="td" onClick={(e) => e.stopPropagation()}>
                       <input

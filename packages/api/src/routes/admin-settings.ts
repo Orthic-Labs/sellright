@@ -1,15 +1,14 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
-import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
 import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
+import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireHuman, guard } from './admin-helpers.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
 // is safe: both bindings are only ever called from inside route handlers,
 // never at module-evaluation time, so ESM's live-binding semantics resolve
@@ -68,8 +67,12 @@ export async function mutateStoreConfig(
   storeId: string,
   mutate: (config: Record<string, unknown>) => Record<string, unknown>,
   audit?: SettingsAudit,
+  hooks?: { before?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void>; after?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void> },
 ): Promise<Record<string, unknown>> {
   const { slug, next } = await withStore(storeId, async (tx) => {
+    // Optional same-transaction hooks: `before` runs ahead of the config read (e.g. a re-authorization under a lock),
+    // `after` alongside the write (e.g. a credential that must commit atomically with the config).
+    if (hooks?.before) await hooks.before(tx);
     const [row] = await tx
       .select({ slug: s.store.slug, config: s.store.config })
       .from(s.store)
@@ -89,73 +92,12 @@ export async function mutateStoreConfig(
         data: audit.detail ? audit.detail(prev, v) : undefined,
       });
     }
+    if (hooks?.after) await hooks.after(tx);
     return { slug: row!.slug, next: v };
   });
   await broadcastStoreCacheInvalidation(slug);
   return next;
 }
-
-// ── admin 2FA (TOTP) ─────────────────────────────────────────────────────────
-adminSettings.openapi(
-  createRoute({
-    method: 'get', path: '/v1/admin/2fa', summary: '2FA status',
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const secret = await getAdminTotpSecret(admin.id);
-    return c.json({ enabled: !!secret }, 200);
-  }),
-);
-
-adminSettings.openapi(
-  createRoute({
-    method: 'post', path: '/v1/admin/2fa/setup', summary: 'Start 2FA setup (returns a secret to confirm)',
-    responses: { 200: { description: 'OK', content: J(z.object({ secret: z.string(), otpauthUri: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const secret = newTotpSecret(); // not persisted until /enable confirms a code
-    return c.json({ secret, otpauthUri: otpauthUri(secret, admin.email) }, 200);
-  }),
-);
-
-adminSettings.openapi(
-  createRoute({
-    method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA',
-    request: { body: { content: J(z.object({ secret: z.string(), code: z.string() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const { secret, code } = c.req.valid('json');
-    // ra-sec: refuse to overwrite an existing factor. /disable requires the current
-    // code, so replacing 2FA always proves possession of the old device — otherwise
-    // a hijacked session could silently swap in an attacker-controlled secret.
-    const existing = await getAdminTotpSecret(admin.id);
-    if (existing) throw new HttpError(409, '2FA already enabled — disable it first');
-    if (!verifyTotp(secret, code)) throw new HttpError(409, 'code did not match — check your authenticator app');
-    await setAdminTotpSecret(admin.id, secret);
-    return c.json({ enabled: true }, 200);
-  }),
-);
-
-adminSettings.openapi(
-  createRoute({
-    method: 'post', path: '/v1/admin/2fa/disable', summary: 'Disable 2FA',
-    request: { body: { content: J(z.object({ code: z.string() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const { code } = c.req.valid('json');
-    const existing = await getAdminTotpSecret(admin.id);
-    if (!existing) return c.json({ enabled: false }, 200);
-    if (!verifyTotp(existing, code)) throw new HttpError(409, 'invalid code');
-    await clearAdminTotpSecret(admin.id);
-    return c.json({ enabled: false }, 200);
-  }),
-);
 
 // ── store details + tax ──────────────────────────────────────────────────────
 adminSettings.openapi(
@@ -179,6 +121,7 @@ adminSettings.openapi(
       stripeMode: stripeModeFromConfig(config),
       notifications: (config.notifications as object) ?? {},
       googleClientId: (config.googleClientId as string) ?? null,
+      storefrontUrl: typeof config.storefrontUrl === 'string' ? config.storefrontUrl : null,
     }, 200);
   }),
 );
@@ -195,13 +138,26 @@ adminSettings.openapi(
       // this body below. Previously nothing on the admin surface could ever
       // set this after bootstrap.js's one-time BOOTSTRAP_STORE_HOSTNAMES.
       hostnames: z.array(z.string().trim().min(1)).optional(),
+      // Public storefront URL (config.storefrontUrl): Sezzle/Stripe return
+      // URLs and email links are built from it. https only (http allowed for
+      // loopback); null or "" clears it.
+      storefrontUrl: z.string().trim().max(2048).nullable().optional(),
     })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const { hostnames, ...b } = c.req.valid('json');
+    const { hostnames, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    let storefrontUrl: string | null | undefined;
+    if (storefrontUrlRaw !== undefined) {
+      if (storefrontUrlRaw === null || storefrontUrlRaw === '') storefrontUrl = null;
+      else {
+        const normalised = normalizeStorefrontUrl(storefrontUrlRaw);
+        if (!normalised) throw new HttpError(400, 'storefrontUrl must be an https URL without credentials, query or fragment');
+        storefrontUrl = normalised;
+      }
+    }
     await withStore(st.storeId, async (tx) => {
       // SR-16: lock the row and snapshot the touched columns so the audit row
       // carries a truthful before/after — name/currency/tax flags only, never
@@ -235,6 +191,16 @@ adminSettings.openapi(
         actor: admin.email,
         action: 'settings_update_hostnames',
         detail: () => ({ hostnames }),
+      });
+    }
+    if (storefrontUrl !== undefined) {
+      await mutateStoreConfig(st.storeId, (config) => {
+        const { storefrontUrl: _drop, ...rest } = config;
+        return storefrontUrl === null ? rest : { ...rest, storefrontUrl };
+      }, {
+        actor: admin.email,
+        action: 'settings_update_storefront_url',
+        detail: (prev, next) => ({ before: prev.storefrontUrl ?? null, after: next.storefrontUrl ?? null }),
       });
     }
     await broadcastStoreCacheInvalidation(st.slug);
@@ -345,6 +311,18 @@ adminSettings.openapi(
 );
 
 // ── shipping methods ─────────────────────────────────────────────────────────
+// Validates the calculator blob the admin editor sends (shipping/calculator.ts
+// is the interpreter). Unknown keys are kept (passthrough) so a future calculator
+// extension is never silently dropped by an older admin UI; known keys are typed.
+const cents = z.number().int().min(0).max(100_000_000);
+export const ShippingCalculatorSchema = z.object({
+  flat: cents.optional(), min: cents.optional(), max: cents.optional(),
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/, 'countries must be 2-letter ISO codes')).max(300).optional(),
+  exclude: z.boolean().optional(), requireCountry: z.boolean().optional(),
+  subtotalBasis: z.enum(['pre_discount', 'discounted_with_tax']).optional(),
+  taxRate: z.number().min(0).max(100_000).optional(), taxInclusive: z.boolean().optional(),
+}).passthrough().refine((c) => c.min == null || c.max == null || c.min <= c.max, { message: 'minimum subtotal cannot exceed maximum' });
+
 adminSettings.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/shipping-methods', summary: 'List shipping methods',
@@ -361,7 +339,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/shipping-methods', summary: 'Create shipping method',
-    request: { body: { content: J(z.object({ code: z.string().min(1), name: z.string().min(1), calculator: z.any().default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
+    request: { body: { content: J(z.object({ code: z.string().min(1), name: z.string().min(1), calculator: ShippingCalculatorSchema.default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -380,8 +358,8 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/shipping-methods/{id}', summary: 'Update shipping method',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), calculator: z.any().optional(), enabled: z.boolean().optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().trim().min(1).optional(), code: z.string().trim().min(1).max(64).optional(), calculator: ShippingCalculatorSchema.optional(), enabled: z.boolean().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Code in use', ...errBody }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -391,8 +369,12 @@ adminSettings.openapi(
     const ok = await withStore(st.storeId, async (tx) => {
       const [m] = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.id, id)).limit(1);
       if (!m) return false;
+      if (b.code && b.code !== m.code) {
+        const [dup] = await tx.select({ id: s.shippingMethod.id }).from(s.shippingMethod).where(and(eq(s.shippingMethod.code, b.code), sql`${s.shippingMethod.id} <> ${id}`)).limit(1);
+        if (dup) throw new HttpError(409, `shipping method code '${b.code}' is already in use`);
+      }
       await tx.update(s.shippingMethod).set(b).where(eq(s.shippingMethod.id, id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'shipping_method', entityId: id, action: 'update', data: { before: { name: m.name, calculator: m.calculator, enabled: m.enabled }, after: b } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'shipping_method', entityId: id, action: 'update', data: { before: { code: m.code, name: m.name, calculator: m.calculator, enabled: m.enabled }, after: b } });
       return true;
     });
     if (!ok) throw new HttpError(404, 'shipping method not found');

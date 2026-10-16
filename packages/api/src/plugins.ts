@@ -14,6 +14,10 @@
  * so an unconfigured deployment's `createApp()` output is unchanged.
  */
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { PluginAgentPolicy } from './auth/agent-policy.js';
+import type { ReleaseRegistrationPolicy } from './releases/registration-policy.js';
+import type { ErrorResponsePolicy } from './pre-route-policy.js';
+import { registerCacheableExceptions, _clearRegisteredCacheableExceptionsForTest, type CacheableException } from './cache-policy.js';
 
 export interface ApiPlugin {
   /** Unique plugin name (diagnostics only; also guards against double-registration). */
@@ -27,6 +31,28 @@ export interface ApiPlugin {
    * of its own.
    */
   init?: (app: OpenAPIHono) => void;
+  /**
+   * Release registration policy (docs/policies/RELEASE-REGISTRATION.md): claims
+   * apps/channels on the engine-hosted `POST /v1/admin/apps/releases`, supplies
+   * a tenant-bound service credential and a validation hook. `createApp()`
+   * throws at startup if two plugins claim the same app or route.
+   */
+  releaseRegistration?: ReleaseRegistrationPolicy;
+  /** Agent (API-token) policy for this plugin's admin routes (auth/agent-policy.ts): extend the deny map and/or
+   *  allowlist reviewed mutations. Unlisted plugin admin mutations are denied to agents by default. */
+  agentPolicy?: PluginAgentPolicy;
+  /**
+   * Optional pre-route response policy (see pre-route-policy.ts): a declared
+   * route set plus a transformer for JSON error bodies on those routes.
+   * Status and headers are preserved; `/v1/admin` is never transformed.
+   */
+  errorPolicy?: ErrorResponsePolicy;
+  /**
+   * Stock-free, visitor-independent routes of this plugin that may keep their own cacheable `Cache-Control` (cache-policy.ts).
+   * Each entry needs a `source` and `reason`; hard-denied (catalog, cart, checkout, stock, feeds) paths and duplicates throw.
+   * Applied by `registerApiPlugin`, all-or-nothing together with the plugin itself.
+   */
+  cacheableExceptions?: readonly CacheableException[];
 }
 
 const registered: ApiPlugin[] = [];
@@ -36,6 +62,8 @@ export function registerApiPlugin(plugin: ApiPlugin): void {
   if (registered.some((p) => p.name === plugin.name)) {
     throw new Error(`API plugin "${plugin.name}" is already registered`);
   }
+  // Validates before anything is stored, so a rejected exception leaves neither the plugin nor any entry registered.
+  if (plugin.cacheableExceptions?.length) registerCacheableExceptions(plugin.cacheableExceptions);
   registered.push(plugin);
 }
 
@@ -47,4 +75,5 @@ export function listApiPlugins(): readonly ApiPlugin[] {
 /** Test-only: clear all registered plugins between test runs. */
 export function _clearApiPluginsForTest(): void {
   registered.length = 0;
+  _clearRegisteredCacheableExceptionsForTest();
 }

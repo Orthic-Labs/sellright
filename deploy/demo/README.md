@@ -19,7 +19,7 @@ The admin can edit product details/prices/availability, create/archive products
 and variants, adjust stock, manage discounts, fulfill/cancel/refund orders and
 inspect the synthetic customers and reports. New variant SKUs must start with
 `DEMO-` and use uppercase letters/hyphens. Media uploads, option editing, staff,
-settings, gateway configuration, exports and external integrations are disabled.
+settings, gateway configuration and external integrations are disabled; order export is allowed (see the owner-features list below).
 This is a product evaluation environment, not gateway acceptance evidence.
 
 ### Isolation and Limits
@@ -36,6 +36,25 @@ This is a product evaluation environment, not gateway acceptance evidence.
   account and tenant rows, transactionally in foreign-key dependency order.
   Cleanup runs every minute and removes expired visitors. The baseline `demo`
   tenant cannot be reset. Cleanup failure fails readiness closed.
+- New visitor tenants start with the points program on at the product defaults
+  (1 point per $1, 10 points = $1 off, never expire) and reviews switched on
+  (`demoRewardsConfig` in `visitors.mjs`), so the PDP shows "Earn N points" and
+  a Reviews section. No review rows are ever seeded: products read "No
+  reviews yet" until a real one is approved. The public reviews read (GET
+  `/v1/shop/catalog/products/{slug}/reviews`) is allowed; submitting is not.
+  Tenants created before this change keep their old settings until they expire.
+- Owner features usable in the visitor admin (allowlist in `interactive-policy.mjs`,
+  each body validated): points settings (+ summary / customer balance reads),
+  review moderation (approve / reject / reply / settings; the queue is empty
+  because no review rows are seeded), order edit preview + commit and order
+  address edit (commit settlement limited to `leave_due`, `leave_credit` or a
+  manual `record_payment`; `refund_now` and `send_pay_link` are rejected and the
+  server forces `notifyCustomer:false`), order export CSV/XLSX, waitlist report
+  (+CSV), SEO config/sitemap preview (read-only), blog create/update/delete
+  (HTML sanitised by the API, no featured image, at most 20 posts per visitor).
+  Still denied: SEO config save / sitemap refresh / IndexNow (CDN purge, search
+  engine calls), loyalty adjust/reverse, review delete, tracking import and
+  uploads, affiliates, emails, payments/webhooks/staff/SheerID, system/step-up.
 - All customer identity/address data is server-generated synthetic data. The
   checkout never accepts card details or user contact information.
 - Stripe/NMI/Sezzle credentials and gateway accounts are rejected; no scheduler
@@ -119,11 +138,11 @@ The Unix socket is inside the private mode-0700 directory; there is no TCP datab
 
 ```sh
 pm2 start deploy/demo/ecosystem.config.cjs --only sellright-demo
-curl --fail http://127.0.0.1:4310/v1/readyz
+curl --fail http://172.22.0.1:4310/v1/readyz
 pm2 save
 ```
 
-Browse `http://127.0.0.1:4310/shop`; `/enter` creates a short-lived read-only admin session. For remote preview, use an SSH tunnel. The readiness response reports synthetic-data checks, read-only access, cart count and session count.
+The ecosystem binds `sellright-demo` to `DEMO_BIND_HOST=172.22.0.1` (the Docker bridge gateway the production nginx reaches); on a host without that bridge, set `DEMO_BIND_HOST` to `127.0.0.1` in the ecosystem file (its app `env` takes precedence over the shell) and use 127.0.0.1 below. Browse `http://127.0.0.1:4310/shop` (loopback bind); `/enter` creates a short-lived read-only admin session. For remote preview, use an SSH tunnel. The readiness response reports synthetic-data checks, read-only access, cart count and session count.
 
 ## Public Edge
 

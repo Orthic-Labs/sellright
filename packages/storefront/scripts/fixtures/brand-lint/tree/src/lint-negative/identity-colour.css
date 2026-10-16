@@ -1,0 +1,3 @@
+/* expect: identity-colour */
+.card { color: #f7f2ea; border-color: #F5C518cc; }
+:root { --color-accent-rgb: 184, 115, 51; }

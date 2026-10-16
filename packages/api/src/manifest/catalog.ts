@@ -20,7 +20,8 @@ import { withStore, type Tx } from '../db/client.js';
 import { resolveStore, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
-import { publishGeneration, readCurrentGeneration } from './publish.js';
+import { publishGeneration, readCurrentCatalogSnapshot } from './publish.js';
+import { aggregatesForProducts } from '../reviews/reviews.js';
 
 const assetUrl = (path: string | null | undefined) => !path ? null : (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }, rule: VariantPriceRule) =>
@@ -94,6 +95,8 @@ export interface NativeProductManifestEntryV2 {
   name: string;
   tags: string[];
   priceRange: { min: NativeMoney; max: NativeMoney };
+  /** Opt-in display range including disabled choices; never a purchase quote. */
+  displayPriceRange?: { min: NativeMoney; max: NativeMoney };
   hasMultiplePrices: boolean;
   /** Availability only — see the file-level note above. Never a quantity. */
   inStock: boolean;
@@ -104,12 +107,16 @@ export interface NativeProductManifestEntryV2 {
   /** Any enabled variant is a pre-order — for a PRE-ORDER badge on grids. */
   hasPreOrder: boolean;
   images: NativeImage[];
+  /** Approved-review aggregate (REWARDS-1) — present only when the product has reviews. Feeds schema.org AggregateRating. */
+  rating?: { average: number; count: number };
 }
 
 export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {
   lastUpdated: string;
   description: string | null;
   variants: NativeVariantV2[];
+  /** Opt-in disabled choices for crossed-out display only. Never purchasable. */
+  displayOnlyVariants?: NativeVariantV2[];
 }
 
 function nativeMoney(amount: number, store: Pick<StoreCtx, 'currency' | 'taxInclusive'>): NativeMoney {
@@ -142,15 +149,21 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
   if (!products.length) return { manifestProducts: [], details: [], manifestProductsV2: [], detailsV2: [] };
 
   const productIds = products.map((p) => p.id);
-  const assetById = new Map((await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.storeId, store.id))).map((a) => [a.id, a.path]));
-  const variants = await tx.select().from(s.productVariant)
-    .where(and(inArray(s.productVariant.productId, productIds), isNull(s.productVariant.deletedAt), eq(s.productVariant.enabled, true)))
+  const ratingByProduct = await aggregatesForProducts(tx, store.id, productIds);
+  const featuredIds = products.flatMap(p => p.featuredAssetId ? [p.featuredAssetId] : []);
+  const assetById = new Map((featuredIds.length ? await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(and(eq(s.asset.storeId, store.id), inArray(s.asset.id, featuredIds))) : []).map((a) => [a.id, a.path]));
+  const showDisabledVariants = (store.config as { catalog?: { showDisabledVariants?: boolean } } | null)?.catalog?.showDisabledVariants === true;
+  const catalogVariants = await tx.select().from(s.productVariant)
+    .where(and(inArray(s.productVariant.productId, productIds), isNull(s.productVariant.deletedAt), showDisabledVariants ? undefined : eq(s.productVariant.enabled, true)))
     .orderBy(asc(s.productVariant.sku));
+  const variants = catalogVariants.filter((v) => v.enabled);
   const variantsByProduct = group(variants, (v) => v.productId);
-  const variantIds = variants.map((v) => v.id);
+  const displayByProduct = group(catalogVariants.filter((v) => !v.enabled), (v) => v.productId);
+  const variantIds = catalogVariants.map((v) => v.id);
+  const enabledVariantIds = variants.map((v) => v.id);
   const stockByVariant = new Map(
-    variantIds.length
-      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, variantIds)))).map((st) => [st.variantId, st.onHand - st.allocated])
+    enabledVariantIds.length
+      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, enabledVariantIds)))).map((st) => [st.variantId, st.onHand - st.allocated])
       : [],
   );
   const vo = variantIds.length
@@ -173,6 +186,13 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     .where(and(eq(s.productAsset.storeId, store.id), inArray(s.productAsset.productId, productIds)))
     .orderBy(asc(s.productAsset.position));
   const assetsByProduct = group(pa, (x) => x.productId);
+  const va = variantIds.length
+    ? await tx.select({ variantId: s.variantAsset.variantId, path: s.asset.path, position: s.variantAsset.position })
+      .from(s.variantAsset).innerJoin(s.asset, eq(s.asset.id, s.variantAsset.assetId))
+      .where(and(eq(s.variantAsset.storeId, store.id), inArray(s.variantAsset.variantId, variantIds)))
+      .orderBy(asc(s.variantAsset.position), asc(s.variantAsset.assetId))
+    : [];
+  const assetsByVariant = group(va, (x) => x.variantId);
 
   const manifestProducts = [];
   const details = [];
@@ -186,22 +206,27 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     const inStock = vs.some((v) => v.fulfillmentType !== 'physical' || v.isPreOrder || (stockByVariant.get(v.id) ?? 0) > 0);
     const featured = assetUrl(p.featuredAssetId ? assetById.get(p.featuredAssetId) : null);
     const v0 = [...vs].sort((a, b) => selectPrice(a, priceRule) - selectPrice(b, priceRule))[0];
+    const agg = ratingByProduct.get(p.id);
+    const ratingField = agg && agg.count > 0 ? { rating: { average: agg.average, count: agg.count } } : {};
     const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, isPreOrder: v0?.isPreOrder ?? false };
     manifestProducts.push({
       id: p.slug, name: p.name, slug: p.slug,
       featuredImage: featured ? { url: featured } : null,
       priceRange: { min, max }, inStock, tags: p.tags ?? [], hasMultiplePrices: min !== max,
       salePrice: cf.salePrice, preOrderPrice: cf.preOrderPrice, shipDate: cf.shipDate, isPreOrder: cf.isPreOrder,
+      ...ratingField,
     });
     details.push({
-      lastUpdated: now, id: p.slug, name: p.name, slug: p.slug, description: p.description,
+      lastUpdated: now, id: p.slug, productId: p.id, name: p.name, slug: p.slug, description: p.description,
       featuredImage: featured ? { url: featured } : null,
       assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max, hasVariantAssets: false,
+      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max,
+      hasVariantAssets: vs.some((v) => (assetsByVariant.get(v.id)?.length ?? 0) > 0),
+      ...ratingField,
       variants: vs.map((v) => ({
         id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
-        assets: [],
+        assets: (assetsByVariant.get(v.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
         salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder,
       })),
     });
@@ -211,7 +236,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
       .filter((x): x is NativeImage => x !== null);
     const manifestImages: NativeImage[] = featured ? [{ url: featured, alt: null, position: 0 }] : [];
-    const variantsV2: NativeVariantV2[] = vs.map((v) => {
+    const toNativeVariant = (v: typeof catalogVariants[number]): NativeVariantV2 => {
       const effective = selectPrice(v, priceRule);
       return {
         id: v.id,
@@ -224,23 +249,37 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         isPreOrder: v.isPreOrder,
         shipDate: v.shipDate ? v.shipDate.toISOString() : null,
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
-        images: [],
+        images: (assetsByVariant.get(v.id) ?? [])
+          .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
+          .filter((image): image is NativeImage => image !== null),
       };
-    });
+    };
+    const variantsV2 = vs.map(toNativeVariant);
+    const displayOnlyVariants = (displayByProduct.get(p.id) ?? []).map(toNativeVariant);
+    const displayPrices = [...vs, ...(displayByProduct.get(p.id) ?? [])].map((v) => selectPrice(v, priceRule));
+    const displayMetadata = showDisabledVariants && displayPrices.length ? { displayPriceRange: {
+      min: nativeMoney(Math.min(...displayPrices), store),
+      max: nativeMoney(Math.max(...displayPrices), store),
+    } } : {};
     manifestProductsV2.push({
+      ...displayMetadata,
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: manifestImages,
       hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
       hasPreOrder: vs.some((v) => v.isPreOrder),
+      ...ratingField,
     });
     detailsV2.push({
+      ...displayMetadata,
+      ...(showDisabledVariants ? { displayOnlyVariants } : {}),
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: productImages,
       hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
       hasPreOrder: vs.some((v) => v.isPreOrder),
       lastUpdated: now, description: p.description, variants: variantsV2,
+      ...ratingField,
     });
   }
   return { manifestProducts, details, manifestProductsV2, detailsV2 };
@@ -272,6 +311,7 @@ interface PublishPayload {
   details: ProductDetailEntry[];
   manifestV2: { lastUpdated: string; totalItems: number; defaultSort: string; products: NativeProductManifestEntryV2[] };
   detailsV2: NativeProductDetailV2[];
+  reuse?: { generation: string; slugs: string[] };
 }
 
 const v2Envelope = (now: string, manifestProductsV2: NativeProductManifestEntryV2[]) =>
@@ -282,41 +322,46 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
   const store = await resolveStore(args.storeSlug);
   const priceRule = variantPriceRuleFromConfig(store.config);
 
-  const scoped: PublishPayload | null = args.variantIds?.length
+  const current = args.variantIds?.length ? await readCurrentCatalogSnapshot(args.outDir, args.storeSlug) : null;
+  const scoped: PublishPayload | null = current && args.variantIds?.length
     ? await withStore(store.id, async (tx): Promise<PublishPayload | null> => {
-        const current = await readCurrentGeneration(args.outDir, args.storeSlug);
-        if (!current) return null; // no reusable snapshot — caller falls back to full scan
         const affectedProductIds = await productIdsForVariants(tx, store.id, args.variantIds!);
         if (!affectedProductIds.length) return null; // variant(s) resolved to nothing real — full scan is the safe default
         // Sequential, not Promise.all: these share one transaction/connection.
-        const { manifestProducts: freshEntries, details: freshDetails } = await buildEntries(tx, store, priceRule, affectedProductIds);
+        const { manifestProducts: freshEntries, details: freshDetails, manifestProductsV2: freshV2, detailsV2: freshDetailsV2 } = await buildEntries(tx, store, priceRule, affectedProductIds);
         const possiblyStaleSlugs = await slugsForProductIds(tx, store.id, affectedProductIds);
         // Merge: start from the reused (unaffected) entries, drop every slug
         // that MIGHT need updating (possiblyStaleSlugs — the product's slug
         // as it exists right now for each affected id), then add back
         // whatever buildEntries freshly computed for the still-active ones.
         // A product that's no longer active/deleted correctly stays dropped.
-        const productMap = new Map<string, ManifestProductEntry>(current.manifest.products.map((p) => [p.slug, p as unknown as ManifestProductEntry]));
-        const detailMap = new Map<string, ProductDetailEntry>(current.details.map((d) => [d.slug, d as unknown as ProductDetailEntry]));
-        for (const staleSlug of possiblyStaleSlugs) { productMap.delete(staleSlug); detailMap.delete(staleSlug); }
-        for (const entry of freshEntries) productMap.set(entry.slug, entry as ManifestProductEntry);
-        for (const entry of freshDetails) detailMap.set(entry.slug, entry as ProductDetailEntry);
-        const manifestProducts = [...productMap.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string));
-        const details = manifestProducts.map((p) => detailMap.get(p.slug)!).filter(Boolean);
-        // v2 doesn't (yet) share v1's incremental-reuse optimization above —
-        // it's new and not yet load-bearing, and correctness-via-full-scan
-        // beats a second, separately-maintained merge algorithm for a
-        // not-yet-relied-upon format. Reuses this same open transaction, so
-        // it costs one more (uncached) query set, not another connection.
-        const { manifestProductsV2, detailsV2 } = await buildEntries(tx, store, priceRule);
+        const productMap = new Map<string, ManifestProductEntry>(current.v1.manifest.products.map((p) => [p.slug, p as unknown as ManifestProductEntry]));
+        const detailMap = new Map<string, ProductDetailEntry>(current.v1.details.map((d) => [d.slug, d as unknown as ProductDetailEntry]));
+        // v2 stable product ids also identify the previous slug after a rename.
+        const affectedIds = new Set(affectedProductIds);
+        const staleSlugs = new Set([...possiblyStaleSlugs, ...current.v2.manifest.products.filter(p => affectedIds.has(p.id as string)).map(p => p.slug)]);
+        for (const oldSlug of staleSlugs) { productMap.delete(oldSlug); detailMap.delete(oldSlug); }
+        for (const entry of freshEntries) productMap.set(entry.slug, entry);
+        for (const entry of freshDetails) detailMap.set(entry.slug, entry);
+        const nativeProducts = new Map(current.v2.manifest.products.map(p => [p.slug, p as unknown as NativeProductManifestEntryV2]));
+        const nativeDetails = new Map(current.v2.details.map(p => [p.slug, p as unknown as NativeProductDetailV2]));
+        for (const oldSlug of staleSlugs) { nativeProducts.delete(oldSlug); nativeDetails.delete(oldSlug); }
+        for (const entry of freshV2) nativeProducts.set(entry.slug, entry);
+        for (const entry of freshDetailsV2) nativeDetails.set(entry.slug, entry);
+        const manifestProductsV2 = [...nativeProducts.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const detailsV2 = manifestProductsV2.map(p => nativeDetails.get(p.slug)!);
+        const reusedSlugs = current.v1.manifest.products.filter(p => !staleSlugs.has(p.slug)).map(p => p.slug);
+        const manifestProducts = [...productMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const details = manifestProducts.map(p => detailMap.get(p.slug)!);
         return {
+          reuse: { generation: current.generation, slugs: reusedSlugs },
           manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
           manifestV2: v2Envelope(now, manifestProductsV2), detailsV2,
         };
       })
     : null;
 
-  const { manifest, details, manifestV2, detailsV2 } = scoped ?? await withStore(store.id, async (tx): Promise<PublishPayload> => {
+  const { manifest, details, manifestV2, detailsV2, reuse } = scoped ?? await withStore(store.id, async (tx): Promise<PublishPayload> => {
     const { manifestProducts, details, manifestProductsV2, detailsV2 } = await buildEntries(tx, store, priceRule);
     return {
       manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
@@ -324,5 +369,5 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
     };
   });
 
-  return publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, manifest, details, manifestV2, detailsV2 });
+  return publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, manifest, details, manifestV2, detailsV2, reuse });
 }

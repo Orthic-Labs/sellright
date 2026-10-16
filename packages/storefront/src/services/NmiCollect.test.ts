@@ -42,6 +42,70 @@ describe('loadCollectJs', () => {
 	});
 });
 
+describe('loadCollectJs failure and retry', () => {
+	it('a failed load is not cached: the retry requests the script again and can succeed', async () => {
+		const scripts: any[] = [];
+		const removed: any[] = [];
+		const doc = {
+			createElement: () => {
+				const el: any = { attrs: {}, setAttribute(k: string, v: string) { this.attrs[k] = v; }, remove() { removed.push(this); } };
+				scripts.push(el);
+				return el;
+			},
+			head: { appendChild: vi.fn() },
+		} as unknown as Document;
+		vi.stubGlobal('window', {});
+		const first = loadCollectJs('retry_key', 'test', doc);
+		scripts[0].onerror();
+		await expect(first).rejects.toThrow('failed to load');
+		expect(removed).toContain(scripts[0]);
+
+		vi.stubGlobal('window', { CollectJS: { configure: () => {}, startPaymentRequest: () => {} } });
+		const second = loadCollectJs('retry_key', 'test', doc);
+		expect(scripts).toHaveLength(2);
+		scripts[1].onload();
+		await expect(second).resolves.toBeDefined();
+		// a successful load stays cached
+		expect(await loadCollectJs('retry_key', 'test', doc)).toBeDefined();
+		expect(scripts).toHaveLength(2);
+		vi.unstubAllGlobals();
+	});
+
+	it('a script that loads without CollectJS also clears the cache', async () => {
+		const scripts: any[] = [];
+		const doc = {
+			createElement: () => { const el: any = { setAttribute() {}, remove() {} }; scripts.push(el); return el; },
+			head: { appendChild: vi.fn() },
+		} as unknown as Document;
+		vi.stubGlobal('window', {});
+		const first = loadCollectJs('init_key', 'test', doc);
+		scripts[0].onload();
+		await expect(first).rejects.toThrow('failed to initialise');
+		void loadCollectJs('init_key', 'test', doc).catch(() => {});
+		expect(scripts).toHaveLength(2);
+		vi.unstubAllGlobals();
+	});
+});
+
+describe('prepareCardTokenization hosted-field initialisation', () => {
+	it('a timeout with no tokenization pending reports an initialisation failure', () => {
+		let options: any;
+		const collect = { configure: (opts: any) => { options = opts; }, startPaymentRequest: vi.fn() };
+		const onInitError = vi.fn();
+		prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError);
+		options.timeoutCallback();
+		expect(onInitError).toHaveBeenCalledWith('Card fields timed out loading.');
+	});
+
+	it('a timeout during a tokenization is a card error, not an initialisation failure', async () => {
+		const onInitError = vi.fn();
+		let options: any;
+		const collect = { configure: (opts: any) => { options = opts; }, startPaymentRequest: () => options.timeoutCallback() };
+		await expect(prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError)()).rejects.toThrow('timed out');
+		expect(onInitError).not.toHaveBeenCalled();
+	});
+});
+
 describe('prepareCardTokenization', () => {
 	const collectWith = (impl: (opts: any) => void): NmiCollectJs => {
     let options: any;

@@ -27,4 +27,10 @@ describe('admin base path', () => {
     const m = await load('/admin', '/administrator');
     expect(m.currentAdminPath()).toBe('/administrator');
   });
+
+  it('treats the login and accept-invite screens as public (no 401 bounce to /login)', async () => {
+    expect((await load(undefined, '/login')).isPublicAdminPath()).toBe(true);
+    expect((await load('/admin', '/admin/accept-invite')).isPublicAdminPath()).toBe(true);
+    expect((await load(undefined, '/orders')).isPublicAdminPath()).toBe(false);
+  });
 });

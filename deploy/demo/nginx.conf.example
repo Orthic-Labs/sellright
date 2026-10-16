@@ -26,6 +26,10 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host demo.sellright.cc;
         proxy_set_header X-Forwarded-Proto https;
+        # Set (overwrite, never append) so a client-sent value cannot reach the storefront. The storefront reads
+        # X-Forwarded-Host/-Proto only when it runs with SELLRIGHT_TRUST_FORWARDED_HOST=1, which is safe only behind
+        # a proxy that sets both like this one; without it the Host above is used.
+        proxy_set_header X-Forwarded-Host $host;
         proxy_connect_timeout 5s;
         proxy_read_timeout 20s;
         proxy_send_timeout 20s;

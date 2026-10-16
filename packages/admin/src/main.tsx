@@ -1,4 +1,5 @@
 import { StrictMode, useEffect, useState } from 'react';
+import { TwoFactorEnroll } from './components/TwoFactorEnroll';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import Layout from './components/Layout';
 import { AppErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
+import AcceptInvite from './pages/AcceptInvite';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -35,6 +37,7 @@ import Customers from './pages/Customers';
 import CustomerDetail from './pages/CustomerDetail';
 import DraftOrder from './pages/DraftOrder';
 import ImportTracking from './pages/ImportTracking';
+import TrackingGrid from './pages/TrackingGrid';
 import AbandonedCarts from './pages/AbandonedCarts';
 import Affiliates from './pages/Affiliates';
 import AffiliateDetail from './pages/AffiliateDetail';
@@ -42,6 +45,8 @@ import Discounts from './pages/Discounts';
 import Marketing from './pages/Marketing';
 import Blog from './pages/Blog';
 import Reports from './pages/Reports';
+import Waitlist from './pages/Waitlist';
+import Seo from './pages/Seo';
 import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
 import PaymentsSettings from './pages/PaymentsSettings';
@@ -49,6 +54,7 @@ import EmailSettings from './pages/EmailSettings';
 import Returns from './pages/Returns';
 import GiftCards from './pages/GiftCards';
 import Loyalty from './pages/Loyalty';
+import Reviews from './pages/Reviews';
 import Webhooks from './pages/Webhooks';
 import Locations from './pages/Locations';
 import TaxZones from './pages/TaxZones';
@@ -57,10 +63,27 @@ import Staff from './pages/Staff';
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
+function EnrollTwoFactorRequired() {
+  const { me, refresh, logout } = useAuth();
+  return (
+    <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
+      <div className="w-full max-w-md card p-6">
+        <h1 className="text-base font-semibold">Set up two-factor authentication</h1>
+        <p className="text-sm text-gray-500 mt-1 mb-4">Two-factor authentication is required for {me?.email}. Set it up to continue to the admin.</p>
+        <TwoFactorEnroll onDone={() => { void refresh(); }} />
+        <button className="btn-ghost mt-4" onClick={() => { void logout(); }}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
 function Protected() {
   const { loading, me } = useAuth();
   if (loading) return <div className="h-full grid place-items-center"><Loading label="Starting up" /></div>;
   if (!me) return <Navigate to="/login" replace />;
+  // P1b: policy requires 2FA and none is enrolled — the API only lets this session enrol, so the whole app is
+  // replaced by the enrolment screen until it is done.
+  if (me.totpEnrollmentRequired) return <EnrollTwoFactorRequired />;
   return (
     <>
       <Layout />
@@ -74,19 +97,21 @@ function Protected() {
 /**
  * Plan §1.4: "while unclaimed, the admin UI shows only the claim screen."
  * Checked once per load via GET /v1/setup/status (pre-auth, cheap): 200 means
- * still unclaimed (every route — including /login — renders Setup instead);
- * 404/network-error means claimed (or the check itself failed, which fails
- * OPEN to the normal app rather than locking out an already-claimed install
- * on a transient blip). Setup.tsx flips this cache entry to `true` right
- * after a successful claim, before navigating, so the very next render
- * already sees the normal app — no extra round-trip.
+ * still unclaimed (every route — including /login — renders Setup instead).
+ * ANY other outcome — 404 (claimed), 401/403 (a front door such as the public
+ * demo's policy that refuses installation routes), 5xx, network error — fails
+ * OPEN to the normal app rather than locking out an already-claimed install.
+ * Only a positive "unclaimed" answer may show the claim screen. Setup.tsx
+ * flips this cache entry to `true` right after a successful claim, before
+ * navigating, so the very next render already sees the normal app — no extra
+ * round-trip.
  */
 function useIsClaimed(): { loading: boolean; claimed: boolean } {
   const [state, setState] = useState<{ loading: boolean; claimed: boolean }>({ loading: true, claimed: true });
   useEffect(() => {
     let cancelled = false;
     fetch('/v1/setup/status', { credentials: 'include' })
-      .then((res) => { if (!cancelled) setState({ loading: false, claimed: res.status === 404 }); })
+      .then((res) => { if (!cancelled) setState({ loading: false, claimed: res.status !== 200 }); })
       .catch(() => { if (!cancelled) setState({ loading: false, claimed: true }); });
     return () => { cancelled = true; };
   }, []);
@@ -107,12 +132,14 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/setup" element={<Setup />} />
+      <Route path="/accept-invite" element={<AcceptInvite />} />
       <Route element={<Protected />}>
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/" element={<Dashboard />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/orders/new" element={<DraftOrder />} />
         <Route path="/orders/import-tracking" element={<ImportTracking />} />
+        <Route path="/orders/tracking-grid" element={<TrackingGrid />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />
@@ -130,10 +157,12 @@ function App() {
         <Route path="/marketing" element={<Marketing />} />
         <Route path="/blog" element={<Blog />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/waitlist" element={<Waitlist />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/gift-cards" element={<GiftCards />} />
         <Route path="/loyalty" element={<Loyalty />} />
+        <Route path="/reviews" element={<Reviews />} />
         <Route path="/locations" element={<Locations />} />
         <Route path="/tax-zones" element={<TaxZones />} />
         <Route path="/currency-rates" element={<CurrencyRates />} />
@@ -142,6 +171,7 @@ function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/payments" element={<PaymentsSettings />} />
         <Route path="/settings/email" element={<EmailSettings />} />
+        <Route path="/settings/seo" element={<Seo />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

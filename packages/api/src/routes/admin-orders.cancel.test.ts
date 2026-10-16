@@ -14,6 +14,7 @@
  * _test-DB guard + TRUNCATE store CASCADE wipe + seed helpers under
  * withStore(). vitest runs files serially (fileParallelism: false).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -21,13 +22,10 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { admin as adminRoutes } from './admin.js';
+import { adminOrderOps } from './admin-order-ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `admin cancel test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-orders.cancel.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'admin-cancel-test-store';
@@ -36,6 +34,9 @@ const VARIANT = 'dddddddd-dddd-dddd-dddd-00000000000b';
 
 const app = new OpenAPIHono();
 app.route('/', adminRoutes);
+const bulkApp = new OpenAPIHono();
+bulkApp.route('/', adminRoutes);
+bulkApp.route('/', adminOrderOps);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -148,4 +149,56 @@ describe('POST /v1/admin/orders/{code}/cancel — HARDENING FIX 1', () => {
     expect(await orderState(orderId)).toBe('Cancelled');
     expect(await stockAllocated()).toBe(0); // released
   });
+});
+
+// X-46: admin cancel (single and bulk) takes the L0 pay advisory for the order before its lock set,
+// so it waits for an in-flight pay / capture holder of the same key.
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function holdPayAdvisory(code: string) {
+  const client = await pool.connect();
+  const key = `pay:${STORE}:${code}`;
+  await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+  return { release: async () => { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]); client.release(); } };
+}
+
+describe('X-46 admin cancel waits for the pay advisory holder', () => {
+  it('single cancel waits while another session holds pay:{store}:{code}', async () => {
+    const orderId = await seedOrder('SR-CANCEL-PAYLOCK-1', 'PendingPayment');
+    const holder = await holdPayAdvisory('SR-CANCEL-PAYLOCK-1');
+    try {
+      const started = Date.now();
+      const pending = cancelOrder('SR-CANCEL-PAYLOCK-1');
+      await pause(1200);
+      expect(await orderState(orderId)).toBe('PendingPayment'); // still waiting on the advisory
+      await holder.release();
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1100);
+      expect(await orderState(orderId)).toBe('Cancelled');
+    } finally {
+      await holder.release().catch(() => undefined);
+    }
+  }, 20000);
+
+  it('bulk cancel waits while another session holds pay:{store}:{code}', async () => {
+    const orderId = await seedOrder('SR-CANCEL-PAYLOCK-2', 'PendingPayment');
+    const holder = await holdPayAdvisory('SR-CANCEL-PAYLOCK-2');
+    try {
+      const started = Date.now();
+      const pending = bulkApp.request('/v1/admin/orders/bulk-cancel', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+        body: JSON.stringify({ codes: ['SR-CANCEL-PAYLOCK-2'] }),
+      });
+      await pause(1200);
+      expect(await orderState(orderId)).toBe('PendingPayment');
+      await holder.release();
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1100);
+      expect(await orderState(orderId)).toBe('Cancelled');
+    } finally {
+      await holder.release().catch(() => undefined);
+    }
+  }, 20000);
 });

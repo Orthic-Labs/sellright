@@ -32,6 +32,13 @@ export const rateLimitAttempt = pgTable('rate_limit_attempt', {
   attemptedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
+// Installation-wide key/value settings (migration 0089). Global infra table, no RLS.
+export const installationSetting = pgTable('installation_setting', {
+  key: text().primaryKey(),
+  value: text().notNull(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
 // SELLRIGHT-ISSUES P1: durable retry for cross-process catalog manifest
 // regeneration triggers (migration 0079, manifest/stock-hook.ts). Same
 // "defined here for drizzle-kit, queried via raw pool elsewhere" posture as
