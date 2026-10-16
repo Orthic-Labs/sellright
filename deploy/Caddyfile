@@ -2,10 +2,13 @@
     encode zstd gzip
 
     # The edge owns the untrusted socket and overwrites X-Real-IP before the
-    # request enters the private admin/API network. Caddy also supplies the
+    # request enters the private admin/API network (and strips CF-Connecting-IP). Caddy also supplies the
     # normal X-Forwarded-Proto/Host chain used by nginx and the application.
     reverse_proxy admin:8080 {
         header_up X-Real-IP {remote_host}
+        # The edge never forwards a client-supplied CF-Connecting-IP: behind it the API (and storefront) would
+        # otherwise trust a forged per-request identity when BEHIND_CLOUDFLARE=1 (security audit P1a).
+        header_up -CF-Connecting-IP
     }
 }
 
@@ -21,5 +24,8 @@
 
     reverse_proxy storefront:4100 {
         header_up X-Real-IP {remote_host}
+        # The edge never forwards a client-supplied CF-Connecting-IP: behind it the API (and storefront) would
+        # otherwise trust a forged per-request identity when BEHIND_CLOUDFLARE=1 (security audit P1a).
+        header_up -CF-Connecting-IP
     }
 }

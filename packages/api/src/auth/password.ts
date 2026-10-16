@@ -136,6 +136,18 @@ export async function verifyPassword(password: string, stored: string | null): P
   }
 }
 
+let dummyHash: Promise<string> | undefined;
+
+/** Constant-time behaviour for unknown accounts (P1a): run one full Argon2id
+ *  verification against a throwaway hash so "no such admin" costs the same as
+ *  "wrong password" and response timing does not reveal which e-mails exist.
+ *  Always resolves false. */
+export async function verifyPasswordAgainstDummy(password: string): Promise<false> {
+  dummyHash ??= hashPassword(randomBytes(16).toString('hex'));
+  await verifyPassword(password, await dummyHash);
+  return false;
+}
+
 /** True when a successful login should replace the stored hash. */
 export function passwordNeedsRehash(stored: string | null): boolean {
   if (!stored) return false;

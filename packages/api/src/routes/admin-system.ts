@@ -13,7 +13,7 @@ import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDow
 import { markStepUpVerified } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
 import { verifyTotp } from '../auth/totp.js';
-import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // SELLRIGHT_MASTER_KEY/RECOVERY_KIT_ID are read directly from process.env,
 // not the parsed `env` singleton — matching security/secret-crypto.ts's own
@@ -162,22 +162,22 @@ adminSystem.openapi(
     const { admin, token } = await requireAdmin(c);
     requireHuman(admin); // agents never step up (deny set already blocks the route; belt and braces)
     const ip = clientIp(c);
-    // Same rate-limit shape as /v1/admin/login (rate-limit.ts) — step-up IS a
-    // second password check, and deserves the identical brute-force guard.
-    const retry = await loginRetryAfter(ip, `stepup:${admin.id}`);
+    // Same gate as /v1/admin/login (rate-limit.ts, P1a) and the same per-account
+    // budget — step-up IS a second password check.
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
 
     const { password, totp } = c.req.valid('json');
     const creds = await getAdminCredentialsById(admin.id);
     if (!creds || !(await verifyPassword(password, creds.passwordHash))) {
-      await recordLoginFailure(ip, `stepup:${admin.id}`);
+      
       throw new HttpError(401, 'invalid password or 2FA code');
     }
     if (creds.totpSecret && (!totp || !verifyTotp(creds.totpSecret, totp, admin.id))) {
-      await recordLoginFailure(ip, `stepup:${admin.id}`);
+      
       throw new HttpError(401, 'invalid password or 2FA code');
     }
-    await clearLoginAttempts(ip, `stepup:${admin.id}`);
+    await clearAdminAuthFailures(ip, admin.email);
 
     await markStepUpVerified(token);
     await auditSystemAction(admin, 'step_up_verify');

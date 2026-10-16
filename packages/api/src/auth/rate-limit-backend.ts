@@ -21,16 +21,10 @@
  * this module only supplies the storage + algorithm, never a shared
  * threshold, so tuning one surface still never changes another's allowance.
  *
- * Concurrency note (Postgres backend): `consume` prunes, counts, and
- * conditionally inserts across two round-trips with no row lock between
- * them — two concurrent requests for the SAME key can both observe
- * "under cap" and both insert, admitting one attempt more than the nominal
- * cap under a genuinely concurrent burst. This is a deliberate, accepted
- * softness for a rate limiter (it bounds abuse, it is not a payment/
- * allocation invariant); the in-memory backend has the same property
- * removed only because Node's single-threaded event loop can't race with
- * itself between two `await`-free lines, which this backend does have
- * (network round-trips to Postgres).
+ * Concurrency (Postgres backend): `consume` prunes, counts and inserts in one
+ * transaction under a per-(bucket, key) advisory lock, so concurrent requests
+ * (in any API process) cannot all observe "under cap". The in-memory backend
+ * is atomic because each operation runs without an intervening await.
  */
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
@@ -47,7 +41,7 @@ export interface RateLimitBackend {
 }
 
 // ── in-memory backend ───────────────────────────────────────────────────────
-interface Entry { attempts: number[]; }
+interface Entry { attempts: number[]; windowMs: number; }
 
 export function createMemoryRateLimitBackend(): RateLimitBackend {
   const store = new Map<string, Entry>();
@@ -60,10 +54,12 @@ export function createMemoryRateLimitBackend(): RateLimitBackend {
     const oldest = e.attempts[0]!;
     return Math.max(1, Math.ceil((windowMs - (now - oldest)) / 1000));
   };
-  const cleanup = (now: number, windowMs: number) => {
+  // Global cleanup prunes each entry by ITS OWN window (buckets mix 15-minute and 1-hour windows; pruning everything by
+  // the triggering call's window would expire longer-window entries early).
+  const cleanup = (now: number) => {
     if (store.size <= 5000) return;
     for (const [kk, e] of store) {
-      prune(e, now, windowMs);
+      prune(e, now, e.windowMs);
       if (!e.attempts.length) store.delete(kk);
     }
   };
@@ -77,24 +73,26 @@ export function createMemoryRateLimitBackend(): RateLimitBackend {
     },
     async consume(bucket, key, windowMs, maxAttempts) {
       const mk = k(bucket, key);
-      const e = store.get(mk) ?? { attempts: [] };
+      const e = store.get(mk) ?? { attempts: [], windowMs };
+      e.windowMs = Math.max(e.windowMs, windowMs);
       const now = Date.now();
       prune(e, now, windowMs);
       const retry = retryFor(e, now, windowMs, maxAttempts);
       if (retry > 0) return retry;
       e.attempts.push(now);
       store.set(mk, e);
-      cleanup(now, windowMs);
+      cleanup(now);
       return 0;
     },
     async recordFailure(bucket, key, windowMs) {
       const mk = k(bucket, key);
-      const e = store.get(mk) ?? { attempts: [] };
+      const e = store.get(mk) ?? { attempts: [], windowMs };
+      e.windowMs = Math.max(e.windowMs, windowMs);
       const now = Date.now();
       prune(e, now, windowMs);
       e.attempts.push(now);
       store.set(mk, e);
-      cleanup(now, windowMs);
+      cleanup(now);
     },
     async clear(bucket, key) {
       store.delete(k(bucket, key));
@@ -129,10 +127,31 @@ export function createPostgresRateLimitBackend(): RateLimitBackend {
       return n < maxAttempts ? 0 : retryFrom(oldest, windowMs);
     },
     async consume(bucket, key, windowMs, maxAttempts) {
-      const { n, oldest } = await pruneAndCount(bucket, key, windowMs);
-      if (n >= maxAttempts) return retryFrom(oldest, windowMs);
-      await pool.query(`INSERT INTO rate_limit_attempt (bucket, key) VALUES ($1, $2)`, [bucket, key]);
-      return 0;
+      // Atomic across concurrent requests and API processes: prune + count + insert run in one transaction under a
+      // per-(bucket, key) advisory lock, so a burst can never all observe "under cap" (security audit P1a).
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`rate:${bucket}:${key}`]);
+        await client.query(
+          `DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval`,
+          [bucket, key, windowMs],
+        );
+        const { rows } = await client.query<{ n: string; oldest: Date | null }>(
+          `SELECT count(*)::int AS n, min(attempted_at) AS oldest FROM rate_limit_attempt WHERE bucket = $1 AND key = $2`,
+          [bucket, key],
+        );
+        const n = Number(rows[0]?.n ?? 0);
+        if (n >= maxAttempts) { await client.query('COMMIT'); return retryFrom(rows[0]?.oldest ?? null, windowMs); }
+        await client.query(`INSERT INTO rate_limit_attempt (bucket, key) VALUES ($1, $2)`, [bucket, key]);
+        await client.query('COMMIT');
+        return 0;
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw e;
+      } finally {
+        client.release();
+      }
     },
     async recordFailure(bucket, key, windowMs) {
       await pool.query(

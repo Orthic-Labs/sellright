@@ -4,6 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
+import { clientIp, reserveAdminAuthAttempt } from '../auth/rate-limit.js';
 import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
@@ -131,7 +132,7 @@ adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA',
     request: { body: { content: J(z.object({ secret: z.string(), code: z.string() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: { description: 'Too many attempts', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -142,7 +143,11 @@ adminSettings.openapi(
     // a hijacked session could silently swap in an attacker-controlled secret.
     const existing = await getAdminTotpSecret(admin.id);
     if (existing) throw new HttpError(409, '2FA already enabled — disable it first');
-    if (!verifyTotp(secret, code)) throw new HttpError(409, 'code did not match — check your authenticator app');
+    // P1a: same credential-check gate (and per-account budget) as login/step-up.
+    const ip = clientIp(c);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
+    if (!verifyTotp(secret, code)) { throw new HttpError(409, 'code did not match — check your authenticator app'); }
     await setAdminTotpSecret(admin.id, secret);
     return c.json({ enabled: true }, 200);
   }),
@@ -152,7 +157,7 @@ adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/2fa/disable', summary: 'Disable 2FA',
     request: { body: { content: J(z.object({ code: z.string() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: { description: 'Too many attempts', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -160,7 +165,12 @@ adminSettings.openapi(
     const { code } = c.req.valid('json');
     const existing = await getAdminTotpSecret(admin.id);
     if (!existing) return c.json({ enabled: false }, 200);
-    if (!verifyTotp(existing, code)) throw new HttpError(409, 'invalid code');
+    // P1a: guessing the current code to strip 2FA from a hijacked session is a
+    // credential check like any other — same gate and per-account budget.
+    const ip = clientIp(c);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
+    if (!verifyTotp(existing, code, admin.id)) { throw new HttpError(409, 'invalid code'); }
     await clearAdminTotpSecret(admin.id);
     return c.json({ enabled: false }, 200);
   }),

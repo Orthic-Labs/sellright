@@ -9,11 +9,11 @@ import { cancelOrderStripeIntents, stripeDiscoverable } from '../payments/stripe
 import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
-import { verifyPassword } from '../auth/password.js';
+import { verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
 import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
-import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -44,7 +44,8 @@ admin.openapi(
     const { email: rawEmail, password, totp } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = await loginRetryAfter(ip, `admin:${email}`);
+    // P1a: (ip, account) + per-account (all IPs) + per-IP (all accounts) budgets.
+    const retry = await reserveAdminAuthAttempt(ip, email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
     // WP1.5: do NOT confirm password validity to unauthenticated callers. The
@@ -53,12 +54,15 @@ admin.openapi(
     // enabled" via the response. The fix: treat a 2FA-enabled account with a
     // missing TOTP as a single incomplete login attempt (401, generic message).
     // The UI must always send both password and TOTP together.
-    if (!u || u.kind === 'agent' || !(await verifyPassword(password, u.passwordHash))) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    // P1a: an unknown address (or an agent identity) still pays one full Argon2id
+    // verification, so timing does not reveal which admin e-mails exist.
+    const passwordOk = u && u.kind !== 'agent' && u.passwordHash ? await verifyPassword(password, u.passwordHash) : await verifyPasswordAgainstDummy(password);
+    if (!u || !passwordOk) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
-      if (!totp) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
-      if (!verifyTotp(u.totpSecret, totp, u.id)) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!totp) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!verifyTotp(u.totpSecret, totp, u.id)) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     }
-    await clearLoginAttempts(ip, `admin:${email}`);
+    await clearAdminAuthFailures(ip, email);
     const token = await createAdminSession(u.id);
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
