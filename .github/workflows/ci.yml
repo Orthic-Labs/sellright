@@ -157,7 +157,10 @@ jobs:
           mkdir "$bundle"
           # Tests already passed; omit compiled test helpers & E2E fixtures from this runtime package.
           rm -f packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
+             packages/api/dist/db/test-database-url.{js,js.map,d.ts} \
              packages/api/dist/licensing/storekit/jws-fixture.{js,js.map,d.ts} \
+             packages/api/dist/licensing/storekit/fork-reference-policy.kit.{js,js.map,d.ts} \
+             packages/api/dist/payments/gateway-e2e-safety.{js,js.map,d.ts} \
              packages/api/dist/scripts/seed-e2e-catalog.{js,js.map,d.ts}
           find packages/api/dist -type f -name '*.testkit.*' -delete
           pnpm --filter @sellright/api pack --pack-destination "$bundle"
@@ -178,7 +181,7 @@ jobs:
                   relative = path.parts[1:]
                   assert not relative or relative[0] in {'dist', 'drizzle', 'exports', 'package.json', 'BUILD-INFO.json', 'README.md', 'LICENSE', 'LICENSE.md', 'LICENSE.txt'}, 'unexpected package content'
                   assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in relative), 'non-runtime package content'
-                  assert not any(marker in member.name for marker in ('.test.', '.testkit.', '.spec.', 'rls-test-utils.', 'jws-fixture.', 'seed-e2e-catalog.')), 'test code in runtime package'
+                  assert not any(marker in member.name for marker in ('.test.', '.testkit.', '.spec.', 'rls-test-utils.', 'test-database-url.', 'jws-fixture.', 'fork-reference-policy.kit.', 'gateway-e2e-safety.', 'seed-e2e-catalog.')), 'test code in runtime package'
                   names.add(member.name)
               required = {'package/package.json', 'package/BUILD-INFO.json', 'package/dist/sdk/index.js', 'package/dist/sdk/index.d.ts', 'package/drizzle/meta/_journal.json', 'package/exports/contract.json'}
               assert required <= names, 'incomplete API runtime package'

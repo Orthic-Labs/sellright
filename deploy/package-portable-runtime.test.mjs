@@ -164,6 +164,17 @@ for (const directory of ['dist/scripts', 'dist/nested', 'drizzle', 'exports']) {
   }
 }
 
+for (const basename of ['dist/payments/gateway-e2e-safety', 'dist/licensing/storekit/fork-reference-policy.kit']) {
+  for (const extension of ['js', 'js.map', 'd.ts']) {
+    const path = `${basename}.${extension}`;
+    test(`reject test-only helper ${path} in first-party runtime`, (t) => {
+      const { runtime, put } = fixture(t);
+      put(path, 'throw Error("must not ship")');
+      assert.throws(() => validateRuntime(runtime, sha), /test code/);
+    });
+  }
+}
+
 test('allow production runtime scripts', () => {
   for (const script of ['migrate', 'bootstrap', 'functional-check', 'seed-demo']) {
     assert.doesNotThrow(() => assertFirstPartyPath(`dist/scripts/${script}.js`));

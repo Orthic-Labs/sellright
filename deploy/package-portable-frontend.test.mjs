@@ -115,13 +115,15 @@ for (const local of sourceFiles) {
 
 test('overlay copies exact compiled bytes, excludes client tests & ships only runtime roots', (t) => {
   const f = fixture(t);
-  for (const local of ['index.test.js', 'request.spec.d.ts', 'helpers.testkit.js', 'fixtures/payload.js', '__mocks__/fetch.js', 'mock/request.js']) {
+  const excluded = ['index.test.js', 'request.spec.d.ts', 'helpers.testkit.js', 'fixtures/payload.js', '__mocks__/fetch.js', 'mock/request.js',
+    ...['gateway-e2e-safety', 'fork-reference-policy.kit'].flatMap((basename) => ['js', 'js.map', 'd.ts'].map((extension) => `${basename}.${extension}`))];
+  for (const local of excluded) {
     f.put(`packages/storefront-client/dist/${local}`, 'must-not-ship');
   }
   installFrontendProductionDependencies(f.repo, f.workspace, f.runtime, (_command, _args, options) => fakeInstall(options.cwd));
   overlayFrontendOutputs(f.repo, f.runtime, sha);
   const files = validateFrontendRuntime(f.runtime, sha);
-  for (const local of ['index.test.js', 'request.spec.d.ts', 'helpers.testkit.js', 'fixtures/payload.js', '__mocks__/fetch.js', 'mock/request.js']) {
+  for (const local of excluded) {
     assert.equal(files.has(`packages/storefront-client/dist/${local}`), false);
   }
   for (const local of ['packages/storefront/server-demo/entry.express.js', 'packages/storefront-client/dist/index.js',
@@ -203,6 +205,7 @@ test('reject first-party source symlink rather than copying its target', (t) => 
   assert.throws(() => overlayFrontendOutputs(f.repo, f.runtime, sha), /unsafe compiled entry/);
 });
 for (const local of ['packages/storefront-client/dist/index.test.js', 'packages/storefront-client/dist/mocks/fetch.js',
+  ...['gateway-e2e-safety', 'fork-reference-policy.kit'].flatMap((basename) => ['js', 'js.map', 'd.ts'].map((extension) => `packages/storefront-client/dist/${basename}.${extension}`)),
   'packages/storefront/server-demo/entry.testkit.js', 'packages/storefront/src/private.ts', 'deploy/demo/unexpected.mjs']) {
   test(`reject unexpected output: ${local}`, (t) => {
     const f = assembled(t);

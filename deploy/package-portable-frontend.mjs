@@ -81,7 +81,7 @@ export function installFrontendProductionDependencies(repo, workspace, runtime, 
 
 export function excludedClientPath(path) {
   return /(?:^|[/._-])(?:tests?|specs?|testkits?|mocks?|fixtures?)(?=[/._-]|$)/i.test(path) ||
-    /(?:rls-test-utils|test-database-url|jws-fixture|seed-e2e-catalog)/.test(path) ||
+    /(?:rls-test-utils|test-database-url|jws-fixture|fork-reference-policy\.kit|gateway-e2e-safety|seed-e2e-catalog)/.test(path) ||
     path.split('/').some((part) => ['src', 'scripts', 'adapters'].includes(part));
 }
 function assertFrontendPath(local) {

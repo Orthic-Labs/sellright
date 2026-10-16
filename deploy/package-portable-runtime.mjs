@@ -41,7 +41,7 @@ export function assertFirstPartyPath(path) {
   invariant(parts.every((part) => part && part !== '..' && !part.startsWith('.') &&
     !['node_modules', 'test', 'tests', 'fixtures', '__tests__', '__mocks__'].includes(part)),
   `non-runtime first-party path: ${path}`);
-  invariant(!/(?:\.test\.|\.testkit\.|\.spec\.|rls-test-utils\.|test-database-url\.|jws-fixture\.|seed-e2e-catalog\.)/.test(path),
+  invariant(!/(?:\.test\.|\.testkit\.|\.spec\.|rls-test-utils\.|test-database-url\.|jws-fixture\.|fork-reference-policy\.kit\.|gateway-e2e-safety\.|seed-e2e-catalog\.)/.test(path),
     `test code in first-party runtime: ${path}`);
 }
 
