@@ -169,7 +169,8 @@ adminSecurity.openapi(
     const gate = await credentialGate(c, admin);
     if (!(await verifyPassword(currentPassword, creds?.passwordHash ?? null))) await gate.fail('invalid password');
     await gate.ok();
-    const revokedSessions = await changeAdminPassword(admin.id, await hashPassword(newPassword), token);
+    const revokedSessions = await changeAdminPassword(admin.id, creds!.passwordHash!, await hashPassword(newPassword), token);
+    if (revokedSessions === null) throw new HttpError(409, 'your password or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
     await audit(c, admin, 'password_change', { revokedSessions });
     return c.json({ ok: true, revokedSessions }, 200);
   }),

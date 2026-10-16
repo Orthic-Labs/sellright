@@ -68,20 +68,29 @@ export async function createAdminSession(adminUserId: string): Promise<string> {
  * (changeAdminPassword: UPDATE + revoke in one transaction) therefore either completes first — and this login is
  * refused — or waits for this session and then revokes it. Returns null when the credential changed meanwhile.
  */
-export async function createAdminSessionIfCredential(adminUserId: string, verifiedHash: string): Promise<string | null> {
+export async function createAdminSessionIfCredential(adminUserId: string, verifiedHash: string, secondFactorVerified: boolean): Promise<string | null> {
   return db.transaction(async (tx) => {
-    const [row] = await tx.select({ hash: s.adminUser.passwordHash }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('share').limit(1);
+    const [row] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('share').limit(1);
     if (!row || row.hash !== verifiedHash) return null;
+    // A sign-in that verified no second factor must not succeed if 2FA was enabled meanwhile (enrolment races).
+    if (!secondFactorVerified && row.totp !== null) return null;
     const token = randomBytes(32).toString('hex');
     await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS) });
     return token;
   });
 }
 
-/** Password change: new hash + sign out every OTHER session, atomically (see createAdminSessionIfCredential). */
-export async function changeAdminPassword(adminUserId: string, newHash: string, keepToken: string): Promise<number> {
+/** Password change: new hash + sign out every OTHER session, atomically (see createAdminSessionIfCredential). Applies
+ *  only if the stored hash is still the one just verified AND the caller's session still exists — a concurrent change
+ *  (which revoked this session) wins. Returns null when refused. */
+export async function changeAdminPassword(adminUserId: string, verifiedHash: string, newHash: string, keepToken: string): Promise<number | null> {
   return db.transaction(async (tx) => {
-    await tx.update(s.adminUser).set({ passwordHash: newHash }).where(eq(s.adminUser.id, adminUserId));
+    const [own] = await tx.select({ id: s.session.id }).from(s.session).where(eq(s.session.tokenHash, hashToken(keepToken))).for('update').limit(1);
+    if (!own) return null;
+    const upd = await tx.update(s.adminUser).set({ passwordHash: newHash })
+      .where(and(eq(s.adminUser.id, adminUserId), eq(s.adminUser.passwordHash, verifiedHash)))
+      .returning({ id: s.adminUser.id });
+    if (upd.length !== 1) return null;
     const del = await tx.delete(s.session)
       .where(and(eq(s.session.adminUserId, adminUserId), ne(s.session.tokenHash, hashToken(keepToken))))
       .returning({ id: s.session.id });

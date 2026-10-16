@@ -160,6 +160,9 @@ services:
       JOBS_ENABLED: ${JOBS_ENABLED:-1}
       JOBS_PUSH_ENABLED: ${JOBS_PUSH_ENABLED:-0}
       BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-0}
+      # Admin 2FA policy (P1b): off | privileged | all, and the opt-in sweep that seals legacy TOTP secrets.
+      ADMIN_REQUIRE_TOTP: ${ADMIN_REQUIRE_TOTP:-off}
+      ADMIN_TOTP_SEAL_EXISTING: ${ADMIN_TOTP_SEAL_EXISTING:-0}
       TRUSTED_PROXY_HEADER: x-real-ip
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
       PGPOOL_CONNECTION_TIMEOUT_MS: ${PGPOOL_CONNECTION_TIMEOUT_MS:-5000}

@@ -75,7 +75,7 @@ admin.openapi(
       } catch { /* retried on the next sign-in */ }
     }
     // The session is created only if the password verified above is still the account's password (P1b review).
-    const token = await createAdminSessionIfCredential(u.id, currentHash);
+    const token = await createAdminSessionIfCredential(u.id, currentHash, !!u.totpSecret);
     if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie

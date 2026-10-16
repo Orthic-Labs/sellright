@@ -271,10 +271,10 @@ describe.skipIf(!isTestDb)('P1b review: session assurance and credential races',
     const old = (await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash as string;
     const replaced = await hashPassword('replaced-password-1');
     await pool.query('UPDATE admin_user SET password_hash = $1 WHERE id = $2', [replaced, OWNER]); // a password change landed meanwhile
-    expect(await createAdminSessionIfCredential(OWNER, old)).toBeNull();
+    expect(await createAdminSessionIfCredential(OWNER, old, false)).toBeNull();
     expect(await rehashAdminPasswordIfUnchanged(OWNER, old, await hashPassword(PW))).toBe(false);
     expect((await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash).toBe(replaced);
-    expect(await createAdminSessionIfCredential(OWNER, replaced)).toMatch(/^[0-9a-f]{64}$/);
+    expect(await createAdminSessionIfCredential(OWNER, replaced, false)).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('concurrent recovery-code regenerations leave exactly one valid set', async () => {
@@ -285,3 +285,24 @@ describe.skipIf(!isTestDb)('P1b review: session assurance and credential races',
     expect(x).not.toEqual(y);
   });
 });
+
+describe.skipIf(!isTestDb)('P1b final review: enrolment and password-change races', () => {
+  it('a password-only sign-in cannot complete after 2FA was enabled meanwhile', async () => {
+    const { createAdminSessionIfCredential } = await import('./auth/admin-session.js');
+    const hash = (await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash as string;
+    await pool.query('UPDATE admin_user SET totp_secret = $1 WHERE id = $2', [newTotpSecret(), OWNER]);
+    expect(await createAdminSessionIfCredential(OWNER, hash, false)).toBeNull();
+    expect(await createAdminSessionIfCredential(OWNER, hash, true)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('a second, stale password change cannot overwrite the first', async () => {
+    const { changeAdminPassword } = await import('./auth/admin-session.js');
+    const a = (await login('owner@mfa.test', PW)).body.token!;
+    const b = (await login('owner@mfa.test', PW)).body.token!;
+    const old = (await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash as string;
+    expect(await changeAdminPassword(OWNER, old, await hashPassword('first-new-password'), a)).toBe(1); // revokes b
+    expect(await changeAdminPassword(OWNER, old, await hashPassword('second-new-password'), b)).toBeNull();
+    expect((await login('owner@mfa.test', 'first-new-password')).res.status).toBe(200);
+  });
+});
+
