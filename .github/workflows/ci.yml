@@ -115,6 +115,55 @@ jobs:
           pnpm --filter @sellright/storefront run check:shape:base
           pnpm --filter @sellright/storefront run lint:brand
 
+      - name: Package verified API and admin runtime
+        run: |
+          bundle="$RUNNER_TEMP/sellright-runtime"
+          mkdir "$bundle"
+          # Tests already passed; omit their two compiled helpers from this runtime package.
+          rm packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
+             packages/api/dist/licensing/storekit/jws-fixture.{js,js.map,d.ts}
+          pnpm --filter @sellright/api pack --pack-destination "$bundle"
+          node packages/api/scripts/write-build-info.mjs packages/admin/dist/BUILD-INFO.json
+          python3 - <<'PY'
+          import json, os, shutil, tarfile
+          from pathlib import Path, PurePosixPath
+          bundle = Path(os.environ['RUNNER_TEMP']) / 'sellright-runtime'
+          sha = os.environ['GITHUB_SHA']
+          def identity(info):
+              assert info['sha'] == sha and info['dirty'] is False, 'runtime build identity mismatch'
+          with tarfile.open(bundle / 'sellright-api-0.1.0.tgz', 'r:gz') as archive:
+              names = set()
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  assert not path.is_absolute() and '..' not in path.parts, 'unsafe package path'
+                  assert path.parts[0] == 'package' and (member.isfile() or member.isdir()), 'unsafe package entry'
+                  relative = path.parts[1:]
+                  assert not relative or relative[0] in {'dist', 'drizzle', 'exports', 'package.json', 'BUILD-INFO.json', 'README.md', 'LICENSE', 'LICENSE.md', 'LICENSE.txt'}, 'unexpected package content'
+                  assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in relative), 'non-runtime package content'
+                  assert not any(marker in member.name for marker in ('.test.', '.spec.', 'rls-test-utils.', 'jws-fixture.')), 'test code in runtime package'
+                  names.add(member.name)
+              required = {'package/package.json', 'package/BUILD-INFO.json', 'package/dist/sdk/index.js', 'package/dist/sdk/index.d.ts', 'package/drizzle/meta/_journal.json', 'package/exports/contract.json'}
+              assert required <= names, 'incomplete API runtime package'
+              identity(json.load(archive.extractfile('package/BUILD-INFO.json')))
+          admin = Path('packages/admin/dist')
+          assert (admin / 'index.html').is_file() and (admin / 'admin-static').is_dir(), 'incomplete admin runtime'
+          for path in admin.rglob('*'):
+              assert not path.is_symlink() and (path.is_file() or path.is_dir()), 'unsafe admin entry'
+              assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in path.relative_to(admin).parts), 'non-runtime admin content'
+          identity(json.loads((admin / 'BUILD-INFO.json').read_text()))
+          shutil.copytree(admin, bundle / 'admin-dist')
+          PY
+
+      - name: Upload verified runtime bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sellright-runtime-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/sellright-runtime/sellright-api-0.1.0.tgz
+            ${{ runner.temp }}/sellright-runtime/admin-dist/
+          if-no-files-found: error
+          retention-days: 7
+
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
