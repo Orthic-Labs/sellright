@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
-  openSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync,
+  openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { constants } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -17,6 +17,12 @@ const required = [
   'package.json', 'BUILD-INFO.json', 'dist/index.js', 'dist/sdk/index.js',
   'dist/sdk/index.d.ts', 'dist/scripts/migrate.js', 'dist/scripts/bootstrap.js',
   'drizzle/meta/_journal.json', 'exports/contract.json',
+];
+const sourceFiles = ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'packages/api/package.json'];
+const productionInstallArgs = [
+  '--filter', '@sellright/api', 'install', '--prod', '--frozen-lockfile', '--offline', '--ignore-scripts',
+  '--virtual-store-dir=packages/api/node_modules/.pnpm', '--config.enable-global-virtual-store=false',
+  '--config.hoist-workspace-packages=false',
 ];
 const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const within = (root, path) => path === root || path.startsWith(`${root}${sep}`);
@@ -141,9 +147,29 @@ with tarfile.open(sys.argv[1], 'r:gz') as tar:
 `, resolve(output)], { stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+export function installProductionDependencies(repo, workspace, runtime, run = execFileSync) {
+  const hashes = Object.fromEntries(sourceFiles.map((path) => [path, sha256(join(repo, path))]));
+  mkdirSync(workspace);
+  mkdirSync(join(workspace, 'packages/api'), { recursive: true });
+  for (const path of sourceFiles) copyFileSync(join(repo, path), join(workspace, path), constants.COPYFILE_EXCL);
+  // Legacy deploy disables frozen resolution & visits unrelated workspace peers.
+  // Discover only API here, preserving the original importer paths, lock & policy.
+  // Core's prior install owns allowed dependency builds; assembly runs no hooks.
+  run('pnpm', productionInstallArgs, { cwd: workspace, stdio: 'inherit' });
+  for (const path of sourceFiles) {
+    invariant(sha256(join(repo, path)) === hashes[path], `source provenance changed: ${path}`);
+    invariant(sha256(join(workspace, path)) === hashes[path], `staged provenance changed: ${path}`);
+  }
+  // Keep the virtual store inside API's node_modules & omit workspace self-links
+  // so dependency links retain their relative targets when this directory moves.
+  const modules = join(workspace, 'packages/api/node_modules');
+  invariant(lstatSync(modules).isDirectory(), 'missing isolated production dependency tree');
+  mkdirSync(runtime);
+  renameSync(modules, join(runtime, 'node_modules'));
+}
+
 export function packagePortableRuntime(apiTgz, bundle, repo, sha) {
   assertIdentity({ sha, dirty: false }, sha);
-  const sourceFiles = ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'packages/api/package.json'];
   const sourceHashes = Object.fromEntries(sourceFiles.map((path) => [path, sha256(join(repo, path))]));
   const workspace = json(join(repo, 'package.json'));
   const pnpm = execFileSync('pnpm', ['--version'], { cwd: repo, encoding: 'utf8' }).trim();
@@ -156,13 +182,8 @@ export function packagePortableRuntime(apiTgz, bundle, repo, sha) {
   const stage = mkdtempSync(join(dirname(resolve(bundle)), 'sellright-portable-'));
   const runtime = join(stage, 'api');
   try {
-    // Same production deployment recipe as packages/api/Dockerfile. Workspace
-    // install was frozen earlier in this job; retain its overrides & lockfile.
-    execFileSync('pnpm', ['--filter', '@sellright/api', 'deploy', '--legacy', '--prod', runtime], { cwd: repo, stdio: 'inherit' });
+    installProductionDependencies(repo, join(stage, 'workspace'), runtime);
     for (const path of sourceFiles) invariant(sha256(join(repo, path)) === sourceHashes[path], `source provenance changed: ${path}`);
-    for (const name of readdirSync(runtime)) {
-      if (name !== 'node_modules') rmSync(join(runtime, name), { recursive: true, force: true });
-    }
     overlayPackedApi(apiTgz, runtime, sha);
     invariant(sha256(apiTgz) === apiHash, 'validated API archive changed');
     mkdirSync(join(runtime, 'provenance'));
@@ -174,7 +195,7 @@ export function packagePortableRuntime(apiTgz, bundle, repo, sha) {
     writeFileSync(manifest, `${JSON.stringify({
       schema: 1, sha, dirty: false, node: process.version, pnpm,
       platform: process.platform, arch: process.arch,
-      deployment: 'pnpm --filter @sellright/api deploy --legacy --prod',
+      deployment: `isolated workspace: pnpm ${productionInstallArgs.join(' ')}`,
       sourceHashes, apiPackage: { file: 'sellright-api-0.1.0.tgz', sha256: apiHash },
       runtime: { file: 'api-runtime.tar.gz', sha256: sha256(output), entries: files.size },
       demoEntrypoint: { file: 'demo-run.mjs', sha256: sha256(demoOutput), restoreTo: 'deploy/demo/run.mjs' },

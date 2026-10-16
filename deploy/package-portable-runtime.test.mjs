@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
-import { archiveRuntime, assertFirstPartyPath, assertIdentity, overlayPackedApi, validateRuntime } from './package-portable-runtime.mjs';
+import { archiveRuntime, assertFirstPartyPath, assertIdentity, installProductionDependencies, overlayPackedApi, validateRuntime } from './package-portable-runtime.mjs';
 
 const sha = 'a'.repeat(40);
-function fixture(t) {
+function temporaryDirectory(t) {
   const dir = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), 'portable-api-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+function fixture(t) {
+  const dir = temporaryDirectory(t);
   const runtime = join(dir, 'api');
   mkdirSync(runtime);
   const put = (path, data) => {
@@ -23,6 +27,90 @@ function fixture(t) {
   put('node_modules/.pnpm/fixture@1.0.0/node_modules/fixture/package.json', JSON.stringify({ name: 'fixture', version: '1.0.0' }));
   symlinkSync('.pnpm/fixture@1.0.0/node_modules/fixture', join(runtime, 'node_modules/fixture'));
   return { dir, runtime, put };
+}
+
+function workspaceFixture(t) {
+  const dir = temporaryDirectory(t);
+  const repo = join(dir, 'repo');
+  const put = (path, data) => {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), data);
+  };
+  put('package.json', JSON.stringify({
+    name: 'workspace', private: true, packageManager: 'pnpm@11.25.0',
+    devDependencies: { devonly: '1.0.0' }, scripts: { postinstall: 'must-not-run' },
+  }));
+  put('pnpm-workspace.yaml', 'packages:\n  - packages/*\nblockExoticSubdeps: true\noverrides:\n  fixture: 1.0.0\nallowBuilds:\n  fixture: true\n');
+  put('pnpm-lock.yaml', `lockfileVersion: '9.0'\noverrides:\n  fixture: 1.0.0\nimporters:\n  .:\n    devDependencies:\n      devonly: {specifier: 1.0.0, version: 1.0.0}\n  packages/api:\n    dependencies:\n      fixture: {specifier: 1.0.0, version: 1.0.0}\n  packages/sample-plugin:\n    devDependencies:\n      '@sellright/api': {specifier: 'workspace:*', version: 'link:../api'}\n`);
+  put('packages/api/package.json', JSON.stringify({
+    name: '@sellright/api', version: '0.1.0', dependencies: { fixture: '1.0.0' },
+    devDependencies: { devonly: '1.0.0' }, scripts: { prepare: 'must-not-run' },
+  }));
+  // This unrelated dev consumer triggered legacy deploy's registry self-fetch.
+  put('packages/sample-plugin/package.json', JSON.stringify({
+    name: '@sellright/sample-plugin', peerDependencies: { '@sellright/api': '0.1.0' },
+    devDependencies: { '@sellright/api': 'workspace:*' },
+  }));
+  put('packages/api/dist/index.js', 'must-use-packed-bytes-instead');
+  return { dir, repo, workspace: join(dir, 'workspace'), runtime: join(dir, 'runtime') };
+}
+
+test('production install isolates API while retaining exact frozen workspace policy & relocatable links', (t) => {
+  const { repo, workspace, runtime } = workspaceFixture(t);
+  let calls = 0;
+  installProductionDependencies(repo, workspace, runtime, (command, args, options) => {
+    calls++;
+    assert.equal(command, 'pnpm');
+    assert.deepEqual(args, [
+      '--filter', '@sellright/api', 'install', '--prod', '--frozen-lockfile', '--offline', '--ignore-scripts',
+      '--virtual-store-dir=packages/api/node_modules/.pnpm', '--config.enable-global-virtual-store=false',
+      '--config.hoist-workspace-packages=false',
+    ]);
+    assert.equal(options.cwd, workspace);
+    for (const path of ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'packages/api/package.json']) {
+      assert.deepEqual(readFileSync(join(workspace, path)), readFileSync(join(repo, path)));
+    }
+    assert.deepEqual(readdirSync(join(workspace, 'packages')), ['api']);
+    assert.deepEqual(readdirSync(join(workspace, 'packages/api')), ['package.json']);
+    const modules = join(workspace, 'packages/api/node_modules');
+    const put = (path, data) => {
+      mkdirSync(join(modules, path, '..'), { recursive: true });
+      writeFileSync(join(modules, path), data);
+    };
+    put('.pnpm/fixture@1.0.0/node_modules/fixture/package.json', '{"name":"fixture","version":"1.0.0"}');
+    put('.pnpm/transitive@1.0.0/node_modules/transitive/package.json', '{"name":"transitive","version":"1.0.0"}');
+    symlinkSync('../../transitive@1.0.0/node_modules/transitive', join(modules, '.pnpm/fixture@1.0.0/node_modules/transitive'));
+    symlinkSync('.pnpm/fixture@1.0.0/node_modules/fixture', join(modules, 'fixture'));
+  });
+  assert.equal(calls, 1);
+  rmSync(workspace, { recursive: true });
+  assert.equal(realpathSync(join(runtime, 'node_modules/fixture')), join(runtime, 'node_modules/.pnpm/fixture@1.0.0/node_modules/fixture'));
+  assert.equal(realpathSync(join(runtime, 'node_modules/.pnpm/fixture@1.0.0/node_modules/transitive')), join(runtime, 'node_modules/.pnpm/transitive@1.0.0/node_modules/transitive'));
+  assert.deepEqual(readdirSync(runtime), ['node_modules']);
+  assert.equal(existsSync(join(runtime, 'node_modules/devonly')), false);
+  assert.equal(existsSync(join(repo, 'node_modules')), false);
+});
+
+test('production install propagates missing pinned dependency failure without fallback', (t) => {
+  const { repo, workspace, runtime } = workspaceFixture(t);
+  const failure = new Error('ERR_PNPM_NO_OFFLINE_TARBALL: missing pinned fixture');
+  let calls = 0;
+  assert.throws(() => installProductionDependencies(repo, workspace, runtime, () => {
+    calls++;
+    throw failure;
+  }), (error) => error === failure);
+  assert.equal(calls, 1);
+  assert.equal(existsSync(runtime), false);
+});
+
+for (const [label, target] of [['staged', 'workspace'], ['source', 'repo']]) {
+  test(`reject ${label} provenance change during production install`, (t) => {
+    const fixture = workspaceFixture(t);
+    assert.throws(() => installProductionDependencies(fixture.repo, fixture.workspace, fixture.runtime, () => {
+      writeFileSync(join(fixture[target], 'pnpm-lock.yaml'), 'modified lockfile');
+    }), new RegExp(`${label} provenance changed: pnpm-lock.yaml`));
+    assert.equal(existsSync(fixture.runtime), false);
+  });
 }
 
 test('valid production graph & archive preserve internal dependency symlinks', (t) => {
