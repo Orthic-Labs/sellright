@@ -12023,6 +12023,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Forbidden — write access required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         trace?: never;

@@ -11748,6 +11748,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Forbidden — write access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }

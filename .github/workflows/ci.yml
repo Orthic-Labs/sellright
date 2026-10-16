@@ -88,6 +88,9 @@ jobs:
         # bigger pipeline that happened to get lucky on a given run.
         run: pnpm build
 
+      - name: Packed sample disposable DB guard
+        run: pnpm --filter @sellright/sample-plugin exec vitest run test/packed-guard.test.ts
+
       - name: Verify core and admin
         id: verify_static
         run: pnpm verify:static

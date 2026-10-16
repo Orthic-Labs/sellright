@@ -446,11 +446,21 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       INSERT INTO session VALUES (100,'source_coupon_proof','AuthenticatedSession',false,'2100-01-01',1,100,10)`);
     const f = await fixtureConfig(randomUUID(), { stripe: { accountId: 'acct_rh', mode: 'live' } });
     const result = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    // This fixture lacks customer-channel membership proof, so auth rollback also blocks parity.
+    const expectedParityBlockers = [
+      { type: 'unmapped-source-field', table: 'authentication_method', blocking: true,
+        detail: 'Auth rollback unavailable; immutable baseline contains explicit identity blockers', count: 2 },
+      { type: 'unmapped-source-field', table: 'order', blocking: true,
+        detail: 'active order 100 has multiple coupon codes; target cart supports one revalidated coupon', sourceValues: ['SAVE', 'VIP'] },
+    ];
     expect(result.parityBlocked).toBe(true);
-    expect(result.parityBlockers).toEqual([expect.objectContaining({ blocking: true, sourceValues: ['SAVE', 'VIP'] })]);
+    expect(result.parityBlockers).toEqual(expectedParityBlockers);
     const manifest = JSON.parse(await readFile(f.manifestPath, 'utf8'));
     expect(manifest.parityBlocked).toBe(true);
-    expect(manifest.parityBlockers[0].sourceValues).toEqual(['SAVE', 'VIP']);
+    expect(manifest.parityBlockers).toEqual(expectedParityBlockers);
+    expect(manifest.rollbackAuthBaseline.blockers.map((blocker: { code: string }) => blocker.code)).toEqual([
+      'source_channel_membership_unavailable', 'source_customer_channel_mismatch',
+    ]);
   });
 
   it('rehearses dry-run/apply/restore for the Rotten Hand schema (no SheerID columns)', async () => {

@@ -16,8 +16,9 @@
  *   4. GET /v1/shop/subscriber/confirm/:token → pending becomes confirmed;
  *      a second confirm is idempotent; an unknown token returns the same
  *      generic HTML page (enumeration defense).
- *   5. POST /v1/shop/subscriber/unsubscribe/:token → confirmed becomes
- *      unsubscribed (RFC 8058 one-click); idempotent on the second call.
+ *   5. POST /v1/shop/subscriber/unsubscribe/:token → pending or confirmed
+ *      becomes unsubscribed (RFC 8058 one-click); old confirm links and
+ *      repeated unsubscribe cannot change that state.
  *
  * The email outbox is asserted directly (we don't need a mailer mock — the
  * scheduler is the test boundary, not the SMTP transport).
@@ -62,7 +63,7 @@ async function outboxCount(kind: string): Promise<number> {
   });
 }
 
-async function rowByEmail(email: string): Promise<{ id: string; status: string; token: string; lastSentAt: Date | null; topic: string } | undefined> {
+async function rowByEmail(email: string) {
   return withStore(STORE, async (tx) => {
     const [r] = await tx.select({
       id: s.subscriber.id,
@@ -70,6 +71,9 @@ async function rowByEmail(email: string): Promise<{ id: string; status: string; 
       token: s.subscriber.token,
       lastSentAt: s.subscriber.lastSentAt,
       topic: s.subscriber.topic,
+      confirmedAt: s.subscriber.confirmedAt,
+      unsubscribedAt: s.subscriber.unsubscribedAt,
+      updatedAt: s.subscriber.updatedAt,
     }).from(s.subscriber).where(eq(s.subscriber.email, email)).limit(1);
     return r;
   });
@@ -268,6 +272,7 @@ describe('subscriber (SUBSCRIBER-1) — confirm + unsubscribe', () => {
     expect(res.status).toBe(200);
     const after = await rowByEmail('unsub@example.com');
     expect(after?.status).toBe('unsubscribed');
+    expect(after?.unsubscribedAt).toBeInstanceOf(Date);
 
     // Idempotent: a second POST is still 200, still unsubscribed.
     const res2 = await app.request(`http://localhost/v1/shop/subscriber/unsubscribe/${row!.token}`, {
@@ -276,7 +281,78 @@ describe('subscriber (SUBSCRIBER-1) — confirm + unsubscribe', () => {
     });
     expect(res2.status).toBe(200);
     const after2 = await rowByEmail('unsub@example.com');
-    expect(after2?.status).toBe('unsubscribed');
+    expect(after2).toEqual(after);
+  });
+
+  it.each(['newsletter', 'waitlist'] as const)('revokes pending %s consent; old confirm and repeated unsubscribe are no-ops', async (kind) => {
+    const email = 'pending-unsub@example.com';
+    expect((await signup({ email, kind, ...(kind === 'waitlist' ? { topic: 'scraperight' } : {}) })).status).toBe(200);
+    const pending = await rowByEmail(email);
+    expect(pending?.status).toBe('pending');
+    const unsubscribeUrl = `http://localhost/v1/shop/subscriber/unsubscribe/${pending!.token}`;
+    const headers = { 'x-store-slug': SLUG };
+
+    // Mail scanners may visit the landing page before any recipient action.
+    expect((await app.request(unsubscribeUrl, { headers })).status).toBe(200);
+    expect(await rowByEmail(email)).toEqual(pending);
+
+    const res = await app.request(unsubscribeUrl, { method: 'POST', headers });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('You have been unsubscribed.');
+    const unsubscribed = await rowByEmail(email);
+    expect(unsubscribed?.status).toBe('unsubscribed');
+    expect(unsubscribed?.unsubscribedAt).toBeInstanceOf(Date);
+    expect(unsubscribed?.confirmedAt).toBeNull();
+
+    expect((await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { headers })).status).toBe(200);
+    expect(await rowByEmail(email)).toEqual(unsubscribed);
+    expect((await app.request(unsubscribeUrl, { method: 'POST', headers })).status).toBe(200);
+    expect(await rowByEmail(email)).toEqual(unsubscribed);
+  });
+
+  it('unsubscribes only the token-selected kind and topic for a shared address', async () => {
+    const email = 'shared-unsub@example.com';
+    await signup({ email, kind: 'newsletter' });
+    await signup({ email, kind: 'waitlist', topic: 'scraperight' });
+    await signup({ email, kind: 'waitlist', topic: 'viewright' });
+    const rows = () => withStore(STORE, (tx) =>
+      tx.select().from(s.subscriber).where(eq(s.subscriber.email, email)).orderBy(s.subscriber.id));
+    const before = await rows();
+    expect(before).toHaveLength(3);
+    const target = before.find((r) => r.kind === 'waitlist' && r.topic === 'scraperight')!;
+
+    expect((await app.request(`http://localhost/v1/shop/subscriber/unsubscribe/${target.token}`, {
+      method: 'POST', headers: { 'x-store-slug': SLUG },
+    })).status).toBe(200);
+    const after = await rows();
+    expect(after.find((r) => r.id === target.id)?.status).toBe('unsubscribed');
+    expect(after.filter((r) => r.id !== target.id)).toEqual(before.filter((r) => r.id !== target.id));
+  });
+
+  it.each(['pending', 'confirmed'] as const)('leaves a %s row unchanged for an unknown token or wrong store', async (status) => {
+    const otherSlug = 'subscriber-unsubscribe-other-store';
+    await pool.query('INSERT INTO store (id, slug, name, currency) VALUES ($1, $2, $3, $4)',
+      ['eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', otherSlug, 'Other Subscriber Store', 'USD']);
+    const email = 'scoped-unsub@example.com';
+    await signup({ email });
+    if (status === 'confirmed') {
+      await withStore(STORE, (tx) => tx.update(s.subscriber)
+        .set({ status, confirmedAt: new Date() }).where(eq(s.subscriber.email, email)));
+    }
+    const before = await rowByEmail(email);
+    expect(before?.status).toBe(status);
+    const unknown = await app.request('http://localhost/v1/shop/subscriber/unsubscribe/00000000-0000-0000-0000-000000000000', {
+      method: 'POST', headers: { 'x-store-slug': SLUG },
+    });
+    expect(unknown.status).toBe(200);
+    expect(await rowByEmail(email)).toEqual(before);
+
+    const wrongStore = await app.request(`http://localhost/v1/shop/subscriber/unsubscribe/${before!.token}`, {
+      method: 'POST', headers: { 'x-store-slug': otherSlug },
+    });
+    expect(wrongStore.status).toBe(200);
+    expect(await wrongStore.text()).toBe(await unknown.text());
+    expect(await rowByEmail(email)).toEqual(before);
   });
 
   it('GET unsubscribe/:token returns the landing page form without unsubscribing', async () => {
