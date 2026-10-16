@@ -8,7 +8,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { and, count, eq, gte, isNull, lt, sql } from 'drizzle-orm';
-import { unsafeUnscopedDb as db, type Tx } from '../db/client.js';
+import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { matchTotpStep } from './totp.js';
 
@@ -37,7 +37,7 @@ export async function regenerateRecoveryCodes(adminId: string): Promise<string[]
 }
 
 /** Caller holds the admin credential lock; replace codes in that same credential transaction. */
-export async function regenerateRecoveryCodesTx(adminId: string, tx: Tx): Promise<string[]> {
+export async function regenerateRecoveryCodesTx(adminId: string, tx: Db): Promise<string[]> {
   const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
   await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminId));
   await tx.insert(s.adminRecoveryCode).values(codes.map((c) => ({ adminUserId: adminId, codeHash: hashRecoveryCode(c) })));
