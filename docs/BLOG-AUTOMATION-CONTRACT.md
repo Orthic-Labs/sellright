@@ -1,6 +1,6 @@
 # Blog automation contract
 
-The existing blog API now advertises `seoContract: revision-v1` and
+The existing blog API advertises `seoContract: revision-v1` and
 `createContract: audit-receipt-v1`. This is an API capability, not evidence that a
 particular downstream server or public storefront has been upgraded.
 

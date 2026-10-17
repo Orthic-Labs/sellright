@@ -5,4 +5,4 @@ Built with: SellRight (generic commerce platform)
 /* SITE */
 
 Standards: HTML5, JSON-LD, Schema.org
-Components: Qwik, Vendure-style REST commerce API
+Components: Qwik, SellRight REST commerce API

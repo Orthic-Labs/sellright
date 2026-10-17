@@ -19,7 +19,15 @@ STOREFRONT_URL=https://store.example.com
 ```
 
 `SMTP_ENABLED` may be omitted; email auto-enables when `SMTP_HOST` is set. Set
-`SMTP_ENABLED=false` to force the no-op path for demos or load tests.
+`SMTP_ENABLED=false` to turn off the env-configured SMTP transport for demos or
+load tests.
+
+When `SMTP_HOST` is not set, the mailer uses the SMTP settings saved for the
+store on the admin Email settings page. When `SMTP_HOST` is set, it always wins
+and the admin page is read-only. The Compose deployment passes only `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` from `deploy/.env` to the
+API (`deploy/compose.yaml`); `SMTP_ENABLED`, the Gmail aliases and the per-app
+variables below are not forwarded there.
 
 ## Vendure Gmail Aliases
 
@@ -33,23 +41,27 @@ FROM_EMAIL=sender@example.com
 ```
 
 When `SMTP_*` values are empty, `GMAIL_USER` + `EMAIL_PASS` automatically map to
-`smtp.gmail.com:587`.
+`smtp.gmail.com:587`. `SMTP_FROM` falls back to `FROM_EMAIL`, then `GMAIL_USER`,
+then `noreply@sellright.local`.
 
 ## Per-App Sender Routing
 
-Shared stores can route email by app. This is used by RightSites, where one
-`rightsites` store sells multiple app brands.
+Shared stores can route email by app. This is meant for one store that sells
+several app brands (see `EMAIL_FROM_BY_APP` in `packages/api/src/env.ts`).
 
 ```env
 EMAIL_FROM_BY_APP=appkey=hello@app.example,otherapp=hello@other.example
 STOREFRONT_URL_BY_APP=appkey=https://app.example,otherapp=https://other.example
 ```
 
-Checkout derives the app key from the purchased product variants'
-`product_variant.app_key`. If all order lines belong to one app, confirmation
-email uses that app's sender and storefront URL. If a cart mixes apps or no app
-key is available, SellRight falls back to `SMTP_FROM` and `STOREFRONT_URL`.
+Order confirmation, refund and order-edit emails derive the app key from the
+purchased product variants' `product_variant.app_key`. If all order lines belong
+to one app, the email uses that app's sender and storefront URL. If an order
+mixes apps or no app key is available, SellRight falls back to the store's own
+`emailFrom` (or `fromEmail`) and `storefrontUrl` settings, then to `SMTP_FROM`
+and `STOREFRONT_URL`.
 
 Keep the mapped sender addresses configured as allowed Gmail/Workspace senders;
-otherwise Gmail may reject or rewrite the visible `From`.
+otherwise Gmail may reject or rewrite the visible `From` (unverified: Gmail
+behavior cannot be checked from this repository).
 

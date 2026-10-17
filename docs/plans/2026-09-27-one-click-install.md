@@ -1,3 +1,4 @@
+> Historical (2026-09-27). Current state: docs/runbooks/production-compose.md.
 # Plan: One-Click Install and Guided Setup (v2)
 
 **Status:** Approved for implementation (owner, 2026-09-27). v2 incorporates the independent review of v1 (commit `5c1fb9c`).

@@ -1,3 +1,5 @@
+> Historical (2026-07-04). Current state: docs/plans/REMAINING-WORK.md.
+
 # Box validation runbook → deploy (2026-07-04)
 
 **Validation COMPLETE.** All 12 lanes are merged to `origin/main` (`bff9e1d`) and validated on the box: `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB tests green**. Box validation caught + fixed 5 defects local gates missed (see the DISPATCH ledger). **What remains is DEPLOY** (§Deploy below) — `main` is not yet live; the box dev API still runs the pre-merge `dist/`. The sections below are kept as the proven procedure (re-run if you touch these lanes) and the deploy runbook. The audit backlog (unbuilt findings) is the ledger at the end of `DISPATCH.md`.

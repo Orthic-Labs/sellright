@@ -1,6 +1,6 @@
 # StoreKit policy (de-fork plan 3.5)
 
-Implements the policy contract of `rs-docs/docs/defork/STOREKIT.md` §3–§5 in SellRight.
+Implements the policy contract of `rs-docs/docs/defork/STOREKIT.md` §3 to §5 in SellRight (that document is not in this repository; unverified).
 Engine owns routing, JWS verification, operation claims, lock planning and HTTP mapping.
 A registered policy owns app-specific decisions.
 
@@ -16,7 +16,9 @@ A registered policy owns app-specific decisions.
 | Fork-reference kit (test-only, heardright rules) | `packages/api/src/licensing/storekit/fork-reference-policy.kit.ts` |
 | Shared Apple-like JWS fixture (test-only) | `packages/api/src/licensing/storekit/jws-fixture.ts` |
 | Unit tests (registry, decideMaterialize, respond precedence) | `packages/api/src/licensing/storekit/policy.test.ts` |
-| DB tests (T-K1, route + kit, T-K2 partial, T-K3 contract, T-K6) | `packages/api/src/licensing/storekit/policy.db.test.ts` |
+| DB tests (T-K1, T-K3, T-K6) | `packages/api/src/licensing/storekit/policy.db.test.ts` |
+| DB tests with the fork-reference kit (T-K2 partial, T-K3, T-K5, T-K9, T-K12) | `packages/api/src/licensing/storekit/policy-kit.db.test.ts` |
+| Default-policy goldens (T-K4, default policy only) | `packages/api/src/licensing/storekit/policy-golden.db.test.ts` |
 | Lock-audit allow-list reseed | `packages/api/scripts/lock-audit.allowlist.json` |
 
 ## Flow
@@ -43,7 +45,7 @@ Link (`POST /v1/shop/pro/link-storekit`):
 
 ## Registration
 
-- `sellright-default` registers itself as the fallback when `default-policy.ts` loads.
+- `sellright-default` is installed as the fallback by `installDefaultStoreKitPolicy()` (`default-policy.ts`), called by `createApp()` and the StoreKit routes; it is never registered at import.
 - A policy with `appKeys` serves those keys. A second policy for a served key, or a second fallback, throws at registration.
 - Default behaviour: unchanged for every existing store (the default issues the same SQL in the same order, apart from the purchase advisory lock).
 
@@ -55,7 +57,7 @@ Link (`POST /v1/shop/pro/link-storekit`):
 
 ## Fork-reference kit (test-only)
 
-Reproduces, through the policy contract and the built-in route:
+Reproduces, through the policy contract and the built-in route (the `file:line` citations below are copied from the kit header and name the RightSites fork's code; they do not match the current lines of the files of the same name in this repository, and the fork is not here: unverified):
 - platform outside {ios, ipados} rejected with the fork message (`routes/storekit-webhooks.ts:196`)
 - upgrade product requires a verified paired proof (`:198–200`)
 - materialize for every action except the upgrade product (`:117`)
@@ -86,11 +88,11 @@ Reproduces, through the policy contract and the built-in route:
 ## Not done (open against STOREKIT §8)
 
 - `linkResponseExtension` in the published OpenAPI document (see above).
-- Order-released credit (`releasedUpgradeOrder`), `order_reservation` and the settlement leg of T-K2 (PAYMENT-TIMING
-  §3.2–3.4, migration 0089): owned by the payment lanes.
+- Order-released credit (`releasedUpgradeOrder`) and the settlement leg of T-K2 (PAYMENT-TIMING
+  §3.2 to §3.4): not reproduced by the fork-reference kit (`fork-reference-policy.kit.ts`). The `order_reservation` table itself exists (migration 0091, see PAYMENT-POLICY.md).
 - T-K11 `validUpgradeOrder`: depends on reservations and is owned by the payment lanes.
 - Device lease credential and `issueDeviceLease`; heardright lease wire is not reproduced.
 - T-K4 heardright goldens from the old runtime (only the default-policy goldens exist, recorded from HEAD).
-- T-K7 `LockOrderRecorder`, T-K8 `storekit_event`, T-K14 rollback compatibility, T-K15 sandbox/platform matrix,
-  T-K16 pairwise interleaving matrix: prerequisites not in this lane.
+- T-K7 `LockOrderRecorder`, T-K14 rollback compatibility, T-K15 sandbox/platform matrix,
+  T-K16 pairwise interleaving matrix: no match for these ids in `packages/api/src`. T-K8 `storekit_event` is implemented (migration 0088, `licensing/storekit-events.ts`; see INSTRUMENTATION.md).
 - The `lock-audit` allow-list still records `applyStoreKitNotification` (#19).

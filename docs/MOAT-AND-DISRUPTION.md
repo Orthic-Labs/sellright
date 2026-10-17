@@ -1,6 +1,6 @@
 # Moat And Disruption
 
-Last reviewed: 2026-06-13
+Last reviewed: 2026-10-14 (SellRight claims checked against code; competitor descriptions not rechecked)
 
 SellRight's disruption strategy is not to out-feature Shopify. It is to serve a smaller operator that the major platforms do not optimize for: the technical owner of several brands who wants one backend, one admin, and direct control.
 
@@ -40,7 +40,7 @@ Defensible:
 - tested migration from Vendure-like systems;
 - multi-brand operating model;
 - exact patterns for static catalog + dynamic checkout;
-- payment-provider layer proven across Stripe, NMI, and Sezzle;
+- payment-provider layer with Stripe, NMI, and Sezzle adapters;
 - app/software licensing built into catalog sales;
 - operational runbooks for self-hosted commerce.
 
@@ -94,5 +94,5 @@ SellRight becomes meaningfully defensible only when these are true:
 - Stripe and one non-Stripe gateway are live.
 - Refunds are provider-backed and tested.
 - Backups and restore are proven.
-- Migration docs exist from at least one incumbent platform.
+- Migration docs exist from at least one incumbent platform (Vendure: `docs/runbooks/vendure-store-import.md`).
 - The OpenAPI contract is stable enough for external consumers.

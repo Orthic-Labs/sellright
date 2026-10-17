@@ -1,3 +1,5 @@
+> Historical (2026-10-11). Current state: packages/storefront/src/platform/gateway/index.tsx.
+
 # Brand views: presentation gateway (issue 206)
 Spec: `.work/agents/2026-10-11/brand-views-gateway.astra-ruling.txt` (option (c) plus the result constraint, steps 1-5, its test list). Reviews whose shapes must be covered: `brand-views-pr1.astra1.json` … `astra6.json`. Base: `feat/brand-views-gateway` on PR1 (`d798c70`). Paths are under `packages/storefront/`.
 

@@ -9,34 +9,42 @@ editing SellRight source — `app.ts`, `env.ts`, `store-context.ts`,
 Every seam below defaults to SellRight's own prior behavior exactly — an
 unconfigured checkout is unchanged.
 
-## 1. Extra routes: `registerApiPlugin` (`src/plugins.ts`)
+## 1. Extra routes: `EnginePlugin` (`@sellright/api`)
 
-Register a Hono/OpenAPIHono sub-app and an optional init hook from your own
-entrypoint, before calling `createApp()`.
+Register a Hono/OpenAPIHono sub-app and optional hooks by passing an
+`EnginePlugin` to `createApp` from your own entrypoint. The package `exports`
+map is a closed list (`packages/api/package.json`), so a fork imports from
+`@sellright/api` and its subpaths, never from `@sellright/api/src/...`. The
+lifecycle and the other plugin members are in [ENGINE-SDK.md](ENGINE-SDK.md).
 
 ```ts
 // your-fork/src/index.ts
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { registerApiPlugin } from '@sellright/api/src/plugins.js';
-import { createApp } from '@sellright/api/src/app.js';
+import { createApp, type EnginePlugin } from '@sellright/api';
 
 const myRoutes = new OpenAPIHono();
 myRoutes.get('/v1/my-app/ping', (c) => c.json({ ok: true }));
 
-registerApiPlugin({
+const myPlugin: EnginePlugin = {
   name: 'my-app',
-  routes: myRoutes,
-  init: (app) => { /* e.g. app.use(...) for a plugin-only middleware */ },
-});
+  routes: myRoutes, // mounted AFTER every built-in route
+  preRoute(app) { /* e.g. app.use(...) for a plugin-only middleware */ },
+};
 
-const app = createApp(); // mounts myRoutes AFTER every built-in route, then runs init
+const engine = await createApp({ plugins: [myPlugin] });
+await engine.start({ handleSignals: true });
 ```
+
+The legacy `registerApiPlugin` (`src/plugins.ts`) still mounts plugins registered
+before the app is built, but it is not part of the package exports.
 
 ## 2. Extra tables: `src/db/extensions/` (`drizzle.config.ts`)
 
 Drop your own Drizzle `pgTable(...)` module under `src/db/extensions/` — the
 `schema` array in `drizzle.config.ts` globs `src/db/extensions/**/*.ts`
 alongside `src/db/schema.ts`, so `pnpm db:generate` picks it up automatically.
+A plugin that ships as its own package declares `schema` and a `migrations` track
+on its `EnginePlugin` instead (see [ENGINE-SDK.md](ENGINE-SDK.md)).
 
 ```ts
 // src/db/extensions/schema-myapp.ts
@@ -54,28 +62,37 @@ export const myappWidget = pgTable('myapp_widget', {
 Import it directly from your own route files (`../db/extensions/schema-myapp.js`)
 — it is not auto-added to the shared `s.*` namespace exported by `schema.ts`.
 
-## 3. Extra env vars: `extendEnv` (`src/env.ts`)
+## 3. Extra env vars: `ctx.extendEnv` (`configure` hook)
 
 ```ts
-import { extendEnv } from '../env.js';
 import { z } from 'zod';
+import type { EnginePlugin } from '@sellright/api';
 
-export const myEnv = extendEnv(
-  {
-    MY_APP_FEATURE_FLAG: z.enum(['0', '1']).default('0'),
-    MY_APP_WEBHOOK_SECRET: z.string().optional(),
-  },
-  (merged) => {
-    // optional boot-time validator; return an array of error strings to abort boot
-    if (merged.NODE_ENV === 'production' && !merged.MY_APP_WEBHOOK_SECRET) {
-      return ['MY_APP_WEBHOOK_SECRET must be set in production'];
-    }
-  },
-);
+export const myPlugin: EnginePlugin = {
+  name: 'my-app',
+  configure(ctx) {
+    const myEnv = ctx.extendEnv(
+      {
+        MY_APP_FEATURE_FLAG: z.enum(['0', '1']).default('0'),
+        MY_APP_WEBHOOK_SECRET: z.string().optional(),
+      },
+      (merged) => {
+        // optional boot-time validator; return an array of error strings to abort boot
+        if (merged.NODE_ENV === 'production' && !merged.MY_APP_WEBHOOK_SECRET) {
+          return ['MY_APP_WEBHOOK_SECRET must be set in production'];
+        }
+      },
+    );
 
-myEnv.MY_APP_FEATURE_FLAG; // '0' | '1'
-myEnv.NODE_ENV; // SellRight's own env fields are still present
+    myEnv.MY_APP_FEATURE_FLAG; // '0' | '1'
+    myEnv.NODE_ENV; // SellRight's own env fields are still present
+  },
+};
 ```
+
+`extendEnv` (`src/env.ts`) must run inside `createApp`: a module that calls it
+at import time initialises the env early, and `createApp` then refuses to start
+(`RUNTIME_PREINITIALISED`).
 
 ## 4. Many hosts → one store, with prefix stripping (`store-context.ts`)
 
@@ -93,7 +110,9 @@ STORE_HOST_STRIP_PREFIXES=www,buy,get,store
 { "hostnames": ["myapp.example"] }
 ```
 
-`buy.myapp.example` and `get.myapp.example` now resolve to the same store.
+`buy.myapp.example` and `get.myapp.example` resolve to the same store.
+(`hostMatchesAny` in `store-context.ts` already matches subdomains of a registered
+hostname, so these two hosts also resolve with the variable unset.)
 Unset (default): no stripping, identical to today.
 
 ## 5. Dev/CI default store (`store-context.ts`)
@@ -138,7 +157,7 @@ APPS_FALLBACK_STORE_SLUG=myapp-consolidated
   (`licensing/app-store-fallback.ts`) instead of 404ing.
 
 ```ts
-import { appKeyHeaderNames, firstHeader } from '../licensing/app-headers.js';
+import { appKeyHeaderNames, firstHeader } from '@sellright/api/licensing';
 firstHeader(c, appKeyHeaderNames()); // reads whichever header(s) you configured
 ```
 
@@ -163,8 +182,8 @@ Nothing registered (the default) means every route's response is byte-for-byte
 what it was before this seam existed.
 
 ```ts
-// your-fork/src/index.ts — before createApp()
-import { registerEntitlementProvider, EntitlementVeto } from '@sellright/api/src/licensing/entitlement-provider.js';
+// your-fork/src/index.ts - call from an EnginePlugin's services(ctx) hook
+import { registerEntitlementProvider, EntitlementVeto } from '@sellright/api/licensing';
 
 registerEntitlementProvider({
   async onActivate(tx, ctx) {
@@ -199,6 +218,8 @@ with signed-token issuance inlined into each route):
 | `503 signing_unavailable` / `400 device_id_required` responses when signing fails or a required field is missing | `throw new EntitlementVeto(503, 'signing_unavailable', ...)` / `throw new EntitlementVeto(400, 'device_id_required', ...)` |
 | Nothing today on `/licenses/deactivate` (the fork's version is a plain passthrough to `deactivateDevice`) | `onDeactivate` is available for future use (e.g. revoking a cached signed token) but doesn't need a hook body yet |
 | `withCurrentDevicePolicy` / pooled-seat overrides in the trial route | **Not** part of this seam — that's the existing `registerDevicePolicy` seam (`licensing/device-policy.ts`); leave those calls where they are |
+
+The left column describes a RightSites fork that is not in this repository (unverified); the right column is checked against `licensing/entitlement-provider.ts`.
 
 Once the fork's `routes/apps.ts` fork is replaced by this provider, the fork
 no longer needs its own copy of `routes/apps.ts` at all — it can depend on

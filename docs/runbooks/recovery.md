@@ -2,7 +2,7 @@
 
 Covers total server loss for the single-VPS Compose appliance: what a backup
 set contains, the recovery kit, restoring to a new server, and the automated
-drill CI runs on every push to `main`.
+drill CI runs on pushes to `main` and on pull requests.
 
 ## Backup sets
 
@@ -20,7 +20,7 @@ containing:
 **encrypt-then-MAC** authenticated encryption and copies the results to
 `SELLRIGHT_OFFSITE_REMOTE` (any `rclone`-configured remote, e.g. an
 S3-compatible bucket, or a plain local path for testing) set in
-`$SELLRIGHT_HOME/.env`. Nothing is pushed off-site unless that variable is
+`$SELLRIGHT_HOME/.env`. Nothing is pushed off-site unless you pass `--offsite` and that variable is
 set. For each part:
 
 - Two keys are derived from the recovery kit's `masterKey` + `kitId` via
@@ -55,9 +55,11 @@ time (root-owned, `chmod 600`):
 ```
 
 Download it (`sellright recovery-kit` prints it) and store it somewhere other
-than this server — it is the only thing that can decrypt an off-site backup,
-it is never re-derivable, and losing both it and the server is unrecoverable.
-It is not re-generated on re-install if one already exists.
+than this server. It is the only thing that can decrypt an off-site backup, it
+cannot be re-derived once the server's `.env` is gone, and losing both it and
+the server is unrecoverable. An installation administrator can also download it
+from the admin API (`GET /v1/admin/system/recovery-kit`, which requires a recent
+step-up). It is not re-generated on re-install if one already exists.
 
 ## Restore to a new server
 
@@ -103,11 +105,12 @@ set you restored.
 
 ## Restore drill (automated, CI)
 
-`.github/workflows/ci.yml`'s `verify-appliance` job runs on every push to
-`main` after the `release` job (build/push/sign) succeeds:
+`.github/workflows/ci.yml`'s `verify-appliance` job runs after the `release`
+job (build/push/sign) on pushes to `main` unless `release` failed or was
+cancelled, and on pull requests, where `release` is skipped:
 
-1. Builds the appliance from this commit's own images in an isolated Compose
-   project (`-p sellright-drill`), with `SMTP_ENABLED=false` and
+1. Builds the `api`, `admin` and `storefront` images from this commit
+   (`compose.build.yaml`) in an isolated Compose project (`-p sellright-drill`), with `SMTP_ENABLED=false` and
    `JOBS_ENABLED=0` — no outbound email, no background jobs, no payment
    provider calls. `SELLRIGHT_OFFSITE_REMOTE` points at a plain local
    directory (`rclone` treats a path with no `remote:` prefix as local
@@ -123,7 +126,7 @@ set you restored.
    fails with an integrity-check error — and that the live store is
    unaffected (still exactly one `slug = 'drill'` row).
 4. `docker compose down -v` — destroys every volume, simulating total loss.
-5. Brings up a bare Postgres, runs `sellright restore --kit … --set
+5. Brings up a fresh Postgres and `db-init`, runs `sellright restore --kit <kit> --set
    <off-site dir> --yes` against the untampered off-site set, and asserts:
    `store.slug = 'drill'` is present in the **promoted, live** `sellright`
    database (not a side database), both sentinels are present in the live
@@ -136,8 +139,9 @@ end of the job regardless of outcome (`if: always()`).
 
 ## What's still manual / follow-up
 
-- `sellright update` is a stub (WS-E ships maintenance-mode + functional-check
-  updates with automatic pre-reopen rollback).
+- `sellright update` never restores a backup automatically. If a migration
+  fails it leaves maintenance mode on and prints the backup set location; run
+  `sellright restore` yourself once you decide the schema is inconsistent.
 - Off-site backup needs `rclone` installed on the host and
   `SELLRIGHT_OFFSITE_REMOTE` configured; `install.sh` does not install or
   configure `rclone` today.

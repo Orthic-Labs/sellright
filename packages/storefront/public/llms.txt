@@ -1,6 +1,6 @@
 # Storefront Demo
 
-> A neutral, themeable e-commerce storefront built on SellRight (generic commerce API + Qwik frontend). This is a demo instance — catalog, pricing, and copy are placeholders configured per deployment via the theme config (see `src/theme/theme.config.ts`).
+> A neutral, themeable e-commerce storefront built on SellRight (generic commerce API + Qwik frontend). This is a demo instance. Store identity and copy are placeholders configured per deployment via the theme config (see `src/theme/theme.config.ts`), and the catalog and prices come from the store's SellRight catalog.
 
 ## Products
 

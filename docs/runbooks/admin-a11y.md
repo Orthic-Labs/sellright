@@ -17,13 +17,14 @@ the admin boots with `import.meta.env.MODE === 'qa'`. It attaches two globals:
 In `main.tsx`:
 
 ```ts
-if (import.meta.env.MODE === 'qa') {
+if ((import.meta as any).env?.MODE === 'qa') {
   void import('./qa-a11y.js');
 }
 ```
 
-Vite statically eliminates the import in production builds (the `MODE` check
-is a string literal), so the helper never ships to real users.
+A production build runs with `MODE` set to `production`, so the import never
+executes there. Whether Vite also drops the chunk from the bundle is unverified
+(it needs a build to check).
 
 ## Manual workflow (today)
 
@@ -32,7 +33,8 @@ is a string literal), so the helper never ships to real users.
 pnpm --filter @sellright/admin qa:browser
 # → http://127.0.0.1:4300/
 
-# 2. Log in (qa-mocks give a fake admin), navigate to the page under test.
+# 2. Open the page with ?qa=1 (qa-mocks answer GET reads such as /me with fake
+#    data; writes still hit the network), navigate to the page under test.
 
 # 3. In devtools console:
 await __runA11yAudit()
@@ -65,10 +67,12 @@ test('home has no critical a11y violations', async ({ page }) => {
 })
 ```
 
-The Playwright runner + snapshot directory are separate infrastructure
-decisions (where do violations live? HTML report or just JSON? which CI step
-runs them?). Land that as a dedicated PR — this runbook only assumes the
-contract `window.__runA11yAudit()` is stable.
+The admin package already has a Playwright setup (`packages/admin/playwright.config.ts`,
+specs in `packages/admin/e2e/`, run by the `e2e-admin` CI job), and no spec calls
+`__runA11yAudit` yet. That e2e build is not a `qa` mode build, so
+`window.__runA11yAudit` is not present there. Where violations are reported
+(HTML report or just JSON) and which CI step runs them are separate decisions;
+this runbook only assumes the contract `window.__runA11yAudit()` is stable.
 
 ## What this catches (and doesn't)
 

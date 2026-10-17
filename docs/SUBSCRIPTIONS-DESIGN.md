@@ -1,3 +1,5 @@
+> Historical (2026-06-20). Current state: packages/api/src/payments/subscriptions.ts.
+
 # Subscriptions / recurring billing — design (#2)
 
 > Status: **design for sign-off** — not built yet. Grounded in Stripe research (`.audit/stripe-research.json`). Approve / adjust the decisions, then I implement in the phases below.

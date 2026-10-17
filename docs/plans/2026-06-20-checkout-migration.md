@@ -1,3 +1,5 @@
+> Historical (2026-06-20). Current state: packages/api/src/routes/checkout.ts.
+
 # Plan — Storefront checkout-flow migration (Vendure/NMI → SellRight/Stripe)
 
 > **Scope honesty:** this is the conversion path AND a payment-gateway change. The design below is world-class and buildable, but the **live Stripe payment leg cannot be verified autonomously** (needs live Stripe test keys on the box + a browser + a test card + Adrian's eyes on the checkout UX). Treat implementation as: build-verified + committed behind the existing `VITE_SERVER_CART`/a `VITE_SR_CHECKOUT` flag, with a **mandatory human verification gate** (one real test-mode transaction) before it's trusted. This is the one place in the SellRight build where "don't wait unless blocker" yields to "a payment path needs human eyes."

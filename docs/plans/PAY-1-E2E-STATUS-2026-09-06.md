@@ -1,3 +1,5 @@
+> Historical (2026-09-06). Current state: docs/plans/REMAINING-WORK.md.
+
 # PAY-1 E2E — session status (2026-09-06)
 
 Working state of the PAY-1 close-out run. Nothing in this file is committed canon; `docs/plans/REMAINING-WORK.md` remains the governing backlog.

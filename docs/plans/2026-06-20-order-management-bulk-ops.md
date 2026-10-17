@@ -1,3 +1,5 @@
+> Historical (2026-06-20). Current state: packages/api/src/routes/admin-order-ops.ts.
+
 # Plan — Order management: bulk cancel / soft-delete (trash) / restore / purge (SellRight)
 
 **Goal:** Give the operator a safe, reversible-by-default way to clear orders in bulk from the admin Orders page — cancel unpaid orders, trash/restore (soft-delete), and permanently purge — closing the "no way to bulk-delete orders" gap.

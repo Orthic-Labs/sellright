@@ -1,3 +1,5 @@
+> Historical (2026-06-20). Current state: packages/api/src/routes/cart.ts.
+
 # Plan — World-class server-authoritative cart (2026-06-20)
 
 **Goal:** Make the server `cart` the single source of truth with an optimistic client mirror, so SellRight gets cross-device carts, abandoned-cart analytics, and always-correct pricing — without losing instant add-to-cart UX.

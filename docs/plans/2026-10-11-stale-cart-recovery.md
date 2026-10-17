@@ -1,3 +1,5 @@
+> Historical (2026-10-11). Current state: packages/storefront/src/services/CartService.ts.
+
 # Converted-cart handling (no recovery) — design (v5.1)
 
 Status: **v5.2** (v5.1 plus §4.3: entry decision, late resume and resume payment recovery as implemented after review rounds 1-2). Replaces v1-v4 ("stale-cart recovery") with the minimal design recommended in `.work/agents/2026-10-11/stale-cart.astra-minimal.txt`, which is the specification. v5.1 resolves the three open findings of `stale-cart.astra5.json`: **lock ownership** (§4.1a, finding 1), **a resume view that bypasses the form gates** (§4.3, finding 2) and **CartContext synchronisation after classified failures** (§4.4, finding 3). Its code is implemented in the working tree.

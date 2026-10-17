@@ -1,3 +1,5 @@
+> Historical (2026-07-04). Current state: docs/plans/REMAINING-WORK.md.
+
 # DISPATCH — the ONE live work order (2026-07-04)
 
 **This is the only document to dispatch agents from.** It turns the 6-model migration-readiness audit (`../../rank.md` + the source audit) into copy-pasteable lanes. Every claim below was re-verified against the code at `25c4b35` before it became a lane — findings that failed verification (qwen's cross-tenant HIGH, the three "missing" indexes that exist) are NOT here.

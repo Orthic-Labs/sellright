@@ -1,6 +1,6 @@
 # Payment policy (de-fork plan 3.4, steps 4-6)
 
-Implements the policy contract of `rs-docs/docs/defork/PAYMENT-TIMING.md` §3-§5 as built in SellRight.
+Implements the policy contract of `rs-docs/docs/defork/PAYMENT-TIMING.md` §3-§5 as built in SellRight (that document is not in this repository; unverified).
 The engine owns attempt rows, provider calls, sweeps and HTTP mapping. A registered policy owns
 app-specific decisions. Default (`sellright-default`) allows everything; orders without reservations
 behave exactly as before.
@@ -9,8 +9,10 @@ behave exactly as before.
 
 | Hook | Status | Call site |
 |---|---|---|
-| `beforePaymentAttempt(tx, input)` | implemented (step 4) | before the attempt row, replay lookup, provider session or PaymentIntent (`payments/policy/host.ts`, `gateway-payment.ts`, `routes/pay.ts` mint loop) |
-| `beforeCapture`, `authorizeInvoiceEffect`, `revalidateForIssuance` | not yet | later steps, with their call sites |
+| `beforePaymentAttempt(tx, input)` | implemented | before the attempt row, replay lookup, provider session or PaymentIntent (`payments/policy/host.ts`, `gateway-payment.ts`, `routes/pay.ts` mint loop) |
+| `beforeCapture` | implemented | `jobs/gateway-recovery.ts` (Sezzle decision transaction) |
+| `authorizeInvoiceEffect`, `revalidateForIssuance` | implemented | `payments/settlement/handlers.ts` |
+| `shapeSettlementResponse`, `onReservationTransition`, `lockPlan`, `onEntitlementReversal`, `checkoutEligibility`, `onCheckoutOrder`, `checkoutReplayAllowed`, `legacyCheckoutFingerprint` | implemented | call sites listed in the header of `payments/policy/types.ts` |
 
 A policy receives the order row already locked under `HeldLocks` (from `withLockedSet`) and the
 order's reservation rows in any state. Hooks never call a provider and never write `payment` or
@@ -51,7 +53,7 @@ over `held|consumed`.
 - **Cancellation race**: when the sweep's cancel loses to a succeeded PaymentIntent, the sweep settles
   (consume). When it wins, the attempt is `cancelled`, the order stays alive and the hold stays `held`.
 - Money that lands after a release follows I1 (recorded, `payment_after_cancel`). Operator overrides
-  (`released_unverified`) are an admin-route concern, not implemented here.
+  (`released_unverified`) go through `POST /v1/admin/payment-reconciliation/reservations/{id}/override-release` (`routes/admin-gateway-payments.ts`, `overrideRelease` in `payments/reservation.ts`).
 
 ## 4. Deadlines and sweeps
 
@@ -76,8 +78,7 @@ and leader lock, per store, in this order:
 
 Failure handling (2-4): exponential backoff in `attempt.context.recovery` (`nextAt`); after
 `STRIPE_SWEEP_MAX_TRIES` (5) the attempt is `recovery.manual`, a `stripe_intent_unresolvable` audit alert is
-written, and the sweeper stops touching it. Manual dispositions (`cancel-intent`, `override-release`) are
-the admin routes of PAYMENT-TIMING §5.3, not yet implemented.
+written, and the sweeper stops touching it. The manual disposition `override-release` is implemented as an admin route (section 3); no `cancel-intent` route exists in `packages/api/src`.
 
 An order with an unresolved open or processing intent, or an open pre-mint row, is not quiescent and is
 excluded from the stale-order cancel claim until resolved.
@@ -97,5 +98,4 @@ T-S3 (balance intent cancelled past the deadline, fresh and processing intents u
 tries), the orphan pre-mint cases (bind, cancel, ambiguous, search error), and consume atomicity with the
 settlement. Stripe is mocked at the retrieve/search/cancel seam.
 
-Not covered in this step: `reservation-release-sweep` (the 15-minute safety net for a lost release event),
-the admin disposition routes, and the policy hooks listed as not yet implemented in section 1.
+`reservation-release-sweep` (the 15-minute safety net for a lost release event) is implemented in `jobs/reservation-release-sweep.ts`, scheduled in `jobs/scheduler.ts` and referenced by `payments/reservation-release-wiring.db.test.ts`.
