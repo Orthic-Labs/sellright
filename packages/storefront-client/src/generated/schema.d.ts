@@ -6723,6 +6723,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         amount?: number;
+                        creditMerchandiseReturn?: boolean;
                         idempotencyKey: string;
                         lines?: {
                             /** Format: uuid */
@@ -8977,6 +8978,7 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        creditMerchandiseReturn?: boolean;
                         /** Format: uuid */
                         paymentId?: string;
                         restock?: boolean;
@@ -14948,6 +14950,7 @@ export interface paths {
                         "application/json": {
                             billingAddress?: unknown;
                             code: string;
+                            couponCodes: string[];
                             currency: string;
                             discountTotal: number;
                             fulfillments: {
@@ -16496,6 +16499,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         couponCode?: string;
+                        couponCodes?: string[];
                         /** Format: email */
                         email?: string;
                         items?: {
@@ -16518,6 +16522,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             customerId: string | null;
                             discountTotal: number;
@@ -16537,8 +16551,13 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
                             revision: number;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             status: string;
                             subtotal: number;
@@ -16577,7 +16596,11 @@ export interface paths {
             parameters: {
                 query?: {
                     couponCode?: string;
+                    couponCodes?: string;
+                    pricingIntent?: "preview" | "checkout";
+                    redeemPoints?: number;
                     shipCountry?: string;
+                    shippingMethodCode?: string;
                 };
                 header?: never;
                 path: {
@@ -16599,6 +16622,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             customerId: string | null;
                             discountTotal: number;
@@ -16618,8 +16651,13 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
                             revision: number;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             status: string;
                             subtotal: number;
@@ -16677,6 +16715,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             customerId: string | null;
                             discountTotal: number;
@@ -16696,8 +16744,13 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
                             revision: number;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             status: string;
                             subtotal: number;
@@ -16729,6 +16782,16 @@ export interface paths {
                                     code: string;
                                     reason?: string;
                                 } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
                                 currency: string;
                                 customerId: string | null;
                                 discountTotal: number;
@@ -16748,8 +16811,13 @@ export interface paths {
                                     sku: string;
                                     unitPrice: number;
                                 }[];
+                                pointsDiscount: number;
                                 pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
                                 revision: number;
+                                shippingMethodCode: string | null;
                                 shippingTotal: number;
                                 status: string;
                                 subtotal: number;
@@ -16857,12 +16925,17 @@ export interface paths {
                 content: {
                     "application/json": {
                         couponCode?: string;
+                        couponCodes?: string[];
                         expectedRevision?: number;
                         lines: {
                             quantity: number;
                             sku: string;
                         }[];
+                        /** @enum {string} */
+                        pricingIntent?: "preview" | "checkout";
+                        redeemPoints?: number;
                         shipCountry?: string;
+                        shippingMethodCode?: string;
                     };
                 };
             };
@@ -16879,6 +16952,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             customerId: string | null;
                             discountTotal: number;
@@ -16898,8 +16981,13 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
                             revision: number;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             status: string;
                             subtotal: number;
@@ -16931,6 +17019,16 @@ export interface paths {
                                     code: string;
                                     reason?: string;
                                 } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
                                 currency: string;
                                 customerId: string | null;
                                 discountTotal: number;
@@ -16950,8 +17048,13 @@ export interface paths {
                                     sku: string;
                                     unitPrice: number;
                                 }[];
+                                pointsDiscount: number;
                                 pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
                                 revision: number;
+                                shippingMethodCode: string | null;
                                 shippingTotal: number;
                                 status: string;
                                 subtotal: number;
@@ -17009,6 +17112,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             customerId: string | null;
                             discountTotal: number;
@@ -17028,8 +17141,13 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
                             revision: number;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             status: string;
                             subtotal: number;
@@ -17070,6 +17188,16 @@ export interface paths {
                                     code: string;
                                     reason?: string;
                                 } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
                                 currency: string;
                                 customerId: string | null;
                                 discountTotal: number;
@@ -17089,8 +17217,13 @@ export interface paths {
                                     sku: string;
                                     unitPrice: number;
                                 }[];
+                                pointsDiscount: number;
                                 pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
                                 revision: number;
+                                shippingMethodCode: string | null;
                                 shippingTotal: number;
                                 status: string;
                                 subtotal: number;
@@ -17138,13 +17271,18 @@ export interface paths {
                 content: {
                     "application/json": {
                         couponCode?: string;
+                        couponCodes?: string[];
                         items: {
                             quantity: number;
                             sku: string;
                         }[];
+                        /** @enum {string} */
+                        pricingIntent?: "preview" | "checkout";
+                        redeemPoints?: number;
                         shipCountry?: string;
                         /** @default 0 */
                         shipping?: number;
+                        shippingMethodCode?: string;
                     };
                 };
             };
@@ -17161,6 +17299,16 @@ export interface paths {
                                 code: string;
                                 reason?: string;
                             } | null;
+                            couponCodes: string[];
+                            coupons: {
+                                applied: boolean;
+                                appliedAmount: number;
+                                availableAmount?: number;
+                                code: string;
+                                kind?: string;
+                                reason?: string;
+                                remainingAmount?: number;
+                            }[];
                             currency: string;
                             discountTotal: number;
                             grandTotal: number;
@@ -17178,7 +17326,12 @@ export interface paths {
                                 sku: string;
                                 unitPrice: number;
                             }[];
+                            pointsDiscount: number;
                             pointsToEarn?: number;
+                            /** @enum {string} */
+                            pricingIntent: "preview" | "checkout";
+                            quoteHash: string;
+                            shippingMethodCode: string | null;
                             shippingTotal: number;
                             subtotal: number;
                             taxTotal: number;
@@ -17218,6 +17371,7 @@ export interface paths {
                         claimId: string;
                         countryCode?: string | null;
                         couponCode?: string | null;
+                        couponCodes?: string[];
                         items: {
                             quantity: number;
                             variantId: string;
@@ -17239,6 +17393,16 @@ export interface paths {
                                     code: string;
                                     reason?: string;
                                 } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
                                 currency: string;
                                 customerId: string | null;
                                 discountTotal: number;
@@ -17258,8 +17422,13 @@ export interface paths {
                                     sku: string;
                                     unitPrice: number;
                                 }[];
+                                pointsDiscount: number;
                                 pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
                                 revision: number;
+                                shippingMethodCode: string | null;
                                 shippingTotal: number;
                                 status: string;
                                 subtotal: number;
@@ -17817,11 +17986,13 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        acceptedQuoteHash?: string;
                         billingAddress?: {
                             [key: string]: unknown;
                         };
                         cartToken?: string;
                         couponCode?: string;
+                        couponCodes?: string[];
                         /** Format: email */
                         email?: string;
                         expectedRevision?: number;
@@ -17889,6 +18060,16 @@ export interface paths {
                                     code: string;
                                     reason?: string;
                                 } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
                                 currency: string;
                                 customerId: string | null;
                                 discountTotal: number;
@@ -17908,8 +18089,13 @@ export interface paths {
                                     sku: string;
                                     unitPrice: number;
                                 }[];
+                                pointsDiscount: number;
                                 pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
                                 revision: number;
+                                shippingMethodCode: string | null;
                                 shippingTotal: number;
                                 status: string;
                                 subtotal: number;
@@ -17918,6 +18104,51 @@ export interface paths {
                                 unavailable: string[];
                             };
                             code?: string;
+                            quote?: {
+                                coupon: {
+                                    applied: boolean;
+                                    code: string;
+                                    reason?: string;
+                                } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
+                                currency: string;
+                                discountTotal: number;
+                                grandTotal: number;
+                                lines: {
+                                    available: boolean;
+                                    availableQuantity: number | null;
+                                    isPreOrder?: boolean;
+                                    lineDiscount: number;
+                                    lineSubtotal: number;
+                                    lineTotal: number;
+                                    name: string;
+                                    quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
+                                    sku: string;
+                                    unitPrice: number;
+                                }[];
+                                pointsDiscount: number;
+                                pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
+                                shippingMethodCode: string | null;
+                                shippingTotal: number;
+                                subtotal: number;
+                                taxTotal: number;
+                                unavailable: string[];
+                            };
+                            quoteHash?: string;
                             reason?: string;
                             revision?: number;
                             skus?: string[];
@@ -18664,6 +18895,7 @@ export interface paths {
                             } | null;
                             code: string;
                             contactEmail: string | null;
+                            couponCodes: string[];
                             currency: string;
                             customerEmail: string | null;
                             discountTotal: number;
@@ -19984,10 +20216,12 @@ export interface paths {
                     "application/json": {
                         country: string;
                         couponCode?: string;
+                        couponCodes?: string[];
                         items: {
                             quantity: number;
                             sku: string;
                         }[];
+                        redeemPoints?: number;
                     };
                 };
             };
@@ -20006,6 +20240,15 @@ export interface paths {
                                 rate: number;
                             }[];
                         };
+                    };
+                };
+                /** @description Credit quote unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -20318,7 +20561,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 import type { StackInput, StackLine, PromotionStackTotals, AppliedPromotion } from './promotion-stack.js';
 
 type MoneyTotals = Pick<PromotionStackTotals, 'subtotal' | 'discountTotal' | 'shippingTotal' | 'taxTotal' | 'grandTotal' | 'pointsDiscount'>;
+type SnapshotAppliedPromotion = Omit<AppliedPromotion, 'lineAllocations'> & {
+  priority: number; sequence: number; scope: 'order' | 'line';
+  lineAllocations: Array<AppliedPromotion['lineAllocations'][number] & { orderLineId: string }>;
+};
 export interface OrderPricingSnapshotV1 {
   version: 1; currency: string; pricesIncludeTax: boolean; couponCodes: string[]; quoteHash: string;
   pricingProfile: 'captured-default-v1';
@@ -9,7 +13,7 @@ export interface OrderPricingSnapshotV1 {
   pointsDiscount: number; adjustments: NonNullable<StackInput['adjustments']>;
   totals: MoneyTotals;
   lines: Array<StackLine & { orderLineId: string; proratedUnitPriceWithTax: number; lineNet: number; lineGross: number }>;
-  applied: Array<AppliedPromotion & { priority: number; sequence: number; scope: 'order' | 'line'; lineAllocations: Array<AppliedPromotion['lineAllocations'][number] & { orderLineId: string }> }>;
+  applied: SnapshotAppliedPromotion[];
   selectedCredit: { accountId: string; promotionId: string; appliedAmount: number; allocation: Record<string, number[]> } | null;
 }
 

@@ -621,9 +621,11 @@ cart.openapi(
       let updated = await applyLines(tx, st, row!, body.lines, { mode: body.expectedRevision == null ? 'increment' : 'set' });
       if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', authTok, body.shipCountry, quoteOptions) };
       if (body.couponCodes !== undefined || body.couponCode !== undefined) {
-        [updated] = await tx.update(s.cart).set({ couponCodes: canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : [])) }).where(eq(s.cart.id, updated.id)).returning();
+        const [couponUpdated] = await tx.update(s.cart).set({ couponCodes: canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : [])) }).where(eq(s.cart.id, updated.id)).returning();
+        if (!couponUpdated) throw new Error('Cart coupon update failed');
+        updated = couponUpdated;
       }
-      return { code: 200 as const, body: await cartResponse(tx, st, updated!, undefined, authTok, body.shipCountry, quoteOptions) };
+      return { code: 200 as const, body: await cartResponse(tx, st, updated, undefined, authTok, body.shipCountry, quoteOptions) };
     });
     if (out.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (out.code === 409) return c.json(out.body, 409);

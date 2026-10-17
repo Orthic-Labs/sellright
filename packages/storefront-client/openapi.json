@@ -22,6 +22,9 @@
           "CART_NOT_FOUND",
           "CHECKOUT_RETRY",
           "COLLECTION_NOT_FOUND",
+          "CREDIT_ALLOCATION_INVALID",
+          "CREDIT_AMOUNT_CHANGED",
+          "CREDIT_PAYMENT_UNAVAILABLE",
           "CSRF_INVALID",
           "AGENT_NOT_ALLOWED",
           "DOWNLOAD_NOT_FOUND",
@@ -64,6 +67,7 @@
           "POST_NOT_FOUND",
           "PRODUCT_NOT_FOUND",
           "PURCHASE_REQUIRED",
+          "QUOTE_CHANGED",
           "RATE_LIMITED",
           "REJECTED_PLATFORM",
           "RESERVATION_CONFLICT",
@@ -1225,6 +1229,29 @@
                   "couponCode": {
                     "type": "string"
                   },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
+                  },
+                  "pricingIntent": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "checkout"
+                    ]
+                  },
+                  "shippingMethodCode": {
+                    "type": "string"
+                  },
+                  "redeemPoints": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
                   "shipCountry": {
                     "type": "string"
                   }
@@ -1244,6 +1271,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -1350,6 +1437,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -1408,6 +1501,15 @@
                     "nullable": true,
                     "maxLength": 200
                   },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
+                  },
                   "countryCode": {
                     "type": "string",
                     "nullable": true,
@@ -1438,6 +1540,66 @@
                       "type": "object",
                       "nullable": true,
                       "properties": {
+                        "pricingIntent": {
+                          "type": "string",
+                          "enum": [
+                            "preview",
+                            "checkout"
+                          ]
+                        },
+                        "couponCodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                          },
+                          "maxItems": 100
+                        },
+                        "quoteHash": {
+                          "type": "string"
+                        },
+                        "shippingMethodCode": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "pointsDiscount": {
+                          "type": "integer"
+                        },
+                        "coupons": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "applied": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "appliedAmount": {
+                                "type": "integer"
+                              },
+                              "availableAmount": {
+                                "type": "integer"
+                              },
+                              "remainingAmount": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "applied",
+                              "appliedAmount"
+                            ]
+                          }
+                        },
                         "currency": {
                           "type": "string"
                         },
@@ -1561,6 +1723,12 @@
                         }
                       },
                       "required": [
+                        "pricingIntent",
+                        "couponCodes",
+                        "quoteHash",
+                        "shippingMethodCode",
+                        "pointsDiscount",
+                        "coupons",
                         "currency",
                         "lines",
                         "subtotal",
@@ -1672,6 +1840,15 @@
                   },
                   "couponCode": {
                     "type": "string"
+                  },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
                   }
                 }
               }
@@ -1686,6 +1863,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -1809,6 +2046,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -1866,6 +2109,43 @@
               "type": "string"
             },
             "required": false,
+            "name": "couponCodes",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "preview",
+                "checkout"
+              ]
+            },
+            "required": false,
+            "name": "pricingIntent",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "shippingMethodCode",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "redeemPoints",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
             "name": "shipCountry",
             "in": "query"
           }
@@ -1878,6 +2158,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -2001,6 +2341,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -2073,6 +2419,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -2196,6 +2602,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -2265,6 +2677,66 @@
                     "cart": {
                       "type": "object",
                       "properties": {
+                        "pricingIntent": {
+                          "type": "string",
+                          "enum": [
+                            "preview",
+                            "checkout"
+                          ]
+                        },
+                        "couponCodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                          },
+                          "maxItems": 100
+                        },
+                        "quoteHash": {
+                          "type": "string"
+                        },
+                        "shippingMethodCode": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "pointsDiscount": {
+                          "type": "integer"
+                        },
+                        "coupons": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "applied": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "appliedAmount": {
+                                "type": "integer"
+                              },
+                              "availableAmount": {
+                                "type": "integer"
+                              },
+                              "remainingAmount": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "applied",
+                              "appliedAmount"
+                            ]
+                          }
+                        },
                         "currency": {
                           "type": "string"
                         },
@@ -2388,6 +2860,12 @@
                         }
                       },
                       "required": [
+                        "pricingIntent",
+                        "couponCodes",
+                        "quoteHash",
+                        "shippingMethodCode",
+                        "pointsDiscount",
+                        "coupons",
                         "currency",
                         "lines",
                         "subtotal",
@@ -2454,11 +2932,33 @@
                         "sku",
                         "quantity"
                       ]
-                    },
-                    "minItems": 1
+                    }
                   },
                   "couponCode": {
                     "type": "string"
+                  },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
+                  },
+                  "pricingIntent": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "checkout"
+                    ]
+                  },
+                  "shippingMethodCode": {
+                    "type": "string"
+                  },
+                  "redeemPoints": {
+                    "type": "integer",
+                    "minimum": 1
                   },
                   "shipCountry": {
                     "type": "string"
@@ -2482,6 +2982,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -2605,6 +3165,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -2674,6 +3240,66 @@
                     "cart": {
                       "type": "object",
                       "properties": {
+                        "pricingIntent": {
+                          "type": "string",
+                          "enum": [
+                            "preview",
+                            "checkout"
+                          ]
+                        },
+                        "couponCodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                          },
+                          "maxItems": 100
+                        },
+                        "quoteHash": {
+                          "type": "string"
+                        },
+                        "shippingMethodCode": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "pointsDiscount": {
+                          "type": "integer"
+                        },
+                        "coupons": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "applied": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "appliedAmount": {
+                                "type": "integer"
+                              },
+                              "availableAmount": {
+                                "type": "integer"
+                              },
+                              "remainingAmount": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "applied",
+                              "appliedAmount"
+                            ]
+                          }
+                        },
                         "currency": {
                           "type": "string"
                         },
@@ -2797,6 +3423,12 @@
                         }
                       },
                       "required": [
+                        "pricingIntent",
+                        "couponCodes",
+                        "quoteHash",
+                        "shippingMethodCode",
+                        "pointsDiscount",
+                        "coupons",
                         "currency",
                         "lines",
                         "subtotal",
@@ -2857,6 +3489,66 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -2980,6 +3672,12 @@
                     }
                   },
                   "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
                     "currency",
                     "lines",
                     "subtotal",
@@ -3059,6 +3757,66 @@
                     "cart": {
                       "type": "object",
                       "properties": {
+                        "pricingIntent": {
+                          "type": "string",
+                          "enum": [
+                            "preview",
+                            "checkout"
+                          ]
+                        },
+                        "couponCodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                          },
+                          "maxItems": 100
+                        },
+                        "quoteHash": {
+                          "type": "string"
+                        },
+                        "shippingMethodCode": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "pointsDiscount": {
+                          "type": "integer"
+                        },
+                        "coupons": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "applied": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "appliedAmount": {
+                                "type": "integer"
+                              },
+                              "availableAmount": {
+                                "type": "integer"
+                              },
+                              "remainingAmount": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "applied",
+                              "appliedAmount"
+                            ]
+                          }
+                        },
                         "currency": {
                           "type": "string"
                         },
@@ -3182,6 +3940,12 @@
                         }
                       },
                       "required": [
+                        "pricingIntent",
+                        "couponCodes",
+                        "quoteHash",
+                        "shippingMethodCode",
+                        "pointsDiscount",
+                        "coupons",
                         "currency",
                         "lines",
                         "subtotal",
@@ -3262,6 +4026,19 @@
                   },
                   "couponCode": {
                     "type": "string"
+                  },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
+                  },
+                  "acceptedQuoteHash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "giftCardCode": {
                     "type": "string"
@@ -3408,6 +4185,66 @@
                         "cart": {
                           "type": "object",
                           "properties": {
+                            "pricingIntent": {
+                              "type": "string",
+                              "enum": [
+                                "preview",
+                                "checkout"
+                              ]
+                            },
+                            "couponCodes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              },
+                              "maxItems": 100
+                            },
+                            "quoteHash": {
+                              "type": "string"
+                            },
+                            "shippingMethodCode": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "pointsDiscount": {
+                              "type": "integer"
+                            },
+                            "coupons": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "applied": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  },
+                                  "appliedAmount": {
+                                    "type": "integer"
+                                  },
+                                  "availableAmount": {
+                                    "type": "integer"
+                                  },
+                                  "remainingAmount": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "applied",
+                                  "appliedAmount"
+                                ]
+                              }
+                            },
                             "currency": {
                               "type": "string"
                             },
@@ -3531,6 +4368,12 @@
                             }
                           },
                           "required": [
+                            "pricingIntent",
+                            "couponCodes",
+                            "quoteHash",
+                            "shippingMethodCode",
+                            "pointsDiscount",
+                            "coupons",
                             "currency",
                             "lines",
                             "subtotal",
@@ -3546,6 +4389,195 @@
                             "customerId",
                             "revision"
                           ]
+                        },
+                        "quote": {
+                          "type": "object",
+                          "properties": {
+                            "pricingIntent": {
+                              "type": "string",
+                              "enum": [
+                                "preview",
+                                "checkout"
+                              ]
+                            },
+                            "couponCodes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              },
+                              "maxItems": 100
+                            },
+                            "quoteHash": {
+                              "type": "string"
+                            },
+                            "shippingMethodCode": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "pointsDiscount": {
+                              "type": "integer"
+                            },
+                            "coupons": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "applied": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  },
+                                  "appliedAmount": {
+                                    "type": "integer"
+                                  },
+                                  "availableAmount": {
+                                    "type": "integer"
+                                  },
+                                  "remainingAmount": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "applied",
+                                  "appliedAmount"
+                                ]
+                              }
+                            },
+                            "currency": {
+                              "type": "string"
+                            },
+                            "lines": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "sku": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "unitPrice": {
+                                    "type": "integer"
+                                  },
+                                  "quantity": {
+                                    "type": "integer"
+                                  },
+                                  "lineSubtotal": {
+                                    "type": "integer"
+                                  },
+                                  "lineDiscount": {
+                                    "type": "integer"
+                                  },
+                                  "lineTotal": {
+                                    "type": "integer"
+                                  },
+                                  "isPreOrder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipDate": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "available": {
+                                    "type": "boolean"
+                                  },
+                                  "availableQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "sku",
+                                  "name",
+                                  "unitPrice",
+                                  "quantity",
+                                  "lineSubtotal",
+                                  "lineDiscount",
+                                  "lineTotal",
+                                  "available",
+                                  "availableQuantity"
+                                ]
+                              }
+                            },
+                            "subtotal": {
+                              "type": "integer"
+                            },
+                            "discountTotal": {
+                              "type": "integer"
+                            },
+                            "shippingTotal": {
+                              "type": "integer"
+                            },
+                            "taxTotal": {
+                              "type": "integer"
+                            },
+                            "grandTotal": {
+                              "type": "integer"
+                            },
+                            "unavailable": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "coupon": {
+                              "type": "object",
+                              "nullable": true,
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "applied": {
+                                  "type": "boolean"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "applied"
+                              ]
+                            },
+                            "pointsToEarn": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "pricingIntent",
+                            "couponCodes",
+                            "quoteHash",
+                            "shippingMethodCode",
+                            "pointsDiscount",
+                            "coupons",
+                            "currency",
+                            "lines",
+                            "subtotal",
+                            "discountTotal",
+                            "shippingTotal",
+                            "taxTotal",
+                            "grandTotal",
+                            "unavailable",
+                            "coupon"
+                          ]
+                        },
+                        "quoteHash": {
+                          "type": "string"
                         }
                       }
                     }
@@ -6962,6 +7994,12 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "payments": {
                       "type": "array",
                       "items": {
@@ -7091,6 +8129,7 @@
                     "grandTotal",
                     "placedAt",
                     "promotionCode",
+                    "couponCodes",
                     "payments",
                     "fulfillments",
                     "lines"
@@ -8894,6 +9933,12 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "payments": {
                       "type": "array",
                       "items": {
@@ -9073,6 +10118,7 @@
                     "customerEmail",
                     "contactEmail",
                     "promotionCode",
+                    "couponCodes",
                     "payments",
                     "fulfillments",
                     "lines",
@@ -15817,6 +16863,9 @@
                   "shippingAmount": {
                     "type": "integer"
                   },
+                  "creditMerchandiseReturn": {
+                    "type": "boolean"
+                  },
                   "reason": {
                     "type": "string"
                   }
@@ -16081,6 +17130,9 @@
                     "format": "uuid"
                   },
                   "restock": {
+                    "type": "boolean"
+                  },
+                  "creditMerchandiseReturn": {
                     "type": "boolean"
                   }
                 }
@@ -27811,6 +28863,19 @@
                   },
                   "couponCode": {
                     "type": "string"
+                  },
+                  "couponCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 100
+                  },
+                  "redeemPoints": {
+                    "type": "integer",
+                    "minimum": 1
                   }
                 },
                 "required": [
@@ -27859,6 +28924,16 @@
                   "required": [
                     "methods"
                   ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Credit quote unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

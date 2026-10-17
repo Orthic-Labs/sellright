@@ -62,6 +62,52 @@ const call = (token: string | null, method: string, path: string, body?: unknown
 const lineId = async () => (await withStore(STORE, (tx) => tx.execute(sql`SELECT id FROM order_line LIMIT 1`))).rows[0] as { id: string };
 
 describe('order edit HTTP contract', () => {
+  it.each(['snapshot', 'stack', 'credit-promotion', 'credit-code', 'credit-usage', 'credit-ledger', 'order-scope'] as const)(
+    'legacy unpaid line route refuses %s pricing before stock, line or audit writes', async protection => {
+      await withStore(STORE, async tx => {
+        await tx.execute(sql`UPDATE "order" SET state = 'PendingPayment' WHERE code = ${CODE}`);
+        if (protection === 'snapshot') await tx.execute(sql`UPDATE "order" SET pricing_snapshot = '{"version":999}'::jsonb WHERE code = ${CODE}`);
+        if (protection === 'stack') await tx.execute(sql`UPDATE "order" SET coupon_codes = ARRAY['ONE','TWO']::text[] WHERE code = ${CODE}`);
+        if (protection.startsWith('credit') || protection === 'order-scope') {
+          const promo = await tx.execute(sql`INSERT INTO promotion (store_id, code, type, value, discount_scope)
+            VALUES (${STORE}, 'PROTECTED', ${protection === 'order-scope' ? 'percentage' : 'account_credit'}::promotion_type, 10, ${protection === 'order-scope' ? 'order' : 'line'}) RETURNING id`);
+          const promotionId = (promo.rows[0] as { id: string }).id;
+          if (protection === 'credit-promotion' || protection === 'order-scope') await tx.execute(sql`UPDATE "order" SET promotion_id = ${promotionId} WHERE code = ${CODE}`);
+          if (protection === 'credit-code') await tx.execute(sql`UPDATE "order" SET coupon_codes = ARRAY['PROTECTED']::text[] WHERE code = ${CODE}`);
+          if (protection === 'credit-usage') await tx.execute(sql`INSERT INTO promotion_usage (store_id, promotion_id, order_id) SELECT ${STORE}, ${promotionId}, id FROM "order" WHERE code = ${CODE}`);
+          if (protection === 'credit-ledger') {
+            const credit = await tx.execute(sql`INSERT INTO account_credit (store_id, promotion_id, currency, email_normalized, issuance_key, initial_amount, balance)
+              VALUES (${STORE}, ${promotionId}, 'USD', 'synthetic@route.test', 'protected-ledger', 100, 100) RETURNING id`);
+            await tx.execute(sql`INSERT INTO account_credit_transaction (store_id, account_credit_id, order_id, kind, status, amount, delta, idempotency_key)
+              SELECT ${STORE}, ${(credit.rows[0] as { id: string }).id}, id, 'RESERVE', 'PENDING', 100, 0, 'protected-ledger-hold' FROM "order" WHERE code = ${CODE}`);
+          }
+        }
+      });
+      const facts = () => withStore(STORE, async tx => ({
+        order: (await tx.execute(sql`SELECT * FROM "order" WHERE code = ${CODE}`)).rows,
+        lines: (await tx.execute(sql`SELECT * FROM order_line ORDER BY id`)).rows,
+        stock: (await tx.execute(sql`SELECT * FROM stock ORDER BY variant_id`)).rows,
+        audits: (await tx.execute(sql`SELECT * FROM audit_log ORDER BY id`)).rows,
+      }));
+      const before = await facts();
+      const response = await call(owner, 'PATCH', `/v1/admin/orders/${CODE}/lines`, { lines: [{ sku: 'SKU1', quantity: 3 }] });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: 'ORDER_PRICING_EDIT_UNSUPPORTED' } });
+      expect(await facts()).toEqual(before);
+    },
+  );
+
+  it('legacy unpaid line route retains ordinary line-scope singleton pricing', async () => {
+    await withStore(STORE, async tx => {
+      const promo = await tx.execute(sql`INSERT INTO promotion (store_id, code, type, value, discount_scope)
+        VALUES (${STORE}, 'ORDINARY', 'percentage', 10, 'line') RETURNING id`);
+      await tx.execute(sql`UPDATE "order" SET state = 'PendingPayment', promotion_id = ${(promo.rows[0] as { id: string }).id} WHERE code = ${CODE}`);
+    });
+    const response = await call(owner, 'PATCH', `/v1/admin/orders/${CODE}/lines`, { lines: [{ sku: 'SKU1', quantity: 3 }] });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ grandTotal: 2700 });
+  });
+
   it('requires auth; read-only role may read context but not preview/commit/address', async () => {
     expect((await call(null, 'POST', `/v1/admin/orders/${CODE}/edit/preview`, { ops: [] })).status).toBe(401);
     expect((await call(reader, 'GET', `/v1/admin/orders/${CODE}/edit/context`)).status).toBe(200);
