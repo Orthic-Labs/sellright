@@ -20,6 +20,8 @@ final class AppSession {
         didSet { UserDefaults.standard.set(activeStore?.slug, forKey: "storeSlug") }
     }
 
+    var canWrite: Bool { StoreAccess.canWrite(role: activeStore?.role) }
+
     /// Order code from a tapped notification, awaiting navigation. RootView
     /// consumes it; lives here because this is the @Observable the views watch.
     var pendingOrderCode: String?

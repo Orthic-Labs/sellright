@@ -45,9 +45,9 @@ function storeEmailCtx(st: StoreCtx): StoreEmailCtx {
 // schema edit mid-flight.
 const EMAIL_CHANGE_KIND = 'email_change';
 
-// PAR-06: per-store anti-bot. The secret lives in store.config
-// (turnstileSecretKey, or turnstile.secretKey nested) — no secret configured
-// means the feature is off and verifyTurnstileToken returns true.
+// PAR-06: per-store anti-bot; store config or env supplies the secret.
+// Without a secret, non-production passes & production fails closed unless
+// TURNSTILE_DISABLED=true. Configured secrets always require verification.
 function turnstileSecret(config: unknown): string | null {
   const c = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
   const nested = (c.turnstile as Record<string, unknown> | undefined)?.secretKey;

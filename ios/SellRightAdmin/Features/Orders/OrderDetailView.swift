@@ -143,7 +143,7 @@ struct OrderDetailView: View {
             FulfillSheet(code: code) { await load() }
         }
         .sheet(isPresented: $showRefundSheet) {
-            if let order {
+            if let order, session.canWrite {
                 RefundSheet(
                     code: code,
                     currency: order.currency,
@@ -167,7 +167,7 @@ struct OrderDetailView: View {
         .task { await load() }
     }
 
-    private var writable: Bool { session.activeStore?.role != "viewer" }
+    private var writable: Bool { session.canWrite }
 
     private var canFulfill: Bool {
         guard let order else { return false }
@@ -189,6 +189,7 @@ struct OrderDetailView: View {
     private var hasActions: Bool { canFulfill || canRefund || canCancel }
 
     private func cancelOrder() async {
+        guard session.canWrite else { return }
         do {
             let _: CancelResponse = try await session.api.post(
                 "/v1/admin/orders/\(code)/cancel", body: CancelRequest(reason: nil)
@@ -258,7 +259,7 @@ struct FulfillSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await submit() } }
-                        .disabled(busy)
+                        .disabled(busy || !session.canWrite)
                 }
             }
         }
@@ -266,6 +267,7 @@ struct FulfillSheet: View {
     }
 
     private func submit() async {
+        guard session.canWrite else { return }
         busy = true
         errorMessage = nil
         defer { busy = false }

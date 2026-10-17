@@ -18,6 +18,40 @@ env:
   NODE_LTS: 24.20.0
 
 jobs:
+  ios-model-contracts:
+    name: iOS model contracts
+    runs-on: macos-15
+    timeout-minutes: 10
+    # Foundation/Observation models only; this does not build UI or App targets.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test Foundation/Observation model contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$(mktemp -d "$RUNNER_TEMP/sellright-ios-model-contracts.XXXXXX")"
+          mkdir -p "$package_dir/Sources/SellRightAdmin" "$package_dir/Tests/SellRightAdminTests"
+          cp ios/SellRightAdmin/Core/Models.swift "$package_dir/Sources/SellRightAdmin/Models.swift"
+          cp ios/Shared/Money.swift "$package_dir/Sources/SellRightAdmin/Money.swift"
+          cp ios/Tests/ModelsTests.swift "$package_dir/Tests/SellRightAdminTests/ModelsTests.swift"
+          cmp ios/SellRightAdmin/Core/Models.swift "$package_dir/Sources/SellRightAdmin/Models.swift"
+          cmp ios/Shared/Money.swift "$package_dir/Sources/SellRightAdmin/Money.swift"
+          cmp ios/Tests/ModelsTests.swift "$package_dir/Tests/SellRightAdminTests/ModelsTests.swift"
+          cat > "$package_dir/Package.swift" <<'SWIFT'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "SellRightAdminModelContracts",
+              platforms: [.macOS(.v14)],
+              targets: [
+                  .target(name: "SellRightAdmin"),
+                  .testTarget(name: "SellRightAdminTests", dependencies: ["SellRightAdmin"]),
+              ],
+              swiftLanguageVersions: [.v5]
+          )
+          SWIFT
+          swift test --package-path "$package_dir" --scratch-path "$package_dir/.build"
+
   storefront:
     # Retains the protected branch's storefront check for the isolated demo
     # consumer. Production merchant storefronts remain downstream.

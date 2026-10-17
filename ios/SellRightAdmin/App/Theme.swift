@@ -142,7 +142,7 @@ enum Theme {
     static func statusColor(_ state: String, _ p: ThemePalette) -> Color {
         switch state {
         case "Paid", "Delivered", "active": return p.success
-        case "PaymentPending", "Draft", "draft": return p.warning
+        case "PendingPayment", "Draft", "draft": return p.warning
         case "Cancelled", "Refunded", "PartiallyRefunded": return p.danger
         case "Shipped": return p.accent
         default: return p.textMuted

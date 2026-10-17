@@ -88,7 +88,7 @@ struct RefundSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Refund") { Task { await submit() } }
-                        .disabled(busy || !canSubmit)
+                        .disabled(busy || !session.canWrite || !canSubmit)
                 }
             }
         }
@@ -126,6 +126,7 @@ struct RefundSheet: View {
     }
 
     private func submit() async {
+        guard session.canWrite else { return }
         busy = true
         errorMessage = nil
         defer { busy = false }

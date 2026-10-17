@@ -27,6 +27,7 @@ struct ProductDetailView: View {
                             VariantRow(variant: variant, currency: currency)
                         }
                         .buttonStyle(.plain)
+                        .disabled(!session.canWrite)
                     }
                 }
             } else if let errorMessage {
@@ -153,7 +154,8 @@ struct VariantEditSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await submit() } }
-                        .disabled(busy || Money.parseCents(priceText) == nil)
+                        .disabled(busy || !session.canWrite || Money.parseCents(priceText) == nil
+                            || (!salePriceText.isEmpty && Money.parseCents(salePriceText) == nil))
                 }
             }
         }
@@ -161,6 +163,7 @@ struct VariantEditSheet: View {
     }
 
     private func submit() async {
+        guard session.canWrite else { return }
         busy = true
         errorMessage = nil
         defer { busy = false }
@@ -169,9 +172,11 @@ struct VariantEditSheet: View {
             let newSale = salePriceText.isEmpty ? nil : Money.parseCents(salePriceText)
             var patch = VariantPatch()
             if let newPrice, newPrice != variant.price { patch.price = newPrice }
-            if let newSale, newSale != variant.salePrice { patch.salePrice = newSale }
+            if newSale != variant.salePrice {
+                patch.salePrice = newSale.map { .set($0) } ?? .clear
+            }
             if enabled != variant.enabled { patch.enabled = enabled }
-            if patch.price != nil || patch.salePrice != nil || patch.enabled != nil {
+            if patch.hasChanges {
                 let _: VariantPatchResponse = try await session.api.patch("/v1/admin/variants/\(variant.id)", body: patch)
             }
             if variant.fulfillmentType == "physical", let onHand = Int(onHandText), onHand != variant.onHand, onHand >= 0 {

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // Codable mirrors of the zod schemas in packages/api/src/routes/admin*.ts.
 // All money values are integer cents (see packages/shared money primitives).
@@ -11,6 +12,11 @@ struct StoreAccess: Codable, Identifiable, Hashable {
     let role: String
 
     var id: String { storeId }
+
+    static func canWrite(role: String?) -> Bool {
+        guard let role else { return false }
+        return ["owner", "manager", "staff"].contains(role)
+    }
 }
 
 struct LoginRequest: Encodable {
@@ -35,8 +41,10 @@ struct AdminIdentity: Codable, Hashable {
 }
 
 struct MeResponse: Decodable {
-    let admin: AdminIdentity
+    let email: String
     let stores: [StoreAccess]
+
+    var admin: AdminIdentity { AdminIdentity(email: email) }
 }
 
 // MARK: - Dashboard
@@ -65,6 +73,71 @@ struct Page<Item: Decodable>: Decodable {
     let total: Int
     let page: Int
     let pageSize: Int
+}
+
+/// Shared by admin lists: only successful responses commit their requested page.
+@MainActor
+@Observable
+final class PaginatedList<Item: Decodable> {
+    private(set) var items: [Item] = []
+    private(set) var total = 0
+    private(set) var page = 0
+    private(set) var loading = false
+    private(set) var errorMessage: String?
+    private var requestID = UUID()
+    private var failedReplacement = true
+
+    var hasMore: Bool { items.count < total }
+
+    /// Invalidates an in-flight request as soon as the store/search/filter changes,
+    /// before the view's debounce finishes.
+    func invalidate() {
+        requestID = UUID()
+        items = []
+        total = 0
+        page = 0
+        loading = false
+        errorMessage = nil
+        failedReplacement = true
+    }
+
+    func retry(fetch: (Int) async throws -> Page<Item>) async {
+        guard !loading else { return }
+        await load(replacing: failedReplacement, fetch: fetch)
+    }
+
+    func load(replacing: Bool, fetch: (Int) async throws -> Page<Item>) async {
+        guard replacing || (hasMore && !loading) else { return }
+        let requestedPage = replacing ? 1 : page + 1
+        let id = UUID()
+        requestID = id
+        loading = true
+        errorMessage = nil
+        defer { if requestID == id { loading = false } }
+        do {
+            let result = try await fetch(requestedPage)
+            try Task.checkCancellation()
+            guard requestID == id else { return }
+            items = replacing ? result.items : items + result.items
+            total = result.total
+            page = requestedPage
+        } catch {
+            guard requestID == id, !Task.isCancelled, !(error is CancellationError) else { return }
+            failedReplacement = replacing
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+enum OrderStateFilter: String, CaseIterable {
+    case paid = "Paid"
+    case pendingPayment = "PendingPayment"
+    case shipped = "Shipped"
+    case delivered = "Delivered"
+    case cancelled = "Cancelled"
+    case refunded = "Refunded"
+
+    var title: String { self == .pendingPayment ? "Payment pending" : rawValue }
 }
 
 struct OrderSummary: Decodable, Identifiable {
@@ -308,8 +381,31 @@ struct VariantDetail: Decodable, Identifiable {
 
 struct VariantPatch: Encodable {
     var price: Int?
-    var salePrice: Int?
+    enum SalePriceUpdate {
+        case unchanged
+        case set(Int)
+        case clear
+    }
+    var salePrice: SalePriceUpdate = .unchanged
     var enabled: Bool?
+
+    var hasChanges: Bool {
+        if case .unchanged = salePrice { return price != nil || enabled != nil }
+        return true
+    }
+
+    private enum CodingKeys: String, CodingKey { case price, salePrice, enabled }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(price, forKey: .price)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        switch salePrice {
+        case .unchanged: break
+        case .set(let value): try container.encode(value, forKey: .salePrice)
+        case .clear: try container.encodeNil(forKey: .salePrice)
+        }
+    }
 }
 
 struct VariantPatchResponse: Decodable {
