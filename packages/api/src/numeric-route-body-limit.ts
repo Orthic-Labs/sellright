@@ -19,7 +19,7 @@ export function resolveNumericRouteBodyLimits(plugins: readonly Pick<EnginePlugi
       }
       if (policy.method !== 'PUT' || policy.finalSegment !== 'ascii-digits') throw new Error('numeric-route body policy requires PUT and an ASCII-digits final segment');
       if (typeof policy.pathPrefix !== 'string' || /\s/.test(policy.pathPrefix) || !/^\/(?:[A-Za-z0-9._~-]+\/)+$/.test(policy.pathPrefix)
-        || policy.pathPrefix.split('/').some((part) => part === '.' || part === '..')) {
+        || policy.pathPrefix.split('/').some((part: string) => part === '.' || part === '..')) {
         throw new Error('numeric-route body policy requires a literal absolute path prefix ending in /');
       }
       if (PROTECTED.test(policy.pathPrefix) || policy.pathPrefix.toLowerCase() === '/v1/') {
