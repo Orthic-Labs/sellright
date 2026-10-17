@@ -1,25 +1,27 @@
 import SwiftUI
 
+@MainActor
 struct ProductsListView: View {
     @Environment(AppSession.self) private var session
 
-    @State private var products: [ProductSummary] = []
-    @State private var total = 0
-    @State private var page = 1
+    @State private var list = PaginatedList<ProductSummary>()
     @State private var searchText = ""
-    @State private var loading = false
-    @State private var errorMessage: String?
 
     private static let pageSize = 25
 
     var body: some View {
         List {
-            ForEach(products) { product in
+            ForEach(list.items) { product in
                 NavigationLink(value: product) {
                     ProductRow(product: product, currency: session.activeStore?.currency ?? "USD")
                 }
             }
-            if products.count < total {
+            if let errorMessage = list.errorMessage, !list.items.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+                    Button("Retry") { Task { await list.retry(fetch: fetchPage) } }
+                }
+            } else if list.hasMore {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .onAppear { Task { await loadMore() } }
@@ -32,14 +34,21 @@ struct ProductsListView: View {
         }
         .searchable(text: $searchText, prompt: "Product name")
         .overlay {
-            if let errorMessage, products.isEmpty {
-                ContentUnavailableView("Couldn't load products", systemImage: "wifi.slash", description: Text(errorMessage))
-            } else if products.isEmpty, !loading {
+            if let errorMessage = list.errorMessage, list.items.isEmpty {
+                ContentUnavailableView {
+                    Label("Couldn't load products", systemImage: "wifi.slash")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Retry") { Task { await list.retry(fetch: fetchPage) } }
+                }
+            } else if list.items.isEmpty, !list.loading {
                 ContentUnavailableView.search
             }
         }
         .refreshable { await reload() }
         .task(id: "\(session.activeStore?.slug ?? "")|\(searchText)") {
+            list.invalidate()
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             await reload()
@@ -47,33 +56,20 @@ struct ProductsListView: View {
     }
 
     private func reload() async {
-        page = 1
-        await fetch(replace: true)
+        await list.load(replacing: true, fetch: fetchPage)
     }
 
     private func loadMore() async {
-        guard !loading else { return }
-        page += 1
-        await fetch(replace: false)
+        await list.load(replacing: false, fetch: fetchPage)
     }
 
-    private func fetch(replace: Bool) async {
-        loading = true
-        errorMessage = nil
-        defer { loading = false }
+    private func fetchPage(_ page: Int) async throws -> Page<ProductSummary> {
         var query = [
             URLQueryItem(name: "page", value: "\(page)"),
             URLQueryItem(name: "pageSize", value: "\(Self.pageSize)"),
         ]
         if !searchText.isEmpty { query.append(URLQueryItem(name: "q", value: searchText)) }
-        do {
-            let result: Page<ProductSummary> = try await session.api.get("/v1/admin/products", query: query)
-            products = replace ? result.items : products + result.items
-            total = result.total
-        } catch {
-            if replace { products = [] }
-            errorMessage = error.localizedDescription
-        }
+        return try await session.api.get("/v1/admin/products", query: query)
     }
 }
 

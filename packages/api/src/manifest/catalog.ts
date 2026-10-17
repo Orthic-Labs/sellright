@@ -7,8 +7,9 @@
  * active catalog, so publish cost grew with total catalog size instead of
  * the changed product — not defensible at large catalog scale. `variantIds`
  * scopes the DB work to just the affected products; unaffected products'
- * manifest/detail entries are reused from the CURRENT published generation
- * (publish.ts::readCurrentGeneration) instead of being recomputed, while
+ * manifest entries & pinned immutable detail references are reused from
+ * the CURRENT published generation (publish.ts::readCurrentCatalogReuseSnapshot)
+ * instead of being recomputed, while
  * `publishGeneration` still always writes one COMPLETE new generation (the
  * atomic full-snapshot invariant is unchanged — a reader pinning `current`
  * still always sees a consistent whole catalog, never a half-updated one).
@@ -20,7 +21,7 @@ import { withStore, type Tx } from '../db/client.js';
 import { resolveStore, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
-import { publishGeneration, readCurrentCatalogSnapshot } from './publish.js';
+import { CatalogReuseError, publishGeneration, readCurrentCatalogReuseSnapshot, type CatalogReuse } from './publish.js';
 import { aggregatesForProducts } from '../reviews/reviews.js';
 
 const assetUrl = (path: string | null | undefined) => !path ? null : (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);
@@ -311,18 +312,33 @@ interface PublishPayload {
   details: ProductDetailEntry[];
   manifestV2: { lastUpdated: string; totalItems: number; defaultSort: string; products: NativeProductManifestEntryV2[] };
   detailsV2: NativeProductDetailV2[];
-  reuse?: { generation: string; slugs: string[] };
+  reuse?: CatalogReuse;
 }
 
 const v2Envelope = (now: string, manifestProductsV2: NativeProductManifestEntryV2[]) =>
   ({ lastUpdated: now, totalItems: manifestProductsV2.length, defaultSort: 'name', products: manifestProductsV2 });
+
+// Both inputs are name-sorted. Take unchanged first on ties, matching stable
+// sort of the former unchanged-then-fresh Map order without sorting N entries.
+function mergeByName<T extends { name: string }>(unchanged: T[], fresh: T[]): T[] {
+  fresh.sort((a, b) => a.name.localeCompare(b.name));
+  const merged: T[] = [];
+  let oldIndex = 0, freshIndex = 0;
+  while (oldIndex < unchanged.length && freshIndex < fresh.length) {
+    if (unchanged[oldIndex]!.name.localeCompare(fresh[freshIndex]!.name) <= 0) merged.push(unchanged[oldIndex++]!);
+    else merged.push(fresh[freshIndex++]!);
+  }
+  while (oldIndex < unchanged.length) merged.push(unchanged[oldIndex++]!);
+  while (freshIndex < fresh.length) merged.push(fresh[freshIndex++]!);
+  return merged;
+}
 
 export async function publishCatalogManifest(args: { outDir: string; storeSlug: string; variantIds?: string[] }) {
   const now = new Date().toISOString();
   const store = await resolveStore(args.storeSlug);
   const priceRule = variantPriceRuleFromConfig(store.config);
 
-  const current = args.variantIds?.length ? await readCurrentCatalogSnapshot(args.outDir, args.storeSlug) : null;
+  const current = args.variantIds?.length ? await readCurrentCatalogReuseSnapshot(args.outDir, args.storeSlug) : null;
   const scoped: PublishPayload | null = current && args.variantIds?.length
     ? await withStore(store.id, async (tx): Promise<PublishPayload | null> => {
         const affectedProductIds = await productIdsForVariants(tx, store.id, args.variantIds!);
@@ -330,44 +346,39 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
         // Sequential, not Promise.all: these share one transaction/connection.
         const { manifestProducts: freshEntries, details: freshDetails, manifestProductsV2: freshV2, detailsV2: freshDetailsV2 } = await buildEntries(tx, store, priceRule, affectedProductIds);
         const possiblyStaleSlugs = await slugsForProductIds(tx, store.id, affectedProductIds);
-        // Merge: start from the reused (unaffected) entries, drop every slug
-        // that MIGHT need updating (possiblyStaleSlugs — the product's slug
-        // as it exists right now for each affected id), then add back
-        // whatever buildEntries freshly computed for the still-active ones.
-        // A product that's no longer active/deleted correctly stays dropped.
-        const productMap = new Map<string, ManifestProductEntry>(current.v1.manifest.products.map((p) => [p.slug, p as unknown as ManifestProductEntry]));
-        const detailMap = new Map<string, ProductDetailEntry>(current.v1.details.map((d) => [d.slug, d as unknown as ProductDetailEntry]));
-        // v2 stable product ids also identify the previous slug after a rename.
+        // Stable v2 ids locate the old slug after a rename; disabled/deleted
+        // affected owners disappear when no fresh entry is built.
         const affectedIds = new Set(affectedProductIds);
         const staleSlugs = new Set([...possiblyStaleSlugs, ...current.v2.manifest.products.filter(p => affectedIds.has(p.id as string)).map(p => p.slug)]);
-        for (const oldSlug of staleSlugs) { productMap.delete(oldSlug); detailMap.delete(oldSlug); }
-        for (const entry of freshEntries) productMap.set(entry.slug, entry);
-        for (const entry of freshDetails) detailMap.set(entry.slug, entry);
-        const nativeProducts = new Map(current.v2.manifest.products.map(p => [p.slug, p as unknown as NativeProductManifestEntryV2]));
-        const nativeDetails = new Map(current.v2.details.map(p => [p.slug, p as unknown as NativeProductDetailV2]));
-        for (const oldSlug of staleSlugs) { nativeProducts.delete(oldSlug); nativeDetails.delete(oldSlug); }
-        for (const entry of freshV2) nativeProducts.set(entry.slug, entry);
-        for (const entry of freshDetailsV2) nativeDetails.set(entry.slug, entry);
-        const manifestProductsV2 = [...nativeProducts.values()].sort((a, b) => a.name.localeCompare(b.name));
-        const detailsV2 = manifestProductsV2.map(p => nativeDetails.get(p.slug)!);
-        const reusedSlugs = current.v1.manifest.products.filter(p => !staleSlugs.has(p.slug)).map(p => p.slug);
-        const manifestProducts = [...productMap.values()].sort((a, b) => a.name.localeCompare(b.name));
-        const details = manifestProducts.map(p => detailMap.get(p.slug)!);
+        const unchanged = current.v1.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as ManifestProductEntry[];
+        const unchangedV2 = current.v2.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as NativeProductManifestEntryV2[];
+        const manifestProducts = mergeByName(unchanged, freshEntries);
+        const manifestProductsV2 = mergeByName(unchangedV2, freshV2);
+        const reusedSlugs = unchanged.map(p => p.slug);
         return {
-          reuse: { generation: current.generation, slugs: reusedSlugs },
-          manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
-          manifestV2: v2Envelope(now, manifestProductsV2), detailsV2,
+          reuse: { generation: current.generation, slugs: reusedSlugs, inventory: current.inventory },
+          manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details: freshDetails,
+          manifestV2: v2Envelope(now, manifestProductsV2), detailsV2: freshDetailsV2,
         };
       })
     : null;
 
-  const { manifest, details, manifestV2, detailsV2, reuse } = scoped ?? await withStore(store.id, async (tx): Promise<PublishPayload> => {
+  const fullPayload = () => withStore(store.id, async (tx): Promise<PublishPayload> => {
     const { manifestProducts, details, manifestProductsV2, detailsV2 } = await buildEntries(tx, store, priceRule);
+    // Establish localeCompare ordering once on a full rebuild. Later scoped
+    // publications preserve it through linear merges of unchanged entries.
+    manifestProducts.sort((a, b) => a.name.localeCompare(b.name));
+    manifestProductsV2.sort((a, b) => a.name.localeCompare(b.name));
     return {
       manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
       manifestV2: v2Envelope(now, manifestProductsV2), detailsV2,
     };
   });
-
-  return publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, manifest, details, manifestV2, detailsV2, reuse });
+  const publish = (payload: PublishPayload) => publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, ...payload });
+  if (scoped) {
+    try { return await publish(scoped); }
+    catch (error) { if (!(error instanceof CatalogReuseError)) throw error; }
+  }
+  // A stale identity/race discards its stage before exactly one full rebuild.
+  return publish(await fullPayload());
 }

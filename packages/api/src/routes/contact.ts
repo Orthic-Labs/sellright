@@ -4,8 +4,9 @@
  *
  * Preserved semantics from the source plugin:
  *   - honeypot field silently accepted (bot gets a fake success, no row)
- *   - Turnstile required when a secret is configured; skipped entirely when
- *     none is (feature disabled, see security/turnstile.ts)
+ *   - Turnstile: configured secrets require successful verification; without
+ *     a secret, non-production passes & production fails closed unless
+ *     TURNSTILE_DISABLED=true (see security/turnstile.ts)
  *   - per-IP rate limit (5/hour — contact.limit.ts)
  *   - validation bounds: name ≤200, subject required, message ≤5000
  *   - SIGNED confirmation link emailed to the SUBMITTER — not an account OTP.
@@ -99,7 +100,7 @@ function contactRecipient(raw: unknown): string {
   return candidate;
 }
 
-/** Per-store Turnstile secret; null when the feature is off for this store. */
+/** Per-store Turnstile secret; null delegates no-secret policy to verifyTurnstileToken. */
 export function turnstileSecret(raw: unknown): string | null {
   const config = asConfig(raw);
   const t = config?.turnstile as Record<string, unknown> | undefined;
@@ -217,9 +218,9 @@ contactRoutes.openapi(
 
     const st = await resolveStoreFromCtx(c);
 
-    // Turnstile: required when a secret is configured for this store (env or
-    // store config); verifyTurnstileToken returns true unconditionally when
-    // unconfigured, and fails closed on any error when configured.
+    // Turnstile: configured secrets require successful verification. Without
+    // a secret, non-production passes & production fails closed unless
+    // TURNSTILE_DISABLED=true (security/turnstile.ts).
     const ok = await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: body.turnstileToken, remoteIp: ip });
     if (!ok) return errJson(c, 400, 'SECURITY_CHECK_FAILED', 'security verification failed — please try again');
 

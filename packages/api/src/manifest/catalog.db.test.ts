@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -305,4 +305,54 @@ describe('native catalog generation', () => {
       await rm(outDir, { recursive: true, force: true });
     }
   });
+  it('preserves unchanged-before-fresh ordering for equal locale names in both formats', async () => {
+    const store = randomUUID(), slug = `manifest-ties-${store}`;
+    const ids = [randomUUID(), randomUUID(), randomUUID()];
+    const variants = [randomUUID(), randomUUID(), randomUUID()];
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-ties-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        for (let index = 0; index < ids.length; index++) {
+          await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${ids[index]}, ${store}, ${`tie-${index}`}, 'Equal', 'active')`);
+          await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variants[index]}, ${store}, ${ids[index]}, ${`TIE-${index}`}, 'Variant', 1000)`);
+        }
+      });
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      const before = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.json'), 'utf8')).products.map((p: { slug: string }) => p.slug);
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variants[0]!] });
+      for (const file of ['shop-catalog.json', 'shop-catalog.v2.json']) {
+        expect(JSON.parse(await readFile(join(outDir, 'current', file), 'utf8')).products.map((p: { slug: string }) => p.slug)).toEqual([...before.filter((slug: string) => slug !== 'tie-0'), 'tie-0']);
+      }
+    } finally { await rm(outDir, { recursive: true, force: true }); }
+  });
+
+  it('rebuilds once after unchanged-file corruption & upgrades missing inventory', async () => {
+    const store = randomUUID(), slug = `manifest-rebuild-${store}`;
+    const ids = [randomUUID(), randomUUID()], variants = [randomUUID(), randomUUID()];
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-rebuild-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        for (let index = 0; index < ids.length; index++) {
+          await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${ids[index]}, ${store}, ${`rebuild-${index}`}, ${`Name ${index}`}, 'active')`);
+          await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variants[index]}, ${store}, ${ids[index]}, ${`REBUILD-${index}`}, 'Variant', 1000)`);
+        }
+      });
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      await writeFile(join(outDir, 'current/products/rebuild-1.json'), '{corrupt');
+      expect((await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variants[0]!] })).products).toBe(2);
+      expect(JSON.parse(await readFile(join(outDir, 'current/products/rebuild-1.json'), 'utf8')).name).toBe('Name 1');
+      // Missing legacy inventory must cause a complete upgrade rebuild too.
+      const markerPath = join(outDir, 'current/marker.json');
+      const marker = JSON.parse(await readFile(markerPath, 'utf8'));
+      delete marker.inventory;
+      await writeFile(markerPath, JSON.stringify(marker));
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET name = 'Upgraded' WHERE id = ${ids[1]}`); });
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variants[0]!] });
+      expect(JSON.parse(await readFile(join(outDir, 'current/products/rebuild-1.json'), 'utf8')).name).toBe('Upgraded');
+      expect(JSON.parse(await readFile(join(outDir, 'current/marker.json'), 'utf8')).inventory.version).toBe(1);
+    } finally { await rm(outDir, { recursive: true, force: true }); }
+  });
+
 });

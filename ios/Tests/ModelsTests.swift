@@ -71,4 +71,145 @@ final class ModelsTests: XCTestCase {
         let formatted = Money.format(cents: 15900, currency: "USD")
         XCTAssertTrue(formatted.contains("159"), "got \(formatted)")
     }
+
+    func testMeDecodesActualTopLevelIdentityContract() throws {
+        let json = """
+        { "email": "operator@example.com", "isInstallationAdmin": false,
+          "kind": "human", "auth": "session", "totpEnabled": true,
+          "totpEnrollmentRequired": false,
+          "stores": [{ "storeId": "store-1", "slug": "shop", "name": "Shop",
+                       "currency": "USD", "role": "read_only" }] }
+        """.data(using: .utf8)!
+        let response = try decoder().decode(MeResponse.self, from: json)
+        XCTAssertEqual(response.admin.email, "operator@example.com")
+        XCTAssertEqual(response.stores.first?.role, "read_only")
+    }
+
+    func testWriteRoleAllowlistFailsClosed() {
+        for role in ["owner", "manager", "staff"] {
+            XCTAssertTrue(StoreAccess.canWrite(role: role), role)
+        }
+        let denied: [String?] = [nil, "read_only", "viewer", "OWNER", "unknown", ""]
+        for role in denied {
+            XCTAssertFalse(StoreAccess.canWrite(role: role), role ?? "nil")
+        }
+    }
+
+    func testSalePricePatchDistinguishesUnchangedSetAndClear() throws {
+        func object(_ patch: VariantPatch) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(patch)) as? [String: Any])
+        }
+        XCTAssertTrue(try object(VariantPatch()).isEmpty)
+        XCTAssertFalse(VariantPatch().hasChanges)
+        var patch = VariantPatch()
+        patch.salePrice = .set(1250)
+        XCTAssertTrue(patch.hasChanges)
+        XCTAssertEqual(try object(patch)["salePrice"] as? Int, 1250)
+        patch.salePrice = .clear
+        XCTAssertTrue(patch.hasChanges)
+        let cleared = try object(patch)
+        XCTAssertEqual(cleared.count, 1)
+        XCTAssertTrue(cleared["salePrice"] is NSNull)
+        patch.price = 2000
+        patch.enabled = false
+        let combined = try object(patch)
+        XCTAssertTrue(combined["salePrice"] is NSNull)
+        XCTAssertEqual(combined["price"] as? Int, 2000)
+        XCTAssertEqual(combined["enabled"] as? Bool, false)
+    }
+
+    func testPendingPaymentFilterKeepsWireValueSeparateFromLabel() throws {
+        let filter = try XCTUnwrap(OrderStateFilter.allCases.first { $0.rawValue == "PendingPayment" })
+        XCTAssertEqual(filter.title, "Payment pending")
+        XCTAssertFalse(OrderStateFilter.allCases.contains { $0.rawValue == "PaymentPending" })
+    }
+
+    @MainActor
+    func testFailedAppendRetriesSamePageWithoutLosingRows() async {
+        let list = PaginatedList<Int>()
+        var requested: [Int] = []
+        let fetch: (Int) async throws -> Page<Int> = { page in
+            requested.append(page)
+            if requested.count == 2 { throw URLError(.notConnectedToInternet) }
+            return Page(items: [page], total: 3, page: page, pageSize: 1)
+        }
+        await list.load(replacing: true, fetch: fetch)
+        await list.load(replacing: false, fetch: fetch)
+        XCTAssertEqual(list.items, [1])
+        XCTAssertEqual(list.page, 1)
+        XCTAssertNotNil(list.errorMessage)
+        XCTAssertFalse(list.loading)
+
+        await list.retry(fetch: fetch)
+        XCTAssertEqual(requested, [1, 2, 2])
+        XCTAssertEqual(list.items, [1, 2])
+        XCTAssertNil(list.errorMessage)
+        await list.load(replacing: false, fetch: fetch)
+        XCTAssertEqual(list.items, [1, 2, 3])
+        XCTAssertFalse(list.hasMore)
+    }
+
+    @MainActor
+    func testFailedInitialLoadRetriesFirstPage() async {
+        let list = PaginatedList<Int>()
+        await list.load(replacing: true) { _ in throw URLError(.notConnectedToInternet) }
+        XCTAssertTrue(list.items.isEmpty)
+        XCTAssertEqual(list.page, 0)
+        XCTAssertNotNil(list.errorMessage)
+        var requested: [Int] = []
+        await list.retry { page in
+            requested.append(page)
+            return Page(items: [10], total: 1, page: page, pageSize: 1)
+        }
+        XCTAssertEqual(requested, [1])
+        XCTAssertEqual(list.items, [10])
+        XCTAssertNil(list.errorMessage)
+    }
+
+    @MainActor
+    func testFailedRefreshRetriesReplacementWithoutAppendingDuplicates() async {
+        let list = PaginatedList<Int>()
+        await list.load(replacing: true) { Page(items: [1], total: 2, page: $0, pageSize: 1) }
+        await list.load(replacing: false) { Page(items: [2], total: 2, page: $0, pageSize: 1) }
+        await list.load(replacing: true) { _ in throw URLError(.notConnectedToInternet) }
+        XCTAssertEqual(list.items, [1, 2])
+        XCTAssertEqual(list.page, 2)
+        var requested: [Int] = []
+        await list.retry { page in
+            requested.append(page)
+            return Page(items: [10], total: 1, page: page, pageSize: 1)
+        }
+        XCTAssertEqual(requested, [1])
+        XCTAssertEqual(list.items, [10])
+        XCTAssertEqual(list.page, 1)
+    }
+
+    @MainActor
+    func testQueryChangeDiscardsInFlightAppendAndPreventsDuplicateRequests() async throws {
+        let list = PaginatedList<Int>()
+        await list.load(replacing: true) { Page(items: [1], total: 2, page: $0, pageSize: 1) }
+        let started = expectation(description: "append started")
+        var pending: CheckedContinuation<Page<Int>, Error>?
+        let append = Task { @MainActor in
+            await list.load(replacing: false) { _ in
+                try await withCheckedThrowingContinuation { continuation in
+                    pending = continuation
+                    started.fulfill()
+                }
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        let continuation = try XCTUnwrap(pending)
+        await list.load(replacing: false) { _ in
+            XCTFail("An append already in flight must not request another copy")
+            return Page(items: [2], total: 2, page: 2, pageSize: 1)
+        }
+        list.invalidate()
+        await list.load(replacing: true) { Page(items: [20], total: 1, page: $0, pageSize: 1) }
+        continuation.resume(returning: Page(items: [2], total: 2, page: 2, pageSize: 1))
+        await append.value
+        XCTAssertEqual(list.items, [20])
+        XCTAssertEqual(list.page, 1)
+        XCTAssertFalse(list.loading)
+    }
 }

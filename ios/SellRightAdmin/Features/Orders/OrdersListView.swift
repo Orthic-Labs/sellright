@@ -1,27 +1,28 @@
 import SwiftUI
 
+@MainActor
 struct OrdersListView: View {
     @Environment(AppSession.self) private var session
 
-    @State private var orders: [OrderSummary] = []
-    @State private var total = 0
-    @State private var page = 1
+    @State private var list = PaginatedList<OrderSummary>()
     @State private var searchText = ""
     @State private var stateFilter: String?
-    @State private var loading = false
-    @State private var errorMessage: String?
 
-    private static let states = ["Paid", "PaymentPending", "Shipped", "Delivered", "Cancelled", "Refunded"]
     private static let pageSize = 25
 
     var body: some View {
         List {
-            ForEach(orders) { order in
+            ForEach(list.items) { order in
                 NavigationLink(value: order.code) {
                     OrderRow(order: order)
                 }
             }
-            if orders.count < total {
+            if let errorMessage = list.errorMessage, !list.items.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+                    Button("Retry") { Task { await list.retry(fetch: fetchPage) } }
+                }
+            } else if list.hasMore {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .onAppear { Task { await loadMore() } }
@@ -38,7 +39,9 @@ struct OrdersListView: View {
                 Menu {
                     Picker("State", selection: $stateFilter) {
                         Text("All states").tag(String?.none)
-                        ForEach(Self.states, id: \.self) { Text($0).tag(String?.some($0)) }
+                        ForEach(OrderStateFilter.allCases, id: \.self) { state in
+                            Text(state.title).tag(String?.some(state.rawValue))
+                        }
                     }
                 } label: {
                     Image(systemName: stateFilter == nil
@@ -48,14 +51,21 @@ struct OrdersListView: View {
             }
         }
         .overlay {
-            if let errorMessage, orders.isEmpty {
-                ContentUnavailableView("Couldn't load orders", systemImage: "wifi.slash", description: Text(errorMessage))
-            } else if orders.isEmpty, !loading {
+            if let errorMessage = list.errorMessage, list.items.isEmpty {
+                ContentUnavailableView {
+                    Label("Couldn't load orders", systemImage: "wifi.slash")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Retry") { Task { await list.retry(fetch: fetchPage) } }
+                }
+            } else if list.items.isEmpty, !list.loading {
                 ContentUnavailableView.search
             }
         }
         .refreshable { await reload() }
         .task(id: "\(session.activeStore?.slug ?? "")|\(searchText)|\(stateFilter ?? "")") {
+            list.invalidate()
             // Debounce keystrokes; task(id:) cancels the previous sleep.
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -64,33 +74,20 @@ struct OrdersListView: View {
     }
 
     private func reload() async {
-        page = 1
-        await fetch(replace: true)
+        await list.load(replacing: true, fetch: fetchPage)
     }
 
     private func loadMore() async {
-        guard !loading else { return }
-        page += 1
-        await fetch(replace: false)
+        await list.load(replacing: false, fetch: fetchPage)
     }
 
-    private func fetch(replace: Bool) async {
-        loading = true
-        errorMessage = nil
-        defer { loading = false }
+    private func fetchPage(_ page: Int) async throws -> Page<OrderSummary> {
         var query = [
             URLQueryItem(name: "page", value: "\(page)"),
             URLQueryItem(name: "pageSize", value: "\(Self.pageSize)"),
         ]
         if !searchText.isEmpty { query.append(URLQueryItem(name: "q", value: searchText)) }
         if let stateFilter { query.append(URLQueryItem(name: "state", value: stateFilter)) }
-        do {
-            let result: Page<OrderSummary> = try await session.api.get("/v1/admin/orders", query: query)
-            orders = replace ? result.items : orders + result.items
-            total = result.total
-        } catch {
-            if replace { orders = [] }
-            errorMessage = error.localizedDescription
-        }
+        return try await session.api.get("/v1/admin/orders", query: query)
     }
 }
