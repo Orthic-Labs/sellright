@@ -14,27 +14,95 @@ import { PACKAGED_MIGRATIONS_DIR, PendingMigrationsError, assertMigrationsCurren
 const DB = process.env.DATABASE_URL as string;
 assertTestDatabase(DB, 'migrations-probe.db.test.ts');
 
-const owner = new pg.Client({ connectionString: DB });
-const ROLE = `probe_rt_${randomBytes(4).toString('hex')}`;
-let roleCreated = false;
+// Never install or re-own the probe in the shared test database. Each role and
+// the scratch database belong exclusively to this file, including partial setup.
+const suffix = randomBytes(6).toString('hex');
+const DATABASE = `sr_migration_probe_${suffix}_test`;
+const ENGINE_ROLE = `probe_engine_${suffix}`;
+const ROLE = `probe_rt_${suffix}`;
+const PLUGIN_ROLE = `probe_plugin_${suffix}`;
+const PLUGIN_RT_ROLE = `probe_plugin_rt_${suffix}`;
+const TABLE = `__drizzle_migrations_probe_${suffix}`;
+const WHEN = 1000;
+const adminUrl = new URL(DB);
+adminUrl.pathname = '/postgres';
+const scratchUrl = new URL(DB);
+scratchUrl.pathname = `/${DATABASE}`;
+assertTestDatabase(scratchUrl.toString(), 'migration probe scratch database');
+const admin = new pg.Client({ connectionString: adminUrl.toString() });
+const owner = new pg.Client({ connectionString: scratchUrl.toString() });
+const createdRoles: string[] = [];
+let databaseCreated = false;
+let adminStarted = false;
+let ownerStarted = false;
 let scratch = '';
 const engineTracks = resolveTracks([]);
 
-beforeAll(async () => {
-  await owner.connect();
-  scratch = mkdtempSync(join(tmpdir(), 'sr-migration-probe-'));
+/** Autocommit is intentional: a refused probe must not abort the fallback read. */
+async function asRole<T>(role: string, fn: (c: pg.Client) => Promise<T>): Promise<T> {
+  const c = new pg.Client({ connectionString: scratchUrl.toString() });
   try {
-    await owner.query(`CREATE ROLE ${ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
-    // PostgreSQL 16+: a non-superuser creator gets ADMIN on the new role but not SET; grant it so SET ROLE works.
-    await owner.query(`GRANT ${ROLE} TO CURRENT_USER WITH SET TRUE`).catch(() => undefined);
-    roleCreated = true;
-  } catch { /* the configured role cannot create roles: the least-privilege case is skipped below */ }
+    await c.connect();
+    await c.query(`SET ROLE ${role}`);
+    return await fn(c);
+  } finally {
+    await c.end();
+  }
+}
+
+beforeAll(async () => {
+  scratch = mkdtempSync(join(tmpdir(), 'sr-migration-probe-'));
+  adminStarted = true;
+  await admin.connect();
+  for (const role of [ENGINE_ROLE, ROLE, PLUGIN_ROLE, PLUGIN_RT_ROLE]) {
+    await admin.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`);
+    createdRoles.push(role);
+    // PG 16+: the creator's ADMIN membership alone does not permit SET ROLE.
+    await admin.query(`GRANT ${role} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
+  }
+  await admin.query(`CREATE DATABASE ${DATABASE} TEMPLATE template0`);
+  databaseCreated = true;
+  ownerStarted = true;
+  await owner.connect();
+  await owner.query(`GRANT CREATE ON DATABASE ${DATABASE} TO ${ENGINE_ROLE}`);
+  await owner.query(`GRANT CREATE ON SCHEMA public TO ${ENGINE_ROLE}`);
+  await owner.query(`SET ROLE ${ENGINE_ROLE}`);
+  await owner.query('CREATE SCHEMA drizzle');
+  await owner.query('CREATE TABLE drizzle."__drizzle_migrations" (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint)');
+  const entries = readJournal(PACKAGED_MIGRATIONS_DIR);
+  expect(entries.length).toBeGreaterThan(0);
+  // The gate reads only journal timestamps; no unrelated commerce schema is needed.
+  await owner.query('INSERT INTO drizzle."__drizzle_migrations" (hash, created_at) VALUES ($1, $2)',
+    ['synthetic-probe-fixture', Math.max(...entries.map((entry) => entry.when))]);
+  await owner.query(readFileSync(join(PACKAGED_MIGRATIONS_DIR, '0095_migration_journal_probe.sql'), 'utf8'));
+  const probeOwner = await owner.query(`SELECT r.rolname, r.rolsuper, r.rolbypassrls
+    FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = 'public.sellright_migration_last_applied(text,text)'::regprocedure`);
+  expect(probeOwner.rows).toEqual([{ rolname: ENGINE_ROLE, rolsuper: false, rolbypassrls: false }]);
+  await owner.query(`GRANT USAGE, CREATE ON SCHEMA drizzle TO ${PLUGIN_ROLE}`);
+  await owner.query(`GRANT USAGE ON SCHEMA drizzle TO ${PLUGIN_RT_ROLE}`);
+  await asRole(PLUGIN_ROLE, async (c) => {
+    await c.query(`CREATE TABLE drizzle."${TABLE}" (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+    await c.query(`INSERT INTO drizzle."${TABLE}" (hash, created_at) VALUES ('h', $1)`, [WHEN]);
+  });
+  // Mandatory preconditions: neither the ordinary engine owner nor its definer
+  // probe can read the plugin's journal. Setup errors must fail, never skip.
+  await expect(owner.query(`SELECT 1 FROM drizzle."${TABLE}"`)).rejects.toMatchObject({ code: '42501' });
+  await expect(owner.query('SELECT public.sellright_migration_last_applied($1, $2)', ['drizzle', TABLE]))
+    .rejects.toMatchObject({ code: '42501' });
 });
 
 afterAll(async () => {
-  if (roleCreated) await owner.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => undefined);
-  await owner.end().catch(() => undefined);
-  rmSync(scratch, { recursive: true, force: true });
+  const errors: unknown[] = [];
+  const clean = async (fn: () => unknown | Promise<unknown>) => {
+    try { await fn(); } catch (error) { errors.push(error); }
+  };
+  if (ownerStarted) await clean(() => owner.end());
+  if (databaseCreated) await clean(() => admin.query(`DROP DATABASE ${DATABASE} WITH (FORCE)`));
+  for (const role of [...createdRoles].reverse()) await clean(() => admin.query(`DROP ROLE ${role}`));
+  if (adminStarted) await clean(() => admin.end());
+  if (scratch) await clean(() => rmSync(scratch, { recursive: true, force: true }));
+  if (errors.length) throw new AggregateError(errors, 'Migration probe fixture cleanup failed');
 });
 
 /** A journal folder = the packaged journal plus one entry newer than anything applied. */
@@ -76,18 +144,8 @@ describe('migration journal probe (0095)', () => {
   });
 
   describe('runtime role without access to schema drizzle', () => {
-    async function asRuntimeRole<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
-      const c = new pg.Client({ connectionString: DB });
-      await c.connect();
-      try {
-        await c.query(`SET ROLE ${ROLE}`);
-        return await fn(c);
-      } finally { await c.end().catch(() => undefined); }
-    }
-
-    it('cannot read the journal directly (the gap) but still verifies through the probe; pending still refuses', async (ctx) => {
-      if (!roleCreated) return ctx.skip();
-      await asRuntimeRole(async (c) => {
+    it('cannot read the journal directly (the gap) but still verifies through the probe; pending still refuses', async () => {
+      await asRole(ROLE, async (c) => {
         await expect(c.query('SELECT 1 FROM drizzle."__drizzle_migrations" LIMIT 1')).rejects.toMatchObject({ code: '42501' });
         const statuses = await assertMigrationsCurrent(c, engineTracks);
         expect(statuses[0]!.pending).toEqual([]);
@@ -100,13 +158,6 @@ describe('migration journal probe (0095)', () => {
 });
 
 describe('separately owned engine and plugin journals', () => {
-  const OWNER_ROLE = `probe_po_${randomBytes(4).toString('hex')}`;
-  const RT_ROLE = `probe_rt2_${randomBytes(4).toString('hex')}`;
-  const TABLE = `__drizzle_migrations_probe_${randomBytes(4).toString('hex')}`;
-  const WHEN = 1000;
-  let ready = false;
-  const cleanup: string[] = [];
-
   function pluginFolder(): string {
     const dir = join(scratch, 'plugin');
     mkdirSync(join(dir, 'meta'), { recursive: true });
@@ -115,55 +166,13 @@ describe('separately owned engine and plugin journals', () => {
   }
   const track = () => ({ name: 'plugin', folder: pluginFolder(), schema: 'drizzle', table: TABLE });
 
-  beforeAll(async () => {
-    try {
-      // The probe's owner must be a role that is NOT allowed to read the plugin-owned journal, so the owner can be neither a
-      // superuser nor a member of the plugin owner that inherits its privileges.
-      const me = await owner.query(`SELECT r.rolsuper, r.rolbypassrls FROM pg_roles r WHERE r.rolname = (SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname = 'sellright_migration_last_applied' AND pronamespace = 'public'::regnamespace)`);
-      if (!me.rows[0] || me.rows[0].rolsuper) return;
-      await owner.query(`CREATE ROLE ${OWNER_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`); cleanup.push(`DROP ROLE IF EXISTS ${OWNER_ROLE}`);
-      await owner.query(`CREATE ROLE ${RT_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`); cleanup.unshift(`DROP ROLE IF EXISTS ${RT_ROLE}`);
-      // set-only membership: the test credential can SET ROLE to the plugin owner / runtime role but inherits nothing from them
-      await owner.query(`GRANT ${OWNER_ROLE} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
-      await owner.query(`GRANT ${RT_ROLE} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
-      await owner.query(`GRANT USAGE, CREATE ON SCHEMA drizzle TO ${OWNER_ROLE}`);
-      await owner.query(`GRANT USAGE ON SCHEMA drizzle TO ${RT_ROLE}`);
-      await owner.query(`SET ROLE ${OWNER_ROLE}`);
-      try {
-        await owner.query(`CREATE TABLE drizzle."${TABLE}" (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
-        await owner.query(`INSERT INTO drizzle."${TABLE}" (hash, created_at) VALUES ('h', ${WHEN})`);
-      } finally { await owner.query('RESET ROLE'); }
-      // precondition: the probe (engine owner's privileges) really cannot read the plugin journal
-      await owner.query('SELECT public.sellright_migration_last_applied($1, $2)', ['drizzle', TABLE]).then(
-        () => { throw new Error('probe could read the plugin journal; case not reproducible with this credential'); },
-        (e: { code?: string }) => { if (e.code !== '42501') throw e; },
-      );
-      ready = true;
-    } catch { /* credential cannot create/own roles, or PG < 16 membership syntax: skipped below */ }
-  });
-
-  afterAll(async () => {
-    await owner.query('RESET ROLE').catch(() => undefined);
-    await asPluginOwner(`DROP TABLE IF EXISTS drizzle."${TABLE}"`).catch(() => undefined);
-    await owner.query(`REVOKE USAGE ON SCHEMA drizzle FROM ${RT_ROLE}`).catch(() => undefined);
-    await owner.query(`REVOKE USAGE, CREATE ON SCHEMA drizzle FROM ${OWNER_ROLE}`).catch(() => undefined);
-    for (const q of cleanup) await owner.query(q).catch(() => undefined);
-  });
-
   async function asPluginOwner(sql: string): Promise<void> {
-    await owner.query(`SET ROLE ${OWNER_ROLE}`);
-    try { await owner.query(sql); } finally { await owner.query('RESET ROLE'); }
-  }
-  async function asRuntime<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
-    const c = new pg.Client({ connectionString: DB });
-    await c.connect();
-    try { await c.query(`SET ROLE ${RT_ROLE}`); return await fn(c); } finally { await c.end().catch(() => undefined); }
+    await asRole(PLUGIN_ROLE, async (c) => { await c.query(sql); });
   }
 
-  it('falls back to the caller\'s own read when the probe is refused (42501) and the caller can read the journal', async (ctx) => {
-    if (!ready) return ctx.skip();
-    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${RT_ROLE}`);
-    await asRuntime(async (c) => {
+  it('falls back to the caller\'s own read when the probe is refused (42501) and the caller can read the journal', async () => {
+    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${PLUGIN_RT_ROLE}`);
+    await asRole(PLUGIN_RT_ROLE, async (c) => {
       const status = await trackStatus(c, track());
       expect(status.lastApplied).toBe(WHEN);
       expect(status.pending).toEqual([]);
@@ -172,24 +181,22 @@ describe('separately owned engine and plugin journals', () => {
     });
   });
 
-  it('still fails (42501) when the caller cannot read the journal either', async (ctx) => {
-    if (!ready) return ctx.skip();
-    await asPluginOwner(`REVOKE SELECT ON drizzle."${TABLE}" FROM ${RT_ROLE}`);
-    await asRuntime(async (c) => {
+  it('still fails (42501) when the caller cannot read the journal either', async () => {
+    await asPluginOwner(`REVOKE SELECT ON drizzle."${TABLE}" FROM ${PLUGIN_RT_ROLE}`);
+    await asRole(PLUGIN_RT_ROLE, async (c) => {
       await expect(trackStatus(c, track())).rejects.toMatchObject({ code: '42501' });
     });
   });
 
-  it('a pending plugin migration is reported through the fallback read', async (ctx) => {
-    if (!ready) return ctx.skip();
-    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${RT_ROLE}`);
+  it('a pending plugin migration is reported through the fallback read', async () => {
+    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${PLUGIN_RT_ROLE}`);
     const dir = join(scratch, 'plugin-pending');
     mkdirSync(join(dir, 'meta'), { recursive: true });
     writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ entries: [
       { idx: 0, version: '7', when: WHEN, tag: '0000_plugin_probe', breakpoints: true },
       { idx: 1, version: '7', when: WHEN + 1, tag: '0001_plugin_next', breakpoints: true },
     ] }));
-    await asRuntime(async (c) => {
+    await asRole(PLUGIN_RT_ROLE, async (c) => {
       const err = await assertMigrationsCurrent(c, [{ name: 'plugin', folder: dir, schema: 'drizzle', table: TABLE }]).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(PendingMigrationsError);
       expect((err as PendingMigrationsError).statuses[0]!.pending).toEqual(['0001_plugin_next']);
