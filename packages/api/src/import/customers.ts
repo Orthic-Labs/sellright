@@ -7,6 +7,7 @@ import { isLegacyBcryptHash } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
 import type { ImportContext } from './context.js';
 import { captureRollbackAuthBaseline } from './rollback-auth.js';
+import { digest } from './artifacts.js';
 
 export async function importCustomers(ctx: ImportContext): Promise<void> {
   const { tx, q } = ctx;
@@ -71,9 +72,10 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
     for (const part of chunk(custRows, 500)) await tx.insert(s.customer).values(part);
 
     // --- addresses (country code via country table; no soft-delete on address) ---
+    const draftRows: Array<typeof s.customerAddressDraft.$inferInsert> = [];
     const addrRows = (
       await q(
-        `SELECT a.id, a."customerId" AS cid, a."fullName" AS fullname, a."streetLine1" AS l1,
+        `SELECT a.id, to_jsonb(a)::text AS source_record, a."customerId" AS cid, a."countryId"::text AS source_country_id, a."fullName" AS fullname, a."streetLine1" AS l1,
                 a."streetLine2" AS l2, a.city, a.province, a."postalCode" AS postal,
                 a."phoneNumber" AS phone, a."defaultShippingAddress" AS dship,
                 a."defaultBillingAddress" AS dbill, co.code AS country
@@ -83,13 +85,13 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
       .map((a) => {
         const customerId = customerMap.get(a.cid);
         if (!customerId) return null;
-        // Incomplete source address-book rows are excluded, not fabricated: the
-        // manifest records each one for operator review (real DD data has a
-        // handful — e.g. a school address with no city). Orders carry their own
-        // shipping snapshot, so skipping a book entry loses no order data.
         if (!a.l1 || !a.city || !a.country) {
-          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'address',
-            detail: `address ${a.id} (customer ${a.cid}) missing required streetLine1/city/country` });
+          draftRows.push({ id: ctx.id('customer-address-draft', a.id), storeId: ctx.storeId, customerId,
+            sourceKey: ctx.sourceKey, sourceId: String(a.id), sourceCustomerId: String(a.cid),
+            sourceDigest: digest({ format: 'retained-pg-jsonb-text-v1', address: a.source_record }),
+            fullName: a.fullname, line1: a.l1, line2: a.l2, city: a.city, province: a.province,
+            postalCode: a.postal, phone: a.phone, sourceCountryId: a.source_country_id, countryCode: a.country,
+            isDefaultShipping: a.dship, isDefaultBilling: a.dbill });
           return null;
         }
         return {
@@ -109,9 +111,10 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
     for (const part of chunk(addrRows, 500)) await tx.insert(s.address).values(part);
+    for (const part of chunk(draftRows, 500)) await tx.insert(s.customerAddressDraft).values(part);
 
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify({ store: ctx.storeId, customers: custRows.length, addresses: addrRows.length }, null, 2));
+    console.log(JSON.stringify({ store: ctx.storeId, customers: custRows.length, addresses: addrRows.length, addressDrafts: draftRows.length }, null, 2));
   }
 
 }

@@ -390,6 +390,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -532,6 +536,10 @@
                             "type": "integer",
                             "nullable": true,
                             "description": "integer minor units (cents)"
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "shipDate": {
                             "type": "string",
@@ -834,6 +842,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -1060,6 +1072,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -1256,6 +1272,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1438,6 +1465,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -1676,6 +1714,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1856,6 +1905,17 @@
                           },
                           "lineTotal": {
                             "type": "integer"
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "available": {
                             "type": "boolean"
@@ -2041,6 +2101,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2221,6 +2292,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -2428,6 +2510,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2609,6 +2702,17 @@
                               "lineTotal": {
                                 "type": "integer"
                               },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "available": {
                                 "type": "boolean"
                               },
@@ -2780,6 +2884,17 @@
                           },
                           "lineTotal": {
                             "type": "integer"
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "available": {
                             "type": "boolean"
@@ -2971,6 +3086,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -3309,6 +3435,17 @@
                                   },
                                   "lineTotal": {
                                     "type": "integer"
+                                  },
+                                  "isPreOrder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipDate": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
                                   },
                                   "available": {
                                     "type": "boolean"
@@ -6481,6 +6618,10 @@
                           "isPreOrder": {
                             "type": "boolean"
                           },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "shipDate": {
                             "type": "string",
                             "nullable": true
@@ -8314,6 +8455,10 @@
                           },
                           "isPreOrder": {
                             "type": "boolean"
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "shipDate": {
                             "type": "string",
@@ -12745,6 +12890,11 @@
                     "nullable": true,
                     "format": "date-time"
                   },
+                  "shipDateLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
                   "compareAtPrice": {
                     "type": "integer",
                     "nullable": true
@@ -13519,6 +13669,11 @@
                     "type": "string",
                     "nullable": true,
                     "format": "date-time"
+                  },
+                  "shipDateLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
                   },
                   "onHand": {
                     "type": "integer",

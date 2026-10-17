@@ -14,6 +14,41 @@ import { reconcileStripeOrder } from '../payments/stripe-reconcile.js';
 
 export const adminGatewayPayments = new OpenAPIHono();
 
+adminGatewayPayments.openapi(createRoute({
+  method: 'get', path: '/v1/admin/payment-archives', summary: 'Read retained source payment history (no payment operations)',
+  request: { query: z.object({ limit: z.coerce.number().int().min(1).max(100).default(25), offset: z.coerce.number().int().min(0).default(0) }) },
+  responses: {
+    200: { description: 'Source facts; importCurrencyContext is not payment currency evidence', content: J(z.object({
+      items: z.array(z.object({ id: z.string(), sourceKey: z.string(), sourceId: z.string(), sourceDigest: z.string(),
+        sourceCreatedAt: z.string().nullable(), sourceOrderId: z.string().nullable(), method: z.string().nullable(),
+        state: z.string().nullable(), amount: z.number().int().nullable(), transactionId: z.string().nullable(),
+        importCurrencyContext: z.string(), refundCount: z.number().int(), referenceCount: z.number().int() })),
+      total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
+    })) },
+    401: { description: 'Unauthorized', ...errBody },
+  },
+}), c => guard(c, async () => {
+  const { admin } = await requireAdmin(c);
+  const store = requireStore(admin, c);
+  requirePermission(store, 'refunds');
+  const { limit, offset } = c.req.valid('query');
+  const out = await withStore(store.storeId, async tx => {
+    const where = eq(s.financialPaymentArchive.storeId, store.storeId);
+    const [count] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.financialPaymentArchive).where(where);
+    // Deliberately project no metadata, error payload, dependency payload or gateway identity.
+    const rows = await tx.select({ id: s.financialPaymentArchive.id, sourceKey: s.financialPaymentArchive.sourceKey,
+      sourceId: s.financialPaymentArchive.sourceId, sourceDigest: s.financialPaymentArchive.sourceDigest,
+      sourceCreatedAt: s.financialPaymentArchive.sourceCreatedAt, sourceOrderId: s.financialPaymentArchive.sourceOrderId,
+      method: s.financialPaymentArchive.method, state: s.financialPaymentArchive.state, amount: s.financialPaymentArchive.amount,
+      transactionId: s.financialPaymentArchive.transactionId, importCurrencyContext: s.financialPaymentArchive.importCurrencyContext,
+      refundCount: sql<number>`cardinality(${s.financialPaymentArchive.sourceRefunds})`,
+      referenceCount: sql<number>`cardinality(${s.financialPaymentArchive.sourceReferences})`,
+    }).from(s.financialPaymentArchive).where(where).orderBy(desc(s.financialPaymentArchive.id)).limit(limit).offset(offset);
+    return { total: count?.total ?? 0, items: rows };
+  });
+  return c.json({ ...out, limit, offset }, 200);
+}));
+
 adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async () => {
   const { admin } = await requireAdmin(c);
   const store = requireStore(admin, c);

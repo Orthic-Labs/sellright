@@ -5,7 +5,7 @@ import { Button, CheckIcon, XCircleIcon, platformAction } from '~/platform/gatew
 import { APP_STATE } from '~/constants';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CountryService } from '~/services/CountryService';
-import { createAddress, getAddresses, updateAddress } from '~/services/customer';
+import { createAddress, getAddresses, updateAddress, getAddressDrafts, completeAddressDraft, deleteAddressDraft } from '~/services/customer';
 import { SellRightError } from '~/sellright/client';
 import type { NewAddressInput } from '~/sellright/types/account';
 import { ShippingAddress } from '~/types';
@@ -27,6 +27,7 @@ export default component$(() => {
 	const location = useLocation();
 	const appState = useContext(APP_STATE);
 	const isNew = location.params.id === 'add';
+	const isDraft = !isNew && location.url.searchParams.get('draft') === '1';
 
 	const form = useStore<ShippingAddress>({
 		fullName: '', streetLine1: '', streetLine2: '', company: '', city: '', province: '', postalCode: '', phoneNumber: '',
@@ -44,6 +45,16 @@ export default component$(() => {
 	});
 
 	useVisibleTask$(async () => {
+		if (isDraft) {
+			const draft = (await getAddressDrafts()).find(row => row.id === location.params.id);
+			if (!draft) { missing.value = true; return; }
+			Object.assign(form, { fullName: draft.fullName ?? '', streetLine1: draft.line1 ?? '', streetLine2: draft.line2 ?? '',
+				city: draft.city ?? '', province: draft.province ?? '', postalCode: draft.postalCode ?? '',
+				phoneNumber: draft.phone ?? '', countryCode: draft.countryCode ?? '',
+				defaultShippingAddress: draft.isDefaultShipping ?? false, defaultBillingAddress: draft.isDefaultBilling ?? false });
+			loaded.value = true;
+			return;
+		}
 		if (isNew) {
 			// A new address starts in the shopper's remembered destination (US until they choose otherwise).
 			form.countryCode = appState.shippingAddress.countryCode || CountryPreferenceService.getCountry();
@@ -76,13 +87,16 @@ export default component$(() => {
 			isDefaultShipping: f.get('defaultShippingAddress') === 'true',
 			isDefaultBilling: f.get('defaultBillingAddress') === 'true',
 		};
-		if (!native.fullName || !native.line1 || !native.city || !native.country || !native.province || !native.postalCode) {
-			error.value = 'Please fill in your name, country, street address, city, state and postal code.';
+		if (!native.fullName || !native.line1 || !native.city || !native.country || (!isDraft && (!native.province || !native.postalCode))) {
+			error.value = isDraft
+				? 'Please fill in your name, country, street address and city.'
+				: 'Please fill in your name, country, street address, city, state and postal code.';
 			return;
 		}
 		saving.value = true;
 		try {
-			if (isNew) await createAddress(native);
+			if (isDraft) await completeAddressDraft(location.params.id, native);
+			else if (isNew) await createAddress(native);
 			else await updateAddress(location.params.id, native);
 			await navigate('/account/address-book/');
 		} catch (e) {
@@ -120,7 +134,23 @@ export default component$(() => {
 							<input class={INPUT} id="phoneNumber" name="phoneNumber" type="tel" autoComplete="tel" placeholder="Phone (optional)" value={form.phoneNumber} />
 						</div>
 					</div>
-					<AddressForm shippingAddress={form} />
+					{isDraft ? <>
+						<h1 class="text-xl font-heading">Needs completion</h1>
+						<p class="text-sm text-gray-600">Complete these retained details to create a saved address.</p>
+						{[
+							['streetLine1', 'Street address', form.streetLine1, true], ['streetLine2', 'Address line 2', form.streetLine2, false],
+							['city', 'City', form.city, true], ['province', 'State / province (optional)', form.province, false],
+							['postalCode', 'Postal code (optional)', form.postalCode, false], ['countryCode', 'Country code (2 letters)', form.countryCode, true],
+						].map(([name, label, value, required]) => <label key={String(name)} class="block text-sm">{label}
+							<input class={INPUT} name={String(name)} value={String(value ?? '')} required={Boolean(required)} maxLength={name === 'countryCode' ? 2 : undefined} />
+						</label>)}
+						<label class="block text-sm"><input type="checkbox" name="defaultShippingAddress" value="true" checked={form.defaultShippingAddress} /> Use completed address as default shipping</label>
+						<label class="block text-sm"><input type="checkbox" name="defaultBillingAddress" value="true" checked={form.defaultBillingAddress} /> Use completed address as default billing</label>
+						<button type="button" class="underline text-sm" onClick$={async () => {
+							try { await deleteAddressDraft(location.params.id); await navigate('/account/address-book/'); }
+							catch { error.value = 'We could not delete that address. Please try again.'; }
+						}}>Delete retained address</button>
+					</> : <AddressForm shippingAddress={form} />}
 					{error.value && (
 						<div class="rounded-md bg-red-50 p-4 mt-8" role="alert">
 							<div class="flex">

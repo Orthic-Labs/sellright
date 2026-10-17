@@ -6,7 +6,10 @@ import { APP_STATE } from '~/constants';
 import {
 	deleteAddress,
 	getAddresses,
+	getAddressDrafts,
+	deleteAddressDraft,
 } from '~/services/customer';
+import type { AddressDraft } from '~/sellright/types/account';
 import { toShippingAddress } from '~/utils/address-book';
 import { createSEOHead } from '~/utils/seo';
 
@@ -17,10 +20,13 @@ export default component$(() => {
 	// Always read the book from the API when the page opens: what another page (add / edit / delete, another tab) did a
 	// moment ago must show up, and state left in the account layout would not.
 	const loaded = useSignal(false);
+	const drafts = useSignal<AddressDraft[]>([]);
 	const loadError = useSignal(false);
 	useVisibleTask$(async () => {
 		try {
-			appState.addressBook = (await getAddresses()).map(toShippingAddress);
+			const [addresses, retained] = await Promise.all([getAddresses(), getAddressDrafts()]);
+			appState.addressBook = addresses.map(toShippingAddress);
+			drafts.value = retained;
 			loaded.value = true;
 		} catch {
 			loadError.value = true;
@@ -71,6 +77,22 @@ export default component$(() => {
 					))}
 				</div>
 			)}
+			{loaded.value && drafts.value.length > 0 && <section class="space-y-4" aria-label="Addresses needing completion">
+				<h2 class="text-xl font-heading">Needs completion</h2>
+				<p class="text-sm text-gray-600">These saved details need completion before they can be used for shipping or billing.</p>
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{drafts.value.map(draft => <article key={draft.id} class="border border-amber-300 rounded-lg p-4 space-y-2">
+					<p class="font-medium">Needs completion</p>
+					{[draft.fullName, draft.line1, draft.line2, draft.city, draft.province, draft.postalCode, draft.countryCode, draft.phone].map((value, i) => value !== null && <p key={i} class="text-sm whitespace-pre-wrap">{value}</p>)}
+					{!draft.countryCode && draft.sourceCountryId !== null && <p class="text-sm text-gray-600">Original country reference: {draft.sourceCountryId}</p>}
+					{draft.isDefaultShipping && <p class="text-sm text-gray-600">Previously marked default shipping</p>}
+					{draft.isDefaultBilling && <p class="text-sm text-gray-600">Previously marked default billing</p>}
+					<a class="underline" href={`/account/address-book/${draft.id}/?draft=1`}>Complete address</a>
+					<button type="button" class="ml-4 underline" onClick$={async () => {
+						try { await deleteAddressDraft(draft.id); drafts.value = drafts.value.filter(row => row.id !== draft.id); }
+						catch { loadError.value = true; }
+					}}>Delete</button>
+				</article>)}</div>
+			</section>}
 			<div class="flex justify-center">
 				<HighlightedButton
 					onClick$={platformAction('ui.press', $(() => {

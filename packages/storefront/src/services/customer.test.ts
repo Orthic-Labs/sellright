@@ -94,6 +94,24 @@ describe('services/customer — native SellRight client', () => {
 		expect(urlOf(mockedFetch)).toContain('/v1/shop/account/addresses/addr-1');
 	});
 
+	it('keeps incomplete drafts outside native saved-address reads & uses explicit completion/deletion paths', async () => {
+		const retained = { id: 'draft-1', line1: '', city: null, countryCode: null };
+		const mockedFetch = vi.fn(async (input: Request) => input.url.includes('address-drafts')
+			? input.method === 'GET' ? jsonResponse(200, { items: [retained] }) : jsonResponse(201, { id: 'native-1', ok: true })
+			: jsonResponse(200, { items: [] }));
+		vi.stubGlobal('fetch', mockedFetch);
+		const { getAddresses, getAddressDrafts, completeAddressDraft, deleteAddressDraft } = await import('./customer');
+		await expect(getAddressDrafts()).resolves.toEqual([retained]);
+		await expect(getAddresses()).resolves.toEqual([]);
+		const completed = { line1: '1 Main', city: 'Town', country: 'US' };
+		await completeAddressDraft('draft-1', completed);
+		expect(urlOf(mockedFetch, 2)).toContain('/v1/shop/account/address-drafts/draft-1/complete');
+		expect(await (mockedFetch.mock.calls[2]![0] as Request).clone().json()).toEqual(completed);
+		await deleteAddressDraft('draft-1');
+		expect((mockedFetch.mock.calls[3]![0] as Request).method).toBe('DELETE');
+		expect(urlOf(mockedFetch, 3)).toContain('/v1/shop/account/address-drafts/draft-1');
+	});
+
 
 	it('getOrderReturns reads the live returns for the order and resolves null for an order that is not the caller\'s', async () => {
 		const mockedFetch = vi.fn(async () => jsonResponse(200, { returnable: [{ sku: 'S1', name: 'Shirt', quantity: 2 }], items: [] }));

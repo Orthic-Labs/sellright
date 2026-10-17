@@ -8270,6 +8270,7 @@ export interface paths {
                         salePrice?: number | null;
                         /** Format: date-time */
                         shipDate?: string | null;
+                        shipDateLabel?: string | null;
                         sku: string;
                         updatesDurationDays?: number | null;
                     };
@@ -12443,6 +12444,7 @@ export interface paths {
                         salePrice?: number | null;
                         /** Format: date-time */
                         shipDate?: string | null;
+                        shipDateLabel?: string | null;
                         updatesDurationDays?: number | null;
                         weightG?: number | null;
                     };
@@ -14680,6 +14682,7 @@ export interface paths {
                                 name: string;
                                 quantity: number;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16239,11 +16242,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16317,11 +16323,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16392,11 +16401,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16441,11 +16453,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16588,11 +16603,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16637,11 +16655,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16712,11 +16733,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16770,11 +16794,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16856,11 +16883,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16933,11 +16963,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -17071,6 +17104,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -17163,6 +17197,7 @@ export interface paths {
                                 /** @description integer minor units (cents) */
                                 salePrice: number | null;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                             }[];
                         };
@@ -17455,6 +17490,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -17577,11 +17613,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -17675,6 +17714,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -18359,6 +18399,7 @@ export interface paths {
                                 name: string;
                                 quantity: number;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
