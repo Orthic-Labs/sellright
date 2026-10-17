@@ -7253,6 +7253,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/payment-archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read retained source payment history (no payment operations) */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Source facts; importCurrencyContext is not payment currency evidence */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                amount: number | null;
+                                id: string;
+                                importCurrencyContext: string;
+                                method: string | null;
+                                referenceCount: number;
+                                refundCount: number;
+                                sourceCreatedAt: string | null;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                sourceOrderId: string | null;
+                                state: string | null;
+                                transactionId: string | null;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/payment-reconciliation/effects/{id}/approve-issuance": {
         parameters: {
             query?: never;
@@ -13925,6 +13992,203 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/account/address-drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My addresses needing completion */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Retained drafts; unavailable for checkout */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                city: string | null;
+                                countryCode: string | null;
+                                customerId: string;
+                                fullName: string | null;
+                                id: string;
+                                isDefaultBilling: boolean | null;
+                                isDefaultShipping: boolean | null;
+                                line1: string | null;
+                                line2: string | null;
+                                phone: string | null;
+                                postalCode: string | null;
+                                province: string | null;
+                                sourceCountryId: string | null;
+                                sourceCustomerId: string;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                storeId: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/account/address-drafts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete my retained address */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/account/address-drafts/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete my retained address */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        city: string;
+                        country: string;
+                        fullName?: string | null;
+                        isDefaultBilling?: boolean;
+                        isDefaultShipping?: boolean;
+                        line1: string;
+                        line2?: string | null;
+                        phone?: string | null;
+                        postalCode?: string | null;
+                        province?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Native address created & draft removed atomically */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/account/addresses": {
         parameters: {
             query?: never;
@@ -14316,6 +14580,26 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            addressDrafts: {
+                                city: string | null;
+                                countryCode: string | null;
+                                customerId: string;
+                                fullName: string | null;
+                                id: string;
+                                isDefaultBilling: boolean | null;
+                                isDefaultShipping: boolean | null;
+                                line1: string | null;
+                                line2: string | null;
+                                phone: string | null;
+                                postalCode: string | null;
+                                province: string | null;
+                                sourceCountryId: string | null;
+                                sourceCustomerId: string;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                storeId: string;
+                            }[];
                             addresses: {
                                 city: string;
                                 country: string;
