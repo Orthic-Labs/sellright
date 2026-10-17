@@ -106,10 +106,10 @@ describe('scoped catalog detail work', () => {
           await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Scaling', 'USD')`);
           await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, description, status)
             SELECT id, ${store}, 'item-' || lpad(ordinality::text, 4, '0'), 'Item ' || lpad(ordinality::text, 4, '0'), repeat('detail-body-', 1024), 'active'
-            FROM unnest(${products}::uuid[]) WITH ORDINALITY AS fixture(id, ordinality)`);
+            FROM unnest(${sql.param(products)}::uuid[]) WITH ORDINALITY AS fixture(id, ordinality)`);
           await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price)
             SELECT id, ${store}, product_id, 'SKU-' || product_id::text, 'Variant', 1000
-            FROM unnest(${variants}::uuid[], ${products}::uuid[]) AS fixture(id, product_id)`);
+            FROM unnest(${sql.param(variants)}::uuid[], ${sql.param(products)}::uuid[]) AS fixture(id, product_id)`);
           await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated)
             SELECT id, ${store}, 10, 0 FROM product_variant WHERE store_id = ${store}`);
         });
