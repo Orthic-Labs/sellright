@@ -3,7 +3,7 @@ import { webcrypto, randomUUID } from 'node:crypto';
 import { CartService, couponMembership, parseLegacyCartSnapshot } from './CartService';
 import { installLocks, removeLocks } from './cart-test-harness';
 import { placeOrder, QuoteChangedError } from '~/providers/shop/checkout/checkout';
-import { useCheckout } from '~/hooks/useCheckout';
+import { useCheckout as createCheckoutHarness } from '~/hooks/useCheckout';
 import { CountryPreferenceService } from './CountryPreferenceService';
 import type { ServerCart } from '~/sellright/types/cart';
 
@@ -115,7 +115,7 @@ describe('quote consent before checkout', () => {
     respond(cart({ revision: 2 })); await CartService.updateLine('SKU', 1);
     respond(cart({ revision: 2 })); respond({ code: 'ORDER', state: 'PendingPayment', grandTotal: 2400 });
     CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'GB' });
-    const checkout = useCheckout();
+    const checkout = createCheckoutHarness();
     expect(await checkout.placeOrder({ shippingAddress: { country: 'CA' }, shippingMethodCode: 'standard', acceptedQuoteHash: 'quote-one' }, null)).toBe('paying');
     const reads = calls.filter(call => call.method === 'GET');
     expect(reads).toHaveLength(2);
