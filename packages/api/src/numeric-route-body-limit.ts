@@ -124,7 +124,11 @@ export function numericRouteBodyLimit(policy: NumericRouteBodyLimit): Middleware
       if (!failure) await next();
       // A handler cannot turn overflow into a 503/success, or acknowledge an incompletely consumed part.
       if (!failure && !complete && c.res.status >= 200 && c.res.status < 300) failure = 400;
-      if (failure) return errorResponse(failure);
+      if (failure) {
+        // Downstream already finalized the context; returning alone cannot replace that response in Hono.
+        c.res = errorResponse(failure);
+        return c.res;
+      }
     } finally {
       raw.signal.removeEventListener('abort', onAbort);
       cancel('request handler finished');

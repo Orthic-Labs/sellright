@@ -89,7 +89,8 @@ describe('composed exact-route CORS', () => {
   });
 
   it('normalizes immutable redirect responses and preserves unrelated headers', async () => {
-    const routes = new OpenAPIHono().get(PATH, () => Response.redirect('https://redirect.example', 303));
+    const routes = new OpenAPIHono();
+    routes.get(PATH, () => Response.redirect('https://redirect.example', 303));
     const app = buildHttpApp({ ctx, plugins: [{ name: 'immutable', corsPolicies: [policy], routes }] });
     const response = await app.request(PATH);
     expect(response.status).toBe(303);
@@ -120,6 +121,18 @@ describe('composed exact-route CORS', () => {
     expect((await app.request(PATH, { headers: { Origin: 'https://late.example' } })).headers.get('access-control-allow-origin')).toBeNull();
     const plain = composition([]).app;
     expect((await plain.request(PATH, { method: 'OPTIONS', headers: { Origin: 'https://default.example' } })).headers.get('access-control-allow-credentials')).toBe('true');
+  });
+
+  it('keeps encoded path aliases outside exact-route policy admission', async () => {
+    const { app } = composition();
+    const response = await app.request('/compat/example/%75pdate.json', {
+      method: 'OPTIONS', headers: { Origin: 'https://default.example', 'x-request-id': 'encoded-cors-probe' },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://default.example');
+    expect(response.headers.get('access-control-allow-credentials')).toBe('true');
+    expect(response.headers.get('access-control-max-age')).toBeNull();
+    expect(response.headers.get('x-request-id')).toBe('encoded-cors-probe');
   });
 
   it('rejects conflicts, route patterns, protected paths and invalid policy data at construction', () => {

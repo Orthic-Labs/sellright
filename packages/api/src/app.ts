@@ -175,9 +175,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // built with the resolved verdict.
   app.use('*', async (c, next) => {
     // Plugin data can replace CORS only on validated, exact, non-engine paths. No plugin hook moves ahead of guards.
-    const exactPolicy = corsPolicies.get(c.req.path);
+    const exactPolicy = corsPolicies.size ? corsPolicies.get(new URL(c.req.url).pathname) : undefined;
     if (exactPolicy) {
-      if (c.req.method === 'OPTIONS' && exactPolicy.options === 'respond-204') c.res = new Response(null, { status: 204 });
+      if (c.req.method === 'OPTIONS' && exactPolicy.options === 'respond-204') c.res = c.body(null, 204);
       else await next();
       normalizeExactRouteCorsResponse(c, exactPolicy);
       return c.res;
@@ -233,7 +233,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
   const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
   app.use('*', (c, next) => {
-    const streamed = streamBodyLimits.find(({ policy }) => matchesNumericRouteBodyLimit(policy, c.req.method, c.req.path));
+    // Hono's routing path decodes escapes; upload admission must use the original encoded pathname.
+    const path = streamBodyLimits.length ? new URL(c.req.url).pathname : '';
+    const streamed = streamBodyLimits.find(({ policy }) => matchesNumericRouteBodyLimit(policy, c.req.method, path));
     if (streamed) return streamed.middleware(c, next);
     return (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next);
   });

@@ -173,7 +173,8 @@ describe('composed numeric-route streaming body caps', () => {
     let firstRead!: () => void;
     const readOnce = new Promise<void>((resolve) => { firstRead = resolve; });
     const input = source([1, 1, 1]);
-    const routes = new OpenAPIHono().put(`${PREFIXES[0]}:part`, async (c) => {
+    const routes = new OpenAPIHono();
+    routes.put(`${PREFIXES[0]}:part`, async (c) => {
       const reader = c.req.raw.body!.getReader();
       await reader.read();
       firstRead();
