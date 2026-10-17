@@ -71,6 +71,7 @@ export function slugifyCode(message: string): string {
  */
 export const SHOP_API_ERROR_CODES = [
   'ACTIVE_SUBSCRIPTION_EXISTS',
+  'ADDRESS_DRAFT_NOT_FOUND',
   'ADDRESS_NOT_FOUND',
   'ALREADY_REVIEWED',
   'APPLE_SIGNIN_NOT_CONFIGURED',
