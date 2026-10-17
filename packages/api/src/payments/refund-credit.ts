@@ -7,11 +7,12 @@ const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v ===
 const cents = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= MAX_CREDIT_CENTS;
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Resolve source-specific or frozen native unit authority once per order.
+/** A validated current snapshot governs every line, including imported lines.
+ * Only legacy orders without snapshots use retained source unit authority.
  * Null is the existing legacy generic refund basis, never a credit unit proof. */
 export function refundUnitBases(order: { currency: string; pricingSnapshot: unknown }, lines: RefundMoneyLine[]): Map<string, number | null> {
-  const allImported = lines.every(line => object(line.metadata) && line.metadata.vendure !== undefined);
-  const snapshot = allImported ? null : readOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'refund' });
+  const snapshot = readOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'refund' });
+  if (snapshot) return new Map(snapshot.lines.map(line => [line.orderLineId, line.proratedUnitPriceWithTax]));
   return new Map(lines.map(line => {
     const raw = object(line.metadata) ? line.metadata.vendure : undefined;
     if (raw !== undefined) {
@@ -26,7 +27,7 @@ export function refundUnitBases(order: { currency: string; pricingSnapshot: unkn
       if (!cents(unit)) throw new Error('Imported refund unit is outside integer cents');
       return [line.id, unit] as const;
     }
-    return [line.id, snapshot?.lines.find(l => l.orderLineId === line.id)?.proratedUnitPriceWithTax ?? null] as const;
+    return [line.id, null] as const;
   }));
 }
 
