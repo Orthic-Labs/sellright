@@ -7,6 +7,7 @@
  * pending-looks-like-paid guess), fulfillment/tracking, preorder/ship-date,
  * and line images. Centralized here so the four call sites can't drift.
  */
+import { shippingLabelSql } from '../lib/shipping-label.js';
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -153,6 +154,7 @@ export interface OrderLineFact {
   image: string | null;
   isPreOrder: boolean;
   shipDate: string | null;
+  shipDateLabel: string | null;
 }
 
 /** Line snapshot (sku/name/price survive the variant being edited/deleted)
@@ -167,6 +169,7 @@ export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLine
       sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
+      shipDateLabel: shippingLabelSql(s.productVariant.metafields),
       image: sql<string | null>`coalesce(
         (select a.path from ${s.variantAsset} va join ${s.asset} a on a.id = va.asset_id where va.variant_id = ${s.orderLine.variantId} order by va.position asc limit 1),
         (select a.path from ${s.productVariant} pv join ${s.productAsset} pa on pa.product_id = pv.product_id join ${s.asset} a on a.id = pa.asset_id where pv.id = ${s.orderLine.variantId} order by pa.position asc limit 1)

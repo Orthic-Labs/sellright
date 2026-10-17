@@ -16,6 +16,7 @@
  * No `variantIds` (or no usable current generation to reuse from — first
  * publish, corrupted state) falls back to a full scan, exactly as before.
  */
+import { variantShippingLabel } from '../lib/shipping-label.js';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStore, type StoreCtx } from '../store-context.js';
@@ -81,6 +82,7 @@ export interface NativeVariantV2 {
   preOrderPrice: NativeMoney | null;
   isPreOrder: boolean;
   shipDate: string | null;
+  shipDateLabel?: string | null;
   // position: merchant-controlled order (migration 0080) — groupPosition
   // orders the groups, position orders values within that group. This array
   // arrives pre-sorted by both (see buildEntries' `vo` query); position is
@@ -209,12 +211,12 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     const v0 = [...vs].sort((a, b) => selectPrice(a, priceRule) - selectPrice(b, priceRule))[0];
     const agg = ratingByProduct.get(p.id);
     const ratingField = agg && agg.count > 0 ? { rating: { average: agg.average, count: agg.count } } : {};
-    const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, isPreOrder: v0?.isPreOrder ?? false };
+    const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, shipDateLabel: variantShippingLabel(v0?.metafields), isPreOrder: v0?.isPreOrder ?? false };
     manifestProducts.push({
       id: p.slug, name: p.name, slug: p.slug,
       featuredImage: featured ? { url: featured } : null,
       priceRange: { min, max }, inStock, tags: p.tags ?? [], hasMultiplePrices: min !== max,
-      salePrice: cf.salePrice, preOrderPrice: cf.preOrderPrice, shipDate: cf.shipDate, isPreOrder: cf.isPreOrder,
+      salePrice: cf.salePrice, preOrderPrice: cf.preOrderPrice, shipDate: cf.shipDate, shipDateLabel: cf.shipDateLabel, isPreOrder: cf.isPreOrder,
       ...ratingField,
     });
     details.push({
@@ -228,7 +230,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         assets: (assetsByVariant.get(v.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-        salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder,
+        salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, shipDateLabel: variantShippingLabel(v.metafields), isPreOrder: v.isPreOrder,
       })),
     });
 
@@ -249,6 +251,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         preOrderPrice: v.preOrderPrice != null ? nativeMoney(v.preOrderPrice, store) : null,
         isPreOrder: v.isPreOrder,
         shipDate: v.shipDate ? v.shipDate.toISOString() : null,
+        shipDateLabel: variantShippingLabel(v.metafields),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         images: (assetsByVariant.get(v.id) ?? [])
           .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })

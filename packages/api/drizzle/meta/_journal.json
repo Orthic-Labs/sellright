@@ -645,6 +645,13 @@
       "when": 1790000013700,
       "tag": "0100_legacy_sessions_carts",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790000013800,
+      "tag": "0101_retained_source_records",
+      "breakpoints": true
     }
   ]
 }

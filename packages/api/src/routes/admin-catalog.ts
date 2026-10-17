@@ -113,6 +113,7 @@ adminCatalog.openapi(
       isPreOrder: z.boolean().default(false),
       preOrderPrice: money.min(0).nullable().optional(),
       shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
+      shipDateLabel: z.string().max(255).nullable().optional(),
       onHand: z.number().int().min(0).default(0),
       fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).default('physical'),
       appKey: z.string().nullable().optional(),
@@ -151,7 +152,7 @@ adminCatalog.openapi(
         licenseSeats: body.licenseSeats,
         licenseDurationDays: body.licenseDurationDays ?? null,
         updatesDurationDays: body.updatesDurationDays ?? null,
-        metafields: body.metafields ?? null,
+        metafields: body.shipDateLabel === undefined ? body.metafields ?? null : { ...body.metafields, shipDateLabel: body.shipDateLabel },
       }).returning({ id: s.productVariant.id });
       if (body.fulfillmentType === 'physical') {
         await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, allocated: 0 });

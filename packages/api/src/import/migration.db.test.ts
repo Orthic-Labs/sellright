@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { runMigration } from './run.js';
 import { restoreMigration, planLegacySessionRollback } from './restore.js';
 import { migrationId } from './context.js';
+import { digest } from './artifacts.js';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
 
 function fixtureUrl(name: string): string {
@@ -276,6 +277,129 @@ async function fixtureConfig(storeId: string, gatewayAccounts: Record<string, { 
 }
 
 describe('Vendure migration rehearsal (synthetic fixtures)', () => {
+  it('preserves six incomplete addresses & orphan payment dependency facts in atomic dry/apply/restore output', async () => {
+    await resetSource('rh', 'retained-' + randomUUID().slice(0, 8));
+    await sourcePool.query(`INSERT INTO address
+      (id,"customerId","fullName","streetLine1","streetLine2",city,province,"postalCode","phoneNumber","defaultShippingAddress","defaultBillingAddress","countryId") VALUES
+      (1,1,'Buyer One','1 Main St',NULL,'Austin','TX','78701','555-1',true,true,1),
+      (100,1,NULL,NULL,'','',NULL,'','',NULL,false,1),
+      (101,1,'','','Line 2','City','','Zip',NULL,true,NULL,1),
+      (102,1,'Name','Line',NULL,NULL,'State',NULL,'Phone',false,true,1),
+      (103,1,'Name','Line','','','State','Zip','Phone',false,false,1),
+      (104,1,'Name','Line',NULL,'City','State','Zip','Phone',true,false,NULL),
+      (105,1,'Name','Line',NULL,'City','State','Zip','Phone',false,true,999)`);
+    await sourcePool.query(`INSERT INTO payment VALUES (99,'2024-03-04 12:34:56.123456',NULL,'unknown-source-method','Authorized',1007,'imported','{"private":"original raw metadata"}','')`);
+    await sourcePool.query(`INSERT INTO refund VALUES
+      (99,99,17,0,0,0,'Pending','raw-refund-txn','source reason','{"private":true}','2024-03-04 12:35:56.654321'),
+      (98,99,13,0,0,0,'Pending',NULL,'earlier source ID','{"private":false}','2024-03-04 12:35:56.123456')`);
+    await sourcePool.query(`INSERT INTO order_line_reference VALUES (99,'RefundLine',NULL,99,999,3), (98,'RefundLine',NULL,98,998,2)`);
+    // Real JSONB numbers must cross node-pg without becoming JavaScript numbers.
+    const exactFacts = String.raw`{"unsafe":9007199254740993,"fraction":0.123456789012345678901234567890,"nested":[{"nullable":null,"values":[9007199254740993,0.123456789012345678901]}],"escaped":"quote \" & slash \\"}`;
+    await sourcePool.query('ALTER TABLE payment ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb');
+    await sourcePool.query('ALTER TABLE refund ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb');
+    await sourcePool.query('UPDATE payment SET metadata=$1::jsonb WHERE id=99', [exactFacts]);
+    await sourcePool.query('UPDATE refund SET metadata=$1::jsonb WHERE "paymentId"=99', [exactFacts]);
+    await sourcePool.query('ALTER TABLE order_line_reference ADD COLUMN retained_facts jsonb');
+    await sourcePool.query('UPDATE order_line_reference SET retained_facts=$1::jsonb WHERE id IN (98,99)', [exactFacts]);
+    const originalPayment = (await sourcePool.query(`SELECT to_jsonb(p)::text AS row,
+      to_jsonb(p)->>'createdAt' AS created, to_jsonb(p.metadata)::text AS metadata FROM payment p WHERE id=99`)).rows[0];
+    const originalRefunds = (await sourcePool.query('SELECT to_jsonb(r)::text AS row FROM refund r WHERE "paymentId"=99 ORDER BY id')).rows.map(row => row.row);
+    const originalReferences = (await sourcePool.query('SELECT to_jsonb(r)::text AS row FROM order_line_reference r WHERE id IN (98,99) ORDER BY id')).rows.map(row => row.row);
+    const originalAddress = (await sourcePool.query('SELECT to_jsonb(a)::text AS row FROM address a WHERE id=100')).rows[0].row;
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(dry.counts.address).toBe(1);
+    expect(dry.counts.customer_address_draft).toBe(6);
+    expect(dry.counts.financial_payment_archive).toBe(1);
+    expect(await targetRows(storeId, 'customer_address_draft')).toEqual([]);
+    expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+    expect(await targetRows(storeId, 'address')).toEqual([]);
+    expect(await targetRows(storeId, 'store')).toEqual([]);
+    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect(applied.applied).toBe(true);
+    const drafts = await targetRows(storeId, 'customer_address_draft', 'ORDER BY source_id');
+    expect(drafts).toHaveLength(6);
+    expect(drafts[0]).toMatchObject({ source_id: '100', source_customer_id: '1', full_name: null, line1: null,
+      line2: '', city: '', phone: '', source_country_id: '1', country_code: 'US', is_default_shipping: null, is_default_billing: false });
+    expect(drafts[1]).toMatchObject({ full_name: '', line1: '', phone: null, is_default_shipping: true, is_default_billing: null });
+    expect(drafts[5]).toMatchObject({ source_country_id: '999', country_code: null });
+    expect(drafts.every(row => /^[a-f0-9]{64}$/.test(row.source_digest))).toBe(true);
+    expect(drafts[0].source_digest).toBe(digest({ format: 'retained-pg-jsonb-text-v1', address: originalAddress }));
+    const archive = await targetOne(storeId, 'financial_payment_archive');
+    expect(archive).toMatchObject({ source_id: '99', source_order_id: null, state: 'Authorized', amount: 1007,
+      method: 'unknown-source-method', transaction_id: 'imported', metadata: originalPayment.metadata,
+      error_message: '', import_currency_context: 'USD', source_created_at: originalPayment.created,
+      source_record: originalPayment.row, source_refunds: originalRefunds, source_references: originalReferences });
+    expect(archive.source_digest).toBe(digest({ format: 'retained-pg-jsonb-text-v1', payment: originalPayment.row,
+      refunds: originalRefunds, references: originalReferences }));
+    for (const raw of [archive.metadata, archive.source_record, ...archive.source_refunds, ...archive.source_references]) {
+      expect(raw).toContain('9007199254740993');
+      expect(raw).toContain('0.123456789012345678901234567890');
+    }
+    expect(archive.id).toBe(migrationId(storeId, 'vendure:test', 'financial-payment-archive', 99));
+    expect((await targetRows(storeId, 'payment')).some(row => row.id === archive.id)).toBe(false);
+    expect((await targetRows(storeId, 'refund')).some(row => row.id === migrationId(storeId, 'vendure:test', 'refund', 99))).toBe(false);
+    const operationalAddresses = await targetRows(storeId, 'address');
+    expect(operationalAddresses).toHaveLength(1);
+    expect(operationalAddresses).toMatchObject([{
+      id: migrationId(storeId, 'vendure:test', 'address', 1),
+      customer_id: migrationId(storeId, 'vendure:test', 'customer', 1),
+      full_name: 'Buyer One', line1: '1 Main St', line2: null, city: 'Austin', province: 'TX',
+      postal_code: '78701', phone: '555-1', country: 'US', is_default_shipping: true, is_default_billing: true,
+    }]);
+    const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
+    expect(manifest.after.customer_address_draft).toHaveLength(6);
+    expect(manifest.after.financial_payment_archive).toHaveLength(1);
+    expect(manifest.after.address).toHaveLength(1);
+    expect(manifest.after.financial_payment_archive[0]).toMatchObject({ metadata: originalPayment.metadata,
+      source_record: originalPayment.row, source_refunds: originalRefunds, source_references: originalReferences });
+    // Restore must notice a one-digit change beyond JavaScript's safe integer range.
+    const target = await targetPool.connect();
+    try {
+      await target.query("SELECT set_config('app.current_store', $1, false)", [storeId]);
+      await target.query('UPDATE financial_payment_archive SET source_record=$2 WHERE store_id=$1',
+        [storeId, originalPayment.row.replace('9007199254740993', '9007199254740992')]);
+      await expect(restoreMigration({ targetUrl: TARGET_URL, manifest, apply: true }))
+        .rejects.toThrow('Destination or manifest changed; automatic restore refused');
+      await target.query('UPDATE financial_payment_archive SET source_record=$2 WHERE store_id=$1', [storeId, originalPayment.row]);
+    } finally { target.release(); }
+    await restoreMigration({ targetUrl: TARGET_URL, manifest, apply: true });
+    expect(await targetRows(storeId, 'customer_address_draft')).toEqual([]);
+    expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+    expect(await targetRows(storeId, 'address')).toEqual([]);
+    // Unknown dependencies abort the whole transaction rather than disappear.
+    await sourcePool.query(`INSERT INTO refund VALUES (100,10000,1,0,0,0,'Settled',NULL,NULL,NULL,NULL)`);
+    await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.manifestPath + '.unknown' })).rejects.toThrow('Source refund references an unknown payment: 100');
+    expect(await targetRows(storeId, 'customer_address_draft')).toEqual([]);
+    expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+    expect(await targetRows(storeId, 'store')).toEqual([]);
+  });
+
+  it('keeps SQL-null metadata distinct from JSON null through private manifest & restore', async () => {
+    await resetSource('rh', 'retained-null-' + randomUUID().slice(0, 8));
+    await sourcePool.query('ALTER TABLE payment ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb');
+    await sourcePool.query(`INSERT INTO payment VALUES
+      (99,'2024-03-04 12:34:56.123456',NULL,'source-method','Authorized',1,NULL,NULL,NULL),
+      (100,'2024-03-04 12:34:56.654321',NULL,'source-method','Authorized',1,NULL,'null'::jsonb,NULL)`);
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath,
+      apply: true, expectedDigest: dry.sourceDigest });
+    const archives = new Map<string, Record<string, unknown>>((await targetRows(storeId, 'financial_payment_archive'))
+      .map(row => [String(row.source_id), row] as const));
+    expect(archives.get('99')?.metadata).toBeNull();
+    expect(archives.get('100')?.metadata).toBe('null');
+    const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
+    const retained = new Map<unknown, Record<string, unknown>>(manifest.after.financial_payment_archive
+      .map((row: Record<string, unknown>) => [row.source_id, row] as const));
+    expect(retained.get('99')).toMatchObject({ metadata: null });
+    expect(retained.get('100')).toMatchObject({ metadata: 'null' });
+    await restoreMigration({ targetUrl: TARGET_URL, manifest, apply: true });
+    expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+  });
+
   it('fails preflight clearly on a missing required source column', async () => {
     await resetSource('broken', 'x');
     const storeId = randomUUID();
@@ -535,6 +659,24 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(await targetRows(storeId, 'store')).toEqual([]);
   });
 
+  it('preserves non-date source shipping copy without creating a fulfillment timestamp', async () => {
+    await resetSource('dd', 'label-' + randomUUID().slice(0, 8));
+    const label = '  Ships late fall & <updates pending>  ';
+    await sourcePool.query('UPDATE product_variant SET "customFieldsShipdate" = $1', [label]);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const variant = await targetOne(storeId, 'product_variant');
+    expect(variant.metafields.shipDateLabel).toBe(label);
+    expect(variant.ship_date).toBeNull();
+  });
+
   it('rehearses the Damned Designs schema: business extensions and gateway provenance', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
@@ -568,6 +710,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const variant = await targetOne(storeId, 'product_variant');
     expect(variant.sale_price).toBe(1500);
     expect(variant.pre_order_price).toBe(800);
+    expect(variant.metafields.shipDateLabel).toBe('2024-06-01');
+    expect(variant.ship_date.toISOString()).toBe('2024-06-01T00:00:00.000Z');
 
     // Affiliate + links + balances: identity preserved, accessToken verbatim,
     // the disabled source promotion backfilled as an inert tombstone.
@@ -677,12 +821,14 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       stripe: { accountId: 'acct_dd', mode: 'live' },
     });
     const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
-    expect(dry.exclusions.filter(e => e.table === 'payment' && /stale authorization|has no order/.test(e.detail))).toHaveLength(2);
+    expect(dry.exclusions.filter(e => e.table === 'payment' && /stale authorization|has no order/.test(e.detail))).toHaveLength(1);
+    expect(dry.counts.financial_payment_archive).toBe(1);
     const applied = await runMigration({
       sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest,
     });
     expect(applied.counts.payment).toBe(4); // the orphan authorization has no order to attach to
+    expect((await targetOne(storeId, 'financial_payment_archive')).state).toBe('Authorized');
     const stale = await targetOne(storeId, 'payment', `AND id = '${migrationId(storeId, 'vendure:test', 'payment', 4)}'`);
     expect(stale.state).toBe('Authorized');
     const unstocked = await targetOne(storeId, 'stock', `AND variant_id = '${migrationId(storeId, 'vendure:test', 'variant', 2)}'`);

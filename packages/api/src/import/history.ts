@@ -1,8 +1,9 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import * as s from '../db/schema.js';
 import type { ImportContext } from './context.js';
 import { vendureLineMoney, type VendureLineSnapshotInput } from './vendure-money.js';
 import { parseDate } from './store.js';
+import { digest } from './artifacts.js';
 
 /** Source refund references have quantities, not amounts. Allocate the exact
  * source items total proportionally with deterministic largest remainders. */
@@ -83,7 +84,7 @@ export async function importHistory(ctx: ImportContext) {
   // tenant boundary must live in the query itself.
   const lines = new Map((await tx.select().from(s.orderLine).where(eq(s.orderLine.storeId, storeId))).map(line => [line.id, line]));
   const payments = new Map((await tx.select().from(s.payment).where(eq(s.payment.storeId, storeId))).map(payment => [payment.id, payment]));
-  const refs = await q('SELECT * FROM order_line_reference ORDER BY id');
+  const refs = await q('SELECT r.*, to_jsonb(r)::text AS source_record FROM order_line_reference r ORDER BY r.id');
   const fulfilledByLine = new Map<string, number>();
   const refundedByLine = new Map<string, number>();
   const overfulfilledLines = new Set<string>();
@@ -135,9 +136,34 @@ export async function importHistory(ctx: ImportContext) {
     }
   }
   await synthesizeSourceShipments(ctx, fulfilledByLine);
-  for (const refund of await q('SELECT * FROM refund ORDER BY id')) {
+  // PostgreSQL text transport preserves timestamps & numeric lexemes before node-pg parsing.
+  const sourceRefunds = await q('SELECT r.*, to_jsonb(r)::text AS source_record FROM refund r ORDER BY id');
+  const sourceRefundIds = new Set(sourceRefunds.map(row => String(row.id)));
+  for (const ref of refs) {
+    if ((ref.discriminator === 'RefundLine' || ref.refundId != null) &&
+        (ref.refundId == null || !sourceRefundIds.has(String(ref.refundId)))) throw new Error('Source reference names an unknown refund: ' + ref.id);
+  }
+  const archives = await tx.select().from(s.financialPaymentArchive).where(eq(s.financialPaymentArchive.storeId, storeId));
+  const archiveSourceIds = new Set(archives.map(row => row.sourceId));
+  for (const archive of archives) {
+    const refundRows = sourceRefunds.filter(row => String(row.paymentId) === archive.sourceId);
+    const refunds = refundRows.map(row => row.source_record as string);
+    const refundIds = new Set(refundRows.map(row => String(row.id)));
+    const references = refs.filter(row => row.refundId != null && refundIds.has(String(row.refundId)))
+      .map(row => row.source_record as string);
+    await tx.update(s.financialPaymentArchive).set({ sourceRefunds: refunds, sourceReferences: references,
+      sourceDigest: digest({ format: 'retained-pg-jsonb-text-v1', payment: archive.sourceRecord, refunds, references }) })
+      .where(and(eq(s.financialPaymentArchive.storeId, storeId), eq(s.financialPaymentArchive.id, archive.id)));
+  }
+  for (const refund of sourceRefunds) {
     const payment = payments.get(ctx.id('payment', refund.paymentId));
-    if (!payment) continue;
+    if (!payment) {
+      if (archiveSourceIds.has(String(refund.paymentId))) continue;
+      throw new Error('Source refund references an unknown payment: ' + refund.id);
+    }
+    if (refs.some(ref => ref.refundId === refund.id && ref.discriminator !== 'RefundLine')) {
+      throw new Error('Unsupported source refund reference: ' + refund.id);
+    }
     const total = Number(refund.total), items = Number(refund.items), shipping = Number(refund.shipping), adjustment = Number(refund.adjustment);
     // DD records refunds as flat totals with zero components; the total is the
     // captured money and stays authoritative. Components are imported verbatim

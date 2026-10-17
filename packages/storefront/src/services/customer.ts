@@ -14,6 +14,7 @@ import type {
 	OrderReturns,
 	NewAddressInput,
 	AddressPatch,
+	AddressDraft,
 } from '~/sellright/types/account';
 
 // Query result cache — unrelated to stock/pricing data (never touches the
@@ -78,6 +79,25 @@ export async function getAddresses(): Promise<Address[]> {
 		if (e instanceof SellRightError && e.status === 401) return [];
 		throw e;
 	}
+}
+
+/** Kept separate from saved-address caches & every checkout consumer. */
+export async function getAddressDrafts(): Promise<AddressDraft[]> {
+	const { data } = await sellright().GET('/v1/shop/account/address-drafts');
+	if (!data) throw new Error('Empty address drafts response');
+	return data.items;
+}
+
+export async function completeAddressDraft(id: string, input: NewAddressInput): Promise<{ id: string }> {
+	const { data } = await sellright().POST('/v1/shop/account/address-drafts/{id}/complete', { params: { path: { id } }, body: input });
+	clearCustomerCacheAfterMutation();
+	return data!;
+}
+
+export async function deleteAddressDraft(id: string): Promise<{ ok: boolean }> {
+	const { data } = await sellright().DELETE('/v1/shop/account/address-drafts/{id}', { params: { path: { id } } });
+	clearCustomerCacheAfterMutation();
+	return data!;
 }
 
 export type ChangePasswordResult = { ok: true } | ({ ok: false } & AccountError);

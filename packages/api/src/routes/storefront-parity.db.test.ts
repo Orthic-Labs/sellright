@@ -67,19 +67,21 @@ describe('native preorder administration', () => {
   it('creates, reads, updates and clears preorder values with audit evidence', async () => {
     const product = await admin('POST', '/v1/admin/products', { name: 'Preorder fixture', status: 'active' });
     const { id: productId } = await product.json() as { id: string };
-    const created = await admin('POST', `/v1/admin/products/${productId}/variants`, { sku: 'PREORDER-FIXTURE', name: 'Fixture', price: 5000, isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00Z' });
+    const created = await admin('POST', `/v1/admin/products/${productId}/variants`, { sku: 'PREORDER-FIXTURE', name: 'Fixture', price: 5000, isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00Z', shipDateLabel: '  Ships after launch & review  ', metafields: { retained: true } });
     expect(created.status).toBe(200);
     const { id } = await created.json() as { id: string };
     const read = async () => (await (await app.request(`/v1/admin/products/${productId}`, { headers: { ...headers, authorization: `Bearer ${token}` } })).json()) as { variants: unknown[] };
-    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00.000Z' });
-    expect((await admin('PATCH', `/v1/admin/variants/${id}`, { preOrderPrice: 3500, shipDate: '2027-02-01T12:30:00+02:00' })).status).toBe(200);
-    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3500, shipDate: '2027-02-01T10:30:00.000Z' });
-    const clear = { isPreOrder: false, preOrderPrice: null, shipDate: null };
+    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00.000Z', shipDateLabel: '  Ships after launch & review  ' });
+    expect((await admin('PATCH', `/v1/admin/variants/${id}`, { preOrderPrice: 3500, shipDate: '2027-02-01T12:30:00+02:00', shipDateLabel: 'Late summer' })).status).toBe(200);
+    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3500, shipDate: '2027-02-01T10:30:00.000Z', shipDateLabel: 'Late summer' });
+    const [saved] = await withStore(STORE, tx => tx.select({ metafields: s.productVariant.metafields }).from(s.productVariant).where(eq(s.productVariant.id, id)));
+    expect(saved?.metafields).toMatchObject({ retained: true, shipDateLabel: 'Late summer' });
+    const clear = { isPreOrder: false, preOrderPrice: null, shipDate: null, shipDateLabel: null };
     expect((await admin('PATCH', `/v1/admin/variants/${id}`, clear)).status).toBe(200);
     expect((await read()).variants[0]).toMatchObject(clear);
     const audit = await withStore(STORE, tx => tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, id)));
     expect(audit.map(row => row.data)).toContainEqual(clear);
-    for (const invalid of [{ preOrderPrice: -1 }, { shipDate: 'not-a-date' }, { isPreOrder: 'true' }]) {
+    for (const invalid of [{ preOrderPrice: -1 }, { shipDate: 'not-a-date' }, { isPreOrder: 'true' }, { shipDateLabel: 'x'.repeat(256) }, { shipDateLabel: 12 }]) {
       expect((await admin('PATCH', `/v1/admin/variants/${id}`, invalid)).status).toBe(400);
       expect((await admin('POST', `/v1/admin/products/${productId}/variants`, { sku: 'INVALID', name: 'Invalid', price: 5000, ...invalid })).status).toBe(400);
     }
@@ -166,6 +168,19 @@ describe('blog parity', () => {
 
 describe('guest tracking', () => {
   const track = (code: string, email = EMAIL) => app.request(`/v1/shop/track?${new URLSearchParams({ code, email, turnstileToken: 'valid-token' })}`, { headers });
+  it('returns current shipping copy for guest order lines without manufacturing dates', async () => {
+    const shipDateLabel = '  Fall & <updates pending>  ';
+    await withStore(STORE, async tx => {
+      const [product] = await tx.insert(s.product).values({ storeId: STORE, slug: 'shipping-copy', name: 'Shipping copy' }).returning();
+      const [variant] = await tx.insert(s.productVariant).values({ storeId: STORE, productId: product!.id, sku: 'SHIPPING-COPY', name: 'Shipping copy', price: 1000, isPreOrder: true, metafields: { shipDateLabel } }).returning();
+      const [order] = await tx.select().from(s.order).where(eq(s.order.code, 'IMPORTED-123'));
+      await tx.insert(s.orderLine).values({ storeId: STORE, orderId: order!.id, variantId: variant!.id, variantSku: variant!.sku, variantName: variant!.name, quantity: 1, unitPrice: 1000, lineSubtotal: 1000, lineTotal: 1000 });
+    });
+    const res = await track('IMPORTED-123');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ lines: [{ isPreOrder: true, shipDate: null, shipDateLabel }] });
+  });
+
   it('returns the same error for an unknown code and a mismatched email', async () => {
     expect(await (await track('unknown')).json()).toEqual(await (await track('IMPORTED-123', 'wrong@parity.test')).json());
   });

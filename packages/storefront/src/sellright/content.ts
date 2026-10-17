@@ -90,6 +90,7 @@ function normalizeTrackedOrder(raw: Record<string, unknown>): TrackedOrder {
 				lineTotal: Number(line.lineTotal ?? 0),
 				isPreOrder: Boolean(line.isPreOrder),
 				shipDate: (line.shipDate as string | null) ?? null,
+				shipDateLabel: typeof line.shipDateLabel === 'string' ? line.shipDateLabel : null,
 			};
 		}) as TrackedOrderLine[],
 	};

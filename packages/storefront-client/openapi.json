@@ -10,6 +10,7 @@
         "type": "string",
         "enum": [
           "ACTIVE_SUBSCRIPTION_EXISTS",
+          "ADDRESS_DRAFT_NOT_FOUND",
           "ADDRESS_NOT_FOUND",
           "ALREADY_REVIEWED",
           "APPLE_SIGNIN_NOT_CONFIGURED",
@@ -390,6 +391,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -532,6 +537,10 @@
                             "type": "integer",
                             "nullable": true,
                             "description": "integer minor units (cents)"
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "shipDate": {
                             "type": "string",
@@ -834,6 +843,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -1060,6 +1073,10 @@
                               "isPreOrder": {
                                 "type": "boolean"
                               },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "shipDate": {
                                 "type": "string",
                                 "nullable": true
@@ -1256,6 +1273,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1438,6 +1466,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -1676,6 +1715,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1856,6 +1906,17 @@
                           },
                           "lineTotal": {
                             "type": "integer"
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "available": {
                             "type": "boolean"
@@ -2041,6 +2102,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2221,6 +2293,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -2428,6 +2511,17 @@
                           "lineTotal": {
                             "type": "integer"
                           },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2609,6 +2703,17 @@
                               "lineTotal": {
                                 "type": "integer"
                               },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "available": {
                                 "type": "boolean"
                               },
@@ -2780,6 +2885,17 @@
                           },
                           "lineTotal": {
                             "type": "integer"
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "available": {
                             "type": "boolean"
@@ -2971,6 +3087,17 @@
                               },
                               "lineTotal": {
                                 "type": "integer"
+                              },
+                              "isPreOrder": {
+                                "type": "boolean"
+                              },
+                              "shipDate": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
                               },
                               "available": {
                                 "type": "boolean"
@@ -3309,6 +3436,17 @@
                                   },
                                   "lineTotal": {
                                     "type": "integer"
+                                  },
+                                  "isPreOrder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipDate": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
                                   },
                                   "available": {
                                     "type": "boolean"
@@ -4067,6 +4205,142 @@
           },
           "503": {
             "description": "Gateway unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/payment-archives": {
+      "get": {
+        "summary": "Read retained source payment history (no payment operations)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Source facts; importCurrencyContext is not payment currency evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "sourceKey": {
+                            "type": "string"
+                          },
+                          "sourceId": {
+                            "type": "string"
+                          },
+                          "sourceDigest": {
+                            "type": "string"
+                          },
+                          "sourceCreatedAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "sourceOrderId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "method": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "state": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "amount": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "transactionId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "importCurrencyContext": {
+                            "type": "string"
+                          },
+                          "refundCount": {
+                            "type": "integer"
+                          },
+                          "referenceCount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "sourceKey",
+                          "sourceId",
+                          "sourceDigest",
+                          "sourceCreatedAt",
+                          "sourceOrderId",
+                          "method",
+                          "state",
+                          "amount",
+                          "transactionId",
+                          "importCurrencyContext",
+                          "refundCount",
+                          "referenceCount"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total",
+                    "limit",
+                    "offset"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -6074,6 +6348,305 @@
         }
       }
     },
+    "/v1/shop/account/address-drafts": {
+      "get": {
+        "summary": "My addresses needing completion",
+        "responses": {
+          "200": {
+            "description": "Retained drafts; unavailable for checkout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "storeId": {
+                            "type": "string"
+                          },
+                          "customerId": {
+                            "type": "string"
+                          },
+                          "sourceKey": {
+                            "type": "string"
+                          },
+                          "sourceId": {
+                            "type": "string"
+                          },
+                          "sourceCustomerId": {
+                            "type": "string"
+                          },
+                          "sourceDigest": {
+                            "type": "string"
+                          },
+                          "fullName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "line1": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "line2": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "city": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "province": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "postalCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "phone": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "sourceCountryId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "countryCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "isDefaultShipping": {
+                            "type": "boolean",
+                            "nullable": true
+                          },
+                          "isDefaultBilling": {
+                            "type": "boolean",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "storeId",
+                          "customerId",
+                          "sourceKey",
+                          "sourceId",
+                          "sourceCustomerId",
+                          "sourceDigest",
+                          "fullName",
+                          "line1",
+                          "line2",
+                          "city",
+                          "province",
+                          "postalCode",
+                          "phone",
+                          "sourceCountryId",
+                          "countryCode",
+                          "isDefaultShipping",
+                          "isDefaultBilling"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/address-drafts/{id}/complete": {
+      "post": {
+        "summary": "Complete my retained address",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fullName": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 200
+                  },
+                  "line1": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "line2": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 200
+                  },
+                  "city": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "province": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 120
+                  },
+                  "postalCode": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 40
+                  },
+                  "country": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 2
+                  },
+                  "phone": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 40
+                  },
+                  "isDefaultShipping": {
+                    "type": "boolean"
+                  },
+                  "isDefaultBilling": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "line1",
+                  "city",
+                  "country"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Native address created & draft removed atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/address-drafts/{id}": {
+      "delete": {
+        "summary": "Delete my retained address",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shop/account/orders": {
       "get": {
         "summary": "Current customer's orders",
@@ -6480,6 +7053,10 @@
                           },
                           "isPreOrder": {
                             "type": "boolean"
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "shipDate": {
                             "type": "string",
@@ -7041,6 +7618,99 @@
                     "exportedAt": {
                       "type": "string"
                     },
+                    "addressDrafts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "storeId": {
+                            "type": "string"
+                          },
+                          "customerId": {
+                            "type": "string"
+                          },
+                          "sourceKey": {
+                            "type": "string"
+                          },
+                          "sourceId": {
+                            "type": "string"
+                          },
+                          "sourceCustomerId": {
+                            "type": "string"
+                          },
+                          "sourceDigest": {
+                            "type": "string"
+                          },
+                          "fullName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "line1": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "line2": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "city": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "province": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "postalCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "phone": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "sourceCountryId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "countryCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "isDefaultShipping": {
+                            "type": "boolean",
+                            "nullable": true
+                          },
+                          "isDefaultBilling": {
+                            "type": "boolean",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "storeId",
+                          "customerId",
+                          "sourceKey",
+                          "sourceId",
+                          "sourceCustomerId",
+                          "sourceDigest",
+                          "fullName",
+                          "line1",
+                          "line2",
+                          "city",
+                          "province",
+                          "postalCode",
+                          "phone",
+                          "sourceCountryId",
+                          "countryCode",
+                          "isDefaultShipping",
+                          "isDefaultBilling"
+                        ]
+                      }
+                    },
                     "profile": {
                       "type": "object",
                       "properties": {
@@ -7165,6 +7835,7 @@
                   },
                   "required": [
                     "exportedAt",
+                    "addressDrafts",
                     "profile",
                     "addresses",
                     "orders"
@@ -8314,6 +8985,10 @@
                           },
                           "isPreOrder": {
                             "type": "boolean"
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "shipDate": {
                             "type": "string",
@@ -12745,6 +13420,11 @@
                     "nullable": true,
                     "format": "date-time"
                   },
+                  "shipDateLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
                   "compareAtPrice": {
                     "type": "integer",
                     "nullable": true
@@ -13519,6 +14199,11 @@
                     "type": "string",
                     "nullable": true,
                     "format": "date-time"
+                  },
+                  "shipDateLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
                   },
                   "onHand": {
                     "type": "integer",

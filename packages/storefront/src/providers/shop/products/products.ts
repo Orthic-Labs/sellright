@@ -85,7 +85,7 @@ interface LegacySearchResponse {
   items: LegacySearchItem[];
   facetValues: never[];
   collections: never[];
-  itemCustomFields: { productVariantId: string; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null }[];
+  itemCustomFields: { productVariantId: string; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel?: string | null }[];
 }
 
 function toLegacySearchResponse(res: CatalogListResponse): LegacySearchResponse {
@@ -106,7 +106,7 @@ function toLegacySearchResponse(res: CatalogListResponse): LegacySearchResponse 
     collections: [],
     itemCustomFields: res.items.flatMap((p) =>
       p.pricingVariant
-        ? [{ productVariantId: p.pricingVariant.sku, salePrice: p.pricingVariant.salePrice, preOrderPrice: p.pricingVariant.preOrderPrice, isPreOrder: p.pricingVariant.isPreOrder, shipDate: p.pricingVariant.shipDate }]
+        ? [{ productVariantId: p.pricingVariant.sku, salePrice: p.pricingVariant.salePrice, preOrderPrice: p.pricingVariant.preOrderPrice, isPreOrder: p.pricingVariant.isPreOrder, shipDate: p.pricingVariant.shipDate, shipDateLabel: p.pricingVariant.shipDateLabel ?? null }]
         : [],
     ),
   };
@@ -148,7 +148,7 @@ interface LegacyVariant {
   options: { id: string; code: string; name: string; group: { id: string; code: string; name: string }; groupId: string }[];
   assets: { id: string; preview: string }[];
   featuredAsset: { id: string; preview: string } | null;
-  customFields: { salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null };
+  customFields: { salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel?: string | null };
 }
 
 interface LegacyProduct {
@@ -196,7 +196,7 @@ function toLegacyProduct(detail: CatalogProduct): LegacyProduct {
         salePrice: v.salePrice,
         preOrderPrice: v.preOrderPrice ?? null,
         isPreOrder: v.isPreOrder,
-        shipDate: v.shipDate ?? null,
+        shipDate: v.shipDate ?? null, shipDateLabel: v.shipDateLabel ?? null,
       },
     })),
     facetValues: (detail.tags ?? []).map((name) => ({ id: name, name, code: name, facet: { id: 'tags', name: 'Tags', code: 'tags' } })),

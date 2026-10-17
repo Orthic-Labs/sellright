@@ -44,18 +44,24 @@ describe('effectiveVariantPrice', () => {
 });
 
 describe('normalizeManifestListItem', () => {
+  it('carries shipping copy across both static manifest boundaries', () => {
+    const shipDateLabel = '  Fall & updates  ';
+    expect(normalizeManifestListItem({ slug: 'x', name: 'X', priceRange: { min: 1, max: 1 }, shipDateLabel }).pricingVariant?.shipDateLabel).toBe(shipDateLabel);
+    expect(normalizeManifestProductDetail({ slug: 'x', name: 'X', description: null, assets: [], variants: [{ id: 'X', sku: 'X', name: 'X', price: 1, options: [], assets: [], shipDateLabel }] }).variants[0]).toMatchObject({ shipDate: null, shipDateLabel });
+  });
+
   it('maps a fully-populated manifest entry to the native shape', () => {
     const out = normalizeManifestListItem({
       slug: 'edc-knife', name: 'EDC Knife', inStock: true,
       priceRange: { min: 12000, max: 15000 },
       tags: ['Bestseller', 'New'],
       featuredImage: { url: '/assets/edc.jpg' },
-      salePrice: 9900, preOrderPrice: null, shipDate: null, isPreOrder: false,
+      salePrice: 9900, preOrderPrice: null, shipDate: null, shipDateLabel: null, isPreOrder: false,
     });
     expect(out).toEqual({
       slug: 'edc-knife', name: 'EDC Knife', status: 'active', inStock: true,
       tags: ['Bestseller', 'New'], minPrice: 12000, maxPrice: 15000,
-      pricingVariant: { sku: 'edc-knife', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null },
+      pricingVariant: { sku: 'edc-knife', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null, shipDateLabel: null },
       image: '/assets/edc.jpg',
     });
   });
@@ -87,7 +93,7 @@ describe('normalizeManifestProductDetail', () => {
       id: 'SKU-1', sku: 'SKU-1', name: 'Default', price: 5000,
       options: [{ code: 'red', name: 'Red', groupId: 'color', group: 'Color' }],
       assets: [{ preview: 'v1.jpg' }],
-      salePrice: 4500, preOrderPrice: null, shipDate: null, isPreOrder: false,
+      salePrice: 4500, preOrderPrice: null, shipDate: null, shipDateLabel: null, isPreOrder: false,
     }],
   };
 

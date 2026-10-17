@@ -76,7 +76,7 @@ const BaseHomePage = component$(() => {
         name: variant.name,
         options: (variant.options || []).map((o: any) => o.name).join(' / '),
         isPreOrder: true,
-        shipDate: variant.customFields?.shipDate,
+        shipDate: variant.customFields?.shipDate, shipDateLabel: variant.customFields?.shipDateLabel,
       };
 
       // Cart add via the single server-owned CartContext — dispatches the

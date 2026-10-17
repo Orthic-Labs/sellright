@@ -1,8 +1,34 @@
-/** Frozen source-session grants & one-shot browser cart receipts. No raw source token is persisted. */
+/** Retained source records, session grants & one-shot cart receipts. No raw source token is persisted. */
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, timestamp, boolean, jsonb, unique, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, boolean, jsonb, integer, unique, uniqueIndex } from 'drizzle-orm/pg-core';
 import { store, customer, session, ts } from './schema-core.js';
 import { cart } from './schema-content.js';
+
+/** Incomplete source address-book entries. Never eligible for checkout. */
+export const customerAddressDraft = pgTable('customer_address_draft', {
+  id: uuid().primaryKey(), storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().notNull().references(() => customer.id, { onDelete: 'cascade' }),
+  sourceKey: text().notNull(), sourceId: text().notNull(), sourceCustomerId: text().notNull(),
+  sourceDigest: text().notNull(),
+  fullName: text(), line1: text(), line2: text(), city: text(), province: text(), postalCode: text(), phone: text(),
+  sourceCountryId: text(), countryCode: text(),
+  isDefaultShipping: boolean(), isDefaultBilling: boolean(),
+}, t => [unique('address_draft_source_identity').on(t.storeId, t.sourceKey, t.sourceId)]);
+
+/** Private source facts, structurally separate from operational payments. */
+export const financialPaymentArchive = pgTable('financial_payment_archive', {
+  id: uuid().primaryKey(), storeId: uuid().notNull().references(() => store.id),
+  sourceKey: text().notNull(), sourceId: text().notNull(), sourceDigest: text().notNull(),
+  sourceCreatedAt: text(), sourceOrderId: text(),
+  method: text(), state: text(), amount: integer(), transactionId: text(),
+  metadata: text(), errorMessage: text(),
+  // Context supplied by migration config; never evidence of payment currency.
+  importCurrencyContext: text().notNull(),
+  // PostgreSQL JSON text bypasses JavaScript number parsing, including in manifests.
+  sourceRecord: text().notNull(),
+  sourceRefunds: text().array().notNull().default(sql`'{}'::text[]`),
+  sourceReferences: text().array().notNull().default(sql`'{}'::text[]`),
+}, t => [unique('payment_archive_source_identity').on(t.storeId, t.sourceKey, t.sourceId)]);
 
 export const legacySessionGrant = pgTable('legacy_session_grant', {
   id: uuid().primaryKey(),

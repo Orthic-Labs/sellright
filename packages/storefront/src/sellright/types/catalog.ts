@@ -107,6 +107,7 @@ export interface RawManifestListItem {
   salePrice?: number | null;
   preOrderPrice?: number | null;
   shipDate?: string | null;
+  shipDateLabel?: string | null;
   isPreOrder?: boolean | null;
 }
 
@@ -131,7 +132,7 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
       salePrice: raw.salePrice ?? null,
       preOrderPrice: raw.preOrderPrice ?? null,
       isPreOrder: raw.isPreOrder ?? false,
-      shipDate: raw.shipDate ?? null,
+      shipDate: raw.shipDate ?? null, shipDateLabel: raw.shipDateLabel ?? null,
     },
     image: resolveAssetPath(raw.featuredImage?.url ?? null),
   };
@@ -165,6 +166,7 @@ export interface RawManifestProductDetail {
     salePrice?: number | null;
     preOrderPrice?: number | null;
     shipDate?: string | null;
+    shipDateLabel?: string | null;
     isPreOrder?: boolean | null;
   }>;
 }
@@ -241,7 +243,7 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
       price: v.price,
       salePrice: v.salePrice ?? null,
       preOrderPrice: v.preOrderPrice ?? null,
-      shipDate: v.shipDate ?? null,
+      shipDate: v.shipDate ?? null, shipDateLabel: v.shipDateLabel ?? null,
       compareAtPrice: null,
       isPreOrder: v.isPreOrder ?? false,
       enabled: true,

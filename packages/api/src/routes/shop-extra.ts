@@ -1,3 +1,4 @@
+import { shippingLabelSql } from '../lib/shipping-label.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
@@ -59,6 +60,7 @@ shopExtra.openapi(
           sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
           unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
           isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
+          shipDateLabel: shippingLabelSql(s.productVariant.metafields),
         })
         .from(s.orderLine)
         .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))

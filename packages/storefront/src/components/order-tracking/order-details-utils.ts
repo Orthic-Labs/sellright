@@ -1,3 +1,4 @@
+import { shippingDateText } from '~/utils/shipping-label';
 import type { TrackedOrder, TrackedOrderDisplayStatus } from '~/sellright/types/content';
 
 export const hasPreOrderItems = (order: TrackedOrder) => order.lines.some((line) => line.isPreOrder);
@@ -21,6 +22,13 @@ export const formatShipDate = (date: Date) => {
 		day: 'numeric',
 	});
 };
+
+export function getPreOrderShippingText(order: TrackedOrder): string | null {
+  const labels = [...new Set(order.lines.filter((line) => line.isPreOrder && line.shipDateLabel).map((line) => shippingDateText(line)))];
+  if (labels.length) return labels.join('; ');
+  const latest = getLatestPreOrderShipDate(order);
+  return latest ? formatShipDate(latest) : null;
+}
 
 export const getTrackingInfo = (order: TrackedOrder) => {
 	const withTracking = order.fulfillments.find((f) => f.trackingCode);
@@ -53,9 +61,9 @@ export const getOrderStatus = (order: TrackedOrder): OrderStatusView => {
 			return { ...base, status: 'Awaiting Payment', description: 'We\'re waiting for payment confirmation.', icon: '⏳' };
 		case 'Processing': {
 			if (hasPreOrderItems(order)) {
-				const latestShipDate = getLatestPreOrderShipDate(order);
-				const description = latestShipDate
-					? `Expected to ship around ${formatShipDate(latestShipDate)}`
+				const shipText = getPreOrderShippingText(order);
+				const description = shipText
+					? `Expected to ship around ${shipText}`
 					: 'Expected ship date to be announced';
 				return { ...base, status: 'Pre-ordered', description, icon: '🎯' };
 			}

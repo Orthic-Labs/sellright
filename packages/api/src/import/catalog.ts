@@ -1,4 +1,5 @@
 /** Atomic Vendure migration phase. Invoke through import/run.ts. */
+import { shippingLabel } from '../lib/shipping-label.js';
 import * as s from '../db/schema.js';
 import { parseDate } from './store.js';
 import { optionalColumn } from './source-schema.js';
@@ -257,7 +258,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
         // collections (see the promotions block below) — vendureId/originalSku
         // stay (import provenance, unrelated to facets).
         id, storeId, productId, sku, name: v.name ?? v.sku, price: v.price ?? 0,
-        metafields: { vendureId: v.id, originalSku: v.sku },
+        metafields: { vendureId: v.id, originalSku: v.sku, ...(shippingLabel(v.shipdate) === null ? {} : { shipDateLabel: v.shipdate }) },
         salePrice: v.sale ?? null, preOrderPrice: v.preprice ?? null,
         isPreOrder: v.ispre ?? false, shipDate: parseDate(v.shipdate), enabled: v.enabled,
       });

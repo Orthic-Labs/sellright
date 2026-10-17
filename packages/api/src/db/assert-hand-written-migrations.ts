@@ -74,6 +74,7 @@ const HAND_WRITTEN = [
   '0098_session_idle.sql',
   '0099_device_session.sql',
   '0100_legacy_sessions_carts.sql',
+  '0101_retained_source_records.sql',
   '0089_installation_setting.sql',
   '0087_harden_outbox_rls_nullif.sql',
   '0088_defork_instrumentation.sql',

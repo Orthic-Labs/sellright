@@ -57,7 +57,7 @@ describe('legacy search()', () => {
       items: [{
         slug: 'knife-1', name: 'Knife One', status: 'active', inStock: true, tags: ['EDC'],
         minPrice: 12000, image: '/assets/knife.jpg',
-        pricingVariant: { sku: 'SKU-1', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null },
+        pricingVariant: { sku: 'SKU-1', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null, shipDateLabel: null },
       }],
     });
     const res = await search({ take: 4 });
@@ -70,7 +70,7 @@ describe('legacy search()', () => {
         facetValues: [{ name: 'EDC' }],
       }],
       facetValues: [], collections: [],
-      itemCustomFields: [{ productVariantId: 'SKU-1', salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null }],
+      itemCustomFields: [{ productVariantId: 'SKU-1', salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null, shipDateLabel: null }],
     });
   });
 
@@ -87,7 +87,7 @@ describe('legacy getProductBySlug()', () => {
       slug: 'p1', name: 'P1', description: 'd', seoTitle: null, seoDescription: null, currency: 'USD',
       images: ['/assets/p1-0.jpg'], tags: ['Sale'],
       variants: [{
-        id: 'S1', sku: 'S1', name: 'Default', price: 1000, salePrice: 800, preOrderPrice: null, shipDate: null,
+        id: 'S1', sku: 'S1', name: 'Default', price: 1000, salePrice: 800, preOrderPrice: null, shipDate: null, shipDateLabel: null,
         compareAtPrice: null, isPreOrder: false, enabled: true,
         options: [{ id: 'red', code: 'red', name: 'Red', group: { id: 'color', code: 'color', name: 'Color' } }],
         assets: [], fulfillmentType: 'physical', appKey: null, inStock: true, availableQuantity: 3,
@@ -99,7 +99,7 @@ describe('legacy getProductBySlug()', () => {
       featuredAsset: { id: 'p1-0', preview: '/assets/p1-0.jpg' },
       variants: [{
         id: 'S1', sku: 'S1', price: 1000, priceWithTax: 800, stockLevel: '999',
-        customFields: { salePrice: 800, preOrderPrice: null, isPreOrder: false, shipDate: null },
+        customFields: { salePrice: 800, preOrderPrice: null, isPreOrder: false, shipDate: null, shipDateLabel: null },
       }],
     });
   });
@@ -108,7 +108,7 @@ describe('legacy getProductBySlug()', () => {
     state.fetchProductDetailWithStock.mockResolvedValue({
       slug: 'p1', name: 'P1', description: null, seoTitle: null, seoDescription: null, currency: 'USD',
       images: [], tags: [],
-      variants: [{ id: 'S1', sku: 'S1', name: 'D', price: 1000, salePrice: null, preOrderPrice: null, shipDate: null,
+      variants: [{ id: 'S1', sku: 'S1', name: 'D', price: 1000, salePrice: null, preOrderPrice: null, shipDate: null, shipDateLabel: null,
         compareAtPrice: null, isPreOrder: false, enabled: true, options: [], assets: [], fulfillmentType: 'physical',
         appKey: null, inStock: false, availableQuantity: 0 }],
     });

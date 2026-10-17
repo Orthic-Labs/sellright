@@ -5,6 +5,7 @@ import { chunk, parseDate, parseJson } from './store.js';
 import { optionalColumn } from './source-schema.js';
 import { mapVendureOrderState, mapVendurePaymentState } from './vendure-order.js';
 import { vendureLineMoney } from './vendure-money.js';
+import { digest } from './artifacts.js';
 
 const asJson = (v: unknown) => (typeof v === 'string' ? parseJson(v) : (v ?? null));
 const jsonArray = (v: unknown): Array<Record<string, unknown>> => {
@@ -288,12 +289,24 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
       }
     }
     let sentinelProviderRefs = 0;
+    const archivedRows: Array<typeof s.financialPaymentArchive.$inferInsert> = [];
     const payRows = (
-      await q(`SELECT p.id, p."createdAt" AS created, p."orderId" AS oid, p.method, p.state, p.amount, p."transactionId" AS txn, p.metadata, p."errorMessage" AS err FROM payment p`)
+      await q(`SELECT p.*, to_jsonb(p)::text AS source_record, to_jsonb(p)->>'createdAt' AS source_created_at,
+        CASE WHEN p.metadata IS NULL THEN NULL ELSE to_jsonb(p.metadata)::text END AS source_metadata,
+        p."createdAt" AS created, p."orderId" AS oid, p."transactionId" AS txn, p."errorMessage" AS err FROM payment p`)
     )
       .map((p) => {
         const orderRef = orderMap.get(p.oid);
-        if (!orderRef) return null;
+        if (!orderRef) {
+          // Preserve source facts without inventing an order or operational payment.
+          archivedRows.push({ id: ctx.id('financial-payment-archive', p.id), storeId: ctx.storeId,
+            sourceKey: ctx.sourceKey, sourceId: String(p.id),
+            sourceDigest: digest({ format: 'retained-pg-jsonb-text-v1', payment: p.source_record, refunds: [], references: [] }),
+            sourceCreatedAt: p.source_created_at, sourceOrderId: p.oid == null ? null : String(p.oid),
+            method: p.method, state: p.state, amount: p.amount, transactionId: p.txn,
+            metadata: p.source_metadata, errorMessage: p.err, importCurrencyContext: ctx.currency, sourceRecord: p.source_record });
+          return null;
+        }
         const sourceMethod = String(p.method);
         let method = sourceMethod.toLowerCase().replace(/-payment$/, '');
         // Vendure's built-in `standard-payment` uses the dummy handler — it is
@@ -358,6 +371,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
+    for (const part of chunk(archivedRows, 500)) await tx.insert(s.financialPaymentArchive).values(part);
     if (sentinelProviderRefs) {
       ctx.exclusions.push({ type: 'unmappable-source-row', table: 'payment',
         detail: `${sentinelProviderRefs} payments carried a sentinel transactionId (e.g. 'imported' from the source's own prior platform migration) — provider_ref imported NULL, sentinel preserved in metadata.vendure.transactionId`,

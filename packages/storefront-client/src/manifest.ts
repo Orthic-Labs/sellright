@@ -44,6 +44,7 @@ export interface NativeVariantV2 {
   preOrderPrice: NativeMoney | null;
   isPreOrder: boolean;
   shipDate: string | null;
+  shipDateLabel?: string | null;
   // position: merchant-controlled order (migration 0080) — groupPosition
   // orders the groups, position orders values within that group. Arrives
   // pre-sorted by both; carried through so a consumer that re-groups

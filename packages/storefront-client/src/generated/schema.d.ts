@@ -7253,6 +7253,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/payment-archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read retained source payment history (no payment operations) */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Source facts; importCurrencyContext is not payment currency evidence */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                amount: number | null;
+                                id: string;
+                                importCurrencyContext: string;
+                                method: string | null;
+                                referenceCount: number;
+                                refundCount: number;
+                                sourceCreatedAt: string | null;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                sourceOrderId: string | null;
+                                state: string | null;
+                                transactionId: string | null;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/payment-reconciliation/effects/{id}/approve-issuance": {
         parameters: {
             query?: never;
@@ -8270,6 +8337,7 @@ export interface paths {
                         salePrice?: number | null;
                         /** Format: date-time */
                         shipDate?: string | null;
+                        shipDateLabel?: string | null;
                         sku: string;
                         updatesDurationDays?: number | null;
                     };
@@ -12443,6 +12511,7 @@ export interface paths {
                         salePrice?: number | null;
                         /** Format: date-time */
                         shipDate?: string | null;
+                        shipDateLabel?: string | null;
                         updatesDurationDays?: number | null;
                         weightG?: number | null;
                     };
@@ -13923,6 +13992,203 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/account/address-drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My addresses needing completion */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Retained drafts; unavailable for checkout */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                city: string | null;
+                                countryCode: string | null;
+                                customerId: string;
+                                fullName: string | null;
+                                id: string;
+                                isDefaultBilling: boolean | null;
+                                isDefaultShipping: boolean | null;
+                                line1: string | null;
+                                line2: string | null;
+                                phone: string | null;
+                                postalCode: string | null;
+                                province: string | null;
+                                sourceCountryId: string | null;
+                                sourceCustomerId: string;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                storeId: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/account/address-drafts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete my retained address */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/account/address-drafts/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete my retained address */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        city: string;
+                        country: string;
+                        fullName?: string | null;
+                        isDefaultBilling?: boolean;
+                        isDefaultShipping?: boolean;
+                        line1: string;
+                        line2?: string | null;
+                        phone?: string | null;
+                        postalCode?: string | null;
+                        province?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Native address created & draft removed atomically */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/account/addresses": {
         parameters: {
             query?: never;
@@ -14314,6 +14580,26 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            addressDrafts: {
+                                city: string | null;
+                                countryCode: string | null;
+                                customerId: string;
+                                fullName: string | null;
+                                id: string;
+                                isDefaultBilling: boolean | null;
+                                isDefaultShipping: boolean | null;
+                                line1: string | null;
+                                line2: string | null;
+                                phone: string | null;
+                                postalCode: string | null;
+                                province: string | null;
+                                sourceCountryId: string | null;
+                                sourceCustomerId: string;
+                                sourceDigest: string;
+                                sourceId: string;
+                                sourceKey: string;
+                                storeId: string;
+                            }[];
                             addresses: {
                                 city: string;
                                 country: string;
@@ -14680,6 +14966,7 @@ export interface paths {
                                 name: string;
                                 quantity: number;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16239,11 +16526,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16317,11 +16607,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16392,11 +16685,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16441,11 +16737,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16588,11 +16887,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16637,11 +16939,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16712,11 +17017,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16770,11 +17078,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -16856,11 +17167,14 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
                                 quantity: number;
+                                shipDate?: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -16933,11 +17247,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -17071,6 +17388,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -17163,6 +17481,7 @@ export interface paths {
                                 /** @description integer minor units (cents) */
                                 salePrice: number | null;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                             }[];
                         };
@@ -17455,6 +17774,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -17577,11 +17897,14 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
                                     quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -17675,6 +17998,7 @@ export interface paths {
                                     /** @description integer minor units (cents) */
                                     salePrice: number | null;
                                     shipDate: string | null;
+                                    shipDateLabel?: string | null;
                                     sku: string;
                                 } | null;
                                 slug: string;
@@ -18359,6 +18683,7 @@ export interface paths {
                                 name: string;
                                 quantity: number;
                                 shipDate: string | null;
+                                shipDateLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -19993,7 +20318,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

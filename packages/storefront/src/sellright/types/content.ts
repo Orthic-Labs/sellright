@@ -64,7 +64,7 @@ export interface TrackedOrderLine {
 	unitPrice: number;
 	lineTotal: number;
 	isPreOrder: boolean;
-	shipDate: string | null;
+	shipDate: string | null; shipDateLabel?: string | null;
 }
 
 /** packages/api `src/routes/order-facts.ts` `OrderPaymentFact` — the guest

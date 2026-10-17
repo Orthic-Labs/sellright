@@ -28,12 +28,93 @@ const Address = z.object({
   isDefaultBilling: z.boolean().optional(),
 });
 const errSchema = apiErrorSchema();
+const AddressDraft = z.object({
+  id: z.string(), storeId: z.string(), customerId: z.string(), sourceKey: z.string(), sourceId: z.string(),
+  sourceCustomerId: z.string(), sourceDigest: z.string(),
+  fullName: z.string().nullable(), line1: z.string().nullable(), line2: z.string().nullable(),
+  city: z.string().nullable(), province: z.string().nullable(), postalCode: z.string().nullable(), phone: z.string().nullable(),
+  sourceCountryId: z.string().nullable(), countryCode: z.string().nullable(),
+  isDefaultShipping: z.boolean().nullable(), isDefaultBilling: z.boolean().nullable(),
+});
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
   return token ? resolveCustomer(tx, token) : null;
 }
 
 export const account = new OpenAPIHono();
+
+account.openapi(createRoute({
+  method: 'get', path: '/v1/shop/account/address-drafts', summary: 'My addresses needing completion',
+  responses: {
+    200: { description: 'Retained drafts; unavailable for checkout', content: { 'application/json': { schema: z.object({ items: z.array(AddressDraft) }) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+  },
+}), async c => {
+  const st = await resolveStoreFromCtx(c);
+  const items = await withStore(st.id, async tx => {
+    const cust = await me(tx, customerToken(c));
+    if (!cust) return null;
+    return tx.select().from(s.customerAddressDraft).where(and(eq(s.customerAddressDraft.storeId, st.id), eq(s.customerAddressDraft.customerId, cust.id)));
+  });
+  if (items === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+  return c.json({ items }, 200);
+});
+
+account.openapi(createRoute({
+  method: 'post', path: '/v1/shop/account/address-drafts/{id}/complete', summary: 'Complete my retained address',
+  request: { params: z.object({ id: z.guid() }), body: { content: { 'application/json': { schema: Address } } } },
+  responses: {
+    201: { description: 'Native address created & draft removed atomically', content: { 'application/json': { schema: z.object({ id: z.string() }) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: errSchema } } },
+  },
+}), async c => {
+  const st = await resolveStoreFromCtx(c), { id } = c.req.valid('param'), body = c.req.valid('json');
+  // Match erasure's customer/session lock order before inserting a customer FK.
+  const customerId = await withStore(st.id, async tx => (await me(tx, customerToken(c)))?.id ?? null);
+  const out = customerId === null ? { kind: 'unauth' as const } : await withLockedSet(st.id, { kind: 'customer', customerId }, async tx => {
+    const [owner] = await tx.select({ id: s.customer.id }).from(s.customer)
+      .where(and(eq(s.customer.storeId, st.id), eq(s.customer.id, customerId))).for('update');
+    if (!owner) return { kind: 'unauth' as const };
+    const cust = await me(tx, customerToken(c));
+    if (!cust || cust.id !== customerId) return { kind: 'unauth' as const };
+    const where = and(eq(s.customerAddressDraft.storeId, st.id), eq(s.customerAddressDraft.id, id), eq(s.customerAddressDraft.customerId, cust.id));
+    const [draft] = await tx.select({ id: s.customerAddressDraft.id }).from(s.customerAddressDraft).where(where).for('update');
+    if (!draft) return { kind: 'missing' as const };
+    const [address] = await tx.insert(s.address).values({ storeId: st.id, customerId: cust.id,
+      fullName: body.fullName ?? null, line1: body.line1, line2: body.line2 ?? null,
+      city: body.city, province: body.province ?? null, postalCode: body.postalCode ?? null,
+      country: body.country.toUpperCase(), phone: body.phone ?? null,
+      isDefaultShipping: body.isDefaultShipping ?? false, isDefaultBilling: body.isDefaultBilling ?? false,
+    }).returning({ id: s.address.id });
+    await tx.delete(s.customerAddressDraft).where(where);
+    return { kind: 'created' as const, id: address!.id };
+  });
+  if (out.kind === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+  if (out.kind === 'missing') return errJson(c, 404, 'ADDRESS_DRAFT_NOT_FOUND', 'address draft not found');
+  return c.json({ id: out.id }, 201);
+});
+
+account.openapi(createRoute({
+  method: 'delete', path: '/v1/shop/account/address-drafts/{id}', summary: 'Delete my retained address',
+  request: { params: z.object({ id: z.guid() }) },
+  responses: {
+    200: { description: 'Deleted', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: errSchema } } },
+  },
+}), async c => {
+  const st = await resolveStoreFromCtx(c), { id } = c.req.valid('param');
+  const out = await withStore(st.id, async tx => {
+    const cust = await me(tx, customerToken(c));
+    if (!cust) return 'unauth';
+    const rows = await tx.delete(s.customerAddressDraft).where(and(eq(s.customerAddressDraft.storeId, st.id), eq(s.customerAddressDraft.customerId, cust.id), eq(s.customerAddressDraft.id, id))).returning({ id: s.customerAddressDraft.id });
+    return rows.length ? 'ok' : 'missing';
+  });
+  if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+  if (out === 'missing') return errJson(c, 404, 'ADDRESS_DRAFT_NOT_FOUND', 'address draft not found');
+  return c.json({ ok: true }, 200);
+});
 
 // GET /v1/shop/account/orders — R20 parity: paginated (was a hard limit(50)
 // with the returned array length silently reported as the total count by
@@ -189,7 +270,7 @@ account.openapi(
         })),
         lines: z.array(z.object({
           sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
-          image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
+          image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
         })),
       }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -419,6 +500,7 @@ account.openapi(
       200: {
         description: 'Export', content: { 'application/json': { schema: z.object({
           exportedAt: z.string(),
+          addressDrafts: z.array(AddressDraft),
           profile: z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), createdAt: z.string().nullable() }),
           addresses: z.array(z.object({ id: z.string(), fullName: z.string().nullable(), line1: z.string(), line2: z.string().nullable(), city: z.string(), province: z.string().nullable(), postalCode: z.string().nullable(), country: z.string(), phone: z.string().nullable(), isDefaultShipping: z.boolean(), isDefaultBilling: z.boolean() })),
           orders: z.array(z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable() })),
@@ -445,13 +527,15 @@ account.openapi(
       const orders = await tx.select({
         code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
       }).from(s.order).where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust))).orderBy(desc(s.order.createdAt));
-      return { profile, addresses, orders };
+      const addressDrafts = await tx.select().from(s.customerAddressDraft).where(and(eq(s.customerAddressDraft.storeId, st.id), eq(s.customerAddressDraft.customerId, cust.id)));
+      return { profile, addresses, addressDrafts, orders };
     });
     if (out === null || !out.profile) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({
       exportedAt: new Date().toISOString(),
       profile: { ...out.profile, createdAt: out.profile.createdAt ? out.profile.createdAt.toISOString() : null },
       addresses: out.addresses,
+      addressDrafts: out.addressDrafts,
       orders: out.orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null })),
     }, 200);
   },
@@ -587,6 +671,7 @@ account.openapi(
       await tx.delete(s.session).where(eq(s.session.customerId, cust.id));
       await tx.update(s.cart).set({ customerId: null }).where(eq(s.cart.customerId, cust.id)); // cart TTL job reaps it
       await tx.delete(s.address).where(eq(s.address.customerId, cust.id));
+      await tx.delete(s.customerAddressDraft).where(and(eq(s.customerAddressDraft.storeId, st.id), eq(s.customerAddressDraft.customerId, cust.id)));
 
       // Email outbox rows are queued/sent mail keyed by recipient address, not
       // customerId — they'd otherwise survive erasure holding this person's

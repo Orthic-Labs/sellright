@@ -1,3 +1,4 @@
+import { shippingLabelSql } from '../lib/shipping-label.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
@@ -37,9 +38,9 @@ function minimumPrice(config: unknown) {
 
 // Metadata belongs to the variant supplying minPrice, not an unrelated variant.
 function listingVariant(config: unknown) {
-  return sql<{ sku: string; price: number; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null } | null>`(
+  return sql<{ sku: string; price: number; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null } | null>`(
     select jsonb_build_object('sku', pv.sku, 'price', pv.price, 'salePrice', pv.sale_price,
-      'preOrderPrice', pv.pre_order_price, 'isPreOrder', pv.is_pre_order, 'shipDate', pv.ship_date)
+      'preOrderPrice', pv.pre_order_price, 'isPreOrder', pv.is_pre_order, 'shipDate', pv.ship_date, 'shipDateLabel', ${shippingLabelSql(sql`pv.metafields`)})
     from product_variant pv where pv.product_id = ${s.product.id}
     and pv.deleted_at is null and pv.enabled = true
     order by ${effectivePrice(config)}, pv.sku limit 1)`;
@@ -66,7 +67,7 @@ const ProductListItem = z.object({
   inStock: z.boolean(),
   tags: z.array(z.string()).nullable(),
   minPrice: Money.nullable(),
-  pricingVariant: z.object({ sku: z.string(), price: Money, salePrice: Money.nullable(), preOrderPrice: Money.nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable() }).nullable(),
+  pricingVariant: z.object({ sku: z.string(), price: Money, salePrice: Money.nullable(), preOrderPrice: Money.nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable() }).nullable(),
   image: z.string().nullable(),
 });
 
@@ -80,7 +81,7 @@ const Variant = z.object({
   price: Money,
   salePrice: Money.nullable(),
   preOrderPrice: Money.nullable(),
-  shipDate: z.string().nullable(),
+  shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
   compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
@@ -242,6 +243,7 @@ catalog.openapi(
           salePrice: s.productVariant.salePrice,
           preOrderPrice: s.productVariant.preOrderPrice,
           shipDate: s.productVariant.shipDate,
+          shipDateLabel: shippingLabelSql(s.productVariant.metafields),
           compareAtPrice: s.productVariant.compareAtPrice,
           isPreOrder: s.productVariant.isPreOrder,
           enabled: s.productVariant.enabled,

@@ -45,6 +45,7 @@ export type Session = AuthCustomer | null;
 
 /** One saved address, as the API returns it. */
 export type Address = Json<'/v1/shop/account/addresses', 'get', 200>['items'][number] & Live;
+export type AddressDraft = Json<'/v1/shop/account/address-drafts', 'get', 200>['items'][number];
 
 /** Body for creating a new address. */
 export type NewAddressInput = Body<'/v1/shop/account/addresses', 'post'>;

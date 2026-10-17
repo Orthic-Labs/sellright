@@ -442,7 +442,7 @@ export interface SrProductListItem {
   inStock?: boolean;
   tags?: string[] | null;
   minPrice: number | null;
-  pricingVariant?: Pick<SrVariant, 'sku' | 'price' | 'salePrice' | 'preOrderPrice' | 'isPreOrder' | 'shipDate'> | null;
+  pricingVariant?: Pick<SrVariant, 'sku' | 'price' | 'salePrice' | 'preOrderPrice' | 'isPreOrder' | 'shipDate' | 'shipDateLabel'> | null;
   image: string | null;
 }
 
@@ -460,7 +460,7 @@ export interface SrVariant {
   price: number;
   salePrice: number | null;
   preOrderPrice: number | null;
-  shipDate: string | null;
+  shipDate: string | null; shipDateLabel?: string | null;
   compareAtPrice: number | null;
   isPreOrder: boolean;
   enabled: boolean;

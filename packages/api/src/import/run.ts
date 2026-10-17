@@ -36,7 +36,7 @@ export const migrationConfig = z.object({
 type Config = z.input<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
-  'customer', 'address', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',
+  'customer', 'address', 'customer_address_draft', 'financial_payment_archive', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',
   'promotion_usage', 'shipping_method', 'tax_zone', 'blog_post', 'affiliate', 'affiliate_settle', 'subscriber',
   // Store-credit balances → points (import/loyalty.ts). References customer,
   // so it sits after it (restore deletes in reverse order).
@@ -103,16 +103,14 @@ export async function runMigration(input: {
     // A Created/Authorized/Pending payment is in flight only while its order
     // can still settle (a pre-settlement order state). A stale
     // authorization left on a finished order, or one with no order at all, is
-    // history: it imports as-is (reported as voided/ignored) and is listed as
-    // an exclusion for review instead of blocking the cutover.
+    // history. Unlinked payments retain their verbatim source facts in the
+    // separate financial archive; linked stale authorizations use normal history mapping.
     const unresolved = await q(`SELECT p.id, p.state, p."orderId" AS oid, o.state AS order_state
       FROM payment p LEFT JOIN "order" o ON o.id = p."orderId"
       WHERE p.state IN ('Created','Authorized','Pending') ORDER BY p.id`);
     if (unresolved.some(isInFlightSourcePayment)) throw new Error('Resolve source pending/authorized payments before cutover');
-    const staleUnresolved = unresolved.map(row => ({ type: 'unmappable-source-row' as const, table: 'payment', count: 1,
-      detail: row.oid == null
-        ? `payment ${row.id} (${row.state}) has no order; not imported`
-        : `payment ${row.id} (${row.state}) is a stale authorization on finished order ${row.oid} (${row.order_state}); imported as history, never captured` }));
+    const staleUnresolved = unresolved.filter(row => row.order_state != null).map(row => ({ type: 'unmappable-source-row' as const, table: 'payment', count: 1,
+      detail: `payment ${row.id} (${row.state}) is a stale authorization on finished order ${row.oid} (${row.order_state}); imported as history, never captured` }));
     const invalidCurrency = await q('SELECT id FROM "order" WHERE "currencyCode" <> $1 LIMIT 1', [config.currency]);
     if (invalidCurrency.length) throw new Error('Source contains orders in another currency');
     const exclusions: ManifestExclusion[] = [

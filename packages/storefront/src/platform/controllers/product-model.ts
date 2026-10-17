@@ -85,14 +85,14 @@ export function findVariant(
  *  client-only display enrichment (`~/sellright/types/cart`). This is the
  *  ONLY place in the catalog area that builds it — everything upstream of it
  *  stays native, and the server cart line itself carries only `sku`/`quantity`. */
-export function toCartEnrichment(product: Pick<CatalogProduct, 'slug'>, variant: Pick<CatalogVariant, 'name' | 'options' | 'isPreOrder' | 'shipDate'>, image: { preview: string } | undefined): CartLineEnrichment {
+export function toCartEnrichment(product: Pick<CatalogProduct, 'slug'>, variant: Pick<CatalogVariant, 'name' | 'options' | 'isPreOrder' | 'shipDate' | 'shipDateLabel'>, image: { preview: string } | undefined): CartLineEnrichment {
   return {
     slug: product.slug,
     image: image?.preview ?? null,
     name: variant.name,
     options: variant.options.map((o) => o.name).join(' / '),
     isPreOrder: variant.isPreOrder,
-    shipDate: variant.shipDate ?? undefined,
+    shipDate: variant.shipDate ?? undefined, shipDateLabel: variant.shipDateLabel ?? null,
   };
 }
 
@@ -112,7 +112,7 @@ export interface ModelVariant {
   salePriceCents: number | null;
   preOrderPriceCents: number | null;
   isPreOrder: boolean;
-  shipDate: string | null;
+  shipDate: string | null; shipDateLabel?: string | null;
   images: ViewImage[];
   /** The enrichment's option label (`S / Black`), from the catalog names. */
   optionLabel: string;
@@ -178,7 +178,7 @@ export function buildModelProduct(product: CatalogProduct, meta: { key: string; 
       salePriceCents: typeof v.salePrice === 'number' ? v.salePrice : null,
       preOrderPriceCents: typeof v.preOrderPrice === 'number' ? v.preOrderPrice : null,
       isPreOrder: v.isPreOrder === true,
-      shipDate: v.shipDate ?? null,
+      shipDate: v.shipDate ?? null, shipDateLabel: v.shipDateLabel ?? null,
       images: (v.assets || []).filter((a) => !!a?.preview).map((a) => ({ url: String(a.preview), alt: null })),
       optionLabel: (v.options || []).map((o) => o.name).join(' / '),
     };
@@ -283,7 +283,7 @@ export function projectViewProduct(model: ModelProduct, stock: ProductStock | un
     salePriceCents: v.salePriceCents,
     preOrderPriceCents: v.preOrderPriceCents,
     isPreOrder: v.isPreOrder,
-    shipDate: v.shipDate,
+    shipDate: v.shipDate, shipDateLabel: v.shipDateLabel ?? null,
     images: v.images.map((im) => ({ url: im.url, alt: im.alt })),
     availability: variantAvailability(stock, v.sku),
   }));
@@ -427,7 +427,7 @@ export function enrichmentFor(model: ModelProduct, variant: ModelVariant): CartL
     name: variant.name,
     options: variant.optionLabel,
     isPreOrder: variant.isPreOrder,
-    shipDate: variant.shipDate ?? undefined,
+    shipDate: variant.shipDate ?? undefined, shipDateLabel: variant.shipDateLabel ?? null,
   };
 }
 
