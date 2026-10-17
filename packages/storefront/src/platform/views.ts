@@ -196,7 +196,7 @@ export interface ViewVariant {
 	preOrderPriceCents: Cents | null;
 	/** Catalog metadata for presentation and consent only: a pre-order is purchasable only while its live read is in stock. */
 	isPreOrder: boolean;
-	shipDate: string | null;
+	shipDate: string | null; shipDateLabel?: string | null;
 	images: ViewImage[];
 	availability: Availability;
 }

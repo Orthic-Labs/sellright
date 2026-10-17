@@ -535,6 +535,24 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(await targetRows(storeId, 'store')).toEqual([]);
   });
 
+  it('preserves non-date source shipping copy without creating a fulfillment timestamp', async () => {
+    await resetSource('dd', 'label-' + randomUUID().slice(0, 8));
+    const label = '  Ships late fall & <updates pending>  ';
+    await sourcePool.query('UPDATE product_variant SET "customFieldsShipdate" = $1', [label]);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const variant = await targetOne(storeId, 'product_variant');
+    expect(variant.metafields.shipDateLabel).toBe(label);
+    expect(variant.ship_date).toBeNull();
+  });
+
   it('rehearses the Damned Designs schema: business extensions and gateway provenance', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
@@ -568,6 +586,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const variant = await targetOne(storeId, 'product_variant');
     expect(variant.sale_price).toBe(1500);
     expect(variant.pre_order_price).toBe(800);
+    expect(variant.metafields.shipDateLabel).toBe('2024-06-01');
+    expect(variant.ship_date.toISOString()).toBe('2024-06-01T00:00:00.000Z');
 
     // Affiliate + links + balances: identity preserved, accessToken verbatim,
     // the disabled source promotion backfilled as an inert tombstone.

@@ -1,3 +1,4 @@
+import { shippingLabelSql } from '../lib/shipping-label.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
@@ -37,7 +38,7 @@ const lifecycle = (st: StoreCtx) =>
 
 type PricedCart = {
   currency: string;
-  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null }>;
+  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
@@ -72,6 +73,7 @@ export async function priceCart(
         .select({
           sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, productId: s.productVariant.productId,
           salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder,
+          shipDate: s.productVariant.shipDate, shipDateLabel: shippingLabelSql(s.productVariant.metafields),
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
           onHand: s.stock.onHand, allocated: s.stock.allocated,
@@ -92,7 +94,7 @@ export async function priceCart(
     const availableQuantity = v && isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
     const available = !!v && v.enabled && (availableQuantity === null || availableQuantity >= i.quantity);
     if (!available) unavailable.push(i.sku);
-    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity };
+    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null };
   });
 
   let promotion: Promotion | undefined;
@@ -184,6 +186,7 @@ const EstimateItem = z.object({ sku: z.string(), quantity: z.number().int().min(
 const LineOut = z.object({
   sku: z.string(), name: z.string(), unitPrice: z.number().int(), quantity: z.number().int(),
   lineSubtotal: z.number().int(), lineDiscount: z.number().int(), lineTotal: z.number().int(),
+  isPreOrder: z.boolean().optional(), shipDate: z.string().nullable().optional(), shipDateLabel: z.string().nullable().optional(),
   available: z.boolean(),
   // Live (on_hand - allocated), never cached. null = not stock-limited
   // (digital/license/update_pass/pre-order) rather than "unlimited stock".

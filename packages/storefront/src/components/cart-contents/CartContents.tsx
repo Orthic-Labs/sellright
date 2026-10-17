@@ -1,3 +1,4 @@
+import { shippingDateText } from '~/utils/shipping-label';
 import { component$, useContext, useSignal, useTask$, $ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
 import { OptimizedImage } from '~/components/ui/LazyImage';
@@ -184,8 +185,8 @@ export default component$(() => {
 									{line.isPreOrder && (
 										<span class="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] tracking-[1.5px] uppercase font-heading mt-1 border border-[var(--color-accent)]/30 text-[var(--color-accent)] bg-[var(--color-accent)]/5">
 											Pre-order
-											{line.shipDate && (
-												<span class="text-[#8a6d4a]">· Ships {line.shipDate}</span>
+											{shippingDateText(line) && (
+												<span class="text-[#8a6d4a]">· Ships {shippingDateText(line)}</span>
 											)}
 										</span>
 									)}

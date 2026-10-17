@@ -15,7 +15,7 @@ describe('server-rendered browse catalog', () => {
         priceRange: { min: 1200, max: 1500 },
         tags: ['EDC'],
         featuredImage: { url: '/assets/snapshot.jpg' },
-        salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false,
+        salePrice: null, preOrderPrice: null, shipDate: null, shipDateLabel: null, isPreOrder: false,
       }],
     });
     const result = await loadBrowseCatalog();
@@ -25,7 +25,7 @@ describe('server-rendered browse catalog', () => {
       products: [{
         slug: 'snapshot', name: 'Snapshot', status: 'active', inStock: true,
         tags: ['EDC'], minPrice: 1200, maxPrice: 1500,
-        pricingVariant: { sku: 'snapshot', price: 1200, salePrice: null, preOrderPrice: null, isPreOrder: false, shipDate: null },
+        pricingVariant: { sku: 'snapshot', price: 1200, salePrice: null, preOrderPrice: null, isPreOrder: false, shipDate: null, shipDateLabel: null },
         image: '/assets/snapshot.jpg',
       }],
     });
@@ -69,8 +69,8 @@ describe('server-rendered browse catalog', () => {
 
   it('reads the snapshot on every load and keeps nothing between loads (no reader cache)', async () => {
     vi.mocked(readCatalogSnapshot)
-      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: true, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false }] })
-      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: false, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false }] });
+      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: true, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, shipDateLabel: null, isPreOrder: false }] })
+      .mockResolvedValueOnce({ products: [{ slug: 'a', name: 'A', inStock: false, priceRange: { min: 1, max: 1 }, tags: [], featuredImage: null, salePrice: null, preOrderPrice: null, shipDate: null, shipDateLabel: null, isPreOrder: false }] });
     expect((await loadBrowseCatalog()).products[0].inStock).toBe(true);
     expect((await loadBrowseCatalog()).products[0].inStock).toBe(false);
     expect(readCatalogSnapshot).toHaveBeenCalledTimes(2);

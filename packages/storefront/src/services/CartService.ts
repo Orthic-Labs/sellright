@@ -272,6 +272,9 @@ export class CartService {
   private static toCartLine = (line: ServerCart['lines'][number]): CartLine => ({
     ...line,
     ...this.enrichment.get(line.sku),
+    ...(line.isPreOrder === undefined ? {} : { isPreOrder: line.isPreOrder }),
+    ...(line.shipDate === undefined ? {} : { shipDate: line.shipDate }),
+    ...(line.shipDateLabel === undefined ? {} : { shipDateLabel: line.shipDateLabel }),
   });
 
   private static toCart(server: ServerCart): Cart {

@@ -305,6 +305,7 @@ export const VIEW_PRODUCT = obj({
 			preOrderPriceCents: nul(num),
 			isPreOrder: bool,
 			shipDate: nul(str),
+			shipDateLabel: opt(nul(str)),
 			images: arr(VIEW_IMAGE),
 			availability: AVAILABILITY,
 		}),

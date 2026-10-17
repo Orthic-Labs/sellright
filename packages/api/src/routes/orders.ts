@@ -72,7 +72,7 @@ orders.openapi(
               })),
               lines: z.array(z.object({
                 sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
-                image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
+                image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
               })),
               /** Points snapshot taken at checkout (REWARDS-1); null when the program was off. Earned points post when the order is paid. */
               /** Order editing: amount still owed on a Paid / PartiallyRefunded order after an edit raised the total (0 otherwise), plus a customer-safe summary of the latest edit. Same receipt-token / owner scope as the rest of this read. */

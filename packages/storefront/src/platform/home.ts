@@ -52,7 +52,7 @@ async function fetchHomeProduct(slug: string) {
         customFields: {
           preOrderPrice: v.customFields?.preOrderPrice,
           salePrice: v.customFields?.salePrice,
-          shipDate: v.customFields?.shipDate,
+          shipDate: v.customFields?.shipDate, shipDateLabel: v.customFields?.shipDateLabel,
           isPreOrder: v.customFields?.isPreOrder,
         },
       })),

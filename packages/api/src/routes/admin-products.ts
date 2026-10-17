@@ -1,3 +1,4 @@
+import { shippingLabelSql } from '../lib/shipping-label.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
 import { and, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
@@ -72,6 +73,7 @@ adminProducts.openapi(
           isPreOrder: s.productVariant.isPreOrder,
           preOrderPrice: s.productVariant.preOrderPrice,
           shipDate: s.productVariant.shipDate,
+          shipDateLabel: shippingLabelSql(s.productVariant.metafields),
           enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
           appKey: s.productVariant.appKey,
@@ -142,6 +144,7 @@ adminProducts.openapi(
       isPreOrder: z.boolean().optional(),
       preOrderPrice: money.min(0).nullable().optional(),
       shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
+      shipDateLabel: z.string().max(255).nullable().optional(),
       compareAtPrice: money.nullable().optional(),
       cost: money.nullable().optional(),
       barcode: z.string().nullable().optional(),
@@ -163,12 +166,12 @@ adminProducts.openapi(
     const st = requireStore(admin, c);
     requireWrite(st);
     const { id } = c.req.valid('param');
-    const patch = c.req.valid('json');
+    const { shipDateLabel, ...patch } = c.req.valid('json');
     const ok = await withStore(st.storeId, async (tx) => {
       const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
       if (!v) return false;
-      await tx.update(s.productVariant).set({ ...patch, shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt: new Date() }).where(eq(s.productVariant.id, id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: patch });
+      await tx.update(s.productVariant).set({ ...patch, ...(shipDateLabel === undefined ? {} : { metafields: sql`coalesce(${patch.metafields === undefined ? s.productVariant.metafields : sql`${JSON.stringify(patch.metafields ?? {})}::jsonb`}, '{}'::jsonb) || ${JSON.stringify({ shipDateLabel })}::jsonb` }), shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt: new Date() }).where(eq(s.productVariant.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: { ...patch, ...(shipDateLabel === undefined ? {} : { shipDateLabel }) } });
       await emitVariantProductChanged(tx, st.storeId, id);
       return true;
     });

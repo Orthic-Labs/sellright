@@ -48,7 +48,7 @@ describe('trackOrder', () => {
 				shippingAddress: { fullName: 'Ada Lovelace', line1: '1 Analytical Engine Way', line2: null, city: 'London', province: '', postalCode: 'SW1A 1AA', country: 'GB', phone: null },
 				fulfillments: [{ state: 'Shipped', trackingCode: 'TRACK123', carrier: 'USPS', updatedAt: '2026-01-02T00:00:00.000Z' }],
 				payments: [{ method: 'card', state: 'Settled', amount: 1500, providerRef: 'pi_1', errorMessage: null, createdAt: '2026-01-01T00:00:00.000Z' }],
-				lines: [{ sku: 'SKU-1', name: 'Widget', quantity: 1, unitPrice: 1000, lineTotal: 1000, isPreOrder: false, shipDate: null }],
+				lines: [{ sku: 'SKU-1', name: 'Widget', quantity: 1, unitPrice: 1000, lineTotal: 1000, isPreOrder: false, shipDate: null, shipDateLabel: '  Fall & updates  ' }],
 			}),
 		);
 
@@ -61,6 +61,7 @@ describe('trackOrder', () => {
 		expect(result.order.displayStatus).toBe('Shipped');
 		expect(result.order.shippingAddress?.line1).toBe('1 Analytical Engine Way');
 		expect(result.order.payments).toHaveLength(1);
+		expect(result.order.lines[0]).toMatchObject({ shipDate: null, shipDateLabel: '  Fall & updates  ' });
 		expect(String(lastCall().url)).toContain('/v1/shop/track');
 		expect(String(lastCall().url)).toContain('code=SR1');
 	});

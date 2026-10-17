@@ -115,13 +115,19 @@ describe('native catalog generation', () => {
         await tx.execute(sql`INSERT INTO product_option (id, store_id, group_id, value) VALUES (${option}, ${store}, ${group}, 'Red')`);
         await tx.execute(sql`INSERT INTO variant_option (store_id, variant_id, option_id) VALUES (${store}, ${variant}, ${option})`);
       });
+      const label = '  Ships after launch & review  ';
+      await withStore(store, tx => tx.execute(sql`UPDATE product_variant SET metafields = ${JSON.stringify({ shipDateLabel: label })}::jsonb WHERE id = ${variant}`));
       const first = await publishCatalogManifest({ outDir, storeSlug: slug });
       expect(first.products).toBe(1);
       const manifest = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.json'), 'utf8'));
       expect(manifest.products).toHaveLength(1);
+      expect(manifest.products[0].shipDateLabel).toBe(label);
       expect(manifest.products[0]).toMatchObject({ priceRange: { min: 3000, max: 3000 }, inStock: true, featuredImage: { url: '/assets/fixture/product.webp' }, tags: ['edc'] });
       const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
       expect(detail.tags).toEqual(['edc']);
+      expect(detail.variants[0]).toMatchObject({ shipDate: null, shipDateLabel: label });
+      const labelNative = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+      expect(labelNative.variants[0]).toMatchObject({ shipDate: null, shipDateLabel: label });
       expect(detail.variants[0]).toMatchObject({ id: 'FIXTURE', price: 3000, options: [{ code: option, groupId: group, group: 'Color', name: 'Red' }] });
 
       // SR-CLIENT-1 — v2 (native): stable UUID ids (not slug/sku), tags as a

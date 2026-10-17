@@ -189,7 +189,7 @@ account.openapi(
         })),
         lines: z.array(z.object({
           sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
-          image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
+          image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
         })),
       }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },

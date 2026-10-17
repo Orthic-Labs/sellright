@@ -88,6 +88,18 @@ afterEach(() => {
 const patchCalls = () => calls.filter((c) => c.init.method === 'PATCH');
 
 describe('addLine — blind append', () => {
+  it('uses live shipping copy after refresh, including fresh tabs without enrichment', async () => {
+    const shipDateLabel = 'Ships late fall & updates';
+    const live = serverCart({ lines: [{ ...serverCart().lines[0], isPreOrder: true, shipDate: null, shipDateLabel }] });
+    enqueue(respond(200, serverCart()), respond(200, live));
+    const added = await CartService.addLine('SKU1', 1, { shipDateLabel: 'stale copy', shipDate: '2020-01-01', isPreOrder: false });
+    expect(added.cart.lines[0]).toMatchObject({ shipDateLabel, shipDate: null, isPreOrder: true });
+    resetService();
+    setCookie('tok_srv');
+    enqueue(respond(200, live));
+    expect((await CartService.refresh()).cart.lines[0]).toMatchObject({ shipDateLabel, shipDate: null, isPreOrder: true });
+  });
+
 	it('creates the cart lazily then appends without a revision', async () => {
 		enqueue(
 			respond(200, serverCart()), // POST /cart (ensureCart)

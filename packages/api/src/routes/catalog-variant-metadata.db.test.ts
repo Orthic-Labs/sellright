@@ -14,6 +14,10 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { catalog } from './catalog.js';
+import { priceCart } from './cart.js';
+import { loadOrderLines } from './order-facts.js';
+import { resolveStore } from '../store-context.js';
+import * as s from '../db/schema.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'catalog-variant-metadata.db.test.ts');
@@ -40,6 +44,29 @@ beforeEach(async () => {
 afterAll(() => pool.end());
 
 describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
+  it('preserves shipping copy independently of dates across catalog, cart & order DTOs', async () => {
+    const shipDateLabel = '  Fall & <updates pending>  ';
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE product_variant SET is_pre_order = true, metafields = ${JSON.stringify({ shipDateLabel })}::jsonb WHERE id = ${VARIANT}`);
+    });
+    const headers = { 'x-store-slug': SLUG };
+    for (const path of ['/v1/shop/catalog/products', '/v1/shop/catalog/search?term=Licensed']) {
+      const res = await app.request(path, { headers });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ items: [{ pricingVariant: { shipDate: null, shipDateLabel } }] });
+    }
+    const detail = await app.request('/v1/shop/catalog/products/lic-app', { headers });
+    expect(await detail.json()).toMatchObject({ variants: [{ shipDate: null, shipDateLabel }, { shipDate: null, shipDateLabel: null }] });
+    const st = await resolveStore(SLUG);
+    const priced = await withStore(STORE, tx => priceCart(tx, st, [{ sku: 'LIC-1', quantity: 1 }]));
+    expect(priced.lines[0]).toMatchObject({ shipDate: null, shipDateLabel, isPreOrder: true });
+    await withStore(STORE, async tx => {
+      const [order] = await tx.insert(s.order).values({ storeId: STORE, code: 'SHIPPING-LABEL' }).returning();
+      await tx.insert(s.orderLine).values({ storeId: STORE, orderId: order!.id, variantId: VARIANT, variantSku: 'LIC-1', variantName: 'Snapshot', quantity: 1, unitPrice: 4900, lineSubtotal: 4900, lineTotal: 4900 });
+      expect((await loadOrderLines(tx, order!.id))[0]).toMatchObject({ shipDate: null, shipDateLabel, isPreOrder: true });
+    });
+  });
+
   it('reports purchasable stock and treats inStock=false as no stock filter', async () => {
     await withStore(STORE, async tx => {
       await tx.execute(sql`UPDATE product_variant SET fulfillment_type = 'physical', app_key = NULL WHERE product_id = ${PRODUCT}`);

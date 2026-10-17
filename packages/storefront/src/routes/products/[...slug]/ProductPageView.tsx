@@ -1,3 +1,4 @@
+import { shippingDateText } from '~/utils/shipping-label';
 import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
@@ -310,7 +311,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               />
               <label for="po-consent" class="sr-consent-text" style="cursor:pointer">
                 I understand this product will ship around{' '}
-                {selectedVariant.value?.shipDate || 'the estimated date'}.
+                {shippingDateText(selectedVariant.value) || 'the estimated date'}.
               </label>
             </div>
           )}
@@ -363,7 +364,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </button>
               {isPreOrder.value && selectedVariant.value && (
                 <div class="sr-ship-note">
-                  Ships {selectedVariant.value?.shipDate || 'when ready'}
+                  Ships {shippingDateText(selectedVariant.value) || 'when ready'}
                 </div>
               )}
               </div>
@@ -406,8 +407,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               <div class="sr-po-dot" />
               <div class="sr-po-text">
                 <strong>Pre-order open.</strong> Production is underway.{' '}
-                {selectedVariant.value?.shipDate
-                  ? `Estimated ship: ${selectedVariant.value.shipDate}.`
+                {shippingDateText(selectedVariant.value)
+                  ? `Estimated ship: ${shippingDateText(selectedVariant.value)}.`
                   : 'Your card will be charged at the time of purchase.'}
               </div>
             </div>

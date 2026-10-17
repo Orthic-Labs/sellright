@@ -92,7 +92,8 @@ export interface CartLineEnrichment {
   name?: string;
   options?: string;
   isPreOrder?: boolean;
-  shipDate?: string;
+  shipDate?: string | null;
+  shipDateLabel?: string | null;
 }
 
 export type CartLine = ServerCartLine & CartLineEnrichment & Live;

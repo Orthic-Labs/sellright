@@ -1,9 +1,10 @@
+import { shippingDateText } from '~/utils/shipping-label';
 import { component$ } from '@qwik.dev/core';
 import type { TrackedOrder } from '~/sellright/types/content';
 import { formatPrice, formatDateTime } from '~/utils';
 import {
   formatShipDate,
-  getLatestPreOrderShipDate,
+  getPreOrderShippingText,
   getMaskedTrackingCode,
   getOrderStatus,
   getTrackingInfo,
@@ -58,11 +59,11 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             Pre-order Shipping Notice
           </h3>
           {(() => {
-            const latestShipDate = getLatestPreOrderShipDate(order);
-            return latestShipDate ? (
+            const shipText = getPreOrderShippingText(order);
+            return shipText ? (
               <div class="text-[#645541]">
                 <span class="font-medium">Expected ship date: </span>
-                <span>{formatShipDate(latestShipDate)}</span>
+                <span>{shipText}</span>
                 <p class="text-sm text-[#7A7166] mt-2">Tracking information will be provided once your pre-order ships.</p>
               </div>
             ) : (
@@ -144,9 +145,9 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
                   {/* Show ship date for pre-order items */}
                   {line.isPreOrder && (
                     <div class="mt-2">
-                      {line.shipDate ? (
+                      {shippingDateText(line) ? (
                         <p class="text-sm text-[#645541] font-medium">
-                          Expected to ship: {formatShipDate(new Date(line.shipDate))}
+                          Expected to ship: {shippingDateText(line, (date) => formatShipDate(new Date(date)))}
                         </p>
                       ) : (
                         <p class="text-sm text-[#645541] font-medium">

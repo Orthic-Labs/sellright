@@ -8,7 +8,7 @@ import { useToast } from '../components/Toast';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 
-type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; isPreOrder: boolean; preOrderPrice: string; shipDate: string; enabled: boolean; onHand: string }> };
+type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; isPreOrder: boolean; preOrderPrice: string; shipDate: string; shipDateLabel: string; enabled: boolean; onHand: string }> };
 
 const dateInput = (value: string | null | undefined) => value ? new Date(value).toISOString().slice(0, 16) : '';
 
@@ -17,7 +17,7 @@ function toDraft(p: ProductDetail): Draft {
     name: p.name, status: p.status, description: p.description ?? '',
     variants: Object.fromEntries(p.variants.map((v) => [v.id, {
       price: (v.price / 100).toFixed(2), salePrice: v.salePrice != null ? (v.salePrice / 100).toFixed(2) : '',
-      isPreOrder: v.isPreOrder ?? false, preOrderPrice: v.preOrderPrice != null ? (v.preOrderPrice / 100).toFixed(2) : '', shipDate: dateInput(v.shipDate),
+      isPreOrder: v.isPreOrder ?? false, preOrderPrice: v.preOrderPrice != null ? (v.preOrderPrice / 100).toFixed(2) : '', shipDate: dateInput(v.shipDate), shipDateLabel: v.shipDateLabel ?? '',
       enabled: v.enabled, onHand: String(v.onHand),
     }])),
   };
@@ -113,6 +113,7 @@ function ProductDetailEditor({ id }: { id: string }) {
         if (salePrice !== v.salePrice) vp.salePrice = salePrice;
         if (d.isPreOrder !== (v.isPreOrder ?? false)) vp.isPreOrder = d.isPreOrder;
         if (preOrderPrice !== (v.preOrderPrice ?? null)) vp.preOrderPrice = preOrderPrice;
+        if (d.shipDateLabel !== (v.shipDateLabel ?? '')) vp.shipDateLabel = d.shipDateLabel || null;
         if (d.shipDate !== dateInput(v.shipDate)) vp.shipDate = d.shipDate ? new Date(`${d.shipDate}Z`).toISOString() : null;
         if (d.enabled !== v.enabled) vp.enabled = d.enabled;
         if (Object.keys(vp).length) await patch(`/variants/${v.id}`, vp);
@@ -252,6 +253,7 @@ function ProductDetailEditor({ id }: { id: string }) {
                         <div className="flex flex-wrap items-end gap-4">
                           <label className="flex items-center gap-2 text-sm py-2"><input type="checkbox" aria-label={`Preorder ${v.sku}`} className="h-4 w-4 accent-brand" checked={d.isPreOrder} onChange={(e) => setV(v.id, { isPreOrder: e.target.checked })} />Preorder</label>
                           <Field label="Preorder price"><CurrencyInput label={`Preorder price ${v.sku}`} value={d.preOrderPrice} onChange={(value) => setV(v.id, { preOrderPrice: value })} cur={cur} /></Field>
+                          <Field label="Shipping label"><input type="text" maxLength={255} aria-label={`Shipping label ${v.sku}`} className="input max-w-full" value={d.shipDateLabel} onInput={(e) => setV(v.id, { shipDateLabel: e.currentTarget.value })} /></Field>
                           <Field label="Ship date (UTC)"><input type="datetime-local" aria-label={`Ship date ${v.sku}`} className="input max-w-full" value={d.shipDate} onInput={(e) => setV(v.id, { shipDate: e.currentTarget.value })} /></Field>
                         </div>
                       </td></tr></Fragment>

@@ -1,3 +1,4 @@
+import { shippingDateText } from '~/utils/shipping-label';
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { OrderReturnsPanel } from '~/components/account/OrderReturns';
@@ -104,7 +105,7 @@ export default component$(() => {
 									</div>
 									{line.isPreOrder && (
 										<p class="text-xs text-[#645541] font-medium mt-1">
-											{line.shipDate ? `Ships: ${line.shipDate}` : 'Ship date TBA'}
+											{shippingDateText(line) ? `Ships: ${shippingDateText(line)}` : 'Ship date TBA'}
 										</p>
 									)}
 								</div>

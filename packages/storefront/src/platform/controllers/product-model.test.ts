@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import type { CatalogProduct } from '~/sellright/types/catalog';
 import {
 	addResultFrom,
+	enrichmentFor,
+	toCartEnrichment,
 	buildModelProduct,
 	computePurchase,
 	keepSelection,
@@ -42,6 +44,16 @@ const model = buildModelProduct(PRODUCT, { key: 'short', href: '/shop/shortsleev
 const ready = (bySku: ProductStock['bySku']): ProductStock => ({ status: 'ready', bySku });
 
 describe('model', () => {
+  it('preserves shipping labels from catalog through views & cart enrichment', () => {
+    const label = '  Ships late fall & updates  ';
+    const product = { ...PRODUCT, variants: [{ ...PRODUCT.variants[0], shipDateLabel: label }] };
+    const model = buildModelProduct(product, { key: 'label', href: '/shop/label/', rating: null, productId: 'p1' });
+    expect(model.variants[0].shipDateLabel).toBe(label);
+    expect(projectViewProduct(model, undefined, []).variants[0].shipDateLabel).toBe(label);
+    expect(toCartEnrichment(product, product.variants[0], undefined)).toMatchObject({ shipDateLabel: label });
+    expect(enrichmentFor(model, model.variants[0])).toMatchObject({ shipDateLabel: label });
+  });
+
 	it('codes are slugs of the names, never the catalog ids; groups and values keep the merchant order', () => {
 		expect(model.groups.map((g) => g.code)).toEqual(['size', 'color']);
 		expect(model.groups[0].values.map((v) => v.code)).toEqual(['small', 'medium']);
