@@ -13,8 +13,11 @@ import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
 import { hasContentViewFor } from '~/platform/content-view';
+import { useContentReviewSummary } from '~/platform/content-review-summary';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { head as catchAllHead, notFoundMarkup } from '../[...catchall]/index';
+
+export { useContentReviewSummary } from '~/platform/content-review-summary';
 
 /** True when this build declares at least one single-segment content path and has a content view to render it. */
 const HAS_SINGLE_SEGMENT_CONTENT = DECLARED_CONTENT.some((d) => d.path.split('/').filter(Boolean).length === 1 && hasContentViewFor(d.path));
@@ -45,10 +48,11 @@ export const head: DocumentHead = (props) => {
 
 /**
  * A declared path renders the content view; anything else reached by client navigation (where onGet does not run) renders today's
- * 404 markup, as the catch-all did for single segments when this route was an endpoint. The route exports no loader, so its onGet
- * never sees a loader request.
+ * 404 markup, as the catch-all did for single segments when this route was an endpoint. The optional editorial loader reads only
+ * for declared, selected content paths; key-file and unknown-path responses keep their existing handlers.
  */
 export default component$(() => {
 	const location = useLocation();
-	return declared(location.url.pathname) ? <BrandContentMount /> : notFoundMarkup(location.url.pathname);
+	const reviewSummary = useContentReviewSummary();
+	return declared(location.url.pathname) ? <BrandContentMount reviewSummary={reviewSummary.value} /> : notFoundMarkup(location.url.pathname);
 });

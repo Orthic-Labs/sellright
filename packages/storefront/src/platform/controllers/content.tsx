@@ -153,16 +153,22 @@ export const pageKeyFor = (pathname: string): string | null => {
 };
 
 /** `route.content`: the built-in static pages and the declared content paths. */
-export const BrandContentMount = component$(() => {
+export const BrandContentMount = component$<Pick<ContentViewProps, 'reviewSummary'>>((props) => {
 	const location = useLocation();
 	const identity = useStoreIdentityLoader();
-	const data = useComputed$(() =>
-		seal<ContentViewProps>({
+	const data = useComputed$(() => {
+		const summary = props.reviewSummary;
+		return seal<ContentViewProps>({
 			identity: projectIdentity(identity.value.identity) as ContentViewProps['identity'],
 			pageKey: pageKeyFor(location.url.pathname) ?? '',
 			pathname: location.url.pathname,
-		}),
-	);
+			...(summary === undefined ? {} : { reviewSummary: summary === null ? null : {
+				score: summary.score,
+				count: summary.count,
+				reviews: summary.reviews.map((review) => ({ text: review.text, name: review.name })),
+			} }),
+		});
+	});
 	return <ContentView {...data.value} />;
 });
 

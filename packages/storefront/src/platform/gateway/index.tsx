@@ -229,7 +229,7 @@ export const ShellHeaderView = /*#__PURE__*/ slotGate('shell.header', {
 export const SHELL_FOOTER_DATA = obj({ identity: IDENTITY, paymentLabels: arr(str), year: num });
 export const ShellFooterView = /*#__PURE__*/ slotGate('shell.footer', { data: SHELL_FOOTER_DATA });
 
-export const CONTENT_DATA = obj({ identity: IDENTITY, pageKey: str, pathname: str });
+export const CONTENT_DATA = obj({ identity: IDENTITY, pageKey: str, pathname: str, reviewSummary: opt(nul(obj({ score: str, count: str, reviews: arr(obj({ text: str, name: str })) }))) });
 export const ContentView = /*#__PURE__*/ slotGate('route.content', { data: CONTENT_DATA });
 export const BLOG_LIST_DATA = obj({ identity: IDENTITY, posts: arr(BLOG_CARD), total: num, pageSize: num, hasMore: bool });
 export const BlogListView = /*#__PURE__*/ slotGate('route.blog', { data: BLOG_LIST_DATA });

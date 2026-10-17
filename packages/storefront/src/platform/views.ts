@@ -71,6 +71,8 @@ export interface ContentViewProps {
 	identity: PublicIdentity;
 	pageKey: string;
 	pathname: string;
+	/** Optional runtime editorial summary; null keeps the brand's existing fallback. */
+	reviewSummary?: { score: string; count: string; reviews: { text: string; name: string }[] } | null;
 }
 
 export interface FormState {
