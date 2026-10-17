@@ -180,6 +180,7 @@ adminOrders.openapi(createRoute({
     // claw back from the carrier" scenario, or the reverse (refund shipping
     // only, keep the goods).
     shippingAmount: money.optional(),
+    creditMerchandiseReturn: z.boolean().optional(),
     reason: z.string().optional(),
   })) } }, responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
@@ -256,7 +257,7 @@ adminOrders.openapi(
 
 adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/returns/{id}/approve', summary: 'Approve a return and reserve its refund',
-  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional() })) }, },
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional(), creditMerchandiseReturn: z.boolean().optional() })) }, },
   responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
@@ -271,7 +272,7 @@ adminOrders.openapi(createRoute({
   }
   try {
     const result = await requestRefund({ storeId: st.storeId, orderId: rma.orderId, actor: admin.email,
-      idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId });
+      idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId, creditMerchandiseReturn: body.creditMerchandiseReturn });
     return c.json({ id, ...result }, 200);
   } catch (error) { if (error instanceof RefundError) throw new HttpError(error.status, error.message); throw error; }
 }));

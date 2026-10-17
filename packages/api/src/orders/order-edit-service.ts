@@ -29,6 +29,7 @@ import { editBalanceEffects, recordSettlementOperation } from '../payments/settl
 import { requestRefund, RefundError, isDuplicatePayment } from '../payments/refunds.js';
 import { editedEarnTarget, orderLoyaltySnapshot, syncEditEarn } from '../loyalty/ledger.js';
 import { editRefundReason } from '../payments/edit-refund.js';
+import { loadOrderCouponCodes } from '../routes/order-facts.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
@@ -39,6 +40,7 @@ import { reserveStockOrThrow, StockReservationError } from './stock-reservation.
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
+import { loadImportedOrderHistory } from './imported-order-history.js';
 import {
   OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
   referencedKeys, sameAddress, validateSettlement, allowedSettlements,
@@ -128,12 +130,30 @@ async function lockableOrderId(storeId: string, code: string): Promise<string> {
   return id;
 }
 
+/** Legacy editing cannot reproduce immutable stacked/unit-vector pricing. */
+async function pricingEditProtected(tx: Tx, storeId: string, order: typeof s.order.$inferSelect, proposedCodes: readonly string[] = []): Promise<boolean> {
+  if (order.pricingSnapshot != null || new Set(order.couponCodes.map(code => code.toLowerCase())).size > 1) return true;
+  const [ledger] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
+    .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id))).limit(1);
+  if (ledger) return true;
+  const codes = new Set([...order.couponCodes, ...proposedCodes].map(code => code.toLowerCase()));
+  const usages = await tx.select({ promotionId: s.promotionUsage.promotionId }).from(s.promotionUsage)
+    .where(and(eq(s.promotionUsage.storeId, storeId), eq(s.promotionUsage.orderId, order.id)));
+  const applied = new Set([order.promotionId, ...usages.map(usage => usage.promotionId)]);
+  const promotions = await tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, scope: s.promotion.discountScope }).from(s.promotion).where(eq(s.promotion.storeId, storeId));
+  return promotions.some(promotion => (applied.has(promotion.id) || (promotion.code != null && codes.has(promotion.code.toLowerCase()))) &&
+    (promotion.type === 'account_credit' || promotion.scope === 'order'));
+}
+
 export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: EditOpT[], opts: { lock: boolean }): Promise<EditPlan> {
   const [order] = opts.lock
     ? await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update')
     : await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
   if (!order || order.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
   assertEditable(order.state, ops);
+  if (await pricingEditProtected(tx, storeId, order, referencedKeys(ops).coupons)) {
+    throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'This order supports address changes only; its saved pricing must remain intact.');
+  }
   const addressOnly = ops.length > 0 && ops.every((o) => o.op === 'set_address');
   if (!addressOnly && await hasUnresolvedPayment(tx, order.id)) {
     throw new OrderEditError(409, 'PAYMENT_UNRESOLVED', 'resolve the pending payment before editing this order');
@@ -165,7 +185,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
       inArray(s.promotion.code, refs.coupons), eq(s.promotion.enabled, true),
       or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)), or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
     ));
-    for (const r of rows) if (r.code) promosByCode.set(r.code, r);
+    for (const r of rows) if (r.code && r.type !== 'account_credit') promosByCode.set(r.code, { ...r, type: r.type });
   }
   const methodsByCode = new Map<string, ShippingMethodFacts>(methods.map((m) => [m.code, m]));
   const priceRule = variantPriceRuleFromConfig(storeRow.config);
@@ -210,7 +230,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     // A discount the customer already received stays on the order as lines
     // change (its conditions are NOT re-run against the new cart).
     const p = currentPromo;
-    if (p) { promotion = { type: p.type, value: p.value, freeShipping: p.freeShipping }; promotionRow = p; }
+    if (p && p.type !== 'account_credit') { promotion = { type: p.type, value: p.value, freeShipping: p.freeShipping }; promotionRow = { ...p, type: p.type }; }
     else warnings.push('PROMOTION_MISSING');
   }
 
@@ -906,15 +926,18 @@ export async function loadEditContext(storeId: string, code: string) {
     const meta = (o.metadata ?? {}) as OrderMeta;
     const amountDue = await amountDueForOrder(tx, storeId, o.id, o.grandTotal);
     const unresolved = await hasUnresolvedPayment(tx, o.id);
-    const items = EDITABLE_STATES.has(o.state);
+    const protectedPricing = await pricingEditProtected(tx, storeId, o);
+    const couponCodes = await loadOrderCouponCodes(tx, o);
+    const items = EDITABLE_STATES.has(o.state) && !protectedPricing;
     return {
-      code: o.code, state: o.state, currency: o.currency,
-      editable: { items: items && !unresolved, addressOnly: !items && o.state !== 'Cancelled', address: o.state !== 'Cancelled', blockedReason: o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : !items ? `A ${o.state} order can only have its address edited.` : null },
+      code: o.code, state: o.state, currency: o.currency, couponCodes,
+      editable: { items: items && !unresolved, addressOnly: !items && o.state !== 'Cancelled', address: o.state !== 'Cancelled', blockedReason: o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null },
       lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
       adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount, actor: a.actor, createdAt: a.createdAt.toISOString() })),
       shipping: { amount: o.shippingTotal, override: o.shippingOverride, methodCode: o.shippingMethodCode ?? meta.shipping?.methodCode ?? null },
       shippingMethods: methods.map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) })),
       amountDue, shippingAddress: readAddress(o.shippingAddress), billingAddress: readAddress(o.billingAddress), hasCustomer: !!o.customerId,
+      importedHistory: await loadImportedOrderHistory(tx, storeId, o.id, lines),
       history: await Promise.all(history.map(async (h) => ({ id: h.id, actor: h.actor, reason: h.reason, balance: h.balance, settlement: h.settlement ? await liveEditSettlement(tx, storeId, h.settlement as SettlementOutcome) : h.settlement, createdAt: h.createdAt.toISOString(), grandTotalBefore: (h.before as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null, grandTotalAfter: (h.after as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null }))),
     };
   });

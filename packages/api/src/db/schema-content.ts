@@ -154,6 +154,7 @@ export const cart = pgTable('cart', {
   email: text(), // captured for guest abandoned-cart recovery (no account yet)
   token: text().notNull().unique(), // device/guest cart token
   status: cartStatus().notNull().default('active'),
+  couponCodes: text().array().notNull().default([]),
   convertedOrderId: uuid().references(() => order.id),
   // Hard TTL: the cart-cleanup job deletes idle/empty carts past this instant.
   // Set on create + extended on every line mutation (cartExpiry helper).

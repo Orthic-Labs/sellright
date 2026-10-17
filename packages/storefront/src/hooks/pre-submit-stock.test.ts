@@ -56,7 +56,7 @@ describe('pre-submit live stock read', () => {
 
 	it('lets a converted cart through to srPlaceOrder even when its last unit is allocated to its own order (live read still awaited)', async () => {
 		vi.mocked(CartService.readFresh).mockResolvedValue(fresh('converted', [line(false)]));
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 't', revision: 1, status: 'converted' });
+		await expect(refreshStockBeforeSubmit()).resolves.toMatchObject({ token: 't', revision: 1, status: 'converted' });
 		expect(CartService.readFresh).toHaveBeenCalledTimes(1);
 	});
 
@@ -76,8 +76,11 @@ describe('pre-submit live stock read', () => {
 
 describe('pre-submit read is the submission snapshot', () => {
 	it('returns the token, revision and status of the validated response itself', async () => {
-		vi.mocked(CartService.readFresh).mockResolvedValue({ token: 'tok_x', revision: 7, status: 'active', lines: [line(true)] } as never);
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_x', revision: 7, status: 'active' });
+		const response = { token: 'tok_x', revision: 7, status: 'active', quoteHash: 'accepted-stock-quote', lines: [line(true)] };
+		vi.mocked(CartService.readFresh).mockResolvedValue(response as never);
+		const snapshot = await refreshStockBeforeSubmit();
+		expect(snapshot).toEqual({ token: 'tok_x', revision: 7, status: 'active', quoteHash: response.quoteHash, quote: response });
+		expect(snapshot.quote).toBe(response);
 		expect(CartService.readFresh).toHaveBeenCalledTimes(1);
 	});
 
@@ -91,7 +94,7 @@ describe('pre-submit read is the submission snapshot', () => {
 
 	it('a converted cart replays its original order even with no lines left', async () => {
 		vi.mocked(CartService.readFresh).mockResolvedValue(fresh('converted', []));
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 't', revision: 1, status: 'converted' });
+		await expect(refreshStockBeforeSubmit()).resolves.toMatchObject({ token: 't', revision: 1, status: 'converted' });
 	});
 
 	it('every call runs a new live read and returns that read\'s own revision (single-use, never remembered)', async () => {
@@ -128,7 +131,7 @@ describe('checkout gate: recovery of the cart\'s own converted order', () => {
 		vi.mocked(CartService.readFresh).mockResolvedValue(fresh('converted', [line(false)]));
 		await CartService.refresh(); // cart open / checkout re-entry adopts the live response
 		expect(validateCheckoutStock().valid).toBe(true);
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 't', revision: 1, status: 'converted' });
+		await expect(refreshStockBeforeSubmit()).resolves.toMatchObject({ token: 't', revision: 1, status: 'converted' });
 		expect(CartService.refresh).toHaveBeenCalledTimes(1);
 		expect(CartService.readFresh).toHaveBeenCalledTimes(1); // the pre-submit read is its own live read, none skipped
 	});

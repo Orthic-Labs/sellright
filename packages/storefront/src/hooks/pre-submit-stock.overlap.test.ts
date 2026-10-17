@@ -63,7 +63,7 @@ describe('pre-submit stock check against the real CartService', () => {
 	it('passes when the fresh response has every line available', async () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart()));
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_srv', revision: 1, status: 'active' });
+		await expect(refreshStockBeforeSubmit()).resolves.toMatchObject({ token: 'tok_srv', revision: 1, status: 'active' });
 		expect(fetchCount).toBe(1);
 	});
 
@@ -106,7 +106,7 @@ describe('pre-submit stock check against the real CartService', () => {
 		await vi.waitFor(() => expect(fetchCount).toBe(1));
 		const overlap = CartService.refresh(); // queued: sent only after the pre-submit read lands
 		preSubmit.resolve(await respond(200, serverCart({ revision: 4 })));
-		await expect(submit).resolves.toEqual({ token: 'tok_srv', revision: 4, status: 'active' });
+		await expect(submit).resolves.toMatchObject({ token: 'tok_srv', revision: 4, status: 'active' });
 		await vi.waitFor(() => expect(fetchCount).toBe(2));
 		overlapping.resolve(await respond(200, serverCart({ revision: 9 })));
 		await overlap;
@@ -136,7 +136,7 @@ describe('pre-submit stock check against the real CartService', () => {
 	it('converted-cart recovery still passes when that same response is converted with an unavailable last unit', async () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart({ status: 'converted' }, false)));
-		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_srv', revision: 1, status: 'converted' });
+		await expect(refreshStockBeforeSubmit()).resolves.toMatchObject({ token: 'tok_srv', revision: 1, status: 'converted' });
 	});
 
 	it('a converted read issued meanwhile does not excuse an active, out-of-stock pre-submit response', async () => {
@@ -158,7 +158,8 @@ describe('pre-submit stock check against the real CartService', () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart({ revision: 3 })));
 		const snapshot = await CartService.withLock((scope) => refreshStockBeforeSubmit(scope));
-		expect(snapshot).toEqual({ token: 'tok_srv', revision: 3, status: 'active' });
+		expect(snapshot).toMatchObject({ token: 'tok_srv', revision: 3, status: 'active' });
+		expect(snapshot.quote?.revision).toBe(3);
 		expect(fetchCount).toBe(1);
 	});
 });

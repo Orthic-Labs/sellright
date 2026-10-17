@@ -25,8 +25,8 @@ function unfulfilled(l: { quantity: number; fulfilledQty: number; cancelledQty: 
   return Math.max(0, l.quantity - l.fulfilledQty - l.cancelledQty);
 }
 /** Remaining un-refunded quantity on a line (never negative). */
-function unrefunded(l: { quantity: number; refundedQty: number }): number {
-  return Math.max(0, l.quantity - l.refundedQty);
+function unrefunded(l: { quantity: number; refundQuantity?: number; refundedQty: number }): number {
+  return Math.max(0, (l.refundQuantity ?? l.quantity) - l.refundedQty);
 }
 
 export default function OrderDetailPage() {
@@ -94,6 +94,7 @@ export default function OrderDetailPage() {
   const [refundRestock, setRefundRestock] = useState<Record<string, boolean>>({});
   const [shippingAmt, setShippingAmt] = useState('');
   const [refundReason, setRefundReason] = useState('');
+  const [creditMerchandiseReturn, setCreditMerchandiseReturn] = useState(false);
   const [refundKey, setRefundKey] = useState(() => crypto.randomUUID());
 
   const refundLineSelection = useMemo(() => {
@@ -107,17 +108,20 @@ export default function OrderDetailPage() {
     if (!o) return 0;
     return refundLineSelection.reduce((sum, l) => {
       const line = o.lines.find((x) => x.id === l.orderLineId);
-      return sum + (line ? Math.round((line.lineTotal / line.quantity) * l.quantity) : 0);
+      return sum + (line ? Math.round((line.refundUnitPrice ?? (line.lineTotal / line.quantity)) * l.quantity) : 0);
     }, 0);
   }, [o, refundLineSelection]);
   const refundShippingCents = Math.max(0, Math.round(Number(shippingAmt || 0) * 100)) || 0;
   const refundComputedTotal = refundItemsTotal + refundShippingCents;
+  const refundBasisMissing = refundLineSelection.some(l => o?.lines.find(line => line.id === l.orderLineId)?.refundUnitPrice === null);
+  const zeroCreditSelection = !!o?.hasPostedCredit && refundLineSelection.length > 0 && !refundBasisMissing && refundComputedTotal === 0;
 
   const refund = useMutation({
     mutationFn: () => {
       const lines = refundLineSelection.map(({ orderLineId, quantity, restock }) => ({ orderLineId, quantity, restock }));
-      return api.post<{ refundState: string }>(`/orders/${encodeURIComponent(code)}/refund`, {
+      return api.post<{ refundState: string; creditRestoration?: { state: string; amount: number } | null }>(`/orders/${encodeURIComponent(code)}/refund`, {
         idempotencyKey: refundKey,
+        creditMerchandiseReturn: zeroCreditSelection && creditMerchandiseReturn ? true : undefined,
         lines: lines.length ? lines : undefined,
         shippingAmount: lines.length && refundShippingCents > 0 ? refundShippingCents : undefined,
         reason: refundReason.trim() || undefined,
@@ -129,8 +133,9 @@ export default function OrderDetailPage() {
     onSuccess: (result) => {
       invalidate();
       if (result.refundState === 'Settled') {
-        setRefundQty({}); setRefundRestock({}); setShippingAmt(''); setRefundReason(''); setRefundKey(crypto.randomUUID());
-        toast.success('Refund issued');
+        setRefundQty({}); setRefundRestock({}); setShippingAmt(''); setRefundReason(''); setCreditMerchandiseReturn(false); setRefundKey(crypto.randomUUID());
+        if (result.creditRestoration?.state === 'reconciliation_required') toast.error('Refund settled; credit restoration requires reconciliation');
+        else toast.success('Refund settled', result.creditRestoration?.state === 'posted' ? `Credit restored: ${money(result.creditRestoration.amount, o?.currency ?? 'USD')}` : undefined);
       } else if (result.refundState === 'Pending') toast.success('Refund pending confirmation');
       else { setRefundKey(crypto.randomUUID()); toast.error('Refund declined'); }
     },
@@ -152,7 +157,7 @@ export default function OrderDetailPage() {
   const cur = o.currency;
   const canFulfill = o.state === 'Paid' || o.state === 'PartiallyRefunded';
   const canCancel = o.state === 'PendingPayment' || o.state === 'Paid';
-  const canRefund = o.state === 'Paid' || o.state === 'PartiallyRefunded';
+  const canRefund = o.state === 'Paid' || o.state === 'PartiallyRefunded' || (o.state === 'Refunded' && !!o.hasPostedCredit && o.lines.some(l => unrefunded(l) > 0));
   const unfulfilledLines = o.lines.filter((l) => unfulfilled(l) > 0);
   const latestFulfillment = o.fulfillments[0];
   const canMarkDelivered = latestFulfillment?.state === 'Shipped';
@@ -370,8 +375,9 @@ export default function OrderDetailPage() {
             ))}
           </FormSection>
 
-          {canRefund && (
+          {(canRefund || o.refunds.length > 0) && (
             <FormSection title="Refund" description="Select lines to refund specific items (with per-line restock), or leave everything unchecked to refund the full remaining balance.">
+              {canRefund && <>
               <div className="stack-y-2">
                 {o.lines.filter((l) => unrefunded(l) > 0).map((l) => {
                   const max = unrefunded(l);
@@ -407,18 +413,21 @@ export default function OrderDetailPage() {
                   <span>Computed total</span><span className="font-semibold tnum">{money(refundComputedTotal, cur)}</span>
                 </div>
               )}
+              {refundBasisMissing && <InlineAlert tone="critical">Refund pricing requires reconciliation.</InlineAlert>}
+              {zeroCreditSelection && <label className="flex gap-2 text-sm"><input type="checkbox" checked={creditMerchandiseReturn} onChange={e => setCreditMerchandiseReturn(e.target.checked)} />Return credit merchandise: cash refund {money(0, cur)}; restore original allocated credit.</label>}
               <div className="pt-2">
                 <button
-                  className="btn-danger" disabled={refund.isPending}
+                  className="btn-danger" disabled={refund.isPending || refundBasisMissing || (refundLineSelection.length > 0 && refundComputedTotal === 0 && !(zeroCreditSelection && creditMerchandiseReturn)) || (o.state === 'Refunded' && !(zeroCreditSelection && creditMerchandiseReturn))}
                   onClick={async () => {
                     const label = refundLineSelection.length > 0 ? money(refundComputedTotal, cur) : 'the full remaining balance';
-                    if (await confirm({ title: 'Issue this refund?', description: `This will refund ${label}.`, tone: 'danger', confirmLabel: 'Issue refund' })) refund.mutate();
+                    if (await confirm({ title: 'Issue this refund?', description: zeroCreditSelection && creditMerchandiseReturn ? `Cash refund ${label}; restore credit from original selected units.` : `This will refund ${label}.`, tone: 'danger', confirmLabel: 'Issue refund' })) refund.mutate();
                   }}
                 >
                   {refund.isPending ? <Spinner /> : 'Issue refund'}
                 </button>
               </div>
 
+              </>}
               {o.refunds.length > 0 && (
                 <div className="pt-3 mt-1 border-t border-gray-100 stack-y-2">
                   {o.refunds.map((r) => (
@@ -430,6 +439,8 @@ export default function OrderDetailPage() {
                       {(r.itemsAmount != null || r.shippingAmount) ? (
                         <div className="text-gray-400">items {money(r.itemsAmount ?? 0, cur)}{r.shippingAmount ? ` + shipping ${money(r.shippingAmount, cur)}` : ''}</div>
                       ) : null}
+                      {r.creditRestoration?.state === 'posted' && <div>Cash refunded {money(r.amount, cur)} · credit restored {money(r.creditRestoration.amount, cur)}</div>}
+                      {r.creditRestoration?.state === 'reconciliation_required' && <div className="text-danger">Cash refund settled; credit restoration requires reconciliation.</div>}
                       {r.reason && <div className="text-gray-400">reason: {r.reason}</div>}
                       {r.lines.some((l) => l.restock) && <div className="text-gray-400">restocked {r.lines.filter((l) => l.restock).reduce((n, l) => n + l.quantity, 0)} item(s)</div>}
                     </div>

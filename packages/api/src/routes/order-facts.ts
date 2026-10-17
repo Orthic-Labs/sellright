@@ -185,6 +185,15 @@ export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLine
  *  promotion with no code, or no promotion at all). */
 export async function loadOrderPromotionCode(tx: Tx, promotionId: string | null): Promise<string | null> {
   if (!promotionId) return null;
-  const [p] = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.id, promotionId)).limit(1);
-  return p?.code ?? null;
+  const [p] = await tx.select({ code: s.promotion.code, type: s.promotion.type }).from(s.promotion).where(eq(s.promotion.id, promotionId)).limit(1);
+  return p?.type === 'account_credit' ? null : p?.code ?? null;
+}
+
+/** Historical order projections never disclose reusable credit bearer codes. */
+export async function loadOrderCouponCodes(tx: Tx, order: { couponCodes?: string[]; promotionId: string | null }): Promise<string[]> {
+  const codes = order.couponCodes ?? [];
+  if (!codes.length) { const legacy = await loadOrderPromotionCode(tx, order.promotionId); return legacy ? [legacy] : []; }
+  const promotions = await tx.select({ code: s.promotion.code, type: s.promotion.type }).from(s.promotion);
+  const privateCodes = new Set(promotions.filter(p => p.type === 'account_credit' && p.code).map(p => p.code!.toLowerCase()));
+  return codes.filter(code => !privateCodes.has(code.toLowerCase()));
 }

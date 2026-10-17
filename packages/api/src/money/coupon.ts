@@ -7,6 +7,9 @@ import type { Promotion } from './totals.js';
  *  `money/coupon-context.ts`. */
 export interface CouponContext {
   subtotal: number; // cents, pre-discount
+  /** Stack callers supply current rounded subtotals for source conditions. */
+  netSubtotal?: number;
+  grossSubtotal?: number;
   activeVerifications: string[]; // customer's SheerID categories (may be empty)
   items?: Array<{ quantity: number; productId: string; tags: string[]; collectionIds: string[] }>;
 }
@@ -31,24 +34,36 @@ function parseStringArray(raw: string | undefined): string[] | null {
   } catch {
     return null;
   }
-  return Array.isArray(parsed) ? parsed.map(String) : null;
+  return Array.isArray(parsed) && parsed.every(value => typeof value === 'string') ? parsed : null;
 }
 
-export function evaluateCoupon(
-  promo: { type: Promotion['type']; value: number; conditions: unknown; freeShipping?: boolean },
-  ctx: CouponContext,
-): CouponEval {
-  const conditions: Condition[] = Array.isArray(promo.conditions) ? (promo.conditions as Condition[]) : [];
+export function evaluatePromotionConditions(raw: unknown, ctx: CouponContext): CouponEval {
+  if (![ctx.subtotal, ctx.netSubtotal ?? ctx.subtotal, ctx.grossSubtotal ?? ctx.subtotal].every(value => Number.isSafeInteger(value) && value >= 0) ||
+      !Array.isArray(ctx.activeVerifications) || ctx.activeVerifications.some(value => typeof value !== 'string') ||
+      (ctx.items != null && (!Array.isArray(ctx.items) || ctx.items.some(item => !item || !Number.isSafeInteger(item.quantity) || item.quantity < 0 ||
+        typeof item.productId !== 'string' || !Array.isArray(item.tags) || item.tags.some(value => typeof value !== 'string') ||
+        !Array.isArray(item.collectionIds) || item.collectionIds.some(value => typeof value !== 'string'))))) return { valid: false, reason: 'invalid promotion context' };
+  if (raw != null && !Array.isArray(raw)) return { valid: false, reason: 'invalid promotion conditions' };
+  const conditions: Condition[] = (raw ?? []) as Condition[];
   for (const cond of conditions) {
+    if (!cond || typeof cond !== 'object' || typeof cond.code !== 'string' ||
+        (cond.args != null && (!Array.isArray(cond.args) || cond.args.some(a => !a || typeof a.name !== 'string' || typeof a.value !== 'string')))) {
+      return { valid: false, reason: 'invalid promotion conditions' };
+    }
     switch (cond.code) {
       case 'minimum_order_amount': {
         const amount = Number(arg(cond, 'amount') ?? 0);
-        if (ctx.subtotal < amount) return { valid: false, reason: `minimum order of ${(amount / 100).toFixed(2)} not met` };
+        const inclusive = arg(cond, 'taxInclusive');
+        if (!Number.isSafeInteger(amount) || amount < 0 || (inclusive != null && inclusive !== 'true' && inclusive !== 'false')) {
+          return { valid: false, reason: 'invalid minimum order amount' };
+        }
+        const subtotal = inclusive === 'true' ? ctx.grossSubtotal ?? ctx.subtotal : ctx.netSubtotal ?? ctx.subtotal;
+        if (subtotal < amount) return { valid: false, reason: `minimum order of ${(amount / 100).toFixed(2)} not met` };
         break;
       }
       case 'verified_customer': {
-        let categories: string[] = [];
-        try { categories = JSON.parse(arg(cond, 'categories') ?? '[]'); } catch { /* ignore */ }
+        const categories = parseStringArray(arg(cond, 'categories'));
+        if (!categories) return { valid: false, reason: 'requires verified status' };
         if (!ctx.activeVerifications.some((v) => categories.includes(v))) return { valid: false, reason: 'requires verified status' };
         break;
       }
@@ -97,5 +112,13 @@ export function evaluateCoupon(
         return { valid: false, reason: `unsupported condition: ${cond.code}` };
     }
   }
-  return { valid: true, promotion: { type: promo.type, value: promo.value, freeShipping: promo.freeShipping } };
+  return { valid: true };
+}
+
+export function evaluateCoupon(
+  promo: { type: Promotion['type']; value: number; conditions: unknown; freeShipping?: boolean },
+  ctx: CouponContext,
+): CouponEval {
+  const conditions = evaluatePromotionConditions(promo.conditions, ctx);
+  return conditions.valid ? { valid: true, promotion: { type: promo.type, value: promo.value, freeShipping: promo.freeShipping } } : conditions;
 }

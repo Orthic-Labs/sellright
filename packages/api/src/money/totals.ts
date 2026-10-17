@@ -159,3 +159,7 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
 
   return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal, pointsDiscount, ...(input.adjustments ? { adjustmentTotal } : {}) };
 }
+
+// Stack pricing is explicit: singleton callers retain their existing rounding.
+export { calculatePromotionStack } from './promotion-stack.js';
+export type { StackInput, StackLine, ResolvedPromotion, PromotionStackTotals, PricingPhase } from './promotion-stack.js';

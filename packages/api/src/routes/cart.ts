@@ -7,13 +7,14 @@ import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { calculateOrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon } from '../money/coupon.js';
+import { resolvePromotionStack } from '../money/promotion-resolver.js';
+import { canonicalCouponCodes, PromotionStackError } from '../money/promotion-stack.js';
+import { shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
+import { loyaltyBalance } from '../loyalty/ledger.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
-import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
-import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, pointsEarned } from '../money/loyalty.js';
+import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, pointsEarned, planRedemption } from '../money/loyalty.js';
 import { customerToken, resolveCustomer, resolveLegacySession } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
@@ -36,7 +37,9 @@ const lifecycle = (st: StoreCtx) =>
     retentionDays: env.CART_RETENTION_DAYS,
   });
 
-type PricedCart = {
+export type PricedCart = {
+  pricingIntent: 'preview' | 'checkout'; couponCodes: string[]; quoteHash: string; shippingMethodCode: string | null; pointsDiscount: number;
+  coupons: Array<{ code: string; kind?: string; applied: boolean; reason?: string; appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
   currency: string;
   lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
@@ -62,7 +65,7 @@ export async function priceCart(
   tx: Tx,
   st: StoreCtx,
   items: Array<{ sku: string; quantity: number }>,
-  opts: { couponCode?: string; shipping?: number; token?: string | null; shipCountry?: string | null } = {},
+  opts: { couponCode?: string; couponCodes?: string[]; pricingIntent?: 'preview' | 'checkout'; shipping?: number; shippingMethodCode?: string; redeemPoints?: number; token?: string | null; shipCountry?: string | null } = {},
 ): Promise<PricedCart> {
   const skus = [...new Set(items.map((i) => i.sku))];
   // Live stock join — never cached, never read from a search index. A row
@@ -97,44 +100,12 @@ export async function priceCart(
     return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null };
   });
 
-  let promotion: Promotion | undefined;
-  let coupon: { code: string; applied: boolean; reason?: string } | null = null;
-  const availSubtotal = priced.filter((p) => p.available).reduce((a, p) => a + p.unitPrice * p.quantity, 0);
-  const now = new Date();
-  const timeValid = and(or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)), or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)));
-  const activeVerifications = opts.token ? (await resolveCustomer(tx, opts.token))?.activeVerifications ?? [] : [];
+  const couponCodes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : []));
+  const customer = opts.token ? await resolveCustomer(tx, opts.token) : null;
+  const activeVerifications = customer?.activeVerifications ?? [];
   const couponFacts = await loadCouponMatchContext(tx, variants.map((v) => v.productId));
   const couponItems = couponItemsFromFacts(
-    items.filter((i) => bySku.has(i.sku)).map((i) => ({ quantity: i.quantity, productId: bySku.get(i.sku)?.productId ?? null })),
-    couponFacts,
-  );
-  if (opts.couponCode) {
-    const [promo] = await tx
-      .select()
-      .from(s.promotion)
-      .where(and(eq(s.promotion.code, opts.couponCode), eq(s.promotion.enabled, true), timeValid))
-      .limit(1);
-    if (!promo) {
-      coupon = { code: opts.couponCode, applied: false, reason: 'invalid or expired code' };
-    } else {
-      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: availSubtotal, activeVerifications, items: couponItems });
-      if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: opts.couponCode, applied: true }; }
-      else coupon = { code: opts.couponCode, applied: false, reason: ev.reason };
-    }
-  } else {
-    // No code → preview the best eligible AUTOMATIC promotion (estimate only;
-    // checkout re-applies it authoritatively with usage-limit enforcement).
-    const autos = await tx
-      .select()
-      .from(s.promotion)
-      .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
-    const best = selectAutomaticPromotion(
-      autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
-      { subtotal: availSubtotal, activeVerifications, items: couponItems },
-    );
-    if (best) promotion = { type: best.type, value: best.value, freeShipping: best.freeShipping };
-  }
-
+    items.filter((i) => bySku.has(i.sku)).map((i) => ({ quantity: i.quantity, productId: bySku.get(i.sku)?.productId ?? null })), couponFacts);
   // Destination tax parity with checkout (checkout.ts): the ship-to country's
   // zone overrides the store flat rate. When the cart doesn't know a
   // shipCountry yet (no address captured pre-checkout), fall back to the flat
@@ -149,10 +120,31 @@ export async function priceCart(
     taxRate = resolveTaxRate(taxZones, opts.shipCountry, st.taxRate);
   }
 
-  const totals = calculateOrderTotals({
-    lines: priced.filter((p) => p.available).map((p) => ({ unitPrice: p.unitPrice, quantity: p.quantity })),
-    shipping: opts.shipping ?? 0, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
-  });
+  const selectedMethod = opts.shippingMethodCode
+    ? (await tx.select().from(s.shippingMethod).where(and(eq(s.shippingMethod.code, opts.shippingMethodCode), eq(s.shippingMethod.enabled, true))).limit(1))[0]
+    : undefined;
+  const calculator = selectedMethod?.calculator as ShippingCalculator | undefined;
+  const stackInput = {
+    storeId: st.id, customerId: customer?.id, couponCodes, selectedCreditOnly: opts.pricingIntent === 'checkout', phase: 'AddingItems' as const,
+    currency: st.currency, pricesIncludeTax: st.taxInclusive,
+    lines: priced.filter(p => p.available).map((p, index) => ({ key: `${index}:${p.sku}`, quantity: p.quantity, placedQuantity: p.quantity,
+      unitListPrice: p.unitPrice, priceIncludesTax: st.taxInclusive, taxRateBps: taxRate })),
+    shipping: calculator ? shippingRate(calculator) : opts.shipping ?? 0,
+    shippingTaxRateBps: calculator?.taxRate ?? (st.shippingTaxable ? taxRate : 0),
+    shippingIncludesTax: calculator?.taxInclusive ?? st.taxInclusive,
+    couponContext: { activeVerifications, items: couponItems },
+  };
+  let totals = await resolvePromotionStack(tx, stackInput);
+  if (opts.redeemPoints && customer?.emailVerified) {
+    const settings = loyaltySettingsFromConfig(st.config);
+    const plan = planRedemption({ settings, requestedPoints: opts.redeemPoints,
+      availablePoints: (await loyaltyBalance(tx, customer.id)).available,
+      discountableCents: totals.subtotal - totals.discountTotal });
+    if (plan.ok) totals = await resolvePromotionStack(tx, { ...stackInput, pointsDiscount: plan.discountCents });
+  }
+  const coupons = totals.coupons.map(coupon => ({ ...coupon, appliedAmount: coupon.appliedAmount ?? 0 }));
+  const first = coupons[0];
+  const coupon = first ? { code: first.code, applied: first.applied, ...(first.reason ? { reason: first.reason } : {}) } : null;
 
   let idx = 0;
   const lines = priced.map((p) => {
@@ -175,7 +167,7 @@ export async function priceCart(
     })
     : undefined;
   return {
-    currency: st.currency, lines,
+    currency: st.currency, lines, pricingIntent: opts.pricingIntent ?? 'preview', couponCodes: coupons.map(coupon => coupon.code), coupons, quoteHash: totals.quoteHash, shippingMethodCode: selectedMethod?.code ?? null, pointsDiscount: totals.pointsDiscount,
     subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
     taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, unavailable, coupon,
     ...(pointsToEarn !== undefined ? { pointsToEarn } : {}),
@@ -192,7 +184,13 @@ const LineOut = z.object({
   // (digital/license/update_pass/pre-order) rather than "unlimited stock".
   availableQuantity: z.number().int().nullable(),
 });
-const EstimateOut = z.object({
+export const CouponCodes = z.array(z.string().min(1).max(255)).max(100);
+export const CouponCodesQuery = z.string().transform((value, ctx) => {
+  try { return CouponCodes.parse(JSON.parse(value)); } catch { ctx.addIssue({ code: 'custom', message: 'couponCodes must be a JSON string array' }); return z.NEVER; }
+}).optional();
+export const EstimateOut = z.object({
+  pricingIntent: z.enum(['preview', 'checkout']), couponCodes: CouponCodes, quoteHash: z.string(), shippingMethodCode: z.string().nullable(), pointsDiscount: z.number().int(),
+  coupons: z.array(z.object({ code: z.string(), kind: z.string().optional(), applied: z.boolean(), reason: z.string().optional(), appliedAmount: z.number().int(), availableAmount: z.number().int().optional(), remainingAmount: z.number().int().optional() })),
   currency: z.string(),
   lines: z.array(LineOut),
   subtotal: z.number().int(), discountTotal: z.number().int(), shippingTotal: z.number().int(),
@@ -204,6 +202,15 @@ const EstimateOut = z.object({
 });
 
 export const cart = new OpenAPIHono();
+export function promotionStackErrorJson(c: Context, error: PromotionStackError) {
+  return error.code === 'CREDIT_AMOUNT_CHANGED'
+    ? errJson(c, 409, 'CREDIT_AMOUNT_CHANGED', error.message)
+    : errJson(c, 409, 'CREDIT_ALLOCATION_INVALID', error.message);
+}
+cart.onError((error, c) => {
+  if (error instanceof PromotionStackError) return promotionStackErrorJson(c, error);
+  throw error;
+});
 
 // POST /v1/shop/cart/estimate — server re-prices the cart (never trusts client prices)
 cart.openapi(
@@ -215,7 +222,7 @@ cart.openapi(
       body: {
         content: {
           'application/json': {
-            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), shipCountry: z.string().optional() }),
+            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }),
           },
         },
       },
@@ -226,9 +233,9 @@ cart.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { items, shipping, couponCode, shipCountry } = c.req.valid('json');
+    const { items, ...quoteOptions } = c.req.valid('json');
     const token = customerToken(c);
-    const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { couponCode, shipping, token, shipCountry }));
+    const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { ...quoteOptions, token }));
     return c.json(result, 200);
   },
 );
@@ -274,6 +281,7 @@ const LegacyMigrationIn = z.object({
   // null means no browser snapshot; [] is an authoritative empty browser cart.
   items: z.array(z.object({ variantId: z.string().regex(/^\d{1,20}$/), quantity: z.number().int().min(1).max(9999) })).max(200).nullable(),
   couponCode: z.string().max(200).nullable().optional(),
+  couponCodes: CouponCodes.optional(),
   countryCode: z.string().regex(/^[A-Z]{2}$/).nullable().optional(),
 }).strict();
 cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration',
@@ -298,7 +306,8 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
   const sourceToken = authToken ?? legacyCustomerToken(c);
   const hash = (value: string) => createHash('sha256').update(value).digest('hex');
   const claimHash = hash(body.claimId);
-  const payloadHash = digest({ items: body.items, couponCode: body.couponCode ?? null, countryCode: body.countryCode ?? null });
+  const payloadHash = digest({ items: body.items, couponCode: body.couponCode ?? null, countryCode: body.countryCode ?? null,
+    ...(body.couponCodes !== undefined ? { couponCodes: body.couponCodes } : {}) });
   const result = await withStore(st.id, async tx => {
     // Serializes first insert as well as retry. Cart row lock below is shared with all ordinary mutations.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`legacy-cart:${st.id}:${claimHash}`}, 0))`);
@@ -320,16 +329,17 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
     let [row] = cartId ? await tx.select().from(s.cart).where(and(
       eq(s.cart.storeId, st.id), eq(s.cart.id, cartId),
     )).for('update') : [];
-    const couponCode = receipt ? receipt.couponCode : body.items !== null ? body.couponCode ?? null : grant?.couponCode ?? null;
+    const localCouponCodes = canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : []));
+    const couponCode = receipt ? receipt.couponCode : body.items !== null ? localCouponCodes[0] ?? null : grant?.couponCode ?? null;
     const countryCode = receipt?.countryCode ?? body.countryCode ?? grant?.countryCode ?? null;
     // Every replay checks the locked cart before returning its capability. A finished cart stays retired.
     const usable = row && ['active', 'abandoned'].includes(row.status) && row.expiresAt !== null && row.expiresAt.getTime() > Date.now();
     if (receipt) {
       if (receipt.retiredAt || !usable) {
         if (!receipt.retiredAt) await tx.update(s.legacyCartClaim).set({ retiredAt: new Date(), cartId: null }).where(eq(s.legacyCartClaim.id, receipt.id));
-        return { receipt: body.claimId, cart: null, couponCode, countryCode, unresolved: receipt.unresolved };
+        return { receipt: body.claimId, cart: null, couponCode: null, countryCode, unresolved: receipt.unresolved };
       }
-      return { receipt: body.claimId, cart: await cartResponse(tx, st, row!, couponCode ?? undefined, authToken, countryCode),
+      return { receipt: body.claimId, cart: await cartResponse(tx, st, row!, undefined, authToken, countryCode),
         couponCode, countryCode, unresolved: receipt.unresolved };
     }
     if (body.items === null) {
@@ -337,12 +347,12 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
       const [consumed] = grant ? await tx.select({ id: s.legacyCartClaim.id }).from(s.legacyCartClaim).where(and(
         eq(s.legacyCartClaim.grantId, grant.id), eq(s.legacyCartClaim.sourceOnly, true),
       )) : [];
-      if (consumed) return { receipt: body.claimId, cart: null, couponCode, countryCode, unresolved: [] };
+      if (consumed) return { receipt: body.claimId, cart: null, couponCode: null, countryCode, unresolved: [] };
       await tx.insert(s.legacyCartClaim).values({ id: randomUUID(), storeId: st.id, claimHash, payloadHash,
         grantId: grant?.id ?? null, sourceOnly: true, cartId: usable ? row!.id : null,
         retiredAt: usable ? null : new Date(), couponCode, countryCode });
       return { receipt: body.claimId,
-        cart: usable ? await cartResponse(tx, st, row!, couponCode ?? undefined, authToken, countryCode) : null,
+        cart: usable ? await cartResponse(tx, st, row!, undefined, authToken, countryCode) : null,
         couponCode, countryCode, unresolved: [] };
     }
     const quantities = new Map<string, number>();
@@ -375,9 +385,11 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
     // Local blob & source active order describe ONE cart. Replace, never append.
     await tx.delete(s.cartLine).where(and(eq(s.cartLine.storeId, st.id), eq(s.cartLine.cartId, row.id)));
     row = (await applyLines(tx, st, row, lines))!;
+    [row] = await tx.update(s.cart).set({ couponCodes: localCouponCodes }).where(eq(s.cart.id, row.id)).returning();
+    if (!row) throw new Error('Cart coupon update failed');
     await tx.insert(s.legacyCartClaim).values({ id: randomUUID(), storeId: st.id, claimHash, payloadHash,
       grantId: grant?.id ?? null, cartId: row.id, couponCode, countryCode, unresolved });
-    return { receipt: body.claimId, cart: await cartResponse(tx, st, row, couponCode ?? undefined, authToken, countryCode),
+    return { receipt: body.claimId, cart: await cartResponse(tx, st, row, undefined, authToken, countryCode),
       couponCode, countryCode, unresolved };
   });
   c.header('Cache-Control', 'no-store');
@@ -399,15 +411,25 @@ async function variantIdsBySku(tx: Tx, skus: string[]): Promise<Map<string, stri
 
 /** Load a cart's lines as priceable items. */
 async function cartItems(tx: Tx, cartId: string): Promise<Array<{ sku: string; quantity: number }>> {
-  const rows = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, cartId));
+  const rows = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, cartId)).orderBy(asc(s.cartLine.createdAt), asc(s.cartLine.id));
   return rows.map((r) => ({ sku: r.sku, quantity: r.quantity }));
 }
 
 /** Build the full cart response (meta + server-priced lines). Exported so
  *  checkout can return the same snapshot on stale-write conflicts. */
-export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string, token?: string | null, shipCountry?: string | null): Promise<z.infer<typeof CartOut>> {
+export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string | string[], token?: string | null, shipCountry?: string | null, quoteOptions: { pricingIntent?: 'preview' | 'checkout'; shippingMethodCode?: string; redeemPoints?: number } = {}): Promise<z.infer<typeof CartOut>> {
   const items = await cartItems(tx, cartRow.id);
-  const priced = await priceCart(tx, st, items, { couponCode, token, shipCountry });
+  const codes = Array.isArray(couponCode) ? couponCode : couponCode !== undefined ? [couponCode] : cartRow.couponCodes;
+  const priced = await priceCart(tx, st, items, { couponCodes: codes, token, shipCountry, ...quoteOptions });
+  // Terminal carts are historical facts; their credit bearer codes stay private.
+  const caller = token ? await resolveCustomer(tx, token) : null;
+  if (['converted', 'merged'].includes(cartRow.status) || (cartRow.customerId && caller?.id !== cartRow.customerId)) {
+    const creditPromotions = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.type, 'account_credit'));
+    const privateCodes = new Set(creditPromotions.flatMap(promotion => promotion.code ? [promotion.code.toLowerCase()] : []));
+    priced.couponCodes = priced.couponCodes.filter(code => !privateCodes.has(code.toLowerCase()));
+    priced.coupons = priced.coupons.filter(c => !privateCodes.has(c.code.toLowerCase()));
+    if (priced.coupon && privateCodes.has(priced.coupon.code.toLowerCase())) priced.coupon = null;
+  }
   return { ...priced, token: cartRow.token, status: cartRow.status, email: cartRow.email, customerId: cartRow.customerId, revision: cartRow.revision };
 }
 
@@ -421,11 +443,11 @@ const CONFLICT_COPY: Record<CartConflictCode, string> = {
 /** 409 body for a rejected cart mutation: the CURRENT revision + repriced
  *  snapshot so the caller can merge and retry (CART-03) or learn the cart is
  *  terminal (CART-02/CART-05). */
-async function cartConflict(c: Context, tx: Tx, st: StoreCtx, row: CartRow, code: CartConflictCode, couponCode?: string, authToken?: string | null, shipCountry?: string | null) {
+async function cartConflict(c: Context, tx: Tx, st: StoreCtx, row: CartRow, code: CartConflictCode, authToken?: string | null, shipCountry?: string | null, quoteOptions: { pricingIntent?: 'preview' | 'checkout'; shippingMethodCode?: string; redeemPoints?: number } = {}) {
   const requestId = (c.var as { requestId?: string } | undefined)?.requestId;
   return {
     error: { code: code.toUpperCase(), message: CONFLICT_COPY[code], ...(requestId ? { requestId } : {}) },
-    code, revision: row.revision, cart: await cartResponse(tx, st, row, couponCode, authToken, shipCountry),
+    code, revision: row.revision, cart: await cartResponse(tx, st, row, undefined, authToken, shipCountry, quoteOptions),
   };
 }
 
@@ -511,7 +533,7 @@ function mutationBlocker(row: CartRow | undefined, expectedRevision: number | un
 cart.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/cart', summary: 'Create a cart',
-    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).optional(), email: z.string().email().optional(), couponCode: z.string().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodes.optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -532,11 +554,11 @@ cart.openapi(
       const token = randomUUID();
       const [row] = await tx
         .insert(s.cart)
-        .values({ storeId: st.id, token, customerId: customer?.id ?? null, email: body.email ? normalizeEmail(body.email) : null, expiresAt: cartExpiry(new Date(), lifecycle(st).ttlDays) })
+        .values({ storeId: st.id, token, couponCodes: canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : [])), customerId: customer?.id ?? null, email: body.email ? normalizeEmail(body.email) : null, expiresAt: cartExpiry(new Date(), lifecycle(st).ttlDays) })
         .returning();
       const seed = (body.items ?? []).filter((l) => l.quantity > 0);
       const cur = seed.length ? (await applyLines(tx, st, row!, seed)) ?? row! : row!;
-      return cartResponse(tx, st, cur, body.couponCode, authTok);
+      return cartResponse(tx, st, cur, body.couponCodes ?? body.couponCode, authTok);
     });
     return c.json(out, 200);
   },
@@ -546,18 +568,18 @@ cart.openapi(
 cart.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/cart/{token}', summary: 'Get a cart',
-    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), shipCountry: z.string().optional() }) },
+    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), couponCodes: CouponCodesQuery, pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.coerce.number().int().min(1).optional(), shipCountry: z.string().optional() }) },
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
-    const { couponCode, shipCountry } = c.req.valid('query');
+    const { couponCode, couponCodes, shipCountry, shippingMethodCode, redeemPoints, pricingIntent } = c.req.valid('query');
     const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
-      return cartResponse(tx, st, row, couponCode, authTok, shipCountry);
+      return cartResponse(tx, st, row, couponCodes ?? couponCode, authTok, shipCountry, { shippingMethodCode, redeemPoints, pricingIntent });
     });
     if (!out) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     return c.json(out, 200);
@@ -574,7 +596,7 @@ cart.openapi(
 cart.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/cart/{token}/lines', summary: 'Update cart lines',
-    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).min(1), couponCode: z.string().optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
+    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -591,13 +613,17 @@ cart.openapi(
       // Append-only requests (every line quantity ≥ 1) commute and need no
       // base; a remove or absolute set is a non-append mutation and must
       // carry expectedRevision (409 'revision_required' when absent).
-      const appendsOnly = body.lines.every((l) => l.quantity > 0);
+      const appendsOnly = body.couponCodes === undefined && body.couponCode === undefined && body.lines.length > 0 && body.lines.every((l) => l.quantity > 0);
+      const quoteOptions = { pricingIntent: body.pricingIntent, shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints };
       const block = mutationBlocker(row, body.expectedRevision, { revisionRequired: !appendsOnly });
       if (block === 'missing') return { code: 404 as const };
-      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, body.couponCode, authTok, body.shipCountry) };
-      const updated = await applyLines(tx, st, row!, body.lines, { mode: body.expectedRevision == null ? 'increment' : 'set' });
-      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', body.couponCode, authTok, body.shipCountry) };
-      return { code: 200 as const, body: await cartResponse(tx, st, updated, body.couponCode, authTok, body.shipCountry) };
+      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, authTok, body.shipCountry, quoteOptions) };
+      let updated = await applyLines(tx, st, row!, body.lines, { mode: body.expectedRevision == null ? 'increment' : 'set' });
+      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', authTok, body.shipCountry, quoteOptions) };
+      if (body.couponCodes !== undefined || body.couponCode !== undefined) {
+        [updated] = await tx.update(s.cart).set({ couponCodes: canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : [])) }).where(eq(s.cart.id, updated.id)).returning();
+      }
+      return { code: 200 as const, body: await cartResponse(tx, st, updated!, undefined, authTok, body.shipCountry, quoteOptions) };
     });
     if (out.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (out.code === 409) return c.json(out.body, 409);
@@ -687,7 +713,7 @@ cart.openapi(
       const row = locked.find((r) => r.id === found.id);
       const block = mutationBlocker(row, expectedRevision, { revisionRequired: true });
       if (block === 'missing') return { code: 404 as const };
-      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, undefined, authTok) };
+      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, authTok) };
 
       // Other active carts owned by this customer → fold their lines in (sum
       // on conflict), then retire them as 'merged'. The fold is a MOVE: the
@@ -716,7 +742,7 @@ cart.openapi(
       const [updated] = await tx.update(s.cart).set({ customerId: customer.id, updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })
         .where(and(eq(s.cart.id, row!.id), inArray(s.cart.status, ['active', 'abandoned'])))
         .returning();
-      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', undefined, authTok) };
+      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', authTok) };
       return { code: 200 as const, body: await cartResponse(tx, st, updated, undefined, authTok) };
     });
     if (res.code === 401) return errJson(c, 401, 'AUTH_REQUIRED', 'authentication required to merge');

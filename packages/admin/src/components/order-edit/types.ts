@@ -14,6 +14,16 @@ export interface AddressForm {
 }
 export const EMPTY_ADDRESS: AddressForm = { fullName: '', line1: '', line2: '', city: '', province: '', postalCode: '', country: '', phone: '' };
 
+export interface ImportedOrderHistoryEntry {
+  kind: 'imported'; id: string; createdAt: string | null; updatedAt: string | null;
+  sourceCreatedAtText: string | null; sourceUpdatedAtText: string | null;
+  priceChange: number; note: string;
+  lineChanges: { lineId: string | null; label: string; quantityDelta: number }[];
+  addressChanges: { shipping: { fields: { label: string; value: string }[] } | null; billing: { fields: { label: string; value: string }[] } | null };
+  links: { refundId: string | null; paymentId: string | null };
+  actionable: false;
+}
+
 export interface EditContext {
   code: string; state: string; currency: string;
   editable: { items: boolean; addressOnly: boolean; address: boolean; blockedReason: string | null };
@@ -26,6 +36,7 @@ export interface EditContext {
   billingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   hasCustomer: boolean;
   history: { id: string; actor: string | null; reason: string | null; balance: number; createdAt: string; grandTotalBefore: number | null; grandTotalAfter: number | null; settlement: { type?: string; status?: string; message?: string; paymentId?: string } | null }[];
+  importedHistory: ImportedOrderHistoryEntry[];
 }
 
 export interface Totals { subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; adjustmentTotal: number; grandTotal: number }

@@ -610,6 +610,11 @@ export interface SrCart {
   grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
+  couponCodes: string[];
+  coupons: Array<{ code: string; kind: 'percentage' | 'fixed' | 'free_shipping' | 'account_credit'; applied: boolean; reason?: string;
+    appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
+  quoteHash: string;
+  pricingIntent: 'preview' | 'checkout';
   /** Optimistic-concurrency counter — echo back on every non-append mutation. */
   revision: number;
 }
@@ -632,30 +637,30 @@ export const srCartConflict = (e: unknown): SrCartConflict | null => {
 
 export type SrCartLineInput = { sku: string; quantity: number };
 
-export const srCreateCart = (body: { items?: SrCartLineInput[]; email?: string; couponCode?: string }) =>
+export const srCreateCart = (body: { items?: SrCartLineInput[]; email?: string; couponCode?: string; couponCodes?: string[] }) =>
   sr<SrCart>('/v1/shop/cart', { method: 'POST', body: JSON.stringify(body) });
 
-export const srGetCart = (token: string, couponCode?: string) => {
-  const q = couponCode ? `?couponCode=${encodeURIComponent(couponCode)}` : '';
+export const srGetCart = (token: string, couponCodes?: string[] | string) => {
+  const q = couponCodes === undefined ? '' : `?couponCodes=${encodeURIComponent(JSON.stringify(typeof couponCodes === 'string' ? [couponCodes] : couponCodes))}`;
   return sr<SrCart>(`/v1/shop/cart/${encodeURIComponent(token)}${q}`);
 };
 
 /** PATCH /v1/shop/cart/{token}/lines — BLIND APPEND (increment semantics).
  *  Quantities are ADDED server-side; no expectedRevision needed or allowed —
  *  appends commute, so concurrent "add to cart" clicks can't stale-conflict. */
-export const srAddCartLines = (token: string, lines: SrCartLineInput[], couponCode?: string) =>
+export const srAddCartLines = (token: string, lines: SrCartLineInput[], couponCodes?: string[] | string) =>
   sr<SrCart>(`/v1/shop/cart/${encodeURIComponent(token)}/lines`, {
     method: 'PATCH',
-    body: JSON.stringify(couponCode ? { lines, couponCode } : { lines }),
+    body: JSON.stringify({ lines, ...(couponCodes === undefined ? {} : { couponCodes: typeof couponCodes === 'string' ? [couponCodes] : couponCodes }) }),
   });
 
 /** PATCH /v1/shop/cart/{token}/lines — ABSOLUTE SET (quantity 0 removes).
  *  Requires expectedRevision: the server 409s 'revision_required' without it
  *  and 'stale' (plus the current snapshot) when it doesn't match. */
-export const srSetCartLines = (token: string, lines: SrCartLineInput[], expectedRevision: number, couponCode?: string) =>
+export const srSetCartLines = (token: string, lines: SrCartLineInput[], expectedRevision: number, couponCodes?: string[] | string) =>
   sr<SrCart>(`/v1/shop/cart/${encodeURIComponent(token)}/lines`, {
     method: 'PATCH',
-    body: JSON.stringify({ lines, expectedRevision, ...(couponCode ? { couponCode } : {}) }),
+    body: JSON.stringify({ lines, expectedRevision, ...(couponCodes === undefined ? {} : { couponCodes: typeof couponCodes === 'string' ? [couponCodes] : couponCodes }) }),
   });
 
 /** Capture the shopper's email — non-append mutation, expectedRevision required. */
@@ -785,10 +790,11 @@ export interface SrLegacyCartReceipt {
   receipt: string;
   cart: SrCart | null;
   couponCode: string | null;
+  couponCodes?: string[];
   countryCode: string | null;
   unresolved: Array<{ variantId: string; quantity: number }>;
 }
 export const srLegacyCartMigration = (body: {
   claimId: string; items: Array<{ variantId: string; quantity: number }> | null;
-  couponCode?: string | null; countryCode?: string | null;
+  couponCode?: string | null; couponCodes?: string[]; countryCode?: string | null;
 }) => sr<SrLegacyCartReceipt>('/v1/shop/cart/legacy-migration', { method: 'POST', body: JSON.stringify(body) });

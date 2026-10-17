@@ -652,6 +652,27 @@
       "when": 1790000013800,
       "tag": "0101_retained_source_records",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1790000013900,
+      "tag": "0102_imported_order_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1790000014000,
+      "tag": "0103_account_credit",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1790000014100,
+      "tag": "0104_coupon_stack",
+      "breakpoints": true
     }
   ]
 }

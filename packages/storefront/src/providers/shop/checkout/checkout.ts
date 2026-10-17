@@ -11,6 +11,7 @@
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
 import type { CheckoutSnapshot } from '~/hooks/pre-submit-stock';
+import type { ServerCart } from '~/sellright/types/cart';
 import type {
 	CheckoutRequest,
 	CheckoutResponse,
@@ -32,9 +33,19 @@ export interface CheckoutForm {
 	billingAddress?: Record<string, unknown>;
 	shippingMethodCode?: string;
 	couponCode?: string;
+	couponCodes?: string[];
+	acceptedQuoteHash?: string;
 	giftCardCode?: string;
 	/** Points to redeem — the server re-validates against the customer's actual balance. */
 	redeemPoints?: number;
+}
+
+export type CheckoutQuote = Pick<ServerCart, 'currency' | 'lines' | 'subtotal' | 'discountTotal' | 'shippingTotal' | 'taxTotal' | 'grandTotal' | 'couponCodes' | 'coupons' | 'quoteHash' | 'pricingIntent'>;
+export class QuoteChangedError extends Error {
+	constructor(readonly quote: CheckoutQuote, readonly quoteHash: string) {
+		super('Your total changed. Review updated amounts & confirm this quote before placing your order.');
+		this.name = 'QuoteChangedError';
+	}
 }
 
 /** An HTTP 204 or a JSON `null` body reaches the caller as `data === undefined/null` with no thrown error. For every
@@ -104,6 +115,10 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		throw new Error('Your cart was merged into your account — please re-add your items.');
 	}
 	if (snapshot.status === 'converted') throw new ConvertedCartError();
+	// A live read validates stock; it never grants consent to changed money.
+	if (snapshot.quoteHash && form.acceptedQuoteHash !== snapshot.quoteHash && snapshot.quote) {
+		throw new QuoteChangedError(snapshot.quote, snapshot.quoteHash);
+	}
 
 	const body: CheckoutRequest = {
 		items: form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }],
@@ -112,6 +127,8 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		billingAddress: form.billingAddress,
 		shippingMethodCode: form.shippingMethodCode,
 		couponCode: form.couponCode,
+		couponCodes: form.couponCodes,
+		acceptedQuoteHash: form.acceptedQuoteHash,
 		giftCardCode: form.giftCardCode,
 		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
 		cartToken: snapshot.token,
@@ -127,6 +144,13 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		return data as CheckoutResponse;
 	} catch (error) {
 		if (error instanceof SellRightError && error.status === 409) {
+			if (error.code === 'QUOTE_CHANGED') {
+				const changed = error.body as { quote?: CheckoutQuote; quoteHash?: string } | undefined;
+				if (!changed?.quote || !changed.quoteHash) throw new Error('Updated quote could not be read. Refresh your cart before trying again.');
+				if (snapshot.quote) scope.adoptConflict({ ...snapshot.quote, ...changed.quote, quoteHash: changed.quoteHash }, snapshot.token);
+				resetAttemptKey();
+				throw new QuoteChangedError(changed.quote, changed.quoteHash);
+			}
 			const conflict = error.body as CheckoutConflictBody | undefined;
 			if (isCartConflict(conflict)) {
 				if (conflict.code === 'stale' || conflict.code === 'revision_required') {

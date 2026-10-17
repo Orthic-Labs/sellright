@@ -62,9 +62,12 @@ export const order = pgTable(
     // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
     // Same (store, key) -> the same order, so a double-submit can't create two.
     idempotencyKey: text(),
-    // The promotion applied to this order (single-coupon v1). promotion_usage is
-    // the per-customer ledger that enforces per_customer_usage_limit.
+    // Compatibility attribution; couponCodes is the complete coupon membership.
+    // promotion_usage is the per-customer usage-limit ledger.
     promotionId: uuid().references(() => promotion.id),
+    couponCodes: text().array().notNull().default([]),
+    // Versioned pricing evidence is written by the shared pricing owner.
+    pricingSnapshot: jsonb(),
     shippingAddress: jsonb(),
     billingAddress: jsonb(),
     // Checkout-migration: high-entropy receipt token returned by /checkout and

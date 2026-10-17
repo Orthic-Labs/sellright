@@ -119,7 +119,8 @@ export interface OrderDetail {
   placedAt: string | null; createdAt: string;
   shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
   customer: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
-  lines: { id: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
+  hasPostedCredit?: boolean;
+  lines: { id: string; sku: string; name: string; quantity: number; refundQuantity?: number; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
   payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
   fulfillments: {
     id: string; state: string; trackingCode: string | null; carrier: string | null;
@@ -128,6 +129,7 @@ export interface OrderDetail {
   }[];
   refunds: {
     id: string; state: string; amount: number; itemsAmount: number | null; shippingAmount: number | null;
+    creditRestoration?: { state: 'posted' | 'not_applicable' | 'reconciliation_required'; amount: number; errorCode?: string } | null;
     reason: string | null; createdAt: string;
     lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
   }[];

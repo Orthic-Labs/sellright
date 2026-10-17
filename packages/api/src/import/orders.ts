@@ -22,6 +22,32 @@ const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
 import type { ImportContext } from './context.js';
 
+/** Source simple-array identity uses lowercase equality, without trimming. */
+export function importedCouponCodes(value: unknown, canonicalCodes: ReadonlyMap<string, string> = new Map()): {
+  codes: string[]; invalidCount: number; duplicateCount: number;
+} {
+  const members: unknown[] = value == null || value === '' ? []
+    : Array.isArray(value) ? value
+      : typeof value === 'string' ? value.split(',') : [value];
+  const codes: string[] = [];
+  const seen = new Set<string>();
+  let invalidCount = 0, duplicateCount = 0;
+  for (const member of members) {
+    if (typeof member !== 'string' || member.length === 0) {
+      invalidCount++;
+      continue;
+    }
+    const identity = member.toLowerCase();
+    if (seen.has(identity)) {
+      duplicateCount++;
+      continue;
+    }
+    seen.add(identity);
+    codes.push(canonicalCodes.get(identity) ?? member);
+  }
+  return { codes, invalidCount, duplicateCount };
+}
+
 /**
  * Transaction-level mode evidence: a gateway may record the mode a charge
  * actually ran under inside the payment row's own metadata — the only source
@@ -85,15 +111,24 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     // affiliate's promotion). Backfilled affiliate promotions are already
     // present — the business phase runs first.
     const promotionByCode = new Map<string, string>();
+    const canonicalCodes = new Map<string, string>();
+    const ambiguousCodes = new Set<string>();
     for (const promo of await tx.select({ id: s.promotion.id, code: s.promotion.code }).from(s.promotion)
       .where(eq(s.promotion.storeId, ctx.storeId))) {
-      if (promo.code && !promotionByCode.has(promo.code)) promotionByCode.set(promo.code, promo.id);
+      if (!promo.code) continue;
+      const identity = promo.code.toLowerCase();
+      if (ambiguousCodes.has(identity)) continue;
+      if (promotionByCode.has(identity)) {
+        promotionByCode.delete(identity);
+        canonicalCodes.delete(identity);
+        ambiguousCodes.add(identity);
+        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion', blocking: true,
+          detail: 'Case-insensitive coupon identity matches multiple target promotions; order attribution requires reconciliation', count: 1 });
+        continue;
+      }
+      promotionByCode.set(identity, promo.id);
+      canonicalCodes.set(identity, promo.code);
     }
-    const couponsOf = (value: unknown): string[] =>
-      // Vendure couponCodes is a simple-array (comma-joined text); accept a
-      // real array too in case a source extension changed the column type.
-      Array.isArray(value) ? value.map(String).filter(Boolean)
-        : typeof value === 'string' ? value.split(',').map(code => code.trim()).filter(Boolean) : [];
     // SR-08: order.isPreOrder is a DD custom field; RH does not declare it.
     const ispreSql = optionalColumn(ctx.sourceColumns, 'order', 'customFieldsIspreorder', 'o', 'ispre');
     // --- orders: source header is the reconciliation authority ---
@@ -141,13 +176,18 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
       const sourceSubTotalWithTax = n(o.subt);
       orderMap.set(o.id, { id, vendureOid: o.id, sourceSubTotalWithTax });
       const sub = n(o.sub), ship = n(o.ship), shipt = n(o.shipt);
-      const coupons = couponsOf(o.coupons);
+      const coupons = importedCouponCodes(o.coupons, canonicalCodes);
+      if (coupons.invalidCount) ctx.exclusions.push({ type: 'unmapped-source-field', table: 'order', blocking: true,
+        detail: 'Invalid source couponCodes members retained in private order metadata; valid coupon membership imported', count: coupons.invalidCount });
+      if (coupons.duplicateCount) ctx.exclusions.push({ type: 'merged-duplicate', table: 'order',
+        detail: 'Historical case-insensitive coupon duplicates retained in private order metadata; runtime membership deduplicated', count: coupons.duplicateCount });
       return {
         id, storeId: ctx.storeId, code: o.code,
         customerId: o.cid && customerIds.has(ctx.id('customer', o.cid)) ? ctx.id('customer', o.cid) : null,
-        // Single-coupon v1: attribute the order to the first source coupon that
-        // maps to an imported promotion. Every source code stays in metadata.
-        promotionId: coupons.map(code => promotionByCode.get(code)).find(Boolean) ?? null,
+        // Compatibility attribution follows the first mapped source coupon;
+        // membership order does not imply promotion execution order.
+        promotionId: coupons.codes.map(code => promotionByCode.get(code.toLowerCase())).find(Boolean) ?? null,
+        couponCodes: coupons.codes,
         createdAt: parseDate(o.created) ?? undefined, updatedAt: parseDate(o.updated) ?? undefined,
         metadata: { vendure: { id: o.id, state: o.state, sourceKey: ctx.sourceKey, customerId: o.cid, couponCodes: o.coupons }, contact: { email: o.email } },
         state: mapVendureOrderState(String(o.state)), currency: o.cur ?? 'USD',
@@ -182,9 +222,11 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
         const orderRef = orderMap.get(l.oid);
         if (!orderRef) return null;
         const quantity = n(l.qty);
+        // Zero is a source refund-eligibility fact; only absent/null uses current quantity.
+        const placedQuantity = l.placed_qty == null ? quantity : n(l.placed_qty);
         const money = vendureLineMoney({
           quantity,
-          orderPlacedQuantity: n(l.placed_qty) || quantity,
+          orderPlacedQuantity: placedQuantity,
           listPrice: n(l.price),
           listPriceIncludesTax: Boolean(l.includes_tax),
           adjustments: jsonArray(l.adjustments),
@@ -202,7 +244,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
           variantSku: l.sku ?? '(unknown)', variantName: l.pname ?? l.sku ?? '(unknown)',
           quantity, ...money,
           metadata: { vendure: { id: l.id, variantId: l.vid, quantity,
-            placedQuantity: n(l.placed_qty) || quantity, listPrice: n(l.price),
+            placedQuantity, listPrice: n(l.price),
             listPriceIncludesTax: Boolean(l.includes_tax), adjustments: jsonArray(l.adjustments), taxLines: jsonArray(l.tax_lines) } },
         };
       })

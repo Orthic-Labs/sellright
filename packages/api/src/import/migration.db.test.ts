@@ -11,7 +11,7 @@
  *   broken — dd minus a required customer column (preflight failure path).
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import { restoreMigration, planLegacySessionRollback } from './restore.js';
 import { migrationId } from './context.js';
 import { digest } from './artifacts.js';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
+import { refundLineCashAmount, refundUnitBases } from '../payments/refund-credit.js';
 
 function fixtureUrl(name: string): string {
   const value = process.env[name];
@@ -47,6 +48,16 @@ afterAll(async () => {
 type Variant = 'dd' | 'rh' | 'broken';
 
 const TABLE = (name: string, cols: string[]) => `CREATE TABLE ${name} (${cols.join(', ')})`;
+
+/** Current monetary-credit plugin shape; every fixture remains synthetic. */
+async function createCreditSource(client: PoolClient) {
+  await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"createdAt" timestamp NOT NULL DEFAULT now()', '"updatedAt" timestamp NOT NULL DEFAULT now()',
+    '"promotionId" int NOT NULL', '"channelId" int NOT NULL DEFAULT 1', '"emailNormalized" text NOT NULL', '"issuanceKey" text NOT NULL',
+    '"currencyCode" text NOT NULL', '"initialAmount" int NOT NULL', 'balance int NOT NULL', 'disabled boolean NOT NULL']));
+  await client.query(TABLE('account_credit_transaction', ['id int PRIMARY KEY', '"createdAt" timestamp NOT NULL DEFAULT now()', '"updatedAt" timestamp NOT NULL DEFAULT now()',
+    '"accountCreditId" int NOT NULL', '"orderId" int', '"orderCode" text', 'kind text NOT NULL', 'status text NOT NULL', 'amount int NOT NULL', 'delta int NOT NULL',
+    '"balanceAfter" int', '"relatedTransactionId" int', '"idempotencyKey" text NOT NULL', 'reason text', 'actor text', '"refundId" int', '"orderLineId" int', 'quantity int', 'allocation jsonb']));
+}
 
 /** Every table in REQUIRED_SOURCE_COLUMNS, minimal columns only. */
 function buildSource(variant: Variant): string[] {
@@ -848,6 +859,44 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       .rejects.toThrow('Resolve source pending/authorized payments before cutover');
   });
 
+  it.each([true, false])('preserves placed zero & null/absent fallback without changing line totals (source column present: %s)', async (hasPlacedQuantity) => {
+    const tag = 'q' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    const total = hasPlacedQuantity ? 5000 : 4800;
+    await sourcePool.query(`INSERT INTO "order" VALUES (4, 'ORD-4', 'PaymentSettled', 'USD', '2024-03-04 00:00:00', $1, $1, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`, [total]);
+    // Current quantity remains positive for zero, unknown & cancellation-era placed quantities.
+    await sourcePool.query(`INSERT INTO order_line VALUES
+      (4, 1, 4, 2, 0, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]'),
+      (5, 1, 4, 2, NULL, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]'),
+      (6, 1, 4, 2, 4, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]')`);
+    if (!hasPlacedQuantity) await sourcePool.query('ALTER TABLE order_line DROP COLUMN "orderPlacedQuantity"');
+    await sourcePool.query(`INSERT INTO payment VALUES (4, '2024-03-04 00:00:00', 4, 'nmi-payment', 'Settled', $1, 'nmi-txn-400', '{}', NULL)`, [total]);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const orderId = migrationId(storeId, 'vendure:test', 'order', 4);
+    const order = await targetOne(storeId, 'order', `AND id = '${orderId}'`);
+    const byId = new Map((await targetRows(storeId, 'order_line', `AND order_id = '${orderId}'`)).map(line => [line.id, line]));
+    const lines = [4, 5, 6].map(id => byId.get(migrationId(storeId, 'vendure:test', 'order-line', id))!);
+    expect(lines.map(line => line.metadata.vendure.placedQuantity)).toEqual(hasPlacedQuantity ? [0, 2, 4] : [2, 2, 2]);
+    expect(lines.map(line => line.metadata.vendure.quantity)).toEqual([2, 2, 2]);
+    // Projection still divides adjustments by max(current, placed), not refund eligibility.
+    expect(lines.map(line => line.line_total)).toEqual(hasPlacedQuantity ? [1600, 1600, 1800] : [1600, 1600, 1600]);
+    expect(order).toMatchObject({ subtotal: 6000, discount_total: 6000 - total, tax_total: 0, grand_total: total });
+    const refundLines = lines.map(line => ({ id: line.id, quantity: line.quantity, unitPrice: line.unit_price,
+      lineTotal: line.line_total, metadata: line.metadata }));
+    const units = refundUnitBases({ currency: 'USD', pricingSnapshot: null }, refundLines);
+    expect(refundLines.map(line => units.get(line.id))).toEqual(hasPlacedQuantity ? [0, 800, 900] : [800, 800, 800]);
+    expect(refundLines.map(line => refundLineCashAmount(line, 2, units.get(line.id)!, false)))
+      .toEqual(hasPlacedQuantity ? [0, 1600, 1800] : [1600, 1600, 1600]);
+  });
+
   it('records a synthetic fulfillment for a Delivered source order that has no fulfillment documents', async () => {
     const tag = 'f' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
@@ -1036,24 +1085,32 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(details).toContain('sentinel transactionId');
   });
 
-  it('maps store-credit balances to loyalty points, excludes legacy credit promotions, and imports combined discount+free-shipping promotions faithfully (R24)', async () => {
+  it('retains exact monetary credits/history without loyalty duplication & keeps combined coupons (R24)', async () => {
     await resetSource('rh', 'r' + randomUUID().slice(0, 8));
     const client = await sourcePool.connect();
     try {
-      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"promotionId" int', '"emailNormalized" varchar(320)',
-        '"currencyCode" varchar(3)', '"initialAmount" int', 'balance int', 'disabled boolean']));
-      await client.query(TABLE('account_credit_transaction', ['id int PRIMARY KEY', '"accountCreditId" int', 'kind varchar(16)',
-        'status varchar(16)', 'amount int']));
+      await createCreditSource(client);
       await client.query(`INSERT INTO promotion VALUES
         (20, 'CREDIT-1', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (21, 'BUNDLE', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"15"}]},{"code":"free_shipping","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
-        (22, 'PLAIN5', '[]', '[{"code":"order_fixed_discount","args":[{"name":"amount","value":"500"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL)`);
-      await client.query(`INSERT INTO account_credit VALUES
-        (1, 20, 'buyer@example.com', 'USD', 5000, 2550, false),
-        (2, 20, 'stranger@example.com', 'USD', 1000, 1000, false),
-        (3, 20, 'buyer@example.com', 'USD', 900, 900, true),
-        (4, 20, 'buyer@example.com', 'USD', 700, 0, false)`);
-      await client.query(`INSERT INTO account_credit_transaction VALUES (1, 1, 'RESERVE', 'PENDING', 100), (2, 1, 'ISSUE', 'SETTLED', 5000)`);
+        (22, 'PLAIN5', '[]', '[{"code":"order_fixed_discount","args":[{"name":"amount","value":"500"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (23, 'CREDIT-2', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (24, 'CREDIT-3', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (25, 'CREDIT-4', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, '2024-01-01')`);
+      await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled) VALUES
+        (1,20,'buyer@example.com','issue-1','USD',5000,2550,false),
+        (2,23,'stranger@example.com','issue-2','USD',1000,1000,false),
+        (3,24,'buyer@example.com','issue-3','USD',900,900,true),
+        (4,25,'buyer@example.com','issue-4','USD',700,0,false)`);
+      await client.query(`INSERT INTO order_channels_channel VALUES (1,1)`);
+      await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey","orderId","relatedTransactionId") VALUES
+        (1,1,'ISSUE','POSTED',5000,5000,5000,'issue:1',NULL,NULL),
+        (2,1,'ADJUST','POSTED',2450,-2450,2550,'adjust:1',NULL,1),
+        (3,1,'RESERVE','PENDING',100,0,NULL,'hold:1',1,2),
+        (4,2,'ISSUE','POSTED',1000,1000,1000,'issue:2',NULL,NULL),
+        (5,3,'ISSUE','POSTED',900,900,900,'issue:3',NULL,NULL),
+        (6,4,'ISSUE','POSTED',700,700,700,'issue:4',NULL,NULL),
+        (7,4,'ADJUST','POSTED',700,-700,0,'adjust:4',NULL,6)`);
     } finally { client.release(); }
     const storeId = randomUUID();
     const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
@@ -1063,87 +1120,73 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
     expect(applied.applied).toBe(true);
-
-    // The legacy account-credit promotion is excluded (see loyalty ledger
-    // import below); the plain discount AND the combined discount+free-ship
-    // promotion both import (R24 — combined promotions are no longer dropped).
     const promos = await targetRows(storeId, 'promotion', 'ORDER BY code');
-    expect(promos.map(p => p.code)).toEqual(['BUNDLE', 'PLAIN5']);
-    const bundle = promos.find((p) => p.code === 'BUNDLE');
-    expect(bundle).toMatchObject({ type: 'percentage', value: 15, free_shipping: true });
-    const plain = promos.find((p) => p.code === 'PLAIN5');
-    expect(plain).toMatchObject({ type: 'fixed', value: 500, free_shipping: false });
-
-    // R23: credit id 1 has a 100-cent PENDING reservation (account_credit_
-    // transaction row 1) — balance (2550) is NOT already net of it (only
-    // SETTLE decrements balance), so the importer must reconcile: net
-    // available = 2550 - 100 = 2450 cents -> 2450 points at 100/$1. Importing
-    // the gross 2550 would let the customer spend the reserved 100 cents
-    // again while the pre-cutover order behind the hold can still settle.
-    const ledger = await targetRows(storeId, 'loyalty_ledger');
-    expect(ledger).toHaveLength(1);
-    const customer = await targetOne(storeId, 'customer');
-    expect(ledger[0]).toMatchObject({ kind: 'import', points: 2450, customer_id: customer.id, order_id: null });
-    expect(ledger[0]!.metadata).toMatchObject({ sourceBalanceCents: 2450 });
-    expect(ledger[0]!.source_ref).toBe('import:account_credit:vendure:test:1');
-    const store = await targetOne(storeId, 'store');
-    expect(store.config.loyalty.pointsPerDollarOff).toBe(100);
-
+    expect(promos.map(p => p.code)).toEqual(['BUNDLE', 'CREDIT-1', 'CREDIT-2', 'CREDIT-3', 'CREDIT-4', 'PLAIN5']);
+    expect(promos.find(p => p.code === 'BUNDLE')).toMatchObject({ type: 'percentage', value: 15, free_shipping: true });
+    expect(promos.find(p => p.code === 'PLAIN5')).toMatchObject({ type: 'fixed', value: 500, free_shipping: false });
+    expect(promos.find(p => p.code === 'CREDIT-4')).toMatchObject({ type: 'account_credit', value: 0, enabled: false });
+    const accounts = await targetRows(storeId, 'account_credit', 'ORDER BY source_id');
+    expect(accounts.map(row => row.balance)).toEqual([2550,1000,900,0]);
+    expect(accounts[1]).toMatchObject({ email_normalized: 'stranger@example.com', disabled: false });
+    expect(accounts[2]!.disabled).toBe(true);
+    expect(accounts.every(row => typeof row.source_record === 'string' && typeof row.source_promotion_record === 'string')).toBe(true);
+    const transactions = await targetRows(storeId, 'account_credit_transaction', 'ORDER BY source_id');
+    expect(transactions).toHaveLength(7);
+    expect(transactions[2]).toMatchObject({ status: 'PENDING', amount: 100, delta: 0, order_id: migrationId(storeId, 'vendure:test', 'order', 1),
+      related_transaction_id: migrationId(storeId, 'vendure:test', 'account-credit-transaction', 2) });
+    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
+    expect((await targetOne(storeId, 'store')).config.loyalty.pointsPerDollarOff).toBe(100);
+    expect(dry.exclusions.some(row => /balances import as loyalty|matches no imported customer|disabled store credits|pending store-credit reservations reconciled/.test(row.detail))).toBe(false);
     const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
-    const ex = manifest.exclusions as Array<{ type: string; table: string; detail: string; count?: number }>;
-    const find = (re: RegExp) => ex.find((e) => re.test(e.detail));
-    expect(find(/account_credit_discount/)).toMatchObject({ table: 'promotion', count: 1 });
-    expect(find(/multi-action/)).toBeUndefined(); // R24: no longer an exclusion — imported with both benefits
-    expect(find(/matches no imported customer/)).toMatchObject({ table: 'account_credit', count: 1 });
-    expect(find(/disabled store credits/)).toMatchObject({ table: 'account_credit', count: 1 });
-    // R23: reports the reconciled hold, not "not replayed" (the old wording
-    // implied balances were already net, which was the bug).
-    expect(find(/pending store-credit reservations reconciled/)).toMatchObject({ table: 'account_credit', count: 1 });
-
-    // Restore removes the imported ledger rows with the rest of the tenant.
-    const restored = await restoreMigration({ targetUrl: TARGET_URL, manifest: manifest, apply: true });
-    expect(restored.restored).toBe(true);
+    expect((await restoreMigration({ targetUrl: TARGET_URL, manifest, apply: true })).restored).toBe(true);
+    expect(await targetRows(storeId, 'account_credit')).toEqual([]);
+    expect(await targetRows(storeId, 'account_credit_transaction')).toEqual([]);
     expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
   });
 
-  it('R23: floors a credit at zero when pending holds exceed its balance, instead of importing negative/wrapped cents', async () => {
+  it('preserves authoritative balance when pending holds exceed it & blocks parity instead of flooring money', async () => {
     await resetSource('rh', 'r' + randomUUID().slice(0, 8));
     const client = await sourcePool.connect();
     try {
-      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"promotionId" int', '"emailNormalized" varchar(320)',
-        '"currencyCode" varchar(3)', '"initialAmount" int', 'balance int', 'disabled boolean']));
-      await client.query(TABLE('account_credit_transaction', ['id int PRIMARY KEY', '"accountCreditId" int', 'kind varchar(16)',
-        'status varchar(16)', 'amount int']));
-      // Data inconsistency at cutover: a 500-cent hold against only a
-      // 300-cent balance (e.g. a hold placed before a partial settlement
-      // elsewhere reduced the balance). Must floor at 0, never go negative.
-      await client.query(`INSERT INTO account_credit VALUES (1, NULL, 'over@example.com', 'USD', 300, 300, false)`);
-      await client.query(`INSERT INTO account_credit_transaction VALUES (1, 1, 'RESERVE', 'PENDING', 500)`);
-    } finally { client.release(); }
-    const storeId = randomUUID();
-    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
-    const config = { ...f.config, loyalty: { enabled: true, earnRatePerDollar: 1, pointsPerDollarOff: 100, minRedeemPoints: 0,
-      maxRedeemPercentOfSubtotal: null, expiryDays: null } };
-    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config, manifestPath: f.manifestPath });
-    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config,
-      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
-    expect(applied.applied).toBe(true);
-    // Net balance floors at 0 (never negative) -> zero cents -> no ledger row.
-    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
-  });
-
-  it('lists — does not import — store-credit balances when no points rate is configured', async () => {
-    await resetSource('rh', 'r' + randomUUID().slice(0, 8));
-    const client = await sourcePool.connect();
-    try {
-      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"emailNormalized" varchar(320)', '"currencyCode" varchar(3)', 'balance int', 'disabled boolean']));
-      await client.query(`INSERT INTO account_credit VALUES (1, 'buyer@example.com', 'USD', 1200, false)`);
+      await createCreditSource(client);
+      await client.query(`INSERT INTO promotion VALUES (20,'HOLD-CREDIT','[]','[{"code":"account_credit_discount","args":[]}]',NULL,NULL,NULL,NULL,0,true,NULL)`);
+      await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled)
+        VALUES (1,20,'over@example.com','over-issuance','USD',300,300,false)`);
+      await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey") VALUES
+        (1,1,'ISSUE','POSTED',300,300,300,'issue:over'),(2,1,'RESERVE','PENDING',500,0,NULL,'hold:over')`);
     } finally { client.release(); }
     const storeId = randomUUID();
     const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
     const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
-    const detail = dry.exclusions.find((e) => e.table === 'account_credit' && /NOT imported/.test(e.detail));
-    expect(detail).toMatchObject({ count: 1 });
-    expect(detail!.detail).toContain('1200 cents');
+    expect(dry.parityBlockers.some(row => /pending_holds_exceed_balance/.test(row.detail))).toBe(true);
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect((await targetOne(storeId, 'account_credit')).balance).toBe(300);
+    expect((await targetRows(storeId, 'account_credit_transaction')).some(row => row.status === 'PENDING' && row.amount === 500)).toBe(true);
+    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
+  });
+
+  it('imports monetary balances without configuring loyalty & resolves full-source redemption allocations', async () => {
+    await resetSource('rh', 'r' + randomUUID().slice(0, 8));
+    const client = await sourcePool.connect();
+    try {
+      await createCreditSource(client);
+      await client.query(`INSERT INTO promotion VALUES (20,'MONETARY-CREDIT','[]','[{"code":"account_credit_discount","args":[]}]',NULL,NULL,NULL,NULL,0,true,NULL)`);
+      await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled)
+        VALUES (1,20,'buyer@example.com','monetary-issuance','USD',1300,1200,false)`);
+      await client.query(`INSERT INTO order_channels_channel VALUES (1,1)`);
+      await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey","orderId",allocation,"relatedTransactionId") VALUES
+        (1,1,'ISSUE','POSTED',1300,1300,1300,'issue:monetary',NULL,NULL,NULL),
+        (2,1,'REDEEM','POSTED',100,-100,1200,'redeem:monetary',1,'{"1":[100]}'::jsonb,1)`);
+    } finally { client.release(); }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect((await targetOne(storeId, 'account_credit')).balance).toBe(1200);
+    const redemption = (await targetRows(storeId, 'account_credit_transaction')).find(row => row.kind === 'REDEEM');
+    expect(redemption).toMatchObject({ amount: 100, delta: -100, allocation: '{"1": [100]}', source_order_id: '1',
+      operational_allocation: { [migrationId(storeId, 'vendure:test', 'order-line', 1)]: [100] } });
+    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
+    expect(dry.exclusions.some(row => /NOT imported.*points/.test(row.detail))).toBe(false);
   });
 });

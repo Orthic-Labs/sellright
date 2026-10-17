@@ -1,4 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { refundQuantity } from '../payments/refunds.js';
+import { refundUnitBases, refundCreditProjection } from '../payments/refund-credit.js';
 import { hasUnresolvedPayment } from '../payments/hold.js';
 import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
@@ -200,6 +202,10 @@ admin.openapi(
       if (!o) return null;
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       const payments = await tx.select().from(s.payment).where(eq(s.payment.orderId, o.id)).orderBy(desc(s.payment.createdAt));
+      const postedCredit = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
+        eq(s.accountCreditTransaction.orderId, o.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED')));
+      let refundUnits = new Map<string, number | null>();
+      try { refundUnits = refundUnitBases(o, lines); } catch { /* Read remains available; refund admission refuses unproven money. */ }
       const fulfillments = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
       const fulfillmentLines = fulfillments.length
         ? await tx.select().from(s.fulfillmentLine).where(inArray(s.fulfillmentLine.fulfillmentId, fulfillments.map((f) => f.id)))
@@ -236,7 +242,9 @@ admin.openapi(
         // `id` is the order_line id the refund/return endpoints key their
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.
-        lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
+        hasPostedCredit: postedCredit.length === 1,
+        lines: lines.map((l) => ({ refundQuantity: refundQuantity(l),
+          refundUnitPrice: refundUnits.has(l.id) ? (refundUnits.get(l.id) ?? (postedCredit.length ? null : l.quantity ? l.lineTotal / l.quantity : l.unitPrice)) : null, id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
         // `state` here is the individual PAYMENT record's wire state (Settled
         // -> captured — BREAKING, pre-1.0), distinct from the order-level
         // `paymentStatus` above. See orders/status.ts.
@@ -250,6 +258,7 @@ admin.openapi(
         // exactly what was refunded/restocked, not just a lump order-level sum.
         refunds: refunds.map((r) => ({
           id: r.id, state: r.state, amount: r.amount, itemsAmount: r.itemsAmount, shippingAmount: r.shippingAmount,
+          creditRestoration: refundCreditProjection(r.metadata),
           reason: r.reason, createdAt: r.createdAt.toISOString(),
           lines: refundLines.filter((rl) => rl.refundId === r.id).map((rl) => ({ orderLineId: rl.orderLineId, quantity: rl.quantity, amount: rl.amount, restock: rl.restock })),
         })),

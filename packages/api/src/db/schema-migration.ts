@@ -1,8 +1,27 @@
 /** Retained source records, session grants & one-shot cart receipts. No raw source token is persisted. */
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, timestamp, boolean, jsonb, integer, unique, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, boolean, jsonb, integer, unique, uniqueIndex, check, index } from 'drizzle-orm/pg-core';
 import { store, customer, session, ts } from './schema-core.js';
 import { cart } from './schema-content.js';
+import { order, payment, refund } from './schema-orders.js';
+
+/** Private historical deltas; never native order edits or executable operations. */
+export const importedOrderModification = pgTable('imported_order_modification', {
+  id: uuid().primaryKey(), storeId: uuid().notNull().references(() => store.id),
+  sourceKey: text().notNull(), sourceId: text().notNull(), sourceDigest: text().notNull(),
+  sourceRecord: text().notNull(),
+  sourceReferences: text().array().notNull().default(sql`'{}'::text[]`),
+  sourceOrderId: text(), sourceRefundId: text(), sourcePaymentId: text(),
+  orderId: uuid().references(() => order.id, { onDelete: 'set null' }),
+  refundId: uuid().references(() => refund.id, { onDelete: 'set null' }),
+  paymentId: uuid().references(() => payment.id, { onDelete: 'set null' }),
+  scopeDisposition: text().$type<'selected_channel' | 'other_channel' | 'unresolved_parent'>().notNull(),
+  sourceCreatedAt: text(), sourceUpdatedAt: text(), priceChange: integer().notNull(), note: text().notNull(),
+  shippingAddressChange: text(), billingAddressChange: text(),
+}, t => [unique('imported_modification_source_identity').on(t.storeId, t.sourceKey, t.sourceId),
+  index('imported_modification_order').on(t.storeId, t.orderId),
+  check('imported_modification_scope', sql`${t.scopeDisposition} IN ('selected_channel','other_channel','unresolved_parent')`),
+  check('imported_modification_projection', sql`${t.scopeDisposition} = 'selected_channel' OR (${t.orderId} IS NULL AND ${t.refundId} IS NULL AND ${t.paymentId} IS NULL)`)]);
 
 /** Incomplete source address-book entries. Never eligible for checkout. */
 export const customerAddressDraft = pgTable('customer_address_draft', {

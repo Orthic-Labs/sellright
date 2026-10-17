@@ -47,6 +47,13 @@ function mockTransfer(behavior: (body: Record<string, unknown>) => Response | Pr
 }
 
 describe('legacy browser snapshot', () => {
+  it('extends only newer snapshots with full coupon intent while retaining old single-code transport', () => {
+    const older = parseLegacyCartSnapshot(raw);
+    expect(older).not.toHaveProperty('couponCodes');
+    const newer = parseLegacyCartSnapshot(JSON.stringify({ ...JSON.parse(raw), couponCodes: ['SAVE', 'credit', 'save', ' SAVE'] }));
+    expect(newer.couponCode).toBe('SAVE');
+    expect(newer.couponCodes).toEqual(['SAVE', 'credit', ' SAVE']);
+  });
   it('ports only numeric variant IDs, quantities, coupon code & country intent', () => {
     expect(parseLegacyCartSnapshot(raw)).toEqual({ items: [{ variantId: '17', quantity: 2 }], couponCode: 'SAVE', countryCode: 'CA', countryExplicit: true });
     expect(() => parseLegacyCartSnapshot(JSON.stringify({ items: [{ productVariantId: 'SKU17', quantity: 1 }] }))).toThrow();

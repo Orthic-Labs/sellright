@@ -102,6 +102,8 @@ export interface CartLockScope {
 export interface LegacyCartSnapshot {
   items: Array<{ variantId: string; quantity: number }>;
   couponCode: string | null;
+  /** Present only for newer saved intent; absence preserves old claim bytes. */
+  couponCodes?: string[];
   countryCode: string | null;
   countryExplicit: boolean;
 }
@@ -117,18 +119,41 @@ export function parseLegacyCartSnapshot(raw: string): LegacyCartSnapshot {
     }
     return { variantId, quantity };
   });
+  if ('couponCodes' in value && (!Array.isArray(value.couponCodes) || !value.couponCodes.every((code: unknown) => typeof code === 'string' && code.length > 0 && code.length <= 200))) {
+    throw new CartError('legacy_invalid', 'Saved coupon intent needs reconciliation; original cart is preserved');
+  }
   return { items,
     couponCode: typeof value.appliedCoupon?.code === 'string' && value.appliedCoupon.code.length <= 200 ? value.appliedCoupon.code : null,
+    ...(Array.isArray(value.couponCodes) && value.couponCodes.every((code: unknown) => typeof code === 'string' && code.length > 0 && code.length <= 200)
+      ? { couponCodes: couponMembership(value.couponCodes) } : {}),
     countryCode: typeof value.countryCode === 'string' && /^[A-Z]{2}$/.test(value.countryCode) ? value.countryCode : null,
     countryExplicit: value.countryExplicitlySet === true,
   };
 }
 
+/** Generic coupon identity is case-insensitive; whitespace belongs to code identity. */
+export const couponMembership = (codes: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  return codes.filter(code => { const key = code.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+};
+
 const isStaleConflict = (c: CartConflict | null): c is CartConflict => !!c && (c.code === 'stale' || c.code === 'revision_required');
 
 export class CartService {
   private static cart: Cart = EMPTY_CART;
-  private static couponCode: string | null = null;
+  private static couponCodes: string[] | null = null;
+  private static pendingIntentMigration = false;
+  private static quoteContext: { shipCountry?: string; shippingMethodCode?: string; redeemPoints?: number; pricingIntent?: 'preview' | 'checkout' } = {};
+
+  /** Context changes invalidate in-flight quotes; every amount still comes from API. */
+  static setQuoteContext(context: { shipCountry?: string; shippingMethodCode?: string; redeemPoints?: number; pricingIntent?: 'preview' | 'checkout' }): void {
+    if (JSON.stringify(context) === JSON.stringify(this.quoteContext)) return;
+    this.quoteContext = { ...context };
+    this.snapshotSeq++;
+  }
+  private static quoteCountry(): string {
+    return this.quoteContext.shipCountry ?? CountryPreferenceService.getCountry();
+  }
   private static enrichment = new Map<string, CartLineEnrichment>();
   private static listeners = new Set<() => void>();
   /** True while this tab owns `sr-cart` (set by `exclusive`). Misuse tripwire for the unlocked internals. */
@@ -257,7 +282,8 @@ export class CartService {
 
   private static resetMirror(): void {
     this.snapshotSeq++; // a read still in flight must not resurrect the dropped cart
-    this.couponCode = null;
+    this.couponCodes = null;
+    this.pendingIntentMigration = false;
     this.enrichment.clear();
     this.cart = EMPTY_CART;
     this.notify();
@@ -294,6 +320,10 @@ export class CartService {
     const dropped = [...prior].filter((sku) => sku !== expectedRemoval && !next.has(sku));
     this.snapshotSeq++; // supersede any read issued before this snapshot landed
     this.cart = this.toCart(server);
+    if (Array.isArray(server.couponCodes)) {
+      this.couponCodes = couponMembership(server.couponCodes);
+      this.persistIntent();
+    }
     // Keep enrichment only for lines still present — stale entries would leak
     // display metadata onto an unrelated future line that reuses the SKU.
     for (const sku of [...this.enrichment.keys()]) {
@@ -331,10 +361,20 @@ export class CartService {
 
   /** Legacy work needs a write lock; ordinary native boot retains its read-only browser fallback. */
   static bootstrap(): Promise<CartMutationResult> {
+    this.syncToCookie();
     this.restoreIntent();
-    if (!this.hasLegacyIntent()) return this.refresh();
+    if (!this.hasLegacyIntent() && !this.pendingIntentMigration) return this.refresh();
     return this.exclusive(async () => {
-      await this.migrateLegacyInLock(true);
+      if (this.hasLegacyIntent()) await this.migrateLegacyInLock(true);
+      if (this.pendingIntentMigration && this.readTokenCookie()) {
+        const legacyCodes = [...(this.couponCodes ?? [])];
+        await this.withRevisionRetryInLock((token, revision) => sellright().PATCH('/v1/shop/cart/{token}/lines', {
+          params: { path: { token } }, body: { lines: [], couponCodes: couponMembership([...(this.cart.couponCodes ?? []), ...legacyCodes]), expectedRevision: revision,
+            ...this.quoteContext, shipCountry: this.quoteCountry() },
+        }));
+        this.pendingIntentMigration = false;
+        this.persistIntent();
+      }
       return this.refreshInLock();
     });
   }
@@ -351,14 +391,27 @@ export class CartService {
 
   /** Persist coupon intent only; every read still revalidates it with current server facts. */
   private static persistIntent(): void {
-    try { localStorage.setItem(CART_INTENT_KEY, JSON.stringify({ token: this.readTokenCookie(), couponCode: this.couponCode })); } catch { /* Current tab keeps intent. */ }
+    // Keep the old replay intent until its revision-fenced membership lift commits.
+    if (this.pendingIntentMigration) return;
+    try { localStorage.setItem(CART_INTENT_KEY, JSON.stringify({ version: 2, token: this.readTokenCookie(), couponCodes: this.couponCodes })); } catch { /* Current tab keeps intent. */ }
   }
 
   private static restoreIntent(): void {
     try {
       const value = JSON.parse(localStorage.getItem(CART_INTENT_KEY) ?? 'null');
-      if (value?.token === this.readTokenCookie() && (typeof value.couponCode === 'string' || value.couponCode === null)) this.couponCode = value.couponCode;
+      if (value?.token !== this.readTokenCookie()) return;
+      if (value.version === 2 && Array.isArray(value.couponCodes) && value.couponCodes.every((code: unknown) => typeof code === 'string' && code.length > 0)) {
+        this.couponCodes = couponMembership(value.couponCodes);
+      } else if (typeof value.couponCode === 'string' || value.couponCode === null) {
+        this.couponCodes = value.couponCode ? [value.couponCode] : [];
+        this.pendingIntentMigration = true;
+      }
     } catch { /* Untrusted transport never overrides server pricing. */ }
+  }
+
+  private static couponQuery(): { shipCountry?: string; shippingMethodCode?: string; redeemPoints?: number; pricingIntent?: 'preview' | 'checkout' } {
+    // Read durable membership before merging any pending legacy intent.
+    return { ...this.quoteContext };
   }
 
   private static async bootstrapAuth(): Promise<void> {
@@ -385,11 +438,11 @@ export class CartService {
       localStorage.setItem(LEGACY_CLAIM_KEY, JSON.stringify({ fingerprint, claimId }));
     }
     const receipt = await srLegacyCartMigration({ claimId, items: snapshot?.items ?? null,
-      couponCode: snapshot?.couponCode, countryCode: snapshot?.countryCode });
+      couponCode: snapshot?.couponCode, ...(snapshot?.couponCodes ? { couponCodes: snapshot.couponCodes } : {}), countryCode: snapshot?.countryCode });
     if (receipt.receipt !== claimId || (raw !== null && !receipt.cart)) throw new CartError('legacy_receipt', 'Saved cart transfer has no confirmed receipt');
     if (receipt.cart) {
       this.writeTokenCookie(receipt.cart.token);
-      this.couponCode = receipt.couponCode;
+      this.couponCodes = receipt.couponCodes ?? (receipt.couponCode ? [receipt.couponCode] : []);
       this.persistIntent();
       this.install(receipt.cart, receipt.cart.token);
     }
@@ -425,7 +478,7 @@ export class CartService {
     if (this.cart.token === token && this.cart.revision) return this.cart.revision;
     const seq = this.claimSeq();
     const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-      params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
+      params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
     });
     if (!data) throw emptyCartResponse();
     // The revision is still the right base for the mutation that asked for it;
@@ -483,7 +536,8 @@ export class CartService {
     const attempt = async (rev: number): Promise<CartMutationResult> => {
       const { data } = await mutate(token, rev);
       if (!data) throw new CartError(undefined, "Couldn't update cart");
-      const dropped = this.install(data, token, expectedRemoval) ?? [];
+      const quoted = await this.inQuoteContext(data, token);
+      const dropped = this.install(quoted, token, expectedRemoval) ?? [];
       return { cart: this.cart, dropped };
     };
     try {
@@ -492,7 +546,7 @@ export class CartService {
       const conflict = this.asConflict(e);
       if (!isStaleConflict(conflict)) throw this.classify(e, token);
       // stale / revision_required — adopt the authoritative snapshot, retry once.
-      this.install(conflict.cart, token, expectedRemoval);
+      this.install(await this.inQuoteContext(conflict.cart, token), token, expectedRemoval);
       try {
         return await attempt(conflict.revision);
       } catch (e2) {
@@ -506,6 +560,15 @@ export class CartService {
 
   // ── mutations ─────────────────────────────────────────────────────────
 
+  private static async inQuoteContext(server: ServerCart, token: string): Promise<ServerCart> {
+    if (this.quoteContext.pricingIntent !== 'checkout' || server.pricingIntent === 'checkout') return server;
+    const { data } = await sellright().GET('/v1/shop/cart/{token}', {
+      params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
+    });
+    if (!data) throw emptyCartResponse();
+    return data;
+  }
+
   /** Add (or increment) a line. Blind append — commutative, no revision. `applied`/`line` describe this add's own response
    *  (brand views PR2 §5); existing callers ignore them. */
   static addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddLineResult> {
@@ -515,11 +578,12 @@ export class CartService {
       try {
         const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
           params: { path: { token } },
-          body: { lines: [{ sku, quantity }], ...(this.couponCode ? { couponCode: this.couponCode } : {}) },
+          body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
         });
         if (!data) throw new CartError(undefined, "Couldn't add item to cart");
-        const installed = this.install(data, token);
-        const line = data.lines.find((l) => l.sku === sku) ?? null;
+        const quoted = await this.inQuoteContext(data, token);
+        const installed = this.install(quoted, token);
+        const line = quoted.lines.find((l) => l.sku === sku) ?? null;
         return { cart: this.cart, dropped: installed ?? [], applied: installed !== null, line };
       } catch (e) {
         // No automatic retry of the append after an uncertain result.
@@ -540,7 +604,7 @@ export class CartService {
             body: {
               lines: [{ sku, quantity: qty }],
               expectedRevision: revision,
-              ...(this.couponCode ? { couponCode: this.couponCode } : {}),
+              ...this.quoteContext, shipCountry: this.quoteCountry(),
             },
           }),
         qty <= 0 ? sku : undefined,
@@ -567,7 +631,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
+        params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
       });
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
@@ -586,7 +650,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
+        params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
@@ -616,7 +680,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
+        params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
       });
       if (!data) throw emptyCartResponse();
       if (this.isCurrent(seq)) this.install(data, token);
@@ -630,44 +694,38 @@ export class CartService {
    *  client-side guess. */
   static applyCoupon(code: string): Promise<{ valid: boolean; reason?: string }> {
     return this.exclusive(async () => {
-      const token = await this.ensureCart();
-      const seq = this.claimSeq();
-      let data: ServerCart | undefined;
-      try {
-        ({ data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token }, query: { couponCode: code } } }));
-      } catch (e) {
-        throw this.classify(e, token);
-      }
-      if (!data) throw emptyCartResponse();
-      // A newer request started while this validated, or the token no longer matches: adopting (or remembering the
-      // code) now would overwrite what the shopper did last.
-      if (!this.isCurrent(seq) || this.install(data, token) === null) return { valid: false, reason: COUPON_SUPERSEDED };
-      if (data.coupon?.applied) {
-        this.couponCode = data.coupon.code;
+      const requestToken = await this.ensureCart();
+      await this.ensureRevision(requestToken);
+      if (this.readTokenCookie() !== requestToken) return { valid: false, reason: COUPON_SUPERSEDED };
+      const codes = couponMembership([...(this.couponCodes ?? this.cart.couponCodes ?? []), code]);
+      const result = await this.withRevisionRetryInLock((token, revision) => sellright().PATCH('/v1/shop/cart/{token}/lines', {
+        params: { path: { token } }, body: { lines: [], couponCodes: couponMembership([...(this.couponCodes ?? this.cart.couponCodes ?? []), code]), expectedRevision: revision,
+          ...this.quoteContext, shipCountry: this.quoteCountry() },
+      }));
+      if (this.readTokenCookie() !== requestToken || result.cart.token !== requestToken) return { valid: false, reason: COUPON_SUPERSEDED };
+      const data = result.cart;
+      const coupon = data.coupons?.find(c => c.code.toLowerCase() === code.toLowerCase()) ?? data.coupon;
+      if (coupon?.applied) {
+        this.couponCodes = data.couponCodes ?? codes;
         this.persistIntent();
         return { valid: true };
       }
-      return { valid: false, reason: data.coupon?.reason ?? 'Invalid or expired code' };
+      return { valid: false, reason: coupon?.reason ?? 'Invalid or expired code' };
     });
   }
 
-  /** Remove the applied coupon and re-price without it. */
-  static removeCoupon(): Promise<CartMutationResult> {
+  /** Remove one coupon without changing other membership; no code clears legacy intent. */
+  static removeCoupon(code?: string): Promise<CartMutationResult> {
     return this.exclusive(async () => {
-      this.couponCode = null;
-      this.persistIntent();
       const token = this.readTokenCookie();
       if (!token) return { cart: this.cart, dropped: [] };
-      const seq = this.claimSeq();
-      try {
-        const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token } } });
-        if (!data) throw emptyCartResponse();
-        if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
-        const dropped = this.install(data, token) ?? [];
-        return { cart: this.cart, dropped };
-      } catch (e) {
-        throw this.classify(e, token);
-      }
+      await this.ensureRevision(token);
+      if (this.readTokenCookie() !== token) throw new CartError('conflict', 'Cart changed — review the updated cart and try again');
+      return this.withRevisionRetryInLock((token, revision) => sellright().PATCH('/v1/shop/cart/{token}/lines', {
+        params: { path: { token } }, body: { lines: [], couponCodes: code === undefined ? []
+          : (this.couponCodes ?? this.cart.couponCodes ?? []).filter(member => member.toLowerCase() !== code.toLowerCase()), expectedRevision: revision,
+          ...this.quoteContext, shipCountry: this.quoteCountry() },
+      }));
     });
   }
 
@@ -705,7 +763,7 @@ export class CartService {
       const seq = this.claimSeq();
       try {
         const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-          params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
+          params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
         });
         if (!data) return null;
         // The revision/status are facts about THIS response and stay valid as

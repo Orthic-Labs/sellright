@@ -7,7 +7,7 @@ import { customerOwnsOrder } from '../auth/order-access.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts } from './order-facts.js';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts } from './order-facts.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { claimReconcileSlot, reconcileStripeOrder } from '../payments/stripe-reconcile.js';
 import { log } from '../lib/logger.js';
@@ -59,7 +59,7 @@ orders.openapi(
               customerEmail: z.string().nullable(),
               /** Where order mail goes: the checkout contact email (guests), else the account email. Same receipt/owner scope as the rest of this read. */
               contactEmail: z.string().nullable(),
-              promotionCode: z.string().nullable(),
+              promotionCode: z.string().nullable(), couponCodes: z.array(z.string()),
               // R18: real payment facts — distinguish pending/paid/failed/
               // cancelled from the actual gateway record, not an invented
               // method or a "confirmed after N polls" heuristic.
@@ -146,6 +146,7 @@ orders.openapi(
       const payments = await loadOrderPayments(tx, o.id);
       const fulfillments = await loadOrderFulfillments(tx, o.id);
       const promotionCode = await loadOrderPromotionCode(tx, o.promotionId);
+      const couponCodes = await loadOrderCouponCodes(tx, o);
       const { status, paymentStatus, fulfillmentStatus } = await loadOrderStatusFacts(tx, o);
       const balanceState = o.state === 'Paid' || o.state === 'PartiallyRefunded';
       const due = balanceState ? Math.max(0, await amountDueForOrder(tx, st.id, o.id, o.grandTotal)) : 0;
@@ -160,7 +161,7 @@ orders.openapi(
         code: o.code, state: o.state, status, paymentStatus, fulfillmentStatus, currency: o.currency,
         shippingMethodName: o.shippingMethodName, subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, customerEmail, contactEmail, promotionCode,
+        shippingAddress: o.shippingAddress ?? null, customerEmail, contactEmail, promotionCode, couponCodes,
         payments, fulfillments, lines, amountDue: due, balanceChange,
         loyalty: (() => { const l = orderLoyaltySnapshot(o.metadata); return l ? { earnPoints: l.earnPoints, redeemPoints: l.redeemPoints, pointsDiscount: l.pointsDiscount } : null; })(),
       };
