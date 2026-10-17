@@ -7,7 +7,10 @@ import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
 import { hasContentViewFor } from '~/platform/content-view';
+import { useContentReviewSummary } from '~/platform/content-review-summary';
 import { PRODUCT_PREFIX } from '~/platform/product-path';
+
+export { useContentReviewSummary } from '~/platform/content-review-summary';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
 	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
@@ -63,11 +66,12 @@ export const head: DocumentHead = ({ resolveValue, url }) => {
 
 export default component$(() => {
         useLegacyRedirects();
+        const reviewSummary = useContentReviewSummary();
         const location = useLocation();
         const currentPath = location.url.pathname;
 
 	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
-	if (hasContentViewFor(currentPath) && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
+	if (hasContentViewFor(currentPath) && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount reviewSummary={reviewSummary.value} />;
 
 	return notFoundMarkup(currentPath);
 });

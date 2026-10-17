@@ -61,7 +61,7 @@ const VIEW_CHOICES: { file: string; choice: RegExp }[] = [
 	{ file: 'routes/shop/index.tsx', choice: /export default hasView\('route\.shop'\) \? BrandShopMount : BaseShopPage;/ },
 	{ file: 'routes/products/[...slug]/index.tsx', choice: /export default hasView\('route\.product'\) \? BrandProductMount : BaseProductPage;/ },
 	{ file: 'routes/shop/[slug]/index.tsx', choice: /export default ACTIVE \? \(hasView\('route\.product'\) \? BrandProductMount : BaseProductPage\) : CatchAll;/ },
-	{ file: 'routes/[...catchall]/index.tsx', choice: /if \(hasContentViewFor\(currentPath\) && matchDeclaredPath\(DECLARED_CONTENT, currentPath\)\) return <BrandContentMount \/>;/ },
+	{ file: 'routes/[...catchall]/index.tsx', choice: /if \(hasContentViewFor\(currentPath\) && matchDeclaredPath\(DECLARED_CONTENT, currentPath\)\) return <BrandContentMount reviewSummary=\{reviewSummary\.value\} \/>;/ },
 ];
 
 function allSourceFiles(dir: string, out: string[] = []): string[] {
