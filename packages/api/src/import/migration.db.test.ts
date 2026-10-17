@@ -281,6 +281,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     await resetSource('rh', 'retained-' + randomUUID().slice(0, 8));
     await sourcePool.query(`INSERT INTO address
       (id,"customerId","fullName","streetLine1","streetLine2",city,province,"postalCode","phoneNumber","defaultShippingAddress","defaultBillingAddress","countryId") VALUES
+      (1,1,'Buyer One','1 Main St',NULL,'Austin','TX','78701','555-1',true,true,1),
       (100,1,NULL,NULL,'','',NULL,'','',NULL,false,1),
       (101,1,'','','Line 2','City','','Zip',NULL,true,NULL,1),
       (102,1,'Name','Line',NULL,NULL,'State',NULL,'Phone',false,true,1),
@@ -307,10 +308,12 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const originalAddress = (await sourcePool.query('SELECT to_jsonb(a)::text AS row FROM address a WHERE id=100')).rows[0].row;
     const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
     const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(dry.counts.address).toBe(1);
     expect(dry.counts.customer_address_draft).toBe(6);
     expect(dry.counts.financial_payment_archive).toBe(1);
     expect(await targetRows(storeId, 'customer_address_draft')).toEqual([]);
     expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+    expect(await targetRows(storeId, 'address')).toEqual([]);
     expect(await targetRows(storeId, 'store')).toEqual([]);
     const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
@@ -337,10 +340,18 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(archive.id).toBe(migrationId(storeId, 'vendure:test', 'financial-payment-archive', 99));
     expect((await targetRows(storeId, 'payment')).some(row => row.id === archive.id)).toBe(false);
     expect((await targetRows(storeId, 'refund')).some(row => row.id === migrationId(storeId, 'vendure:test', 'refund', 99))).toBe(false);
-    expect(await targetRows(storeId, 'address')).toHaveLength(1);
+    const operationalAddresses = await targetRows(storeId, 'address');
+    expect(operationalAddresses).toHaveLength(1);
+    expect(operationalAddresses).toMatchObject([{
+      id: migrationId(storeId, 'vendure:test', 'address', 1),
+      customer_id: migrationId(storeId, 'vendure:test', 'customer', 1),
+      full_name: 'Buyer One', line1: '1 Main St', line2: null, city: 'Austin', province: 'TX',
+      postal_code: '78701', phone: '555-1', country: 'US', is_default_shipping: true, is_default_billing: true,
+    }]);
     const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
     expect(manifest.after.customer_address_draft).toHaveLength(6);
     expect(manifest.after.financial_payment_archive).toHaveLength(1);
+    expect(manifest.after.address).toHaveLength(1);
     expect(manifest.after.financial_payment_archive[0]).toMatchObject({ metadata: originalPayment.metadata,
       source_record: originalPayment.row, source_refunds: originalRefunds, source_references: originalReferences });
     // Restore must notice a one-digit change beyond JavaScript's safe integer range.
@@ -356,6 +367,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     await restoreMigration({ targetUrl: TARGET_URL, manifest, apply: true });
     expect(await targetRows(storeId, 'customer_address_draft')).toEqual([]);
     expect(await targetRows(storeId, 'financial_payment_archive')).toEqual([]);
+    expect(await targetRows(storeId, 'address')).toEqual([]);
     // Unknown dependencies abort the whole transaction rather than disappear.
     await sourcePool.query(`INSERT INTO refund VALUES (100,10000,1,0,0,0,'Settled',NULL,NULL,NULL,NULL)`);
     await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
