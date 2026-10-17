@@ -30,8 +30,8 @@ test.describe('#8 Sezzle', () => {
 		await addToCart(page, PRODUCT.shirt.slug);
 		await goToCheckout(page);
 		await fillShipping(page, email);
-		// Both gateways are configured, so the shopper chooses: Card (NMI) or Installments (Sezzle).
-		await page.getByRole('radio', { name: /installments/i }).click();
+		// Both gateways are configured, so the shopper chooses NMI or Sezzle.
+		await page.getByRole('radio', { name: 'Sezzle', exact: true }).click();
 		const placed = await placeOrder(page);
 		expect(placed.grandTotal).toBe(2500 + 500);
 		const startButton = page.getByRole('button', { name: /^continue/i });
@@ -91,7 +91,7 @@ test.describe('#8 Sezzle', () => {
 		await addToCart(page, PRODUCT.mug.slug);
 		await goToCheckout(page);
 		await fillShipping(page, `${uniq('sezret')}@example.net`);
-		await page.getByRole('radio', { name: /installments/i }).click();
+		await page.getByRole('radio', { name: 'Sezzle', exact: true }).click();
 		const placed = await placeOrder(page);
 		await page.getByRole('button', { name: /^continue/i }).click();
 		await page.waitForURL(/^https:\/\/sandbox\.checkout\.sezzle\.com\//, { timeout: 15_000 });

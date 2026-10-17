@@ -61,7 +61,7 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 				return;
 			}
 			const elements: StripeElements = stripe.elements({ clientSecret: props.clientSecret });
-			const element = elements.create('payment');
+			const element = elements.create('payment', { layout: 'tabs' });
 			paymentElement = element;
 			// Loading failures after mount arrive asynchronously as `loaderror`; readiness is Stripe's `ready`, not the mount call.
 			element.on('loaderror', (event) => {

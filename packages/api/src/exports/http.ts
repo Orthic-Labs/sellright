@@ -7,3 +7,5 @@ export { resolveStore, type StoreCtx } from '../store-context.js';
 export type {
   ReleaseRegistrationBody, ReleaseRegistrationPolicy, ReleaseServiceCredential, ReleaseValidationContext,
 } from '../releases/registration-policy.js';
+
+export { persistSubscriberSignup, type SubscriberSignupInput } from '../routes/shop-extra.signup.js';

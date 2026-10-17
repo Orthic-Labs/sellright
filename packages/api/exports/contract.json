@@ -563,6 +563,20 @@
       "surface": "http"
     },
     {
+      "module": "routes/shop-extra.signup",
+      "symbol": "persistSubscriberSignup",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/shop-extra.signup",
+      "symbol": "SubscriberSignupInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
       "module": "routes/shop-config",
       "symbol": "shopConfig",
       "kind": "const",

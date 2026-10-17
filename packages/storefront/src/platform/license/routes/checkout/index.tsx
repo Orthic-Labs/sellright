@@ -211,7 +211,7 @@ export default component$(() => {
       if (disposed) return;
       if (!stripe) { state.error = 'Payment could not load. Please reload and try again.'; return; }
       const elements = stripe.elements({ clientSecret: cs });
-      const payment = elements.create('payment');
+      const payment = elements.create('payment', { layout: 'tabs' });
       destroy = () => payment.destroy();
       paymentRuntime.value = noSerialize({ stripe, elements });
       payment.on('ready', () => { if (!disposed) state.paymentReady = true; });

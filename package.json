@@ -31,10 +31,11 @@
     "test:sdk-packed": "pnpm --filter @sellright/sample-plugin test"
   },
   "devDependencies": {
-    "@typescript-eslint/parser": "8.71.1",
+    "@typescript-eslint/parser": "8.71.2",
     "eslint": "10.12.0",
     "jscpd": "^5.4.1",
     "knip": "^6.41.0",
-    "typescript": "^6.0.3"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2"
   }
 }

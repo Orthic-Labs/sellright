@@ -3,7 +3,7 @@ import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
-import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
+import { INSTALLMENT_PROVIDER, PROVIDER_LABELS } from '~/platform/payments/labels';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
 import { totalChange, formatCents, needsTotalConsent } from '~/hooks/checkout-total';
@@ -44,11 +44,7 @@ export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 	return methods;
 }
 
-export const METHOD_LABEL: Record<PaymentMethod, string> = {
-	stripe: 'Card',
-	nmi: 'Card',
-	sezzle: 'Installments',
-};
+export const METHOD_LABEL = PROVIDER_LABELS;
 
 export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
 	const methods = availableMethods(props.shopConfig.value);
@@ -295,7 +291,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 					<span>{props.state.error}</span>
 				</div>
 			)}
-			<CheckoutDesktopCta {...props} />
+			{!paying && <CheckoutDesktopCta {...props} />}
 		</div>
 	</div>
 	);

@@ -108,7 +108,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
             <CheckoutPaymentPanel {...props} />
           </div>
         </div>
-        <CheckoutMobileCta {...props} />
+        {props.srState.phase !== 'paying' && <CheckoutMobileCta {...props} />}
       </div>
     )}
   </div>

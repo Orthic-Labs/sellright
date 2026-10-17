@@ -82,6 +82,8 @@ import type { EngineContext, EnginePlugin } from './sdk/types.js';
 import { createReleaseRegistrationRoutes } from './releases/release-registration.js';
 import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistrationConflicts, type PolicyOwner } from './releases/registration-policy.js';
 import { preRoutePolicy } from './pre-route-policy.js';
+import { normalizeExactRouteCorsResponse, resolveExactRouteCorsPolicies } from './exact-route-cors-policy.js';
+import { matchesNumericRouteBodyLimit, numericRouteBodyLimit, resolveNumericRouteBodyLimits } from './numeric-route-body-limit.js';
 
 export { SELLRIGHT_VERSION };
 
@@ -119,6 +121,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   const app = new OpenAPIHono();
   const sdkPlugins = options.plugins ?? [];
   if (sdkPlugins.length > 0 && !options.ctx) throw new Error('buildHttpApp: plugins require an engine context');
+  const corsPolicies = resolveExactRouteCorsPolicies(sdkPlugins);
+  const streamBodyLimits = resolveNumericRouteBodyLimits(sdkPlugins).map((policy) => ({ policy, middleware: numericRouteBodyLimit(policy) }));
   const admit = options.admit;
 
   // Cache policy FIRST so it wraps every response (shutdown 503s, CORS preflights, route output, onError envelopes,
@@ -170,6 +174,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // lookup is awaited here, then a synchronous per-request cors() instance is
   // built with the resolved verdict.
   app.use('*', async (c, next) => {
+    // Plugin data can replace CORS only on validated, exact, non-engine paths. No plugin hook moves ahead of guards.
+    const exactPolicy = corsPolicies.get(c.req.path);
+    if (exactPolicy) {
+      if (c.req.method === 'OPTIONS' && exactPolicy.options === 'respond-204') c.res = new Response(null, { status: 204 });
+      else await next();
+      normalizeExactRouteCorsResponse(c, exactPolicy);
+      return c.res;
+    }
     const origin = c.req.header('origin');
     // P2: the credentialed admin API only answers CORS for EXACT configured origins (cors-origins.ts).
     const allowed = !origin ? false
@@ -220,7 +232,11 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   const tooLarge = (c: Parameters<Parameters<typeof app.use>[1]>[0]) => errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'request body too large');
   const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
   const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
-  app.use('*', (c, next) => (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next));
+  app.use('*', (c, next) => {
+    const streamed = streamBodyLimits.find(({ policy }) => matchesNumericRouteBodyLimit(policy, c.req.method, c.req.path));
+    if (streamed) return streamed.middleware(c, next);
+    return (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next);
+  });
 
   // P2: validation failures on the admin API answer the generic error envelope (no raw zod issue dump).
   app.use('/v1/admin/*', async (c, next) => {
