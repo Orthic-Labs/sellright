@@ -41,6 +41,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
 import { loadImportedOrderHistory } from './imported-order-history.js';
+import { assertImportedEditAllowed, classifyImportedEditAdmission } from './imported-edit-admission.js';
 import {
   OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
   referencedKeys, sameAddress, validateSettlement, allowedSettlements,
@@ -54,6 +55,13 @@ type OrderRow = typeof s.order.$inferSelect;
 type VariantRow = typeof s.productVariant.$inferSelect;
 
 const EDITABLE_STATES = new Set(['PendingPayment', 'Paid', 'PartiallyRefunded']);
+
+/** Keep importer-specific metadata access at this compatibility boundary. */
+function importedEditAdmission(metadata: unknown) {
+  return classifyImportedEditAdmission(metadata != null && typeof metadata === 'object' && Object.hasOwn(metadata, 'vendure')
+    ? { present: true, value: (metadata as { vendure: unknown }).vendure }
+    : { present: false });
+}
 
 /** Throws unless this order may take these ops. Cancelled: nothing. Refunded:
  *  address changes only (G5 — "address edit allowed until Cancelled"). */
@@ -150,6 +158,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     ? await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update')
     : await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
   if (!order || order.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+  assertImportedEditAllowed(importedEditAdmission(order.metadata), 'plan');
   assertEditable(order.state, ops);
   if (await pricingEditProtected(tx, storeId, order, referencedKeys(ops).coupons)) {
     throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'This order supports address changes only; its saved pricing must remain intact.');
@@ -892,6 +901,7 @@ export async function saveOrderAddress(input: SaveAddressInput): Promise<SaveAdd
   return withStore(storeId, async (tx) => {
     const [o] = await tx.select().from(s.order).where(eq(s.order.code, input.code)).limit(1).for('update');
     if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+    assertImportedEditAllowed(importedEditAdmission(o.metadata), 'address');
     assertEditable(o.state, [{ op: 'set_address', kind: input.kind, address: input.address as never }]);
     const before = readAddress(input.kind === 'shipping' ? o.shippingAddress : o.billingAddress);
     if (input.kind === 'shipping' && countryChanged(before, input.address)) {
@@ -918,6 +928,7 @@ export async function loadEditContext(storeId: string, code: string) {
   return withStore(storeId, async (tx) => {
     const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
     if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+    const sourceAdmission = importedEditAdmission(o.metadata);
     const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
     const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id)).orderBy(asc(s.orderAdjustment.createdAt));
     const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
@@ -928,10 +939,11 @@ export async function loadEditContext(storeId: string, code: string) {
     const unresolved = await hasUnresolvedPayment(tx, o.id);
     const protectedPricing = await pricingEditProtected(tx, storeId, o);
     const couponCodes = await loadOrderCouponCodes(tx, o);
-    const items = EDITABLE_STATES.has(o.state) && !protectedPricing;
+    const items = EDITABLE_STATES.has(o.state) && !protectedPricing && !sourceAdmission.planRefusal;
+    const address = o.state !== 'Cancelled' && !sourceAdmission.addressRefusal;
     return {
       code: o.code, state: o.state, currency: o.currency, couponCodes,
-      editable: { items: items && !unresolved, addressOnly: !items && o.state !== 'Cancelled', address: o.state !== 'Cancelled', blockedReason: o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null },
+      editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
       lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
       adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount, actor: a.actor, createdAt: a.createdAt.toISOString() })),
       shipping: { amount: o.shippingTotal, override: o.shippingOverride, methodCode: o.shippingMethodCode ?? meta.shipping?.methodCode ?? null },
