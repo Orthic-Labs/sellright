@@ -39,8 +39,8 @@ beforeEach(async () => {
     await tx.insert(s.store).values({ id, slug: slug!, name: slug! });
     await tx.insert(s.customer).values({ id: customerId, storeId: id!, email: slug + '@example.test' });
     await tx.insert(s.customerAddressDraft).values({ id: draftId!, storeId: id!, customerId: customerId!,
-      sourceKey: 'vendure:test', sourceId: '1', sourceCustomerId: '1', sourceDigest: 'd'.repeat(64), city: null });
-    await tx.insert(s.financialPaymentArchive).values({ id: archiveId!, storeId: id!, sourceKey: 'vendure:test',
+      sourceKey: 'source:test', sourceId: '1', sourceCustomerId: '1', sourceDigest: 'd'.repeat(64), city: null });
+    await tx.insert(s.financialPaymentArchive).values({ id: archiveId!, storeId: id!, sourceKey: 'source:test',
       sourceId: '99', sourceDigest: 'a'.repeat(64), state: 'Authorized', method: 'stripe', amount: 1000,
       sourceCreatedAt: '2024-03-04T12:34:56.123456', sourceOrderId: null, transactionId: 'raw-original-id',
       metadata: '{"private":"never-expose"}', errorMessage: 'private-error', importCurrencyContext: 'USD',

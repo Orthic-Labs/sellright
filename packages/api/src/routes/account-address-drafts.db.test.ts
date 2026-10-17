@@ -31,7 +31,7 @@ beforeEach(async () => {
       { id: OTHER_CUSTOMER, storeId: STORE, email: 'draft-other@example.test', emailVerified: true },
     ]);
     await tx.insert(s.customerAddressDraft).values([DRAFT, OTHER_DRAFT].map((id, index) => ({ id,
-      storeId: STORE, customerId: index ? OTHER_CUSTOMER : CUSTOMER, sourceKey: 'vendure:test', sourceId: String(index + 1),
+      storeId: STORE, customerId: index ? OTHER_CUSTOMER : CUSTOMER, sourceKey: 'source:test', sourceId: String(index + 1),
       sourceCustomerId: String(index + 1), sourceDigest: 'a'.repeat(64), fullName: '', line1: 'Retained street',
       line2: '', city: null, phone: '', sourceCountryId: '999', countryCode: null,
       isDefaultShipping: true, isDefaultBilling: null,
@@ -42,7 +42,7 @@ beforeEach(async () => {
     await tx.insert(s.store).values({ id: OTHER_STORE, slug: 'foreign-drafts-test', name: 'Foreign' });
     await tx.insert(s.customer).values({ id: FOREIGN_CUSTOMER, storeId: OTHER_STORE, email: 'foreign@example.test' });
     await tx.insert(s.customerAddressDraft).values({ id: FOREIGN_DRAFT, storeId: OTHER_STORE,
-      customerId: FOREIGN_CUSTOMER, sourceKey: 'vendure:test', sourceId: '1', sourceCustomerId: '1', sourceDigest: 'b'.repeat(64) });
+      customerId: FOREIGN_CUSTOMER, sourceKey: 'source:test', sourceId: '1', sourceCustomerId: '1', sourceDigest: 'b'.repeat(64) });
   });
 });
 afterAll(wipe);
