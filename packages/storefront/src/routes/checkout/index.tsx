@@ -422,6 +422,8 @@ const CheckoutContent = component$(() => {
   });
 
   const placeOrder = $(async () => {
+    // An existing order is paid through its provider controls, including after an init failure.
+    if (srState.phase === 'paying') return;
     if (isOrderProcessing.value) return;
     if (state.loading || checkoutState.isLoading) return;
 

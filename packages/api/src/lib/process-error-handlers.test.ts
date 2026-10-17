@@ -38,7 +38,7 @@ describe('registerProcessErrorHandlers (REL-2)', () => {
       loggerSpy as unknown as LoggerFn,
     );
     const reason = new Error('boom');
-    process.emit('unhandledRejection', reason);
+    process.emit('unhandledRejection', reason, Promise.resolve());
     expect(loggerSpy).toHaveBeenCalledWith('[api:unhandledRejection]', reason);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });

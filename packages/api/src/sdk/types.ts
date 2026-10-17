@@ -69,14 +69,48 @@ export interface PluginEffectiveConfig {
   deployment?: Record<string, unknown>;
 }
 
+/** Data-only CORS override for one plugin-owned, literal request path. */
+export interface ExactRouteCorsPolicy {
+  readonly path: string;
+  /** Bare, exact origins, including explicit custom schemes or the literal `null`. No wildcards. */
+  readonly origins: readonly string[];
+  /** Additionally echo HTTP(S) localhost, 127.0.0.1 or [::1] origins, with any valid port. */
+  readonly loopback?: boolean;
+  /** Origin sent when the request has no Origin header; omitted means no allow-origin header. */
+  readonly missingOrigin?: string;
+  /** Origin sent for an unmatched Origin header; omitted means no allow-origin header. */
+  readonly fallbackOrigin?: string;
+  readonly methods: readonly string[];
+  readonly headers: readonly string[];
+  /** Integer seconds, from 0 through 86400. */
+  readonly maxAge?: number;
+  /** Credential permission is always absent, including on downstream error responses. */
+  readonly credentials: 'absent';
+  /** Continue keeps normal guards and the route's own OPTIONS response. */
+  readonly options: 'respond-204' | 'continue';
+}
+
+/** Streaming body cap for one PUT route ending in exactly one ASCII-decimal segment. */
+export interface NumericRouteBodyLimit {
+  readonly method: 'PUT';
+  /** Literal absolute prefix ending in `/`; no route patterns or encoded segments. */
+  readonly pathPrefix: string;
+  readonly finalSegment: 'ascii-digits';
+  readonly maxBytes: number;
+}
+
 export interface EnginePlugin {
   /** Unique name (diagnostics, journal table default, job lock key). Lower-case [a-z0-9-]. */
   name: string;
   /** Exact `@sellright/api` version this plugin was built against; createApp refuses a mismatch. */
   engineVersion?: string;
   configure?(ctx: ConfigureContext): void | Promise<void>;
-  /** Middleware / error policies that must wrap every route (runs after request-id + access log, before CORS). */
+  /** Middleware / error policies mounted after engine credential, CSRF and agent guards. */
   preRoute?(app: OpenAPIHono, ctx: EngineContext): void;
+  /** Exact plugin-route response policies, validated per app before the default CORS middleware. */
+  corsPolicies?: readonly ExactRouteCorsPolicy[];
+  /** Pull-driven, counted body streams for plugin-owned numeric PUT routes; other requests keep engine caps. */
+  bodyLimits?: readonly NumericRouteBodyLimit[];
   /** Routes mounted at `/` after every built-in route, so a plugin never shadows a built-in exact path. */
   routes?: OpenAPIHono | ((ctx: EngineContext) => OpenAPIHono);
   /** Drizzle tables the plugin owns. Names must not collide with the engine's or another plugin's. */

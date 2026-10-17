@@ -126,7 +126,7 @@ test.describe('checkout', () => {
 		await expect(
 			page.getByRole('button', { name: /^pay/i })
 				.or(page.getByText(/no payment method is configured/i))
-				.or(page.getByRole('radio', { name: /card|installments/i }))
+				.or(page.getByRole('radio', { name: /^(stripe|nmi|sezzle)$/i }))
 				.first(),
 		).toBeVisible({ timeout: 15_000 });
 	});

@@ -1,4 +1,4 @@
-import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
+import { $, component$, useSignal, type QRL, type Signal } from '@qwik.dev/core';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
@@ -46,6 +46,7 @@ interface CheckoutResumePanelProps {
  * would be unpayable. Nothing here reads the cart, stock, shipping or form state, and nothing here creates an order.
  */
 export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) => {
+	const switchingMethod = useSignal(false);
 	const view = props.srState.resume;
 	const methods = availableMethods(props.shopConfig.value);
 	const total = props.srState.grandTotal > 0 ? formatCents(props.srState.grandTotal) : null;
@@ -114,13 +115,22 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 										type="button"
 										role="radio"
 										aria-checked={props.paymentMethod.value === m}
-										disabled={props.state.loading}
-										onClick$={$(() => {
-											if (props.state.loading || props.paymentMethod.value === m) return;
+										disabled={props.state.loading || switchingMethod.value}
+										onClick$={$(async () => {
+											if (switchingMethod.value || props.state.loading || props.paymentMethod.value === m) return;
+											// Lock before dispatch: the route QRL may still need to load before its resume queue can run.
+											switchingMethod.value = true;
 											props.paymentMethod.value = m;
 											// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
 											bumpView(props.paymentInit);
-											props.onResumeMethod$(m);
+											try {
+												await props.onResumeMethod$(m);
+											} catch {
+												props.srState.error = "We couldn't load your payment options. Please try again.";
+												props.srState.resume = 'error';
+											} finally {
+												switchingMethod.value = false;
+											}
 										})}
 										class="payment-method-option"
 										style={{
@@ -134,7 +144,9 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 								))}
 							</div>
 						)}
-						{props.paymentInit.failed ? (
+						{switchingMethod.value ? (
+							<p class="payment-placeholder" style="padding:14px 0;" role="status">Preparing payment...</p>
+						) : props.paymentInit.failed ? (
 							<PaymentInitRetry init={props.paymentInit} />
 						) : props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && props.srState.clientSecret ? (
 							<>
@@ -152,10 +164,10 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 								<button
 									type="button"
 									onClick$={$(() => {
-										if (props.state.loading) return;
+										if (props.state.loading || switchingMethod.value) return;
 										props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
 									})}
-									disabled={props.state.loading}
+									disabled={props.state.loading || switchingMethod.value}
 									class="checkout-cta"
 									style="margin-top:14px;"
 								>
@@ -181,10 +193,10 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 								<button
 									type="button"
 									onClick$={$(() => {
-										if (props.state.loading) return;
+										if (props.state.loading || switchingMethod.value) return;
 										props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 									})}
-									disabled={props.state.loading}
+									disabled={props.state.loading || switchingMethod.value}
 									class="checkout-cta"
 									style="margin-top:14px;"
 								>
@@ -197,7 +209,7 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 								code={props.srState.code}
 								receiptToken={props.srState.receiptToken || undefined}
 								label={total ? `Continue — ${total}` : 'Continue'}
-								disabled={props.state.loading}
+								disabled={props.state.loading || switchingMethod.value}
 								onError$={props.onPaymentError$}
 								onProcessingChange$={props.onPaymentProcessingChange$}
 							/>

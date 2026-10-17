@@ -60,6 +60,35 @@ describe('request-id middleware', () => {
     expect(res.headers.get('x-request-id')).toBe(body.requestId);
   });
 
+  it('echoes the resolved id after a raw Response replaces prepared headers', async () => {
+    const { requestIdMiddleware } = await import('./request-id.js');
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.get('/raw', (c) => new Response(c.var.requestId, { status: 202, headers: {
+      'Content-Type': 'text/plain', 'X-Endpoint': 'raw-response', 'X-Request-Id': 'route-value',
+    } }));
+
+    const res = await app.request('/raw', { headers: { 'x-request-id': 'raw-response-id' } });
+    expect(res.status).toBe(202);
+    expect(res.headers.get('x-request-id')).toBe('raw-response-id');
+    expect(res.headers.get('content-type')).toBe('text/plain');
+    expect(res.headers.get('x-endpoint')).toBe('raw-response');
+    expect(await res.text()).toBe('raw-response-id');
+  });
+
+  it('echoes an id on immutable redirects while preserving status, location and empty body', async () => {
+    const { requestIdMiddleware } = await import('./request-id.js');
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.get('/redirect', () => Response.redirect('https://redirect.example/destination?keep=1', 307));
+
+    const res = await app.request('/redirect', { headers: { 'x-request-id': 'immutable-response-id' } });
+    expect(res.status).toBe(307);
+    expect(res.headers.get('x-request-id')).toBe('immutable-response-id');
+    expect(res.headers.get('location')).toBe('https://redirect.example/destination?keep=1');
+    expect(await res.text()).toBe('');
+  });
+
   it('rejects a hostile inbound header (script tag, control chars, oversize) and mints a fresh id', async () => {
     const { requestIdMiddleware } = await import('./request-id.js');
     const app = new Hono();

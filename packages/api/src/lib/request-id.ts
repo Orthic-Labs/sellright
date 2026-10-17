@@ -45,6 +45,8 @@ export function requestIdMiddleware(): MiddlewareHandler {
     c.set('requestId', requestId);
     c.header(REQUEST_ID_HEADER, requestId);
     await next();
+    // Raw or immutable Responses can replace Hono's prepared headers; always echo the resolved id.
+    c.header(REQUEST_ID_HEADER, requestId);
   };
 }
 
