@@ -146,7 +146,7 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		if (error instanceof SellRightError && error.status === 409) {
 			if (error.code === 'QUOTE_CHANGED') {
 				const changed = error.body as { quote?: CheckoutQuote; quoteHash?: string } | undefined;
-				if (!changed?.quote || !changed.quoteHash) throw new Error('Updated quote could not be read. Refresh your cart before trying again.', { cause: error });
+				if (!changed?.quote || !changed.quoteHash) throw Object.assign(new Error('Updated quote could not be read. Refresh your cart before trying again.'), { cause: error });
 				if (snapshot.quote) scope.adoptConflict({ ...snapshot.quote, ...changed.quote, quoteHash: changed.quoteHash }, snapshot.token);
 				resetAttemptKey();
 				throw new QuoteChangedError(changed.quote, changed.quoteHash);

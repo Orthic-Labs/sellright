@@ -29,6 +29,8 @@ const serverCart = (over: Partial<ServerCart> = {}, available = true): ServerCar
 	grandTotal: 2500,
 	unavailable: [],
 	coupon: null,
+	couponCodes: [],
+	coupons: [],
 	email: null,
 	customerId: null,
 	lines: [{ sku: 'SKU1', name: 'Widget', quantity: 1, unitPrice: 2500, lineSubtotal: 2500, lineDiscount: 0, lineTotal: 2500, available, availableQuantity: available ? 5 : 0 }],

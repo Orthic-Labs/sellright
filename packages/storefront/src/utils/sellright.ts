@@ -615,6 +615,8 @@ export interface SrCart {
     appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
   quoteHash: string;
   pricingIntent: 'preview' | 'checkout';
+  shippingMethodCode: string | null;
+  pointsDiscount: number;
   /** Optimistic-concurrency counter — echo back on every non-append mutation. */
   revision: number;
 }

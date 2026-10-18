@@ -126,8 +126,21 @@ describe('cart contract — append vs set', () => {
 		currency: 'USD',
 		subtotal: 5000,
 		discountTotal: 0,
-		lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, available: true }],
-	} as SrCart;
+		shippingTotal: 0,
+		taxTotal: 0,
+		grandTotal: 5000,
+		unavailable: [],
+		coupon: null,
+		couponCodes: [],
+		coupons: [],
+		quoteHash: '',
+		pricingIntent: 'preview',
+		shippingMethodCode: null,
+		pointsDiscount: 0,
+		email: null,
+		customerId: null,
+		lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }],
+	};
 
 	it('create cart posts lines to /v1/shop/cart', async () => {
 		enqueue(respond(200, cart));

@@ -26,6 +26,8 @@ const serverCart = (over: Partial<ServerCart> = {}): ServerCart => ({
 	grandTotal: 5000,
 	unavailable: [],
 	coupon: null,
+	couponCodes: [],
+	coupons: [],
 	email: null,
 	customerId: null,
 	lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }],
