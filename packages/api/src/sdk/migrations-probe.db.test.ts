@@ -92,6 +92,7 @@ beforeAll(async () => {
     .rejects.toMatchObject({ code: '42501' });
 });
 
+// PG 17 DROP DATABASE waits for a global checkpoint; bound cleanup to six minutes.
 afterAll(async () => {
   const errors: unknown[] = [];
   const clean = async (fn: () => unknown | Promise<unknown>) => {
@@ -103,7 +104,7 @@ afterAll(async () => {
   if (adminStarted) await clean(() => admin.end());
   if (scratch) await clean(() => rmSync(scratch, { recursive: true, force: true }));
   if (errors.length) throw new AggregateError(errors, 'Migration probe fixture cleanup failed');
-});
+}, 360_000);
 
 /** A journal folder = the packaged journal plus one entry newer than anything applied. */
 function folderWithPendingEntry(): string {
