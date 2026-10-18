@@ -201,7 +201,11 @@ installer() (
 update() (
   # shellcheck disable=SC1091
   . "$tmp/sellright-functions.sh"
+  # Called indirectly by cmd_update() from the sourced CLI body.
+  # shellcheck disable=SC2329
   cmd_maintenance() { :; }
+  # Called indirectly by cmd_update() from the sourced CLI body.
+  # shellcheck disable=SC2329
   cmd_functional_check() {
     if [ "$FIRST_CHECK_FAIL" = 1 ] && [ ! -f "$CHECK_MARKER" ]; then
       : > "$CHECK_MARKER"
@@ -316,6 +320,8 @@ pass 'incomplete previous image plan fails closed before rebuild'
 reset_case
 RECOVERY_DATA=1 RECOVERY_JQ_GUARD=1
 export LITERAL_ID='literal "kit" id'
+# This literal shell payload must stay unexpanded until consumed as data.
+# shellcheck disable=SC2016
 LITERAL_KEY=$(printf 'literal $(touch %s/env-substitution)' "$tmp")
 export LITERAL_KEY
 # Valid shell syntax would execute both markers if a regression sourced it.
@@ -326,6 +332,8 @@ printf "RECOVERY_KIT_ID='%s'\nSELLRIGHT_MASTER_KEY=\"%s\"\ntouch \"%s\"\n" "$LIT
   write_recovery_kit
 ) > "$tmp/recovery.out" 2>&1 || { cat "$tmp/recovery.out" >&2; fail 'recovery data parsing failed'; }
 [ ! -e "$tmp/env-executed" ] && [ ! -e "$tmp/env-substitution" ] || fail 'preserved .env executed shell syntax'
+# Variables in this literal filter belong to jq, not the shell.
+# shellcheck disable=SC2016
 "$REAL_JQ" -e --arg id "$LITERAL_ID" --arg key "$LITERAL_KEY" '.kitId == $id and .masterKey == $key' "$SELLRIGHT_HOME/recovery-kit.json" >/dev/null || fail 'recovery kit did not retain literal resolved values'
 grep -Fx 'recovery-jq safe-argv' "$TRACE" >/dev/null || fail 'recovery argv guard not exercised'
 pass 'recovery kit consumes literal Compose values via stdin without shell execution or secret argv'
