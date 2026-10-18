@@ -18,7 +18,7 @@ import * as s from '../db/schema.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { derivePaymentStatus } from './status.js';
-import { buildImportedEditBasis } from '../import/history.js';
+import { retainedDetachedHistoryFixture } from '../import/retained-history-fixture.js';
 
 const refundCalls: Array<{ providerRef: string | null; amount: number; idempotencyKey?: string }> = [];
 const chargeCalls: Array<{ orderCode: string; amount: number }> = [];
@@ -169,25 +169,10 @@ afterAll(async () => { await wipe(); });
 
 describe('preview (stateless)', () => {
   it('keeps retained detached import history address-only & denies economic preview/commit without effects', async () => {
-    const o = await makeOrder({}), line = (await linesOf(o.code))[0]!, sourceKey = 'synthetic-detached-history';
-    const capture = buildImportedEditBasis({ storeId: STORE, sourceKey, channelId: '1', currency: 'USD',
-      id: entity => entity === 'order' ? o.id : line.id,
-      targetOrders: [{ id: o.id, storeId: STORE, metadata: { vendure: { id: '1', sourceKey } } }],
-      targetLines: [{ id: line.id, orderId: o.id, storeId: STORE, metadata: { vendure: { id: '1' } } }],
-      orders: [{ id: '1', selected: true, sourceRecord: '{"id":1,"state":"PaymentSettled","currencyCode":"USD","couponCodes":[]}',
-        subTotal: '2000', subTotalWithTax: '2000', shipping: '500', shippingWithTax: '500' }],
-      lines: [{ id: '1', orderId: '1', shippingLineId: '7',
-        sourceRecord: '{"id":1,"orderId":1,"shippingLineId":7,"quantity":2,"orderPlacedQuantity":2,"listPrice":1000,"listPriceIncludesTax":false,"adjustments":[],"taxLines":[]}' }],
-      shippingLines: [{ id: '7', orderId: null, shippingMethodId: '5',
-        sourceRecord: '{"id":7,"orderId":null,"shippingMethodId":5,"listPrice":500,"listPriceIncludesTax":false,"adjustments":[],"taxLines":[]}' }],
-      shippingMethods: [{ id: '5', sourceRecord: '{"id":5,"code":"historical"}' }], surcharges: [],
-      channels: [{ id: '1', sourceRecord: '{"id":1,"defaultCurrencyCode":"USD","pricesIncludeTax":false,"defaultTaxZoneId":null}' }],
-      orderChannels: [{ orderId: '1', channelId: '1', sourceRecord: '{"orderId":1,"channelId":1}' }],
-    })[0]!;
-    expect(capture).not.toHaveProperty('editBasisV1');
+    const o = await makeOrder({}), line = (await linesOf(o.code))[0]!;
     const original = await orderRow(o.code);
-    await withStore(STORE, tx => tx.update(s.order).set({ metadata: { ...(original.metadata as object),
-      vendure: { id: '1', sourceKey, state: 'PaymentSettled', retainedHistoryV1: capture.retainedHistoryV1 } } }).where(eq(s.order.id, o.id)));
+    const metadata = retainedDetachedHistoryFixture({ storeId: STORE, orderId: o.id, orderLineId: line.id, metadata: original.metadata });
+    await withStore(STORE, tx => tx.update(s.order).set({ metadata }).where(eq(s.order.id, o.id)));
     const snapshot = () => withStore(STORE, async tx => ({
       orders: await tx.select().from(s.order), lines: await tx.select().from(s.orderLine),
       stock: await tx.select().from(s.stock), payments: await tx.select().from(s.payment),
