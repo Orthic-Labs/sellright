@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { StackInput, StackLine, PromotionStackTotals, AppliedPromotion } from './promotion-stack.js';
 
-type MoneyTotals = Pick<PromotionStackTotals, 'subtotal' | 'discountTotal' | 'shippingTotal' | 'taxTotal' | 'grandTotal' | 'pointsDiscount'>;
+export type MoneyTotals = Pick<PromotionStackTotals, 'subtotal' | 'discountTotal' | 'shippingTotal' | 'taxTotal' | 'grandTotal' | 'pointsDiscount'>;
 type SnapshotAppliedPromotion = Omit<AppliedPromotion, 'lineAllocations'> & {
   priority: number; sequence: number; scope: 'order' | 'line';
   lineAllocations: Array<AppliedPromotion['lineAllocations'][number] & { orderLineId: string }>;
@@ -42,7 +42,7 @@ export function promotionQuoteHash(input: StackInput, result: Omit<PromotionStac
     version: 1, currency: input.currency, pricesIncludeTax: input.pricesIncludeTax, couponCodes: input.couponCodes,
     pricingProfile: result.pricingProfile,
     lines: input.lines.map(({ key, ...line }) => ({ ...line, snapshot: result.lineSnapshots.find(item => item.lineKey === key) &&
-      (({ lineKey: _key, ...snapshot }) => snapshot)(result.lineSnapshots.find(item => item.lineKey === key)!) })),
+      (({ lineKey: _key, sourceAdjustmentTotal: _sum, sourceAdjustmentDivisor: _divisor, ...snapshot }) => snapshot)(result.lineSnapshots.find(item => item.lineKey === key)!) })),
     shippingBasis: { amount: input.shipping, taxRateBps: input.shippingTaxRateBps, includesTax: input.shippingIncludesTax, taxable: input.shippingTaxRateBps !== 0 },
     pointsDiscount: input.pointsDiscount ?? 0, adjustments: input.adjustments ?? [], totals: economicTotals(result),
     applied: result.applied.map(entry => ({ ...entry,
@@ -66,7 +66,7 @@ export function buildOrderPricingSnapshot(input: StackInput, result: PromotionSt
     shippingBasis: { amount: input.shipping, taxRateBps: input.shippingTaxRateBps, includesTax: input.shippingIncludesTax, taxable: input.shippingTaxRateBps !== 0 },
     pointsDiscount: input.pointsDiscount ?? 0, adjustments: structuredClone(input.adjustments ?? []),
     lines: input.lines.map(line => { const facts = result.lineSnapshots.find(item => item.lineKey === line.key);
-      requireValue(facts, 'missing line facts'); const { lineKey: _key, ...rest } = facts;
+      requireValue(facts, 'missing line facts'); const { lineKey: _key, sourceAdjustmentTotal: _sum, sourceAdjustmentDivisor: _divisor, ...rest } = facts;
       return { ...structuredClone(line), ...rest, orderLineId: mapped(line.key) }; }),
     applied: result.applied.map(entry => { const promo = input.promotions.find(p => p.id === entry.promotionId); requireValue(promo, 'missing applied promotion');
       return { ...structuredClone(entry), priority: promo.priority, sequence: promo.sequence, scope: promo.scope,

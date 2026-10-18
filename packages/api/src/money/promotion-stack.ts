@@ -36,7 +36,9 @@ export interface AppliedPromotion {
 export interface PromotionStackTotals extends OrderTotals {
   pricingProfile: 'captured-default-v1';
   coupons: StackCouponStatus[]; applied: AppliedPromotion[];
-  lineSnapshots: { lineKey: string; quantity: number; proratedUnitPriceWithTax: number; lineNet: number; lineGross: number }[];
+  lineSnapshots: { lineKey: string; quantity: number; proratedUnitPriceWithTax: number; lineNet: number; lineGross: number;
+    /** Exact final producer facts, including actual points adjustments; internal only. */
+    sourceAdjustmentTotal?: number; sourceAdjustmentDivisor?: number }[];
   selectedCredit: { accountId: string; promotionId: string; appliedAmount: number; allocation: Record<string, number[]> } | null;
   quoteHash: string;
   /** Internal resolver evidence for snapshot construction; route projections
@@ -279,7 +281,8 @@ export function calculatePromotionStack(input: StackInput): PromotionStackTotals
     grandTotal: Math.max(0, sum([final.gross, shippingGross, adjustmentTotal, input.pricesIncludeTax ? 0 : adjustmentTax])), pointsDiscount,
     ...(input.adjustments ? { adjustmentTotal } : {}), coupons, applied,
     lineSnapshots: lines.map(line => { const current = facts(line); return { lineKey: line.input.key, quantity: line.input.quantity,
-      proratedUnitPriceWithTax: current.unitGross, lineNet: current.lineNet, lineGross: current.lineGross }; }),
+      proratedUnitPriceWithTax: current.unitGross, lineNet: current.lineNet, lineGross: current.lineGross,
+      sourceAdjustmentTotal: sum(line.adjustments), sourceAdjustmentDivisor: Math.max(line.input.placedQuantity, line.input.quantity) }; }),
     selectedCredit, quoteHash: '', resolvedPromotions: promotions,
   };
   result.quoteHash = promotionQuoteHash({ ...input, couponCodes: codes }, result);

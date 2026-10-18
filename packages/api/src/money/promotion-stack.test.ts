@@ -58,7 +58,8 @@ describe('captured-default promotion stack', () => {
 
   it('keeps rounded gross refund UNIT distinct from rounded gross LINE', () => {
     const result = calculatePromotionStack(input({ lines: [line({ unitListPrice: 1, quantity: 2, placedQuantity: 2, taxRateBps: 5000 })], promotions: [], couponCodes: [] }));
-    expect(result.lineSnapshots).toEqual([{ lineKey: 'SKU', quantity: 2, proratedUnitPriceWithTax: 2, lineNet: 2, lineGross: 3 }]);
+    expect(result.lineSnapshots).toEqual([{ lineKey: 'SKU', quantity: 2, proratedUnitPriceWithTax: 2, lineNet: 2, lineGross: 3,
+      sourceAdjustmentTotal: 0, sourceAdjustmentDivisor: 2 }]);
     expect(result.taxTotal).toBe(1);
   });
 
