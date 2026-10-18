@@ -11,7 +11,7 @@ import { issue } from '../account-credit/service.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { recordSettlementOperation } from '../payments/settlement/record.js';
 import { settleOrderReleases } from '../payments/reservation.js';
-import { loadEditContext, previewOrderEdit } from '../orders/order-edit-service.js';
+import { commitOrderEdit, loadEditContext, previewOrderEdit } from '../orders/order-edit-service.js';
 import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
@@ -80,7 +80,7 @@ describe('accepted ordered credit checkout', () => {
     });
     expect((await place(saved.token, saved.revision, changed.quoteHash)).status).toBe(200);
   });
-  it('requires credit acceptance, persists exact vectors & debits once after settled provider outcome', async () => {
+  it.each(['send_pay_link', 'leave_due', 'record_payment'] as const)('requires credit acceptance, debits once & redacts %s edit context', async settlementType => {
     const { saved, quote } = await cartQuote();
     expect((await place(saved.token, saved.revision)).status).toBe(409);
     const response = await place(saved.token, saved.revision, quote.quoteHash); expect(response.status).toBe(200);
@@ -109,7 +109,56 @@ describe('accepted ordered credit checkout', () => {
       expect(Object.values(redeems[0]!.operationalAllocation ?? {}).flat().reduce((a, b) => a + b, 0)).toBe(101);
     });
     expect((await loadEditContext(STORE, placed.code)).editable).toMatchObject({ items: true, addressOnly: false, address: true });
-    expect((await previewOrderEdit(STORE, placed.code, [])).after.grandTotal).toBe(placed.grandTotal);
+    const preview = await previewOrderEdit(STORE, placed.code, []);
+    expect(preview.after.grandTotal).toBe(placed.grandTotal);
+    expect(preview.couponCodes).toEqual(['ORDINARY']); // reusable credit bearer stays out of preview wire data
+    await withStore(STORE, async tx => {
+      expect((await tx.select().from(s.order))[0]?.couponCodes).toEqual(codes);
+      expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(0);
+      expect((await tx.select().from(s.accountCreditTransaction)).filter(row => row.kind === 'RESTORE')).toHaveLength(0);
+      expect(await tx.select().from(s.orderEdit)).toHaveLength(0);
+    });
+    const ops = [{ op: 'add_item' as const, sku: SKU, quantity: 1 }];
+    const addition = await previewOrderEdit(STORE, placed.code, ops);
+    expect(addition.balance.amountDue).toBe(900);
+    const input = { storeId: STORE, storeSlug: SLUG, code: placed.code, actor: 'fixture', principalKind: 'human' as const,
+      ops, expectedGrandTotal: addition.after.grandTotal, expectedBalance: addition.balance.amountDue,
+      previewAcceptanceHash: addition.previewAcceptanceHash, idempotencyKey: `private-context-${settlementType}`,
+      settlement: settlementType === 'record_payment' ? { type: settlementType, method: 'cash' } : { type: settlementType }, notifyCustomer: false };
+    const prepared = await commitOrderEdit(input);
+    if (settlementType === 'record_payment') {
+      expect(prepared.settlement.phase).toBe('activated');
+      expect((await commitOrderEdit(input)).replay).toBe(true);
+      expect((await loadEditContext(STORE, placed.code)).pendingEdit).toBeNull();
+      await withStore(STORE, async tx => {
+        expect((await tx.select().from(s.order))[0]).toMatchObject({ grandTotal: addition.after.grandTotal, couponCodes: codes });
+        expect((await tx.select().from(s.payment)).filter(row => row.method === 'manual')).toHaveLength(1);
+        expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(0);
+        expect((await tx.select().from(s.accountCreditTransaction)).filter(row => row.kind === 'RESTORE')).toHaveLength(0);
+        expect((await tx.select().from(s.accountCreditTransaction)).filter(row => row.kind === 'REDEEM')).toHaveLength(1);
+      });
+      return;
+    }
+    expect(prepared.settlement.phase).toBe('awaiting_tender');
+    const storedEdit = () => withStore(STORE, async tx => (await tx.select().from(s.orderEdit).where(eq(s.orderEdit.id, prepared.editId)))[0]!);
+    const durable = await storedEdit();
+    const proposal = (durable.after as { proposal: { couponCodes: string[]; proposalDigest: string; activation: unknown; pricingSnapshot: unknown } }).proposal;
+    expect(proposal.couponCodes).toEqual(codes);
+    expect(proposal.activation).toBeDefined(); expect(proposal.pricingSnapshot).toBeDefined();
+    const context = await loadEditContext(STORE, placed.code);
+    const values = (value: unknown): unknown[] => value && typeof value === 'object' ? Object.values(value).flatMap(values) : [value];
+    expect(values(context)).not.toContain('CREDIT');
+    expect(values(context)).not.toContain('private-issuance@example.invalid');
+    expect(context.pendingEdit).toMatchObject({ id: prepared.editId, settlement: { type: settlementType, phase: 'awaiting_tender' },
+      proposal: { previewAcceptanceHash: addition.previewAcceptanceHash, proposalDigest: proposal.proposalDigest,
+        settlementRequirement: { type: settlementType, currency: 'USD', requiredTender: 900, requiredRefund: 0 } },
+      proposed: { totals: { grandTotal: addition.after.grandTotal } } });
+    expect(context.pendingEdit?.proposal).not.toHaveProperty('activation');
+    expect(context.pendingEdit?.proposal).not.toHaveProperty('pricingSnapshot');
+    expect(context.pendingEdit?.proposal).not.toHaveProperty('couponCodes');
+    expect(context.pendingEdit?.proposed).not.toHaveProperty('proposal');
+    expect(context.editable).toMatchObject({ items: false, address: false });
+    expect(await storedEdit()).toEqual(durable);
   });
   it('keeps financially settled payment successful on invalid snapshot & cancellation releases a hold without policy reservations', async () => {
     const { saved, quote } = await cartQuote();

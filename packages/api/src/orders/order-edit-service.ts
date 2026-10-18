@@ -217,6 +217,11 @@ async function lockableOrderId(storeId: string, code: string): Promise<string> {
   return id;
 }
 
+/** Internal pricing identities retain credit membership; display loaders redact its bearer. */
+async function loadOrderPricingCouponCodes(tx: Tx, order: OrderRow): Promise<string[]> {
+  return order.couponCodes.length ? [...order.couponCodes] : await loadOrderCouponCodes(tx, order);
+}
+
 /** Legacy editing cannot reproduce immutable stacked/unit-vector pricing. */
 async function pricingEditProtected(tx: Tx, storeId: string, order: typeof s.order.$inferSelect, proposedCodes: readonly string[] = []): Promise<boolean> {
   const source = importedSourceMetadata(order.metadata);
@@ -307,7 +312,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
       original: { variantId: l.variantId, sku: l.variantSku, name: l.variantName, unitPrice: l.unitPrice, quantity: l.quantity },
     })),
     adjustments: dbAdjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount })),
-    couponCodes: await loadOrderCouponCodes(tx, order),
+    couponCodes: await loadOrderPricingCouponCodes(tx, order),
     promotion: { kind: 'keep' }, shipping: { kind: 'keep' }, saveToAddressBook: false,
   };
   const working = applyEditOps(initial, ops, { variantsBySku, promosByCode, methodsByCode, unitPriceFor: (v) => selectUnitPrice(v, priceRule) });
@@ -320,6 +325,8 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const afterBill = working.billingAddress ?? beforeBill;
   const country = afterShip?.country ?? null;
   const taxRate = resolveTaxRate(zones, country, storeRow.taxRate);
+  const beforeTaxRate = resolveTaxRate(zones, beforeShip?.country, storeRow.taxRate);
+  const destinationChanged = countryChanged(beforeShip, afterShip);
   const taxInclusive = meta.taxInclusive ?? storeRow.taxInclusive;
 
   const productIdOf = (l: WLine) => (l.variantId ? variantsById.get(l.variantId)?.productId ?? null : null);
@@ -407,6 +414,13 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     for (const line of nativeLines) line.key = byId.get(line.id)!.key;
     for (const line of working.lines) if (line.id) line.key = byId.get(line.id)!.key;
   }
+  // Prior snapshots retain keys such as new:1. Reserve them before naming this edit's new rows.
+  const usedLineKeys = new Set(working.lines.filter(line => line.id).map(line => line.key));
+  let newLineSequence = 0;
+  for (const line of working.lines) if (!line.id) {
+    do { line.key = `new:${++newLineSequence}`; } while (usedLineKeys.has(line.key));
+    usedLineKeys.add(line.key);
+  }
   const originalByKey = new Map((snapshot?.lines ?? importedBasis?.lines ?? []).map(line => [line.key, line]));
   const sourceKey = importedSourceMetadata(order.metadata)?.sourceKey;
   const priorOrdinary = snapshot ? snapshot.snapshot.version === 2 ? snapshot.snapshot.ordinary : isImportedCreditOrigin(snapshot.snapshot) ? null : snapshot.snapshot : null;
@@ -454,11 +468,12 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const workingBases = working.lines.map(line => {
     const original = originalByKey.get(line.key);
     const untouched = !!line.original && line.original.variantId === line.variantId && line.original.quantity === line.quantity;
-    if (untouched) return { key: line.key, quantity: line.quantity, change: 'untouched' as const };
+    if (untouched && !destinationChanged) return { key: line.key, quantity: line.quantity, change: 'untouched' as const };
     const variant = line.variantId ? variantsById.get(line.variantId) : undefined;
     if (!variant) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Current line price cannot be established.', { lineId: line.id });
     return { key: line.key, quantity: line.quantity, change: line.id ? 'touched' as const : 'new' as const,
-      basis: { unitListPrice: line.customPrice ? line.unitPrice : selectUnitPrice(variant, priceRule), priceIncludesTax: storeRow.taxInclusive,
+      basis: { unitListPrice: untouched ? original?.unitListPrice ?? line.unitPrice : line.customPrice ? line.unitPrice : selectUnitPrice(variant, priceRule),
+        priceIncludesTax: untouched ? original?.priceIncludesTax ?? taxInclusive : storeRow.taxInclusive,
         taxRateBps: taxRate, placedQuantity: Math.max(original?.placedQuantity ?? line.original?.quantity ?? line.quantity, line.quantity), priorAdjustments: [] } };
   });
   // Legacy native unitPrice is a list price only if reproducing every stored
@@ -466,6 +481,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   let legacyInput: StackInput | undefined;
   let legacyResult: ReturnType<typeof calculatePromotionStack> | undefined;
   if (!snapshot && !importedBasis) {
+    const storedCalculator = storedMethodCode ? methodsByCode.get(storedMethodCode)?.calculator as ShippingCalculator | undefined : undefined;
     const beforeItems = dbLines.map(line => {
       const productId = line.variantId ? variantsById.get(line.variantId)?.productId : undefined;
       const product = productId ? facts.get(productId) : undefined;
@@ -473,8 +489,10 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
       return { lineKey: line.id, quantity: line.quantity, productId, tags: product.tags, collectionIds: product.collectionIds };
     });
     const legacyBase = { ...pricingBase, shipping: storedBase, couponCodes: initial.couponCodes,
+      shippingTaxRateBps: storedCalculator?.taxRate ?? (storeRow.shippingTaxable ? beforeTaxRate : 0),
+      shippingIncludesTax: storedCalculator?.taxInclusive ?? taxInclusive,
       adjustments: dbAdjustments.map(({ label, amount }) => ({ label, amount })), couponContext: { activeVerifications: [], items: beforeItems },
-      lines: dbLines.map(line => ({ key: line.id, quantity: line.quantity, placedQuantity: line.quantity, unitListPrice: line.unitPrice, priceIncludesTax: taxInclusive, taxRateBps: taxRate })) };
+      lines: dbLines.map(line => ({ key: line.id, quantity: line.quantity, placedQuantity: line.quantity, unitListPrice: line.unitPrice, priceIncludesTax: taxInclusive, taxRateBps: beforeTaxRate })) };
     legacyResult = await resolvePromotionStack(tx, { ...legacyBase, storeId, orderId: order.id, customerId: order.customerId ?? undefined });
     legacyInput = { ...legacyBase, promotions: legacyResult.resolvedPromotions ?? [] };
     const legacyPerLine = projectEditStackLines(legacyInput, legacyResult);
@@ -723,7 +741,9 @@ export function previewFromPlan(plan: EditPlan): PreviewResult {
     promotion: plan.promotionRow ? { code: plan.promotionRow.code, type: plan.promotionRow.type, value: plan.promotionRow.value } : null,
     stock: plan.stock, stockOk: plan.stock.every((x) => x.ok), balance: plan.balance,
     settlementOptions: allowedSettlements(amountDue), refund, warnings: plan.warnings, address: plan.address,
-    isPreOrder: plan.isPreOrder, recipientEmail: plan.recipient, couponCodes: [...plan.working.couponCodes], previewAcceptanceHash: plan.previewAcceptanceHash,
+    isPreOrder: plan.isPreOrder, recipientEmail: plan.recipient,
+    couponCodes: plan.working.couponCodes.filter(code => !plan.credit || code.toLowerCase() !== plan.credit.creditCode.toLowerCase()),
+    previewAcceptanceHash: plan.previewAcceptanceHash,
   };
 }
 
@@ -903,7 +923,7 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
     const usage = await tx.select().from(s.promotionUsage).where(and(eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.orderId, input.orderId)));
     // Linked settlement can advance state/timestamp; every stored economic fact remains frozen.
     const beforeFingerprint = orderEditStoredFingerprint({ order: { ...order, state: a.beforeOrder.state, updatedAt: a.beforeOrder.updatedAt, receiptToken: a.beforeOrder.receiptToken },
-      lines: lines.sort((x, y) => x.id.localeCompare(y.id)), adjustments, couponCodes: await loadOrderCouponCodes(tx, order),
+      lines: lines.sort((x, y) => x.id.localeCompare(y.id)), adjustments, couponCodes: await loadOrderPricingCouponCodes(tx, order),
       usage: usage.sort((x, y) => x.id.localeCompare(y.id)), variants: a.variants.sort((x, y) => x.id.localeCompare(y.id)),
       refundPrefixDigest: refundPrefixDigest(evidence, stage.settlement.refundId) });
     const [refund] = stage.settlement.refundId ? await tx.select().from(s.refund).where(eq(s.refund.id, stage.settlement.refundId)).limit(1) : [];
@@ -1520,6 +1540,33 @@ export async function saveOrderAddress(input: SaveAddressInput): Promise<SaveAdd
 }
 
 // ── context for the admin UI ─────────────────────────────────────────────────
+/** Durable proposals contain credit bearers & activation proofs; only public edit facts cross this boundary. */
+function pendingEditContext(pending: { id: string; settlement: unknown; after: unknown }) {
+  const after = pending.after as OrderSnapshot & { proposal: unknown };
+  const proposal = readEditStageProposal(after.proposal);
+  const settlement = pending.settlement as SettlementOutcome;
+  const totals = after.totals;
+  const requirement = proposal.settlementRequirement;
+  return {
+    id: pending.id,
+    settlement: { type: settlement.type, status: settlement.status, phase: settlement.phase, amount: settlement.amount,
+      paymentId: settlement.paymentId, refundId: settlement.refundId, paymentAttemptId: settlement.paymentAttemptId,
+      refundState: settlement.refundState, message: settlement.message, paymentMethod: settlement.paymentMethod, reference: settlement.reference },
+    proposal: { version: proposal.version, editId: proposal.editId, orderId: proposal.orderId,
+      previewAcceptanceHash: proposal.previewAcceptanceHash, proposalDigest: proposal.proposalDigest,
+      settlementRequirement: { type: requirement.type, currency: requirement.currency, requiredTender: requirement.requiredTender, requiredRefund: requirement.requiredRefund } },
+    proposed: {
+      totals: { subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
+        taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, adjustmentTotal: totals.adjustmentTotal },
+      lines: after.lines.map(line => ({ id: line.id, sku: line.sku, name: line.name, unitPrice: line.unitPrice,
+        quantity: line.quantity, lineTotal: line.lineTotal, fulfilledQty: line.fulfilledQty, refundedQty: line.refundedQty })),
+      adjustments: after.adjustments.map(item => ({ label: item.label, amount: item.amount })),
+      shipping: { amount: after.shipping.amount, override: after.shipping.override, methodCode: after.shipping.methodCode },
+      shippingAddress: readAddress(after.shippingAddress), billingAddress: readAddress(after.billingAddress), isPreOrder: after.isPreOrder,
+    },
+  };
+}
+
 export async function loadEditContext(storeId: string, code: string) {
   return withStore(storeId, async (tx) => {
     const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -1541,7 +1588,7 @@ export async function loadEditContext(storeId: string, code: string) {
     return {
       code: o.code, state: o.state, currency: o.currency, couponCodes, pricingOptions: editPricingOptions({}),
       editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: pending ? 'Resolve the prepared order edit before changing its economics.' : sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
-      pendingEdit: pending ? { id: pending.id, settlement: pending.settlement, proposal: (pending.after as { proposal?: unknown } | null)?.proposal ?? null, proposed: pending.after } : null,
+      pendingEdit: pending ? pendingEditContext(pending) : null,
       lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
       adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount, actor: a.actor, createdAt: a.createdAt.toISOString() })),
       shipping: { amount: o.shippingTotal, override: o.shippingOverride, methodCode: o.shippingMethodCode ?? meta.shipping?.methodCode ?? null },

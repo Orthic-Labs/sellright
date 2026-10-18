@@ -412,6 +412,8 @@ describe('settlement paths', () => {
     const r = await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 2 }], {}, { type: 'record_payment', method: 'cash', amount: 500 });
     expect(r.amountDue).toBe(1500);
     await expectErr(commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'record_payment', method: 'cash', amount: 5000 }), 'SETTLEMENT_INVALID');
+    expect((await orderRow(o.code)).grandTotal).toBe(4500);
+    expect(await linesOf(o.code)).toHaveLength(2);
   });
 
   it('record_payment fully covering an unpaid (PendingPayment) order takes it to Paid', async () => {
@@ -546,15 +548,57 @@ describe('address editing (G5)', () => {
     const toCanada = { ...addr, city: 'Toronto', province: 'ON', postalCode: 'M5V', country: 'CA' };
     await expectErr(saveOrderAddress({ storeId: STORE, code: o.code, actor: 'a', kind: 'shipping', address: toCanada }), 'COUNTRY_CHANGE_REQUIRES_EDIT');
     expect((await orderRow(o.code)).shippingAddress).toMatchObject({ country: 'US' });
+    await withStore(STORE, (tx) => tx.update(s.productVariant).set({ price: 1500 }).where(eq(s.productVariant.id, V['A']!.id)));
+    const facts = () => withStore(STORE, async tx => ({
+      orders: await tx.select().from(s.order), lines: await tx.select().from(s.orderLine), stock: await tx.select().from(s.stock),
+      payments: await tx.select().from(s.payment), edits: await tx.select().from(s.orderEdit), audits: await tx.select().from(s.auditLog),
+    }));
+    const beforePreview = await facts();
     const op: EditOpT = { op: 'set_address', kind: 'shipping', address: toCanada };
     const p = await previewOrderEdit(STORE, o.code, [op]);
     expect(p.address.shipping).toEqual({ changed: true, countryChanged: true });
+    expect(p.before).toMatchObject({ subtotal: 2000, taxTotal: 0, grandTotal: 2500 });
+    expect(p.after.subtotal).toBe(2000); // address repricing preserves the proven merchandise list price
     expect(p.after.taxTotal).toBe(100); // 5% of 2000 items
     expect(p.balance.amountDue).toBe(100);
+    expect(await facts()).toEqual(beforePreview);
     const r = await commit(o.code, [op], {}, { type: 'record_payment', method: 'cash', reference: 'tax diff' });
     expect(r.amountDue).toBe(0);
     expect((await orderRow(o.code)).shippingAddress).toMatchObject({ country: 'CA' });
     expect((await orderRow(o.code)).taxTotal).toBe(100);
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 2, lineTax: 100 });
+    const back: EditOpT = { op: 'set_address', kind: 'shipping', address: addr };
+    const returning = await previewOrderEdit(STORE, o.code, [back]);
+    expect(returning.before).toMatchObject({ subtotal: 2000, taxTotal: 100, grandTotal: 2600 });
+    expect(returning.after).toMatchObject({ subtotal: 2000, taxTotal: 0, grandTotal: 2500 });
+    expect(returning.balance.amountDue).toBe(-100);
+    await commit(o.code, [back], {}, { type: 'leave_credit' });
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 2, lineTax: 0 });
+    const manualPayments = await withStore(STORE, tx => tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.method, 'manual'))));
+    expect(manualPayments).toHaveLength(1);
+    expect(manualPayments[0]!.amount).toBe(100);
+    expect(await audits('record_payment')).toHaveLength(1);
+  });
+
+  it('country repricing preserves an admitted inclusive list price after the live price changes', async () => {
+    await withStore(STORE, tx => tx.update(s.store).set({ taxInclusive: true }).where(eq(s.store.id, STORE)));
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }], shipping: 0 });
+    await withStore(STORE, async tx => {
+      await tx.update(s.order).set({ subtotal: 1050, grandTotal: 1050 }).where(eq(s.order.id, o.id));
+      await tx.update(s.orderLine).set({ unitPrice: 1050, lineSubtotal: 1050, lineTotal: 1050 }).where(eq(s.orderLine.orderId, o.id));
+      await tx.update(s.payment).set({ amount: 1050 }).where(eq(s.payment.orderId, o.id));
+      await tx.insert(s.taxZone).values({ storeId: STORE, name: 'CA', countries: ['CA'], rate: 500 });
+    });
+    // Admit the original zero-tax basis before changing destination or the live variant price.
+    await commit(o.code, [{ op: 'set_address', kind: 'billing', address: addr }], { notifyCustomer: false });
+    await withStore(STORE, tx => tx.update(s.productVariant).set({ price: 1500 }).where(eq(s.productVariant.id, V['A']!.id)));
+    const op: EditOpT = { op: 'set_address', kind: 'shipping', address: { ...addr, country: 'CA' } };
+    const preview = await previewOrderEdit(STORE, o.code, [op]);
+    expect(preview.before).toMatchObject({ subtotal: 1050, taxTotal: 0, grandTotal: 1050 });
+    expect(preview.after).toMatchObject({ subtotal: 1050, taxTotal: 50, grandTotal: 1050 });
+    expect(preview.balance.amountDue).toBe(0);
+    await commit(o.code, [op], { notifyCustomer: false });
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 1, lineSubtotal: 1000, lineTax: 50, lineTotal: 1050 });
   });
 });
 
@@ -588,13 +632,22 @@ describe('pay link: /pay charges ONLY the balance on a Paid order', () => {
 
   it('two successive edits each get their own balance payment (claim keyed per payment count)', async () => {
     const o = await makeOrder({});
-    await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'send_pay_link' });
+    const ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
+    await commit(o.code, ops, {}, { type: 'send_pay_link' });
     expect((await app.request(`/v1/shop/orders/${o.code}/pay`, { method: 'POST', headers: hdr, body: JSON.stringify({ method: 'stripe' }) })).status).toBe(200);
-    await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'send_pay_link' });
+    const accepted = await acceptedCommit(o.code, ops, {}, { type: 'send_pay_link' });
+    expect((await previewOrderEdit(STORE, o.code, ops)).previewAcceptanceHash).toBe(accepted.previewAcceptanceHash);
+    await commitOrderEdit(accepted);
     const r2 = await app.request(`/v1/shop/orders/${o.code}/pay`, { method: 'POST', headers: hdr, body: JSON.stringify({ method: 'stripe' }) });
     expect(r2.status).toBe(200);
     expect(await r2.json()).toMatchObject({ payment: 'Settled' });
+    expect((await commitOrderEdit(accepted)).replay).toBe(true);
     expect(chargeCalls.map((c) => c.amount)).toEqual([1000, 1000]);
+    const lines = await linesOf(o.code);
+    const snapshot = (await orderRow(o.code)).pricingSnapshot as { lines: Array<{ key: string; orderLineId: string }> };
+    expect(lines).toHaveLength(3);
+    expect(new Set(snapshot.lines.map(line => line.key)).size).toBe(3);
+    expect(new Set(snapshot.lines.map(line => line.orderLineId))).toEqual(new Set(lines.map(line => line.id)));
   });
 });
 

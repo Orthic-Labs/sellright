@@ -141,8 +141,14 @@ describe('agent seats', () => {
     expect(((await withStore(A, async (tx) => (await tx.execute(sql`SELECT status FROM product_review WHERE id = ${RA}`)).rows[0])) as { status: string }).status).toBe('approved');
     expect(((await withStore(A, async (tx) => (await tx.execute(sql`SELECT deleted_at FROM "order" WHERE code = ${ORDER_TRASH}`)).rows[0])) as { deleted_at: string | null }).deleted_at).toBeNull();
     const reqRows = await agentAudit(A, 'request');
-    expect(reqRows.length).toBe(ALLOWED.filter((x) => x.method !== 'GET').length);
+    // acceptedEditBody adds one audited preview before the ordinary edit commit.
+    expect(reqRows.length).toBe(ALLOWED.filter((x) => x.method !== 'GET').length + 1);
     for (const r of reqRows) expect([r.data.route, typeof r.data.status]).toEqual([r.data.route, 'number']); // pre-handler row, status filled in after
+    for (const phase of ['preview', 'commit']) {
+      const edits = reqRows.filter((r) => r.data.path === `/v1/admin/orders/${ORDER_EDIT}/edit/${phase}`);
+      expect(edits).toHaveLength(1);
+      expect(edits[0]).toMatchObject({ actor: a.email, data: { method: 'POST', status: 200 } });
+    }
     const prod = await withStore(A, async (tx) => (await tx.execute(sql`SELECT actor FROM audit_log WHERE entity = 'product' AND action = 'create' ORDER BY at DESC LIMIT 1`)).rows[0] as { actor: string });
     expect(prod.actor).toBe(a.email);
   });
