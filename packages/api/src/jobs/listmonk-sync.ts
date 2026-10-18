@@ -34,6 +34,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
+import { withRequestDeadline } from '../security/request-deadline.js';
 import { normalizeEmail } from '../auth/email.js';
 
 const DEFAULT_BATCH_LIMIT = 200;
@@ -111,13 +112,13 @@ function membershipResult(existing: RemoteSubscriber | undefined, c: Claimed, li
   }
 }
 
-async function syncSubscriber(cfg: ListmonkCfg & { listId: number }, c: Claimed): Promise<SyncResult> {
+async function syncSubscriber(cfg: ListmonkCfg & { listId: number }, c: Claimed, passSignal: AbortSignal): Promise<SyncResult> {
   const auth = Buffer.from(`${cfg.apiUser}:${cfg.apiToken}`).toString('base64');
   const baseUrl = cfg.url.replace(/\/$/, '');
-  const request = (path: string, init: RequestInit = {}) => safeOutboundFetch(`${baseUrl}${path}`, {
-    ...init,
+  const request = (path: string, init: RequestInit = {}) => withRequestDeadline(10_000, signal => safeOutboundFetch(`${baseUrl}${path}`, {
+    ...init, signal,
     headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' },
-  });
+  }), passSignal);
   const created = await request('/api/subscribers', {
     method: 'POST',
     body: JSON.stringify({
@@ -173,6 +174,14 @@ async function syncSubscriber(cfg: ListmonkCfg & { listId: number }, c: Claimed)
  * per-row; one bad email never blocks the rest of the batch.
  */
 export async function listmonkSync(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ synced: number; suppressed: number; skipped: number; failed: number }> {
+  const passDeadline = performance.now() + 60_000;
+  return withRequestDeadline(60_000, signal => listmonkSyncPass(opts, signal, passDeadline));
+}
+
+// Remaining provider time is shared fairly by remaining stores each pass.
+// Each store signal also bounds all of its rows & duplicate requests.
+// DB operations are awaited normally; no live work escapes the leader lock.
+async function listmonkSyncPass(opts: { limit?: number; log?: (m: string) => void }, signal: AbortSignal, passDeadline: number): Promise<{ synced: number; suppressed: number; skipped: number; failed: number }> {
   const log = opts.log ?? (() => {});
   const limit = opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_BATCH_LIMIT;
   const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
@@ -181,8 +190,10 @@ export async function listmonkSync(opts: { limit?: number; log?: (m: string) => 
   let skipped = 0;
   let failed = 0;
 
-  for (const st of stores.rows) {
+  for (const [storeIndex, st] of stores.rows.entries()) {
+    if (signal.aborted || performance.now() >= passDeadline) { log('[listmonk-sync] provider-work deadline exceeded; remaining rows stay queued'); break; }
     const cfg = await getCfg(st.id);
+    if (signal.aborted || performance.now() >= passDeadline) break;
     if (!cfg) { skipped++; continue; }
     const listId = cfg.listId;
     if (!Number.isSafeInteger(listId) || !listId || listId <= 0) {
@@ -208,25 +219,36 @@ export async function listmonkSync(opts: { limit?: number; log?: (m: string) => 
 
     const claimedIds: string[] = [];
     let storeSuppressed = 0;
+    let storeFailed = 0;
 
-    for (const c of claimed) {
-      try {
-        const outcome = await syncSubscriber({ ...cfg, listId }, c);
-        if (outcome !== 'synced') {
-          storeSuppressed++;
-          log(`[listmonk-sync] ${st.slug}: subscriber=${c.id} suppressed: preserving provider ${outcome}`);
+    const storeStartedAt = performance.now();
+    const remainingMs = passDeadline - storeStartedAt;
+    if (signal.aborted || remainingMs <= 0) break;
+    const storeBudgetMs = remainingMs / (stores.rows.length - storeIndex);
+    const storeDeadline = storeStartedAt + storeBudgetMs;
+    // Await cancellation before marking successes or moving to another store.
+    // Unattempted rows remain queued; no store receives a minimum over its share.
+    await withRequestDeadline(storeBudgetMs, async (storeSignal) => {
+      for (const c of claimed) {
+        if (storeSignal.aborted || performance.now() >= storeDeadline) break;
+        try {
+          const outcome = await syncSubscriber({ ...cfg, listId }, c, storeSignal);
+          if (outcome !== 'synced') {
+            storeSuppressed++;
+            log(`[listmonk-sync] ${st.slug}: subscriber=${c.id} suppressed: preserving provider ${outcome}`);
+          }
+          claimedIds.push(c.id);
+        } catch (e) {
+          failed++; storeFailed++;
+          // Log the per-row failure but keep the batch going — one bad email
+          // must not block the rest. The row stays unsynced and will be
+          // re-claimed next tick; if it persistently fails, ops can see it
+          // via `SELECT count(*) FROM subscriber WHERE status='confirmed'
+          // AND listmonk_synced_at IS NULL`.
+          log(`[listmonk-sync] ${st.slug}: failed to sync ${c.email}: ${e instanceof Error ? e.message : String(e)}`);
         }
-        claimedIds.push(c.id);
-      } catch (e) {
-        failed++;
-        // Log the per-row failure but keep the batch going — one bad email
-        // must not block the rest. The row stays unsynced and will be
-        // re-claimed next tick; if it persistently fails, ops can see it
-        // via `SELECT count(*) FROM subscriber WHERE status='confirmed'
-        // AND listmonk_synced_at IS NULL`.
-        log(`[listmonk-sync] ${st.slug}: failed to sync ${c.email}: ${e instanceof Error ? e.message : String(e)}`);
       }
-    }
+    }, signal);
 
     // Single batched UPDATE for the successes — one round-trip, one txn. The
     // predicate is re-checked here (status still confirmed, still unsynced) so
@@ -242,7 +264,7 @@ export async function listmonkSync(opts: { limit?: number; log?: (m: string) => 
       suppressed += storeSuppressed;
     }
 
-    if (claimed.length) log(`[listmonk-sync] ${st.slug}: claimed=${claimed.length} synced=${claimedIds.length - storeSuppressed} suppressed=${storeSuppressed} failed=${claimed.length - claimedIds.length}`);
+    if (claimed.length) log(`[listmonk-sync] ${st.slug}: claimed=${claimed.length} synced=${claimedIds.length - storeSuppressed} suppressed=${storeSuppressed} failed=${storeFailed} queued=${claimed.length - claimedIds.length - storeFailed}`);
   }
 
   log(`[listmonk-sync] done: synced=${synced} suppressed=${suppressed} failed=${failed} skipped=${skipped}`);

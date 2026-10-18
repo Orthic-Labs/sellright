@@ -4,6 +4,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
+import { withRequestDeadline } from '../security/request-deadline.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
@@ -211,10 +212,12 @@ async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
 async function lm(cfg: ListmonkCfg, path: string, init: RequestInit = {}): Promise<unknown> {
   const auth = Buffer.from(`${cfg.apiUser}:${cfg.apiToken}`).toString('base64');
   const baseUrl = cfg.url.replace(/\/$/, '');
-  const res = await safeOutboundFetch(`${baseUrl}${path}`, { ...init, headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } });
-  const text = await res.text();
-  if (!res.ok) throw new HttpError(409, `listmonk ${path} ${res.status}: ${text.slice(0, 200)}`);
-  return text ? JSON.parse(text) : {};
+  return withRequestDeadline(10_000, async signal => {
+    const res = await safeOutboundFetch(`${baseUrl}${path}`, { ...init, signal, headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } });
+    const text = await res.text();
+    if (!res.ok) throw new HttpError(409, `listmonk ${path} ${res.status}: ${text.slice(0, 200)}`);
+    return text ? JSON.parse(text) : {};
+  }, init.signal);
 }
 
 adminMarketing.openapi(
@@ -241,16 +244,23 @@ adminMarketing.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const cfg = c.req.valid('json');
-    const safeCfg = { ...cfg, url: await assertSafeOutboundUrl(cfg.url) };
-    // Verify the connection before saving.
+    const [snapshot] = await withStore(st.storeId, async (tx) =>
+      tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1),
+    );
+    const previous = (snapshot?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
+    const safeCfg = { ...cfg, url: await withRequestDeadline(10_000, signal => assertSafeOutboundUrl(cfg.url, { signal })) };
+    const listId = safeCfg.listId ?? previous?.listId;
+    if (listId === undefined || !Number.isSafeInteger(listId) || listId <= 0) throw new HttpError(409, 'Configure a positive Listmonk list ID');
+    // Both remote checks finish before taking a store-row lock.
     const lists = (await lm(safeCfg, '/api/lists')) as { data?: { total?: number } };
+    const target = await lm(safeCfg, `/api/lists/${listId}`) as { data?: { id?: number } };
+    if (target.data?.id !== listId) throw new HttpError(409, 'Listmonk list ID was not found');
     await withStore(st.storeId, async (tx) => {
       const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1).for('update');
-      const previous = (row?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
-      const listId = safeCfg.listId ?? previous?.listId;
-      if (listId === undefined || !Number.isSafeInteger(listId) || listId <= 0) throw new HttpError(409, 'Configure a positive Listmonk list ID');
-      const target = await lm(safeCfg, `/api/lists/${listId}`) as { data?: { id?: number } };
-      if (target.data?.id !== listId) throw new HttpError(409, 'Listmonk list ID was not found');
+      const current = (row?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
+      if ((['url', 'apiUser', 'apiToken', 'listId'] as const).some(key => current?.[key] !== previous?.[key])) {
+        throw new HttpError(409, 'Listmonk configuration changed; retry');
+      }
       const config = { ...((row?.config as object) ?? {}), listmonk: { ...safeCfg, listId } };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
@@ -290,17 +300,22 @@ adminMarketing.openapi(
       tx.select({ email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName }).from(s.customer).where(and(eq(s.customer.emailVerified, true))).limit(5000),
     );
     let synced = 0; const failures: string[] = [];
-    for (const cu of customers) {
-      try {
-        await lm(cfg, '/api/subscribers', { method: 'POST', body: JSON.stringify({ email: cu.email, name: [cu.firstName, cu.lastName].filter(Boolean).join(' ') || cu.email, lists: [listId], status: 'enabled', preconfirm_subscriptions: true }) });
-        synced++;
-      } catch (e) {
-        // Per-record failure is usually "already subscribed" (re-sync) — keep going,
-        // but don't pretend they all succeeded: count failures so a wholesale break
-        // (bad token / Listmonk down → 0 synced, N failed) is visible, not silent.
-        failures.push(e instanceof Error ? e.message : String(e));
+    await withRequestDeadline(60_000, async signal => {
+      for (let index = 0; index < customers.length; index++) {
+        if (signal.aborted) {
+          failures.push(...Array<string>(customers.length - index).fill('Listmonk sync deadline exceeded'));
+          break;
+        }
+        const cu = customers[index]!;
+        try {
+          await lm(cfg, '/api/subscribers', { signal, method: 'POST', body: JSON.stringify({ email: cu.email, name: [cu.firstName, cu.lastName].filter(Boolean).join(' ') || cu.email, lists: [listId], status: 'enabled', preconfirm_subscriptions: true }) });
+          synced++;
+        } catch (e) {
+          // Failed or unattempted rows remain visible in the existing counts.
+          failures.push(e instanceof Error ? e.message : String(e));
+        }
       }
-    }
+    });
     if (failures.length) logErr.error('listmonk sync partial failure', undefined, { failed: failures.length, total: customers.length, firstError: failures[0] });
     await withStore(st.storeId, async (tx) => { await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'marketing', entityId: String(listId), action: 'listmonk_sync', data: { synced, failed: failures.length } }); });
     return c.json({ synced, failed: failures.length }, 200);
