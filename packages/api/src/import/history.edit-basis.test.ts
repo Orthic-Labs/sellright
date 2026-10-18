@@ -29,10 +29,105 @@ function fixture() {
     orders, lines, shippingLines, surcharges, targetOrders, targetLines };
 }
 
+function detachedFixture() {
+  const input = fixture();
+  input.shippingLines[0]!.orderId = null;
+  input.shippingLines[0]!.sourceRecord = input.shippingLines[0]!.sourceRecord.replace('"orderId":1', '"orderId":null');
+  return input;
+}
+
 describe('imported edit basis source capture', () => {
+  it('retains complete detached history without publishing an operational basis or rewriting raw relations', () => {
+    const input = detachedFixture(), exactId = '9007199254740993';
+    input.shippingLines[0]!.id = exactId;
+    input.shippingLines[0]!.sourceRecord = input.shippingLines[0]!.sourceRecord.replace('"id":10', `"id":${exactId}`)
+      .replace('"listPrice":75', '"listPrice":9007199254740993,"exactFraction":0.123456789012345678901');
+    input.lines[0]!.shippingLineId = exactId;
+    input.lines[0]!.sourceRecord = input.lines[0]!.sourceRecord.replace('"shippingLineId":10', `"shippingLineId":${exactId}`);
+    const copy = () => ({ ...structuredClone({ ...input, id: null }), id: input.id });
+    const original = copy(), capture = buildImportedEditBasis(input)[0]!;
+    expect(capture).not.toHaveProperty('editBasisV1');
+    const retained = capture.retainedHistoryV1!;
+    expect(retained).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', reason: 'DETACHED_SHIPPING_LINE',
+      sourceKey, sourceOrderId: '1', sourceOrderRecord: input.orders[0]!.sourceRecord,
+      header: { subTotal: '9007199254740993', subTotalWithTax: '9007199254740995', shipping: '101', shippingWithTax: '111' },
+      channel: { sourceId: '1', projection: 'pricing-v1', sourceRecord: input.channels[0]!.sourceRecord,
+        orderChannelRecord: input.orderChannels[0]!.sourceRecord },
+      shippingLines: [{ sourceId: '2', sourceRecord: input.shippingLines[1]!.sourceRecord }],
+      referencedDetachedShippingLines: [{ sourceId: exactId, sourceRecord: input.shippingLines[0]!.sourceRecord }],
+      shippingMethods: [input.shippingMethods[1], input.shippingMethods[0]].map(row => ({ sourceId: row!.id, sourceRecord: row!.sourceRecord })),
+      surcharges: [{ sourceId: '3', sourceRecord: input.surcharges[0]!.sourceRecord }],
+      lines: [input.lines[1], input.lines[0]].map(row => ({ sourceId: row!.id, orderLineId: id('order-line', row!.id), sourceRecord: row!.sourceRecord })) });
+    const { sourceDigest, ...payload } = retained;
+    expect(sourceDigest).toBe(digest(payload));
+    expect(retained.referencedDetachedShippingLines[0]!.sourceRecord).toContain('0.123456789012345678901');
+    expect(input).toEqual(original);
+    expect(buildImportedEditBasis({ ...input, lines: [...input.lines].reverse(), shippingLines: [...input.shippingLines].reverse() })).toEqual([capture]);
+    for (const change of [
+      (changed: ReturnType<typeof fixture>) => { changed.shippingLines[0]!.sourceRecord += ' '; },
+      (changed: ReturnType<typeof fixture>) => { changed.shippingLines[1]!.sourceRecord += ' '; },
+      (changed: ReturnType<typeof fixture>) => { changed.shippingMethods[0]!.sourceRecord += ' '; },
+      (changed: ReturnType<typeof fixture>) => { changed.lines[1]!.sourceRecord += ' '; },
+      (changed: ReturnType<typeof fixture>) => { changed.surcharges[0]!.sourceRecord += ' '; },
+    ]) {
+      const changed = copy(); change(changed);
+      expect(buildImportedEditBasis(changed)[0]!.retainedHistoryV1!.sourceDigest).not.toBe(sourceDigest);
+    }
+  });
+
+  it('deduplicates shared detached references per order while retaining each order membership', () => {
+    const input = detachedFixture();
+    input.lines[1]!.shippingLineId = '10';
+    input.lines[1]!.sourceRecord = input.lines[1]!.sourceRecord.replace('"shippingLineId":null', '"shippingLineId":10');
+    input.orders.push({ ...input.orders[0]!, id: '2', sourceRecord: '{"id":2}' });
+    input.targetOrders.push({ ...input.targetOrders[0]!, id: id('order', '2'), metadata: {
+      ...input.targetOrders[0]!.metadata, vendure: { ...input.targetOrders[0]!.metadata.vendure, id: 2 } } });
+    input.orderChannels.push({ orderId: '2', channelId: '1', sourceRecord: '{"orderId":2,"channelId":1}' });
+    input.lines.push({ id: '3', orderId: '2', shippingLineId: '10', sourceRecord: '{"id":3,"orderId":2,"shippingLineId":10}' });
+    input.targetLines.push({ id: id('order-line', '3'), storeId, orderId: id('order', '2'), metadata: { vendure: { id: 3, listPrice: 1 } } });
+    const captures = buildImportedEditBasis(input);
+    expect(captures).toHaveLength(2);
+    for (const capture of captures) {
+      expect(capture).not.toHaveProperty('editBasisV1');
+      expect(capture.retainedHistoryV1!.referencedDetachedShippingLines).toEqual([{ sourceId: '10', sourceRecord: input.shippingLines[0]!.sourceRecord }]);
+      const { sourceDigest, ...payload } = capture.retainedHistoryV1!;
+      expect(sourceDigest).toBe(digest(payload));
+    }
+    expect(captures[0]!.retainedHistoryV1!.lines.map(line => line.sourceId)).toEqual(['2', '10']);
+    expect(captures[1]!.retainedHistoryV1).toMatchObject({ sourceOrderId: '2', shippingLines: [],
+      shippingMethods: [{ sourceId: '6', sourceRecord: input.shippingMethods[0]!.sourceRecord }],
+      lines: [{ sourceId: '3', orderLineId: id('order-line', '3'), sourceRecord: input.lines[2]!.sourceRecord }] });
+    const multiple = detachedFixture();
+    multiple.shippingLines[1]!.orderId = null;
+    multiple.shippingLines[1]!.sourceRecord = multiple.shippingLines[1]!.sourceRecord.replace('"orderId":1', '"orderId":null');
+    multiple.lines[1]!.shippingLineId = '2';
+    multiple.lines[1]!.sourceRecord = multiple.lines[1]!.sourceRecord.replace('"shippingLineId":null', '"shippingLineId":2');
+    expect(buildImportedEditBasis(multiple)[0]!.retainedHistoryV1!.referencedDetachedShippingLines.map(row => row.sourceId)).toEqual(['2', '10']);
+  });
+
+  it('does not let detached history hide missing, cross-order, substituted or unused shipping facts', () => {
+    const cases = [
+      (input: ReturnType<typeof fixture>) => { input.shippingLines.shift(); },
+      (input: ReturnType<typeof fixture>) => {
+        input.shippingLines[0]!.orderId = '999';
+        input.shippingLines[0]!.sourceRecord = input.shippingLines[0]!.sourceRecord.replace('"orderId":null', '"orderId":999');
+      },
+      (input: ReturnType<typeof fixture>) => { input.shippingLines[0]!.sourceRecord = input.shippingLines[0]!.sourceRecord.replace('"orderId":null', '"orderId":1'); },
+      (input: ReturnType<typeof fixture>) => { input.lines[0]!.sourceRecord = input.lines[0]!.sourceRecord.replace('"shippingLineId":10', '"shippingLineId":2'); },
+      (input: ReturnType<typeof fixture>) => {
+        input.shippingLines[1]!.orderId = null;
+        input.shippingLines[1]!.sourceRecord = input.shippingLines[1]!.sourceRecord.replace('"orderId":1', '"orderId":null');
+      },
+      (input: ReturnType<typeof fixture>) => { input.shippingMethods.shift(); },
+      (input: ReturnType<typeof fixture>) => { input.surcharges[0]!.sourceRecord = input.surcharges[0]!.sourceRecord.replace('"orderId":1', '"orderId":2'); },
+    ];
+    for (const change of cases) { const input = detachedFixture(); change(input); expect(() => buildImportedEditBasis(input)).toThrow(/shipping|ownership/); }
+  });
+
   it('retains raw LIST/header/shipping/surcharge/line evidence, with numeric identity order & source-bound digest', () => {
     const input = fixture(), original = structuredClone(input.targetOrders);
-    const { orderId, editBasisV1 } = buildImportedEditBasis(input)[0]!;
+    const capture = buildImportedEditBasis(input)[0]!, { orderId } = capture, editBasisV1 = capture.editBasisV1!;
+    expect(capture).not.toHaveProperty('retainedHistoryV1');
     expect(orderId).toBe(id('order', '1'));
     expect(editBasisV1).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey, sourceOrderId: '1',
       sourceOrderRecord: sourceRecord, header: { subTotal: '9007199254740993', subTotalWithTax: '9007199254740995', shipping: '101', shippingWithTax: '111' },
@@ -54,7 +149,7 @@ describe('imported edit basis source capture', () => {
     input.orders[0]!.shippingWithTax = null;
     input.lines.forEach(line => { line.shippingLineId = null; line.sourceRecord = line.sourceRecord.replace('"shippingLineId":10', '"shippingLineId":null'); });
     input.shippingLines = []; input.shippingMethods = []; input.surcharges = [];
-    const basis = buildImportedEditBasis(input)[0]!.editBasisV1;
+    const basis = buildImportedEditBasis(input)[0]!.editBasisV1!;
     expect(basis.header.shipping).toBeNull(); expect(basis.header.shippingWithTax).toBeNull();
     expect(basis.shippingLines).toEqual([]); expect(basis.surcharges).toEqual([]);
     expect(basis.shippingMethods).toEqual([]);
@@ -62,9 +157,9 @@ describe('imported edit basis source capture', () => {
   });
 
   it('binds digest to source identity & every opaque source record', () => {
-    const before = buildImportedEditBasis(fixture())[0]!.editBasisV1.sourceDigest;
+    const before = buildImportedEditBasis(fixture())[0]!.editBasisV1!.sourceDigest;
     const changed = fixture(); changed.lines[0]!.sourceRecord += ' ';
-    expect(buildImportedEditBasis(changed)[0]!.editBasisV1.sourceDigest).not.toBe(before);
+    expect(buildImportedEditBasis(changed)[0]!.editBasisV1!.sourceDigest).not.toBe(before);
     const other = fixture(); other.sourceKey = 'another-source';
     expect(() => buildImportedEditBasis(other)).toThrow(/source\/tenant/);
   });
@@ -104,14 +199,14 @@ describe('imported edit basis source capture', () => {
   });
 
   it('binds tax mode, selected membership & historical method records into each source digest', () => {
-    const original = buildImportedEditBasis(fixture())[0]!.editBasisV1;
+    const original = buildImportedEditBasis(fixture())[0]!.editBasisV1!;
     for (const change of [
       (input: ReturnType<typeof fixture>) => { input.channels[0]!.sourceRecord = input.channels[0]!.sourceRecord.replace('true', 'false'); },
       (input: ReturnType<typeof fixture>) => { input.orderChannels[0]!.sourceRecord += ' '; },
       (input: ReturnType<typeof fixture>) => { input.shippingMethods[0]!.sourceRecord = input.shippingMethods[0]!.sourceRecord.replace('historical', 'retired'); },
     ]) {
       const input = fixture(); change(input);
-      expect(buildImportedEditBasis(input)[0]!.editBasisV1.sourceDigest).not.toBe(original.sourceDigest);
+      expect(buildImportedEditBasis(input)[0]!.editBasisV1!.sourceDigest).not.toBe(original.sourceDigest);
     }
     expect(original.shippingMethods[1]!.sourceRecord).toContain('9007199254740993');
     expect(original.channel.sourceRecord).toContain('9007199254740993');
@@ -168,7 +263,7 @@ describe('imported edit basis source capture', () => {
     const nullable = fixture(); nullable.shippingLines[0]!.shippingMethodId = null;
     nullable.shippingLines[0]!.sourceRecord = nullable.shippingLines[0]!.sourceRecord.replace('"shippingMethodId":6', '"shippingMethodId":null');
     nullable.shippingMethods.shift();
-    expect(buildImportedEditBasis(nullable)[0]!.editBasisV1.shippingMethods.map(method => method.sourceId)).toEqual(['5']);
+    expect(buildImportedEditBasis(nullable)[0]!.editBasisV1!.shippingMethods.map(method => method.sourceId)).toEqual(['5']);
   });
 
   it('keeps bigint method identities exact & limits each order to its own referenced methods', () => {
@@ -183,8 +278,8 @@ describe('imported edit basis source capture', () => {
     input.shippingLines[1]!.orderId = '2';
     input.shippingLines[1]!.sourceRecord = input.shippingLines[1]!.sourceRecord.replace('"orderId":1', '"orderId":2');
     const captures = buildImportedEditBasis(input);
-    expect(captures[0]!.editBasisV1.shippingMethods.map(method => method.sourceId)).toEqual([exactId]);
-    expect(captures[1]!.editBasisV1.shippingMethods.map(method => method.sourceId)).toEqual(['5']);
+    expect(captures[0]!.editBasisV1!.shippingMethods.map(method => method.sourceId)).toEqual([exactId]);
+    expect(captures[1]!.editBasisV1!.shippingMethods.map(method => method.sourceId)).toEqual(['5']);
     input.shippingMethods[0]!.sourceRecord = '{"id":9007199254740992,"code":"historic"}';
     expect(() => buildImportedEditBasis(input)).toThrow(/method identity mismatch/);
   });
