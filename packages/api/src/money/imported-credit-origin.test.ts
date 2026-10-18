@@ -66,10 +66,13 @@ function ordinary(quantity: number) {
 
 describe('retained imported credit origin', () => {
   it('requires canonical retained account currencyCode without accepting a normalized currency alias', () => {
-    const valid=fixture();
-    expect(JSON.parse(buildImportedCreditOrigin(valid).accountSource.sourceRecord)).toMatchObject({currencyCode:'USD'});
+    const valid=fixture(),sourceRecord=buildImportedCreditOrigin(valid).accountSource.sourceRecord;
+    if (typeof sourceRecord !== 'string') throw new Error('Expected retained account source record');
+    expect(JSON.parse(sourceRecord)).toMatchObject({currencyCode:'USD'});
     for (const currencyCode of [undefined,'EUR']) {
-      const input=fixture(),account=JSON.parse(input.accountSource.sourceRecord);
+      const input=fixture(),sourceRecord=input.accountSource.sourceRecord;
+      if (typeof sourceRecord !== 'string') throw new Error('Expected retained account source record');
+      const account=JSON.parse(sourceRecord);
       input.accountSource.sourceRecord=JSON.stringify({...account,currencyCode,currency:'USD'});
       input.accountSource.sourceDigest=orderEditStoredFingerprint({format:'retained-pg-jsonb-text-v1',
         account:input.accountSource.sourceRecord,promotion:input.accountSource.sourcePromotionRecord});

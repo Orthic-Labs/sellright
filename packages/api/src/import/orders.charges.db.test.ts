@@ -53,19 +53,19 @@ function source(options: { stale?: boolean; paid?: number; refund?: number; quan
 }
 
 async function fixture<T>(options: Parameters<typeof source>[0], fn: (input: {
-  ctx: ImportContext; tx: ReturnType<typeof drizzle>; data: ReturnType<typeof source>;
+  ctx: ImportContext; tx: ImportContext['tx']; data: ReturnType<typeof source>;
 }) => Promise<T>) {
   const client = await pool.connect();
   const storeId = randomUUID(), sourceKey = 'synthetic-charges';
   try {
     await client.query('BEGIN');
     await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const tx = drizzle(client);
+    const tx: ImportContext['tx'] = drizzle(client, { schema: s, casing: 'snake_case' });
     await tx.insert(s.store).values({ id: storeId, slug: `charges-${storeId}`, name: 'Synthetic charges', currency: 'USD' });
     const data = source(options);
-    const ctx = { tx, storeId, sourceKey, channelId: 1, currency: 'USD', gatewayAccounts: {}, exclusions: [],
+    const ctx: ImportContext = { tx, source: client, storeId, sourceKey, channelId: 1, currency: 'USD', gatewayAccounts: {}, exclusions: [],
       sourceColumns: new Map([['order_line', new Set(['listPriceIncludesTax', 'adjustments', 'taxLines', 'orderPlacedQuantity'])]]),
-      id: (entity: string, id: unknown) => migrationId(storeId, sourceKey, entity, id), q: data.q } as unknown as ImportContext;
+      id: (entity: string, id: unknown) => migrationId(storeId, sourceKey, entity, id), q: data.q };
     return await fn({ ctx, tx, data });
   } finally {
     await client.query('ROLLBACK');
