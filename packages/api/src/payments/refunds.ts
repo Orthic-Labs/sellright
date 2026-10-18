@@ -446,7 +446,9 @@ export async function enqueueRefundSettledEmail(
 
 /** CALLER CONTRACT (STOREKIT §5.3): `tx` must be the transaction of a withLockedSet over this
  *  refund's order (requestRefund, the Sezzle reconcile loop, the gateway refund reconcile). The
- *  order/licence lock set is then already held; the row locks below are re-takes on rows the set holds. */
+ *  Stripe webhook's runMoney plans its refund payment's order before invoking reconciliation too.
+ *  L2 licences, L3 order & L4 reservations are already held before the L5 attempt lock below;
+ *  later order/licence writes re-take held rows, including shared revokeRefundLicenses calls. */
 /** Transactional and monotonic: observed money remains settled while failed
  * stock or credit effects retain durable reconciliation state.
  *  THE shared finalizer (SR-04): the synchronous request path and the inbound

@@ -43,7 +43,7 @@ const importedCredit = (allocation = [34, 34, 33], returned = false, historical 
     lines: [{ sourceId: '7', orderLineId: lineId, sourceRecord: JSON.stringify(rawLine) }], shippingLines: [], surcharges: [] };
   const metadata = { vendure: { id: 9, sourceKey, editBasisV1: { ...basis, sourceDigest: orderEditStoredFingerprint(basis) } } };
   const lines = [{ id: lineId, orderId, storeId, quantity: 2, ...money, metadata: { vendure: { id: 7 } } }];
-  const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currency: 'USD' });
+  const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currencyCode: 'USD' });
   const sourcePromotionRecord = JSON.stringify({ id: 5, actions: [{ code: 'account_credit_discount' }], conditions: [{ code: 'account_credit_eligible' }] });
   const accountSource = { id: accountId, storeId, promotionId, currency: 'USD', sourceKey, sourceId: '4', sourceRecord, sourcePromotionRecord,
     sourceDigest: orderEditStoredFingerprint({ format: 'retained-pg-jsonb-text-v1', account: sourceRecord, promotion: sourcePromotionRecord }),
@@ -217,6 +217,9 @@ describe('refund cash unit & independent credit unit authority', () => {
         sequence: 1, freeShipping: false, conditions: null, credit: { accountId: account, availableCents: 101 } }],
       shipping: 0, shippingTaxRateBps: 0, shippingIncludesTax: true, couponContext: { activeVerifications: [] } };
     const origin = buildOrderPricingSnapshot(input, calculatePromotionStack(input), new Map([[id, id]]));
+    // Signed -101 proration floors to [-34,-34,-34], then awards its +1
+    // remainder to first index: immutable credit custody is [33,34,34].
+    expect(origin.selectedCredit!.allocation[id]).toEqual([33, 34, 34]);
     const ordinaryInput = { ...input, couponCodes: [], promotions: [], lines: [{ ...input.lines[0]!, quantity: 4 }] };
     const result = calculatePromotionStack(ordinaryInput);
     const ordinary = buildOrderPricingSnapshot(ordinaryInput, result, new Map([[id, id]]));
@@ -259,20 +262,20 @@ describe('refund cash unit & independent credit unit authority', () => {
     const lines = [{ id, quantity: 4, unitPrice: 100, lineTotal: snapshot.lines[0]!.lineGross }];
     const order = { currency: 'USD', pricingSnapshot: snapshot };
     const first = prepareCreditUnitReturns(order, lines, evidence, selection(), [], pricingSources);
-    expect(first.lines[0]).toMatchObject({ positions: [0], originalIndexes: [2], creditCents: [33] });
+    expect(first.lines[0]).toMatchObject({ positions: [0], originalIndexes: [2], creditCents: [34] });
     const brokenReceipt = structuredClone(pricingSources);
     brokenReceipt[0]!.settlement.activationReceipt.requestDigest = 'f'.repeat(64);
     expect(() => prepareCreditUnitReturns(order, lines, evidence, selection(), [], brokenReceipt)).toThrow(/activation operation receipt/);
     const basis = refundUnitBases(order, lines, evidence, pricingSources).get(id)!;
-    expect(basis).toEqual([67, 100, 66, 66]);
-    expect(refundLineCashAmount(lines[0]!, 1, [67], true)).toBe(67);
+    expect(basis).toEqual([66, 100, 67, 66]);
+    expect(refundLineCashAmount(lines[0]!, 1, [66], true)).toBe(66);
     expect(() => prepareCreditUnitReturns(order, lines, { ...evidence, refunds: [{ id: '77777777-7777-4777-8777-777777777777', state: 'Pending', metadata: null,
-      lines: [{ orderLineId: id, quantity: 1, amount: 67 }] }] }, selection(), [], pricingSources)).toThrow(/frozen/);
+      lines: [{ orderLineId: id, quantity: 1, amount: 66 }] }] }, selection(), [], pricingSources)).toThrow(/frozen/);
     const returned = planCreditUnitReturn({ ...evidence, orderLineId: id, originalIndexes: [2],
       operation: { kind: 'refund', id: '77777777-7777-4777-8777-777777777777' } });
     if (!returned.ok || !returned.posting) throw new Error('Expected indexed return');
     const originalRefund = { id: '77777777-7777-4777-8777-777777777777', state: 'Settled', metadata: { creditUnitReturns: first },
-      lines: [{ orderLineId: id, quantity: 1, amount: 67 }] };
+      lines: [{ orderLineId: id, quantity: 1, amount: 66 }] };
     const live = { ...evidence, history: [{ ...returned.posting, id: 'return-row' }], refunds: [originalRefund] };
     const next = prepareCreditUnitReturns(order, lines, live, selection(), [], pricingSources);
     expect(next.lines[0]).toMatchObject({ positions: [1], originalIndexes: [null], creditCents: [0] });

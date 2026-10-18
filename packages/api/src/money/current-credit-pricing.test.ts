@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { migrationId } from '../import/context.js';
 import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
 import { buildEditStageProposal } from '../orders/edit-stage.js';
-import { planEditCreditFunding, planCreditUnitReturn, originalCreditUnitId, creditReturnSnapshotDigest,
+import { planEditCreditFunding, planCreditUnitReturn, readCreditFundingState, originalCreditUnitId, creditReturnSnapshotDigest,
   type EditFundingHistoryRow, type EditFundingRedemption, type CreditRefundEvidence, type CreditUnitReturnsV2 } from '../account-credit/edit-funding.js';
 import { calculatePromotionStack, type StackInput } from './promotion-stack.js';
 import { buildOrderPricingSnapshot, readOrderPricingSnapshot, type OrderPricingSnapshotV1 } from './pricing-snapshot.js';
@@ -197,7 +197,7 @@ describe('current edited credit pricing proof', () => {
     const baseQuote = quote(50, creditReturnSnapshotDigest(second), 'revalidate-promotions');
     const thirdInput = { ...i, ordinary: baseQuote.saved, ordinaryUnitFacts: baseQuote.ordinaryUnitFacts, predecessor: secondView,
       lineage: { editId: 'cccccccc-0000-4000-8000-000000000008', predecessorSnapshotDigest: creditReturnSnapshotDigest(second), consumedUnitIds: [] } };
-    expect(() => buildCurrentCreditPricingSnapshot(thirdInput)).toThrow('ancestry');
+    expect(() => buildCurrentCreditPricingSnapshot(thirdInput)).toThrow('activated pricing row custody required');
     expect(buildCurrentCreditPricingSnapshot({ ...thirdInput, pricingSources: sources }).totals.grandTotal).toBe(i.origin.totals.grandTotal);
     const forged = structuredClone(sources); forged[1]!.settlement.activationReceipt.activatedSnapshotHash = '0'.repeat(64);
     expect(() => buildCurrentCreditPricingSnapshot({ ...thirdInput, pricingSources: forged })).toThrow('receipt');
@@ -238,8 +238,10 @@ describe('current edited credit pricing proof', () => {
     expect(saved.lines[0]!.cashRefundGrossUnits).toEqual([0, 0, 0]);
     expect(saved.credit.atPricingRestoreIds).toEqual(i.evidence.history.map(h => h.id).sort());
     expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: { ...i.evidence, history: [] } })).toThrow('absent');
-    const changed = structuredClone(i.evidence); changed.history[0]!.amount += 1;
-    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: changed })).toThrow('digest');
+    const changed = structuredClone(i.evidence);
+    for (const row of changed.history) row.allocation=JSON.stringify({...JSON.parse(row.allocation!),requestDigest:'f'.repeat(64)});
+    expect(readCreditFundingState(changed).ok).toBe(true);
+    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: changed })).toThrow('activation restoration digest');
     expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: { ...i.evidence, historyComplete: false } as never })).toThrow('Complete');
   });
 

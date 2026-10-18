@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
   locked: vi.fn(), evidence: vi.fn(), anchor: vi.fn(), refund: vi.fn(), fence: vi.fn(), bind: vi.fn(),
 }));
 vi.mock('../db/client.js', () => ({ withAdvisoryLock: (_key: string, action: () => unknown) => action() }));
-vi.mock('../db/locks.js', () => ({ withLockedSet: mocks.locked }));
+vi.mock('../db/locks.js', async importOriginal => ({ ...await importOriginal<typeof import('../db/locks.js')>(),
+  withLockedSet: mocks.locked }));
 vi.mock('../orders/edit-stage.js', async importOriginal => ({ ...await importOriginal<typeof import('../orders/edit-stage.js')>(),
   assertNoPendingOrderEdit: mocks.fence }));
 vi.mock('../orders/order-edit-service.js', () => ({ bindPreparedEditRefund: mocks.bind }));

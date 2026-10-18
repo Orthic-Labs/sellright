@@ -60,7 +60,7 @@ function ordinary(quantity: number) {
     lines: [{ key: LINE, quantity, placedQuantity: 3, unitListPrice: 100, priceIncludesTax: false, taxRateBps: 0 }],
     shipping: 0, shippingTaxRateBps: 0, shippingIncludesTax: false, couponContext: { activeVerifications: [] } };
   const result = calculatePromotionStack(input);
-  return { snapshot: buildOrderPricingSnapshot(input, result, new Map([[LINE, LINE]])),
+  return { input, snapshot: buildOrderPricingSnapshot(input, result, new Map([[LINE, LINE]])),
     facts: { [LINE]: { sourceAdjustmentTotal: result.lineSnapshots[0]!.sourceAdjustmentTotal!, sourceAdjustmentDivisor: result.lineSnapshots[0]!.sourceAdjustmentDivisor! } } };
 }
 
@@ -168,7 +168,7 @@ describe('retained imported credit origin', () => {
     input.totals.taxTotal = -60; input.totals.grandTotal = -161;
     const { origin, view, evidence } = adopt(input), current = ordinary(3);
     const stackInput: StackInput = { currency: 'USD', pricesIncludeTax: false, phase: 'PaymentSettled', couponCodes: [], promotions: [],
-      lines: current.snapshot.lines, shipping: 0, shippingIncludesTax: false, shippingTaxRateBps: 0, couponContext: { activeVerifications: [] },
+      lines: current.input.lines, shipping: 0, shippingIncludesTax: false, shippingTaxRateBps: 0, couponContext: { activeVerifications: [] },
       adjustments: [{ amount: -300, sourceSurcharge: { sourceId: '70', sourceDigest: metadata.vendure.editBasisV1.sourceDigest, net: -300, gross: -360 } }] };
     const result = calculatePromotionStack(stackInput), saved = buildCurrentCreditPricingSnapshot({ origin,
       ordinary: buildOrderPricingSnapshot(stackInput, result, new Map([[LINE, LINE]])), ordinaryUnitFacts: current.facts,
@@ -190,7 +190,7 @@ describe('retained imported credit origin', () => {
       const net=amount-20,gross=Math.round(net*1.1);
       const stackInput: StackInput = { currency:'USD',pricesIncludeTax:false,phase:'PaymentSettled',couponCodes:[],
         promotions:[{id:'free-now',code:null,kind:'free_shipping',scope:'order',value:0,priority:0,sequence:0,freeShipping:true,conditions:[]}],
-        lines:current.snapshot.lines,shipping:net,shippingIncludesTax:false,shippingTaxRateBps:0,couponContext:{activeVerifications:[]},
+        lines:current.input.lines,shipping:net,shippingIncludesTax:false,shippingTaxRateBps:0,couponContext:{activeVerifications:[]},
         retainedShipping:{sourceDigest:creditReturnSnapshotDigest(origin),mode:'recalculate-keep-promotions',lines:[{sourceId:'60',net,gross}],
           repricedBasis:[{sourceId:'60',amount,includesTax:false,taxRateBps:1000}]} };
       const result=calculatePromotionStack(stackInput),saved=buildCurrentCreditPricingSnapshot({origin,evidence,predecessor:view,

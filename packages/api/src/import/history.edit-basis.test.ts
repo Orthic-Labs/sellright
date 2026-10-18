@@ -135,7 +135,11 @@ describe('imported edit basis source capture', () => {
       (input: ReturnType<typeof fixture>) => { input.channels[0]!.sourceRecord = input.channels[0]!.sourceRecord.replace('"id":1', '"id":2'); },
       (input: ReturnType<typeof fixture>) => { input.channels[0]!.sourceRecord = input.channels[0]!.sourceRecord.replace('true', 'null'); },
       (input: ReturnType<typeof fixture>) => { input.channels[0]!.sourceRecord = input.channels[0]!.sourceRecord.replace('USD', 'EUR'); },
-      (input: ReturnType<typeof fixture>) => { input.channels[0]!.sourceRecord = input.channels[0]!.sourceRecord.replace('}', ',"token":"must-not-retain"}'); },
+      (input: ReturnType<typeof fixture>) => {
+        const channel = JSON.parse(input.channels[0]!.sourceRecord);
+        channel.token = 'must-not-retain';
+        input.channels[0]!.sourceRecord = JSON.stringify(channel);
+      },
     ];
     for (const change of cases) { const input = fixture(); change(input); expect(() => buildImportedEditBasis(input)).toThrow(); }
   });
