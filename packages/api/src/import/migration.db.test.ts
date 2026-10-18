@@ -761,6 +761,52 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' } });
   });
 
+  it('archives globally referenced detached shipping history without an operational edit basis', async () => {
+    await resetSource('rh', 'detached-' + randomUUID().slice(0, 8));
+    await sourcePool.query(`INSERT INTO shipping_method (id,code,checker,calculator,"deletedAt")
+      SELECT 2,'detached-history',checker,calculator,'2020-01-01' FROM shipping_method WHERE id=1`);
+    await sourcePool.query(`INSERT INTO shipping_line VALUES
+      (7,1,1,0,false,'[]','[]'), (8,NULL,2,775,false,'[]','[{"taxRate":10}]')`);
+    await sourcePool.query('UPDATE order_line SET "shippingLineId"=8 WHERE id=1');
+    await sourcePool.query('ALTER TABLE shipping_line ADD COLUMN "customFieldsExact" jsonb');
+    await sourcePool.query(`UPDATE shipping_line SET "customFieldsExact"=$1::jsonb WHERE id=8`,
+      [String.raw`{"unsafe":9007199254740993,"fraction":0.123456789012345678901}`]);
+    const raw = (await sourcePool.query(`SELECT
+      (SELECT to_jsonb(o)::text FROM "order" o WHERE id=1) AS header,
+      (SELECT to_jsonb(l)::text FROM order_line l WHERE id=1) AS line,
+      (SELECT to_jsonb(l)::text FROM shipping_line l WHERE id=7) AS owned,
+      (SELECT to_jsonb(l)::text FROM shipping_line l WHERE id=8) AS detached,
+      (SELECT to_jsonb(m)::text FROM shipping_method m WHERE id=2) AS method`)).rows[0];
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(await targetRows(storeId, 'order')).toEqual([]);
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const orderId = migrationId(storeId, 'vendure:test', 'order', 1);
+    const order = await targetOne(storeId, 'order', `AND id = '${orderId}'`);
+    expect(order.metadata.vendure).not.toHaveProperty('editBasisV1');
+    const retained = order.metadata.vendure.retainedHistoryV1;
+    expect(retained).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', reason: 'DETACHED_SHIPPING_LINE',
+      sourceKey: 'vendure:test', sourceOrderId: '1', sourceOrderRecord: raw.header,
+      header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' },
+      shippingLines: [{ sourceId: '7', sourceRecord: raw.owned }],
+      referencedDetachedShippingLines: [{ sourceId: '8', sourceRecord: raw.detached }],
+      lines: [{ sourceId: '1', orderLineId: migrationId(storeId, 'vendure:test', 'order-line', 1), sourceRecord: raw.line }] });
+    expect(retained.shippingMethods.map((method: { sourceId: string }) => method.sourceId)).toEqual(['1', '2']);
+    expect(retained.shippingMethods[1]).toEqual({ sourceId: '2', sourceRecord: raw.method });
+    expect(retained.referencedDetachedShippingLines[0].sourceRecord).toContain('9007199254740993');
+    expect(retained.referencedDetachedShippingLines[0].sourceRecord).toContain('0.123456789012345678901');
+    const { sourceDigest, ...payload } = retained;
+    expect(sourceDigest).toBe(digest(payload));
+    expect(order).toMatchObject({ subtotal: 1000, discount_total: 0, shipping_total: 0, tax_total: 0, grand_total: 1000 });
+    expect((await targetRows(storeId, 'payment', `AND order_id = '${orderId}'`)).map(payment => payment.amount)).toEqual([1000]);
+    expect(await targetOne(storeId, 'order_line', `AND order_id = '${orderId}'`))
+      .toMatchObject({ unit_price: 1000, line_subtotal: 1000, line_discount: 0, line_tax: 0, line_total: 1000 });
+    const unaffected = await targetOne(storeId, 'order', `AND id = '${migrationId(storeId, 'vendure:test', 'order', 2)}'`);
+    expect(unaffected.metadata.vendure).toHaveProperty('editBasisV1');
+    expect(unaffected.metadata.vendure).not.toHaveProperty('retainedHistoryV1');
+  });
+
   it('refuses historical edit-basis capture when a shipping line names a missing source method', async () => {
     await resetSource('rh', 'missing-method-' + randomUUID().slice(0, 8));
     await sourcePool.query(`INSERT INTO shipping_line VALUES (7,1,999,0,false,'[]','[]')`);

@@ -18,6 +18,7 @@ import * as s from '../db/schema.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { derivePaymentStatus } from './status.js';
+import { retainedDetachedHistoryFixture } from '../import/retained-history-fixture.js';
 
 const refundCalls: Array<{ providerRef: string | null; amount: number; idempotencyKey?: string }> = [];
 const chargeCalls: Array<{ orderCode: string; amount: number }> = [];
@@ -167,6 +168,34 @@ beforeEach(async () => {
 afterAll(async () => { await wipe(); });
 
 describe('preview (stateless)', () => {
+  it('keeps retained detached import history address-only & denies economic preview/commit without effects', async () => {
+    const o = await makeOrder({}), line = (await linesOf(o.code))[0]!;
+    const original = await orderRow(o.code);
+    const metadata = retainedDetachedHistoryFixture({ storeId: STORE, orderId: o.id, orderLineId: line.id, metadata: original.metadata });
+    await withStore(STORE, tx => tx.update(s.order).set({ metadata }).where(eq(s.order.id, o.id)));
+    const snapshot = () => withStore(STORE, async tx => ({
+      orders: await tx.select().from(s.order), lines: await tx.select().from(s.orderLine),
+      stock: await tx.select().from(s.stock), payments: await tx.select().from(s.payment),
+      edits: await tx.select().from(s.orderEdit), credit: await tx.select().from(s.accountCreditTransaction),
+      outbox: await tx.select().from(s.emailOutbox), audits: await tx.select().from(s.auditLog),
+    }));
+    const before = await snapshot(), ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
+    expect((await loadEditContext(STORE, o.code)).editable).toMatchObject({ items: false, address: true, addressOnly: true });
+    await expectErr(previewOrderEdit(STORE, o.code, ops), 'ORDER_PRICING_EDIT_UNSUPPORTED');
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'owner@example.test',
+      principalKind: 'human', ops, expectedGrandTotal: o.grandTotal, idempotencyKey: 'detached-denied',
+      notifyCustomer: true, settlement: { type: 'leave_due' } }), 'ORDER_PRICING_EDIT_UNSUPPORTED');
+    expect(await snapshot()).toEqual(before);
+    expect(refundCalls).toEqual([]); expect(chargeCalls).toEqual([]); expect(intentSpy.calls).toEqual([]);
+    expect(stockHook.onStockChanged).not.toHaveBeenCalled();
+    const address = { fullName: 'New Name', line1: '9 New St', line2: null, city: 'Dallas', province: 'TX', postalCode: '75001', country: 'US', phone: null };
+    expect((await saveOrderAddress({ storeId: STORE, code: o.code, actor: 'owner@example.test', kind: 'shipping', address })).changed).toBe(true);
+    const saved = await orderRow(o.code);
+    expect(saved.grandTotal).toBe(o.grandTotal);
+    expect(saved.metadata).toEqual(before.orders[0]!.metadata);
+    expect(saved.pricingSnapshot).toBeNull();
+  });
+
   it('shows new totals, per-line diff, stock check and balance — and writes nothing', async () => {
     const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }, { sku: 'B', qty: 1 }] }); // 2000+2000+500 = 4500
     const line = (await linesOf(o.code)).find((l) => l.variantSku === 'B')!;

@@ -3,6 +3,7 @@
   "exclude": [
     "src/**/*.test.ts",
     "src/db/rls-test-utils.ts",
-    "src/db/test-database-url.ts"
+    "src/db/test-database-url.ts",
+    "src/import/retained-history-fixture.ts"
   ]
 }
