@@ -702,16 +702,26 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     // its 500-cent basis into a new operational shipping charge.
     await sourcePool.query(`INSERT INTO shipping_line VALUES
       (7,1,1,500,false,'[{"amount":-500,"type":"PROMOTION","description":"Historical shipping waiver"}]','[{"taxRate":0}]')`);
-    await sourcePool.query(`INSERT INTO surcharge VALUES (9,1,0,false,'[]')`);
+    await sourcePool.query('ALTER TABLE surcharge ADD COLUMN description text');
+    await sourcePool.query(`INSERT INTO surcharge (id,"orderId","listPrice","listPriceIncludesTax","taxLines",description)
+      VALUES (9,1,0,false,'[]','Historical surcharge')`);
     await sourcePool.query('UPDATE order_line SET "shippingLineId"=7, "taxCategoryId"=1 WHERE id=1');
     await sourcePool.query('ALTER TABLE order_line ADD COLUMN "customFieldsRetained" jsonb');
+    await sourcePool.query('ALTER TABLE channel ADD COLUMN token text');
+    await sourcePool.query('UPDATE channel SET token=$1', ['must-not-enter-edit-basis']);
+    await sourcePool.query('ALTER TABLE shipping_method ADD COLUMN "customFieldsRetained" jsonb');
     const exactFacts = String.raw`{"unsafe":9007199254740993,"fraction":0.123456789012345678901,"nullable":null}`;
     await sourcePool.query('UPDATE order_line SET "customFieldsRetained"=$1::jsonb WHERE id=1', [exactFacts]);
+    await sourcePool.query('UPDATE shipping_method SET "deletedAt"=$1, "customFieldsRetained"=$2::jsonb WHERE id=1', ['2020-01-01', exactFacts]);
     const original = (await sourcePool.query(`SELECT
       (SELECT to_jsonb(o)::text FROM "order" o WHERE id=1) AS header,
       (SELECT to_jsonb(l)::text FROM order_line l WHERE id=1) AS line,
       (SELECT to_jsonb(l)::text FROM shipping_line l WHERE id=7) AS shipping,
-      (SELECT to_jsonb(c)::text FROM surcharge c WHERE id=9) AS surcharge`)).rows[0];
+      (SELECT to_jsonb(c)::text FROM surcharge c WHERE id=9) AS surcharge,
+      (SELECT jsonb_build_object('id',c.id,'defaultCurrencyCode',c."defaultCurrencyCode",
+        'pricesIncludeTax',c."pricesIncludeTax",'defaultTaxZoneId',c."defaultTaxZoneId")::text FROM channel c WHERE id=1) AS channel,
+      (SELECT to_jsonb(c)::text FROM order_channels_channel c WHERE "orderId"=1 AND "channelId"=1) AS membership,
+      (SELECT to_jsonb(m)::text FROM shipping_method m WHERE id=1) AS method`)).rows[0];
     const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
     const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
     expect(await targetRows(storeId, 'order')).toEqual([]);
@@ -722,6 +732,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const basis = order.metadata.vendure.editBasisV1;
     expect(basis).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'vendure:test', sourceOrderId: '1',
       sourceOrderRecord: original.header,
+      channel: { sourceId: '1', projection: 'pricing-v1', sourceRecord: original.channel, orderChannelRecord: original.membership },
+      shippingMethods: [{ sourceId: '1', sourceRecord: original.method }],
       header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' },
       shippingLines: [{ sourceId: '7', sourceRecord: original.shipping }],
       surcharges: [{ sourceId: '9', sourceRecord: original.surcharge }],
@@ -729,14 +741,29 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(basis.sourceDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(basis.lines[0].sourceRecord).toContain('9007199254740993');
     expect(basis.lines[0].sourceRecord).toContain('0.123456789012345678901');
+    expect(basis.shippingMethods[0].sourceRecord).toContain('9007199254740993');
+    expect(basis.shippingMethods[0].sourceRecord).toContain('0.123456789012345678901');
+    expect(basis.channel.sourceRecord).not.toContain('must-not-enter-edit-basis');
+    const { sourceDigest, ...payload } = basis;
+    expect(sourceDigest).toBe(digest(payload));
     expect(order).toMatchObject({ subtotal: 1000, discount_total: 0, shipping_total: 0, tax_total: 0, grand_total: 1000,
       shipping_method_code: 'standard' });
     const line = await targetOne(storeId, 'order_line', `AND order_id = '${orderId}'`);
     expect(line).toMatchObject({ unit_price: 1000, line_subtotal: 1000, line_discount: 0, line_tax: 0, line_total: 1000 });
     expect((await targetRows(storeId, 'payment', `AND order_id = '${orderId}'`)).map(payment => payment.amount)).toEqual([1000]);
     const empty = await targetOne(storeId, 'order', `AND id = '${migrationId(storeId, 'vendure:test', 'order', 2)}'`);
-    expect(empty.metadata.vendure.editBasisV1).toMatchObject({ shippingLines: [], surcharges: [],
+    expect(empty.metadata.vendure.editBasisV1).toMatchObject({ shippingLines: [], shippingMethods: [], surcharges: [],
       header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' } });
+  });
+
+  it('refuses historical edit-basis capture when a shipping line names a missing source method', async () => {
+    await resetSource('rh', 'missing-method-' + randomUUID().slice(0, 8));
+    await sourcePool.query(`INSERT INTO shipping_line VALUES (7,1,999,0,false,'[]','[]')`);
+    await sourcePool.query('UPDATE order_line SET "shippingLineId"=7 WHERE id=1');
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath }))
+      .rejects.toThrow('Edit basis referenced shipping method missing');
+    expect(await targetRows(storeId, 'order')).toEqual([]);
   });
 
   it.each(['missing', 'other-channel'])('refuses historical edit-basis capture with %s order channel ownership', async (ownership) => {
@@ -748,7 +775,9 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     }
     const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
     await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath }))
-      .rejects.toThrow('Edit basis source order ownership missing');
+      .rejects.toThrow(ownership === 'other-channel'
+        ? 'Use a dedicated single-channel source snapshot with the selected currency'
+        : 'Edit basis source order ownership missing');
     expect(await targetRows(storeId, 'order')).toEqual([]);
   });
 
@@ -1090,15 +1119,18 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
     const extra = [
-      // ORD-DRIFT-LINES: header stale (5000), lines 4000+6000, settled 10800.
+      // ORD-DRIFT-LINES: header stale (5000), lines 4000+6000,
+      // independent ShippingLine 800, settled full getter grand 10800.
       `INSERT INTO "order" VALUES (10, 'DRIFT-LINES', 'Delivered', 'USD', '2024-03-04', 5000, 5000, 800, 800, NULL, NULL, NULL, 1, '2024-03-04', '2024-03-04', false)`,
       `INSERT INTO order_channels_channel VALUES (10, 1)`,
-      `INSERT INTO order_line VALUES (10, 1, 10, 1, 1, 4000, false, '[]', '[]', NULL, 1), (12, 1, 10, 1, 1, 6000, false, '[]', '[]', NULL, 1)`,
+      `INSERT INTO shipping_line VALUES (10,10,1,800,false,'[]','[]')`,
+      `INSERT INTO order_line VALUES (10, 1, 10, 1, 1, 4000, false, '[]', '[]', 10, 1), (12, 1, 10, 1, 1, 6000, false, '[]', '[]', 10, 1)`,
       `INSERT INTO payment VALUES (10, '2024-03-04', 10, 'nmi-payment', 'Settled', 10800, 'txn-drift-1', '{}', NULL)`,
       // ORD-DRIFT-UNRES: header 5000, lines 9000, settled 3300 — nothing agrees.
       `INSERT INTO "order" VALUES (11, 'DRIFT-UNRES', 'Delivered', 'USD', '2024-03-05', 5000, 5000, 800, 800, NULL, NULL, NULL, 1, '2024-03-05', '2024-03-05', false)`,
       `INSERT INTO order_channels_channel VALUES (11, 1)`,
-      `INSERT INTO order_line VALUES (11, 1, 11, 1, 1, 9000, false, '[]', '[]', NULL, 1)`,
+      `INSERT INTO shipping_line VALUES (11,11,1,800,false,'[]','[]')`,
+      `INSERT INTO order_line VALUES (11, 1, 11, 1, 1, 9000, false, '[]', '[]', 11, 1)`,
       `INSERT INTO payment VALUES (11, '2024-03-05', 11, 'nmi-payment', 'Settled', 3300, 'txn-drift-2', '{}', NULL)`,
       // ORD-MOD: 'Modifying' admin-edit state + a dummy-handler manual capture.
       `INSERT INTO "order" VALUES (12, 'MOD-1', 'Modifying', 'USD', '2024-03-06', 2000, 2000, 0, 0, NULL, NULL, NULL, 1, '2024-03-06', '2024-03-06', false)`,
@@ -1127,14 +1159,20 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
 
-    // Payment-corroborated drift: line economics become the order totals.
+    // Payment corroborates complete merchandise + independent shipping getters.
     const drift = await targetOne(storeId, 'order', `AND code = 'DRIFT-LINES'`);
     expect(drift.grand_total).toBe(10800);
     expect(drift.subtotal).toBe(10000);
+    expect(drift.metadata.vendure.chargeProjectionV1).toMatchObject({ status: 'settled-corroborated',
+      expected: { subTotal: 10000, subTotalWithTax: 10000, shipping: 800, shippingWithTax: 800 },
+      sourceHeader: { subTotal: '5000', subTotalWithTax: '5000', shipping: '800', shippingWithTax: '800' },
+      settlementProof: { netSettled: '10800', payments: [{ sourceId: '10', sourceRecord: expect.any(String) }], refunds: [] } });
     // Unresolved drift keeps the source header — no invented totals.
     const unres = await targetOne(storeId, 'order', `AND code = 'DRIFT-UNRES'`);
     expect(unres.grand_total).toBe(5800);
     expect(unres.subtotal).toBe(5000);
+    expect(unres.metadata.vendure.chargeProjectionV1).toMatchObject({ status: 'unresolved',
+      expected: { subTotal: 9000, subTotalWithTax: 9000, shipping: 800, shippingWithTax: 800 } });
     // 'Modifying' imports as Paid (settled admin-edit order).
     const mod = await targetOne(storeId, 'order', `AND code = 'MOD-1'`);
     expect(mod.state).toBe('Paid');
@@ -1165,9 +1203,9 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
     const details = manifest.exclusions.map((e: { detail?: string }) => e.detail ?? '').join('\n');
     expect(details).toContain('DRIFT-LINES');
-    expect(details).toContain('stale vs reconstructed lines');
+    expect(details).toContain('stale source header');
     expect(details).toContain('DRIFT-UNRES');
-    expect(details).toContain('review required');
+    expect(details).toContain('reconciliation required');
     expect(details).toContain('total-only source record');
     expect(details).toContain('exceed settled payments');
     expect(details).toContain('fulfillment refs exceed ordered quantity');
