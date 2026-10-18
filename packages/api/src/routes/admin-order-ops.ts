@@ -2,6 +2,8 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { PassThrough, Readable } from 'node:stream';
 import ExcelJS from 'exceljs';
 import { hasUnresolvedPayment } from '../payments/hold.js';
+import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
+import { OrderEditError } from '../orders/order-edit.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withAdvisoryLock, withStore } from '../db/client.js';
@@ -524,6 +526,12 @@ adminOrderOps.openapi(
         if (o.state === 'Cancelled') return { ok: false, error: 'already cancelled' };
         if (o.state !== 'PendingPayment') return { ok: false, error: `paid order — use Refund (state ${o.state})` };
         if (!canTransition(o.state as OrderState, 'Cancelled')) return { ok: false, error: `cannot cancel from ${o.state}` };
+        try {
+          await assertNoPendingOrderEdit(tx, st.storeId, o.id);
+        } catch (error) {
+          if (error instanceof OrderEditError && error.code === 'ORDER_EDIT_PENDING') return { ok: false, error: error.message };
+          throw error;
+        }
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
           const rel = l.quantity - l.fulfilledQty - l.cancelledQty;

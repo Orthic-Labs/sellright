@@ -23,6 +23,7 @@ import { operatorRecipients } from '../disputes/disputes.js';
 import { env } from '../env.js';
 import { EDIT_REFUND_SOURCE } from './edit-refund.js';
 import { usableTenderSql } from './tender.js';
+import { isPendingEditStage } from '../orders/edit-stage.js';
 
 /**
  * MONEY-3: amount still owed on an order, in cents — grandTotal minus every
@@ -57,7 +58,13 @@ export async function editRefundedTotal(tx: Tx, storeId: string, orderId: string
     SELECT coalesce(sum(r.amount), 0)::bigint AS total
     FROM refund r
     WHERE r.store_id = ${storeId} AND r.order_id = ${orderId} AND r.state <> 'Failed'
-      AND r.metadata->>'source' = ${EDIT_REFUND_SOURCE}`);
+      AND r.metadata->>'source' = ${EDIT_REFUND_SOURCE}
+      AND NOT EXISTS (
+        SELECT 1 FROM order_edit e
+        WHERE e.store_id = r.store_id AND e.order_id = r.order_id
+          AND e.settlement->>'refundId' = r.id::text AND e.settlement ? 'phase'
+          AND e.settlement->>'phase' <> 'activated'
+      )`);
   return Number((res.rows[0] as { total?: string } | undefined)?.total ?? 0);
 }
 
@@ -72,9 +79,44 @@ export interface SettleOrderRef {
   code?: string;
 }
 
+/** Durable recovery only. Caller holds the order's existing licence/order set. */
+export async function retryPreparedEditSettlement(tx: Tx, storeId: string, orderId: string, match: {
+  paymentAttemptId?: string; providerRef?: string; idempotencyKey?: string; method?: string;
+} = {}) {
+  const edits = await tx.select({ id: s.orderEdit.id, settlement: s.orderEdit.settlement }).from(s.orderEdit)
+    .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, orderId)));
+  for (const edit of edits) {
+    const settlement = edit.settlement as { paymentAttemptId?: string } | null;
+    if (!isPendingEditStage(edit.settlement) || !settlement?.paymentAttemptId ||
+        (match.paymentAttemptId && match.paymentAttemptId !== settlement.paymentAttemptId)) continue;
+    const [attempt] = await tx.select().from(s.paymentAttempt).where(and(
+      eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.orderId, orderId), eq(s.paymentAttempt.id, settlement.paymentAttemptId),
+    )).limit(1);
+    if (!attempt || !['intent', 'charge', 'session'].includes(attempt.operation) ||
+        (match.providerRef && attempt.providerRef !== match.providerRef) || (match.method && attempt.method !== match.method) ||
+        (match.idempotencyKey && attempt.idempotencyKey !== match.idempotencyKey && attempt.idempotencyKey !== `${match.idempotencyKey}:edit:${edit.id}`)) continue;
+    const [payment] = await tx.select().from(s.payment).where(and(
+      eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled'),
+      ...(attempt.paymentId ? [eq(s.payment.id, attempt.paymentId)] : attempt.providerRef ? [
+        eq(s.payment.method, attempt.method), eq(s.payment.providerRef, attempt.providerRef),
+        ...(attempt.method === 'stripe' ? [] : [eq(s.payment.gatewayAccount, attempt.accountId), eq(s.payment.gatewayMode, attempt.mode)]),
+      ] : [sql`false`]),
+    )).limit(1);
+    if (!payment || payment.method !== attempt.method || payment.amount !== attempt.amount || payment.currency !== attempt.currency ||
+        !attempt.providerRef || payment.providerRef !== attempt.providerRef ||
+        (attempt.method !== 'stripe' && (payment.gatewayAccount !== attempt.accountId || payment.gatewayMode !== attempt.mode))) continue;
+    const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');
+    await activatePreparedOrderEdit(tx, { storeId, orderId, paymentAttemptId: attempt.id, paymentId: payment.id });
+    const [order] = await tx.select({ state: s.order.state }).from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.id, orderId))).limit(1);
+    if (!order) throw new Error('Payment order is missing');
+    return { attempt, paymentId: payment.id, orderState: order.state };
+  }
+  return null;
+}
+
 export async function applyPaymentResult(
   tx: Tx,
-  opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number; editId?: string },
+  opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number; editId?: string; paymentAttemptId?: string },
 ): Promise<{ orderState: OrderState; paymentState: PaymentResult['state'] }> {
   // PAYMENT-TIMING §3.5: the order's set (L2 licences, L3 order, L4 reservations) is held on this transaction BEFORE
   // the order row is read FOR UPDATE below, so an inline issuance never takes L2 after L3. Pass-through when the
@@ -91,7 +133,7 @@ async function applyPaymentResultLocked(
   // partial tender (a gift-card draw-down at checkout) can leave less than
   // grandTotal owed. `editId`: the order edit this payment settles (the edit's
   // own record_payment), which keys the balance operation.
-  opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number; editId?: string },
+  opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number; editId?: string; paymentAttemptId?: string },
 ): Promise<{ orderState: OrderState; paymentState: PaymentResult['state'] }> {
   const { storeId, method, result } = opts;
   const [current] = await tx.select().from(s.order)
@@ -154,6 +196,14 @@ async function applyPaymentResultLocked(
       if (existing.state === 'Settled' ||
           (existing.state === 'Authorized' && result.state === 'Pending') ||
           (existing.state !== 'Pending' && result.state !== 'Settled' && existing.state === result.state)) {
+        if (existing.state === 'Settled') {
+          const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');
+          const activated = await activatePreparedOrderEdit(tx, { storeId, orderId: order.id, paymentId: existing.id, paymentAttemptId: opts.paymentAttemptId });
+          if (activated) {
+            const [live] = await tx.select({ state: s.order.state }).from(s.order).where(eq(s.order.id, order.id));
+            return { orderState: live!.state as OrderState, paymentState: existing.state };
+          }
+        }
         return { orderState: order.state as OrderState, paymentState: existing.state };
       }
       paymentId = existing.id;
@@ -167,6 +217,19 @@ async function applyPaymentResultLocked(
     const r = await recordSettlementOperation(tx, { storeId, kind: 'payment_state_progress', operationId: paymentId, effects: [], mutations });
     if (r.paymentId === undefined) throw mismatch();
     return { orderState: order.state as OrderState, paymentState: result.state };
+  }
+
+  // A staged edit still exposes its original economics. Record its captured
+  // tender first, then let activation publish the frozen proposal & effects.
+  const edits = await tx.select({ settlement: s.orderEdit.settlement }).from(s.orderEdit)
+    .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, order.id)));
+  if (edits.some(edit => isPendingEditStage(edit.settlement))) {
+    const recorded = await recordSettlementOperation(tx, { storeId, kind: 'payment_settled', operationId: paymentId, mutations, effects: [] });
+    if (!recorded.created && !recorded.replayed) throw mismatch();
+    const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');
+    await activatePreparedOrderEdit(tx, { storeId, orderId: order.id, paymentId, paymentAttemptId: opts.paymentAttemptId });
+    const [live] = await tx.select({ state: s.order.state }).from(s.order).where(eq(s.order.id, order.id));
+    return { orderState: live!.state as OrderState, paymentState: 'Settled' };
   }
 
   // MONEY-3: don't flip to Paid on the FIRST Settled tender — a partial

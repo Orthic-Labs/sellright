@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { planEditCreditFunding, type EditFundingHistoryRow, type EditFundingRedemption } from '../account-credit/edit-funding.js';
+import { planEditCreditFunding, planCreditUnitReturn, originalCreditUnitId, creditReturnSnapshotDigest,
+  type EditFundingHistoryRow, type EditFundingRedemption, type CreditRefundEvidence, type CreditUnitReturnsV2 } from '../account-credit/edit-funding.js';
 import { calculatePromotionStack, type StackInput } from './promotion-stack.js';
 import { buildOrderPricingSnapshot, readOrderPricingSnapshot } from './pricing-snapshot.js';
 import { buildCurrentCreditPricingSnapshot, currentCreditFundingTargets, currentCreditPricingHash,
@@ -32,11 +33,33 @@ function fixture(tax = 875, inclusive = false): BuildCurrentCreditPricingInput {
   const redemption: EditFundingRedemption = { id: REDEEM, orderId: ORDER, accountCreditId: ACCOUNT, kind: 'REDEEM', status: 'POSTED',
     amount: 101, delta: -101, operationalAllocation: structuredClone(origin.selectedCredit!.allocation) };
   return { origin, ordinary: ordinary.saved, ordinaryUnitFacts: ordinary.ordinaryUnitFacts, couponCodes: ['CREDIT'],
-    evidence: { redemption, history: [], historyComplete: true }, originalUnitIndexes: { [LINE]: [0, 1, 2] } };
+    evidence: { redemption, history: [], historyComplete: true, refunds: [], refundsComplete: true }, originalUnitIndexes: { [LINE]: [0, 1, 2] },
+    unitIds: { [LINE]: [0, 1, 2].map(index => originalCreditUnitId(REDEEM, LINE, index)) },
+    lineage: { editId: EDIT, predecessorSnapshotDigest: creditReturnSnapshotDigest(origin), consumedUnitIds: [] } };
 }
-function context(i: BuildCurrentCreditPricingInput) {
+function sourceRow(saved: ReturnType<typeof buildCurrentCreditPricingSnapshot>, predecessor = saved.origin as unknown,
+  history: readonly EditFundingHistoryRow[] = [], capturedPredecessor?: BuildCurrentCreditPricingInput['predecessor']) {
+  const own = history.filter(row => row.allocation && JSON.parse(row.allocation).editId === saved.lineage.editId);
+  const requestDigest = own.length ? String(JSON.parse(own[0]!.allocation!).requestDigest) : '0'.repeat(64), postingKeys = own.map(row => row.idempotencyKey);
+  const predecessorView = capturedPredecessor ?? readCurrentOrderPricingSnapshot(predecessor, {
+    currency: saved.currency, orderLines: saved.origin.lines.map(l => ({ id: l.orderLineId, quantity: l.quantity })), mode: 'settlement',
+    creditEvidence: { redemption: { id: REDEEM, orderId: ORDER, accountCreditId: ACCOUNT, kind: 'REDEEM', status: 'POSTED',
+      amount: 101, delta: -101, operationalAllocation: saved.origin.selectedCredit!.allocation }, history, historyComplete: true,
+      refunds: [], refundsComplete: true },
+  })!;
+  const payload = { editId: saved.lineage.editId, orderId: ORDER, pricingSnapshot: saved, requestDigest, postingKeys,
+    lineIds: Object.fromEntries(saved.lines.map(l => [l.key, l.orderLineId])),
+    activation: { unitIds: saved.unitIds, indexes: saved.originalUnitIndexes, predecessor: predecessorView,
+      lineage: saved.lineage, origin: saved.origin, ordinary: saved.ordinary, ordinaryUnitFacts: saved.ordinaryUnitFacts } };
+  const proposal = { ...payload, proposalDigest: creditReturnSnapshotDigest(payload) };
+  return { id: saved.lineage.editId, orderId: ORDER, before: { currentPricing: predecessor },
+    after: { activatedPricingSnapshot: saved, proposal },
+    settlement: { phase: 'activated', activationReceipt: { proposalDigest: proposal.proposalDigest, requestDigest, postingKeys,
+      activatedSnapshotHash: creditReturnSnapshotDigest(saved) } } };
+}
+function context(i: BuildCurrentCreditPricingInput, saved?: ReturnType<typeof buildCurrentCreditPricingSnapshot>) {
   return { currency: 'USD', orderLines: i.ordinary.lines.map(l => ({ id: l.orderLineId, quantity: l.quantity })),
-    mode: 'settlement' as const, creditEvidence: i.evidence };
+    mode: 'settlement' as const, creditEvidence: i.evidence, pricingSources: saved ? [sourceRow(saved, i.predecessor?.snapshot ?? i.origin, i.evidence.history, i.predecessor)] : [] };
 }
 function plan(i: BuildCurrentCreditPricingInput) {
   const result = planEditCreditFunding({ ...i.evidence, editId: EDIT,
@@ -54,7 +77,7 @@ describe('current edited credit pricing proof', () => {
       expect(saved.lines.map(l => [l.lineNet, l.lineGross])).toEqual(i.origin.lines.map(l => [l.lineNet, l.lineGross]));
       expect(saved.credit.allocation).toEqual(i.origin.selectedCredit!.allocation);
       expect(saved.credit.basis).toBe(inclusive ? 'gross' : 'net');
-      expect(readCurrentOrderPricingSnapshot(JSON.parse(JSON.stringify(saved)), { ...context(i), totals: saved.totals })?.snapshot).toEqual(saved);
+      expect(readCurrentOrderPricingSnapshot(JSON.parse(JSON.stringify(saved)), { ...context(i, saved), totals: saved.totals })?.snapshot).toEqual(saved);
       expect(readOrderPricingSnapshot(i.origin, { ...context(i), totals: i.origin.totals })).toEqual(i.origin);
     });
 
@@ -64,6 +87,7 @@ describe('current edited credit pricing proof', () => {
     const ordinary = snapshot({ ...input, promotions: [], couponCodes: [] });
     i.ordinary = ordinary.saved; i.ordinaryUnitFacts = ordinary.ordinaryUnitFacts;
     i.originalUnitIndexes[LINE] = [2, null, 0, 1];
+    i.unitIds[LINE] = [i.unitIds[LINE]![2]!, `edit:${EDIT}:${LINE}:0`, i.unitIds[LINE]![0]!, i.unitIds[LINE]![1]!];
     const saved = buildCurrentCreditPricingSnapshot(i), origin = i.origin.selectedCredit!.allocation[LINE]!;
     expect(saved.credit.allocation[LINE]).toEqual([origin[2], 0, origin[0], origin[1]]);
     expect(saved.lines[0]!.cashRefundGrossUnits).toEqual([100 - origin[2]!, 100, 100 - origin[0]!, 100 - origin[1]!]);
@@ -81,10 +105,10 @@ describe('current edited credit pricing proof', () => {
     expect(saved.credit.allocation[LINE]).toEqual([20, 20, 20]);
     expect(saved.lines[0]!.cashRefundGrossUnits).toEqual([0, 0, 0]);
     expect(saved.credit.atPricingRestoreIds).toEqual(i.evidence.history.map(h => h.id).sort());
-    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i), creditEvidence: { ...i.evidence, history: [] } })).toThrow('absent');
+    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: { ...i.evidence, history: [] } })).toThrow('absent');
     const changed = structuredClone(i.evidence); changed.history[0]!.amount += 1;
-    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i), creditEvidence: changed })).toThrow('digest');
-    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i), creditEvidence: { ...i.evidence, historyComplete: false } as never })).toThrow('Complete');
+    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: changed })).toThrow('digest');
+    expect(() => readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), creditEvidence: { ...i.evidence, historyComplete: false } as never })).toThrow('Complete');
   });
 
   it('allows later merchandise RESTOREs without rewriting saved prices or activation allocation', () => {
@@ -93,23 +117,19 @@ describe('current edited credit pricing proof', () => {
     const ordinary = snapshot({ ...stack(0), promotions: [], couponCodes: [], lines: [{ ...stack(0).lines[0]!, quantity: 2 }] });
     later.ordinary = ordinary.saved; later.ordinaryUnitFacts = ordinary.ordinaryUnitFacts;
     const effects = plan(later), history = posted(effects.postings);
-    const read = readCurrentOrderPricingSnapshot(saved, { ...context(i), mode: 'refund',
+    const read = readCurrentOrderPricingSnapshot(saved, { ...context(i, saved), mode: 'refund',
       orderLines: [{ id: LINE, quantity: 2 }], creditEvidence: { ...i.evidence, history } })!;
     expect(read.lines).toEqual(saved.lines); expect(read.totals).toEqual(saved.totals);
     expect(read.selectedCredit!.allocation).toEqual(saved.credit.allocation);
     expect(read.liveAllocation[LINE]).toEqual([0, saved.credit.allocation[LINE]![1], saved.credit.allocation[LINE]![2]]);
     expect(read.fundingState!.restored).toBe(i.origin.selectedCredit!.allocation[LINE]![0]);
-    later.evidence.history = history;
-    const next = buildCurrentCreditPricingSnapshot(later);
-    expect(next.originalUnitIndexes[LINE]).toEqual([1, 2]);
-    later.originalUnitIndexes[LINE] = [0, 2];
-    expect(() => buildCurrentCreditPricingSnapshot(later)).toThrow('reattached');
+    expect(read.consumedPositions[LINE]).toEqual([0]);
   });
 
   it('rejects transferred, duplicated, omitted & forged identities or producer pricing', () => {
     for (const indexes of [[0, 0, 2], [0, null, 2], [0, 1, 99]]) {
       const i = fixture(); i.originalUnitIndexes[LINE] = indexes;
-      expect(() => buildCurrentCreditPricingSnapshot(i)).toThrow(/index/);
+      expect(() => buildCurrentCreditPricingSnapshot(i)).toThrow(/index|unit/);
     }
     const i = fixture(); i.ordinary.lines[0]!.orderLineId = NEW;
     expect(() => buildCurrentCreditPricingSnapshot(i)).toThrow();
@@ -117,9 +137,9 @@ describe('current edited credit pricing proof', () => {
     expect(() => buildCurrentCreditPricingSnapshot(bad)).toThrow('provenance');
     const forged = fixture(); forged.evidence.redemption.operationalAllocation![LINE]!.reverse();
     expect(() => buildCurrentCreditPricingSnapshot(forged)).toThrow('origin');
-    const saved = buildCurrentCreditPricingSnapshot(fixture()); saved.lines[0]!.cashRefundGrossUnits.reverse();
+    const saved = buildCurrentCreditPricingSnapshot(fixture()); saved.unitEconomics[LINE]![0]!.gross += 1;
     saved.quoteHash = currentCreditPricingHash(saved);
-    expect(() => readCurrentOrderPricingSnapshot(saved, context(fixture()))).toThrow('facts/hash');
+    expect(() => readCurrentOrderPricingSnapshot(saved, context(fixture(), saved))).toThrow('facts/hash');
   });
 
   it('uses genuine source facts including points & leaves V1 refund rounding unchanged', () => {
@@ -128,7 +148,7 @@ describe('current edited credit pricing proof', () => {
     expect(ordinary.ordinaryUnitFacts[LINE]).toEqual({ sourceAdjustmentTotal: -11, sourceAdjustmentDivisor: 3 });
     const i = fixture(); i.ordinary = ordinary.saved; i.ordinaryUnitFacts = ordinary.ordinaryUnitFacts;
     const saved = buildCurrentCreditPricingSnapshot(i);
-    expect(readCurrentOrderPricingSnapshot(saved, context(i))?.lines).toEqual(saved.lines);
+    expect(readCurrentOrderPricingSnapshot(saved, context(i, saved))?.lines).toEqual(saved.lines);
     const v1 = readCurrentOrderPricingSnapshot(i.origin, { ...context(i), creditEvidence: undefined })!;
     expect(v1.lines[0]!.cashRefundGrossUnits).toEqual(Array(3).fill(i.origin.lines[0]!.proratedUnitPriceWithTax));
     expect(saved.ordinary.lines[0]).not.toHaveProperty('sourceAdjustmentTotal');
@@ -143,5 +163,101 @@ describe('current edited credit pricing proof', () => {
     expect(saved.lines[0]!.lineNet).toBe(199);
     expect(saved.lines[0]!.lineGross).toBe(299);
     expect(saved.lines[0]!.cashRefundGrossUnits).toEqual(i.origin.selectedCredit!.allocation[LINE]!.map(n => Math.round((100 - n) * 1.5)));
+  });
+
+  it('freezes refunded original custody so a no-price edit keeps 199 instead of inventing restored credit due', () => {
+    const i = fixture(0);
+    const noShipping = stack(0); noShipping.shipping = 0;
+    const origin = snapshot(noShipping).saved, ordinary = snapshot({ ...noShipping, promotions: [], couponCodes: [] });
+    i.origin = origin; i.ordinary = ordinary.saved; i.ordinaryUnitFacts = ordinary.ordinaryUnitFacts;
+    i.lineage.predecessorSnapshotDigest = creditReturnSnapshotDigest(origin);
+    const returned = planCreditUnitReturn({ ...i.evidence, orderLineId: LINE, originalIndexes: [0],
+      operation: { kind: 'manual_return', id: 'native-return' } });
+    if (!returned.ok || !returned.posting) throw new Error('Expected return posting');
+    i.evidence.history = [{ ...returned.posting, id: 'posted-return' }];
+    i.predecessor = readCurrentOrderPricingSnapshot(origin, { ...context(i), creditEvidence: i.evidence })!;
+    i.lineage.consumedUnitIds = [i.unitIds[LINE]![0]!];
+    const saved = buildCurrentCreditPricingSnapshot(i);
+    expect(saved.totals.grandTotal).toBe(199);
+    expect(saved.unitEconomics[LINE]![0]).toEqual(i.predecessor.unitEconomics[LINE]![0]);
+    expect(saved.credit.allocation[LINE]![0]).toBe(0);
+    expect(saved.originalUnitIndexes[LINE]).toEqual([0, 1, 2]);
+    const targets = currentCreditFundingTargets(i.ordinary, i.originalUnitIndexes, 'net', i.ordinaryUnitFacts,
+      { consumedPositions: i.predecessor.consumedPositions });
+    expect(targets[0]!.units[0]).toMatchObject({ originalIndex: 0, consumed: true });
+    const read = readCurrentOrderPricingSnapshot(saved, context(i, saved))!;
+    expect(read.consumedPositions[LINE]).toEqual([0]);
+    const lowered = snapshot({ ...noShipping, promotions: [], couponCodes: [], lines: [{ ...noShipping.lines[0]!, unitListPrice: 0 }] });
+    const next = { ...i, ordinary: lowered.saved, ordinaryUnitFacts: lowered.ordinaryUnitFacts, predecessor: read,
+      lineage: { editId: NEW, predecessorSnapshotDigest: creditReturnSnapshotDigest(saved), consumedUnitIds: [i.unitIds[LINE]![0]!] } };
+    const effects = planEditCreditFunding({ ...next.evidence, editId: NEW,
+      lines: currentCreditFundingTargets(next.ordinary, next.originalUnitIndexes, 'net', next.ordinaryUnitFacts, { consumedPositions: read.consumedPositions }) });
+    if (!effects.ok || effects.replay) throw new Error('Expected lower-price correction');
+    next.evidence = { ...i.evidence, history: [...i.evidence.history, ...posted(effects.postings)] };
+    const lowerSaved = buildCurrentCreditPricingSnapshot(next);
+    expect(lowerSaved.totals.discountTotal).toBe(-i.predecessor.unitEconomics[LINE]![0]!.net);
+    expect(lowerSaved.totals.grandTotal).toBe(i.predecessor.unitEconomics[LINE]![0]!.gross);
+    expect(lowerSaved.unitEconomics[LINE]![0]).toEqual(saved.unitEconomics[LINE]![0]);
+  });
+
+  it('retains refunded null unit ID, economics & reservation across reorder and blocks forged source custody', () => {
+    const i = fixture(0), expanded = stack(0); expanded.lines[0]!.quantity = 4;
+    const ordinary = snapshot({ ...expanded, promotions: [], couponCodes: [] });
+    i.ordinary = ordinary.saved; i.ordinaryUnitFacts = ordinary.ordinaryUnitFacts;
+    const born = `edit:${EDIT}:${LINE}:0`;
+    i.originalUnitIndexes[LINE] = [0, 1, 2, null]; i.unitIds[LINE]!.push(born);
+    const first = buildCurrentCreditPricingSnapshot(i), position = 3, econ = first.unitEconomics[LINE]![position]!;
+    const payload = { version: 2 as const, redemptionId: REDEEM, snapshotHash: first.quoteHash,
+      snapshotDigest: creditReturnSnapshotDigest(first), lines: [{ orderLineId: LINE, positions: [position], unitIds: [born],
+        originalIndexes: [null], creditCents: [0], unitEconomics: [econ] }] };
+    const refund: CreditRefundEvidence = { id: NEW, state: 'Settled', metadata: { creditUnitReturns: {
+      ...payload, requestDigest: creditReturnSnapshotDigest(payload) } }, lines: [{ orderLineId: LINE, quantity: 1, amount: econ.cashRefundGross }] };
+    i.evidence.refunds = [refund];
+    const predecessor = readCurrentOrderPricingSnapshot(first, context(i, first))!;
+    expect(predecessor.consumedPositions[LINE]).toEqual([3]);
+    const next = { ...i, predecessor, unitIds: { [LINE]: [born, ...i.unitIds[LINE]!.slice(0, 3)] },
+      originalUnitIndexes: { [LINE]: [null, 0, 1, 2] },
+      lineage: { editId: NEW, predecessorSnapshotDigest: creditReturnSnapshotDigest(first), consumedUnitIds: [born] } };
+    const second = buildCurrentCreditPricingSnapshot(next);
+    expect(second.unitEconomics[LINE]![0]).toEqual(econ);
+    expect(second.totals).toEqual(first.totals);
+    const read = readCurrentOrderPricingSnapshot(second, { ...context(next), pricingSources: [sourceRow(first), sourceRow(second, first, [], predecessor)] })!;
+    expect(read.consumedPositions[LINE]).toEqual([0]);
+    const tampered = structuredClone(predecessor); tampered.unitEconomics[LINE]![3]!.net += 1;
+    expect(() => buildCurrentCreditPricingSnapshot({ ...next, predecessor: tampered })).toThrow('normalized predecessor');
+    const bad = structuredClone(refund), frozen = (bad.metadata as { creditUnitReturns: typeof payload & { requestDigest: string } }).creditUnitReturns;
+    frozen.lines[0]!.unitEconomics[0]!.net += 1;
+    const { requestDigest: _old, ...badPayload } = frozen; frozen.requestDigest = creditReturnSnapshotDigest(badPayload);
+    expect(() => readCurrentOrderPricingSnapshot(first, { ...context(i, first), creditEvidence: { ...i.evidence, refunds: [bad] } })).toThrow('source economics');
+    expect(() => readCurrentOrderPricingSnapshot(first, { ...context(i), pricingSources: [] })).toThrow('custody');
+    const badRow = sourceRow(first); badRow.settlement.activationReceipt.activatedSnapshotHash = '0'.repeat(64);
+    expect(() => readCurrentOrderPricingSnapshot(first, { ...context(i), pricingSources: [badRow] })).toThrow('receipt');
+  });
+
+  it('joins each posted refund restore to its exact settled frozen selection', () => {
+    const i = fixture(0), source = readCurrentOrderPricingSnapshot(i.origin, context(i))!;
+    const returned = planCreditUnitReturn({ ...i.evidence, orderLineId: LINE, originalIndexes: [0],
+      operation: { kind: 'refund', id: NEW } });
+    if (!returned.ok || !returned.posting) throw new Error('Expected linked return posting');
+    i.evidence.history = [{ ...returned.posting, id: 'posted-refund' }];
+    const frozenRefund = (index: number, state = 'Settled'): CreditRefundEvidence => {
+      const economics = source.unitEconomics[LINE]![index]!;
+      const payload = { version: 2 as const, redemptionId: REDEEM, snapshotHash: source.quoteHash,
+        snapshotDigest: creditReturnSnapshotDigest(i.origin), lines: [{ orderLineId: LINE, positions: [index],
+          unitIds: [source.unitIds[LINE]![index]!], originalIndexes: [index],
+          creditCents: [i.origin.selectedCredit!.allocation[LINE]![index]!], unitEconomics: [economics] }] };
+      return { id: NEW, state, metadata: { creditUnitReturns: { ...payload, requestDigest: creditReturnSnapshotDigest(payload) } },
+        lines: [{ orderLineId: LINE, quantity: 1, amount: economics.cashRefundGross }] };
+    };
+    i.evidence.refunds = [frozenRefund(0)];
+    expect(readCurrentOrderPricingSnapshot(i.origin, context(i))!.consumedPositions[LINE]).toEqual([0]);
+    expect(i.origin.selectedCredit!.allocation[LINE]![0]).toBe(i.origin.selectedCredit!.allocation[LINE]![1]);
+    for (const refunds of [[], [frozenRefund(0, 'Failed')], [frozenRefund(0, 'Pending')], [frozenRefund(1)]]) {
+      expect(() => readCurrentOrderPricingSnapshot(i.origin, { ...context(i), creditEvidence: { ...i.evidence, refunds } })).toThrow(/restoration|refund selection/);
+    }
+    const wrongCents = frozenRefund(0), frozen = (wrongCents.metadata as { creditUnitReturns: CreditUnitReturnsV2 }).creditUnitReturns;
+    frozen.lines[0]!.creditCents[0]! -= 1;
+    const { requestDigest: _old, ...payload } = frozen; frozen.requestDigest = creditReturnSnapshotDigest(payload);
+    expect(() => readCurrentOrderPricingSnapshot(i.origin, { ...context(i), creditEvidence: { ...i.evidence, refunds: [wrongCents] } })).toThrow('unit closure');
   });
 });

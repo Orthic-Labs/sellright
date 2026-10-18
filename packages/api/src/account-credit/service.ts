@@ -9,8 +9,10 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import { lockOrderRowsInTx } from '../db/locks.js';
 import * as s from '../db/schema.js';
+import { readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
 import { err as logger } from '../lib/logger.js';
-import { assertCents, availableCredit, equalAllocation, MAX_CREDIT_CENTS, normalizeCreditEmail, restorationAmount, validateAllocation } from './math.js';
+import { assertCents, availableCredit, equalAllocation, MAX_CREDIT_CENTS, normalizeCreditEmail, validateAllocation } from './math.js';
+import { planCreditUnitReturn, planEditCreditFunding, readCreditFundingState, readCreditUnitReturns, readCreditRefundEvidence, creditReturnSnapshotDigest, type EditFundingInput, type EditFundingPosting } from './edit-funding.js';
 import {
   AccountCreditError, type AccountCreditAllocation, type CreditAccount, type CreditSettlementResult,
   type CreditTransaction, type RedeemCreditInput, type ReleaseCreditInput, type ReserveCreditInput, type RestoreManualInput,
@@ -282,97 +284,194 @@ async function redemptionForOrder(tx: Tx, storeId: string, orderId: string, acco
   if (entries.length > 1) conflict('Multiple redemptions require explicit reconciliation');
   return entries[0];
 }
-async function postRestoration(tx: Tx, account: CreditAccount, redeem: CreditTransaction, input: {
-  orderId: string; orderLineId: string; quantity: number; key: string; reason: string; actor: string | null; refundId: string | null; expectedCents?: number;
-}) {
-  const priorByKey = await priorOperation(tx, account.storeId, input.key);
-  // Imported keys retain source numeric IDs. Native UUID keys cannot identify
-  // those operations, so settled refunds also bind to proven mapped business
-  // identity. Account + order locks already serialize every possible posting.
-  const priorByRefund = input.refundId === null ? [] : await tx.select().from(s.accountCreditTransaction).where(and(
-    eq(s.accountCreditTransaction.storeId, account.storeId), eq(s.accountCreditTransaction.accountCreditId, account.id),
-    eq(s.accountCreditTransaction.orderId, input.orderId), eq(s.accountCreditTransaction.refundId, input.refundId),
-    eq(s.accountCreditTransaction.orderLineId, input.orderLineId), eq(s.accountCreditTransaction.kind, 'RESTORE'),
-    eq(s.accountCreditTransaction.status, 'POSTED')));
-  if (priorByRefund.length > 1 || (priorByKey && priorByRefund[0] && priorByKey.id !== priorByRefund[0].id)) {
-    conflict('Restoration identity conflicts with existing operations');
+/** Load potential restorations without filtering malformed identities/statuses away. */
+export async function readCreditFundingEvidence(tx: Tx, input: { storeId: string; orderId: string }) {
+  const redemption = await redemptionForOrder(tx, input.storeId, input.orderId);
+  if (!redemption) return null;
+  const history = await tx.select().from(s.accountCreditTransaction).where(and(
+    eq(s.accountCreditTransaction.storeId, input.storeId), eq(s.accountCreditTransaction.orderId, input.orderId),
+    eq(s.accountCreditTransaction.kind, 'RESTORE')));
+  return { redemption, history, historyComplete: true as const };
+}
+/** Complete native-unit custody & durable edit-source evidence for every reader. */
+export async function readCurrentCreditEvidence(tx: Tx, input: { storeId: string; orderId: string }) {
+  const funding = await readCreditFundingEvidence(tx, input);
+  if (!funding) return null;
+  const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.storeId, input.storeId), eq(s.refund.orderId, input.orderId)));
+  const lines = await tx.select({ refundId: s.refundLine.refundId, orderLineId: s.refundLine.orderLineId,
+    quantity: s.refundLine.quantity, amount: s.refundLine.amount }).from(s.refundLine)
+    .innerJoin(s.refund, and(eq(s.refund.id, s.refundLine.refundId), eq(s.refund.storeId, s.refundLine.storeId)))
+    .where(and(eq(s.refundLine.storeId, input.storeId), eq(s.refund.orderId, input.orderId)));
+  const pricingSources = await tx.select({ id: s.orderEdit.id, orderId: s.orderEdit.orderId, before: s.orderEdit.before,
+    after: s.orderEdit.after, settlement: s.orderEdit.settlement }).from(s.orderEdit)
+    .where(and(eq(s.orderEdit.storeId, input.storeId), eq(s.orderEdit.orderId, input.orderId)));
+  return { ...funding, refunds: refunds.map(refund => ({ id: refund.id, state: refund.state, metadata: refund.metadata,
+    lines: lines.filter(line => line.refundId === refund.id).map(({ orderLineId, quantity, amount }) => ({ orderLineId, quantity, amount })) })),
+    refundsComplete: true as const, pricingSources };
+}
+type EditCreditInput = { storeId: string; orderId: string } & Pick<EditFundingInput, 'editId' | 'lines' | 'committedEdit'>;
+export async function prepareEditCreditFunding(tx: Tx, input: EditCreditInput) {
+  const order = await lockOrder(tx, input.storeId, input.orderId);
+  const redemption = await redemptionForOrder(tx, input.storeId, input.orderId);
+  if (!redemption) return null;
+  const account = await lockAccount(tx, input.storeId, redemption.accountCreditId);
+  if (account.currency !== order.currency) conflict('Credit funding currency differs from order');
+  const evidence = (await readCreditFundingEvidence(tx, input))!;
+  const plan = planEditCreditFunding({ ...input, ...evidence });
+  if (!plan.ok) throw new AccountCreditError('allocation', plan.message);
+  return { redemptionId: redemption.id, plan, evidence };
+}
+async function postFundingRows(tx: Tx, account: CreditAccount, redemption: CreditTransaction,
+  postings: readonly EditFundingPosting[], extra: { refundId?: string | null; actor?: string | null; reason: string }) {
+  const entries: CreditTransaction[] = [];
+  for (const posting of postings) {
+    const updated = await setBalance(tx, account, account.balance + posting.amount);
+    entries.push(await insertEntry(tx, { ...posting, storeId: account.storeId, orderCode: redemption.orderCode,
+      balanceAfter: updated.balance, refundId: extra.refundId ?? null, actor: extra.actor ?? null, reason: extra.reason }));
+    account.balance = updated.balance;
   }
-  const prior = priorByKey ?? priorByRefund[0];
+  return entries;
+}
+/** Activation transaction owns durable edit receipt together with these postings. */
+export async function postEditCreditFunding(tx: Tx, input: EditCreditInput) {
+  const prepared = await prepareEditCreditFunding(tx, input);
+  if (!prepared || prepared.plan.replay) return prepared;
+  const account = await lockAccount(tx, input.storeId, prepared.evidence.redemption.accountCreditId);
+  await postFundingRows(tx, account, prepared.evidence.redemption, prepared.plan.postings,
+    { reason: 'Committed order edit', actor: null, refundId: null });
+  return prepared;
+}
+async function postRestoration(tx: Tx, account: CreditAccount, redeem: CreditTransaction, input: {
+  orderId: string; orderLineId: string; quantity: number; key: string; reason: string; actor: string | null; refundId: string | null;
+  expectedCents?: number; originalIndexes?: readonly (number | null)[];
+}) {
+  const evidence = (await readCreditFundingEvidence(tx, { storeId: account.storeId, orderId: input.orderId }))!;
+  const state = readCreditFundingState(evidence);
+  if (!state.ok) throw new AccountCreditError('allocation', `Proven credit allocation missing or restoration conflicts: ${state.message}`);
+  const priorByKey = await priorOperation(tx, account.storeId, input.key);
+  const byRefund = input.refundId === null ? [] : evidence.history.filter(row => row.refundId === input.refundId && row.orderLineId === input.orderLineId);
+  if (byRefund.length > 1 || (priorByKey && byRefund[0] && priorByKey.id !== byRefund[0].id)) conflict('Restoration identity conflicts with existing operations');
+  const prior = priorByKey ?? byRefund[0];
   if (prior) {
+    const originalQuantity = input.originalIndexes?.filter(i => i !== null).length ?? input.quantity;
     if (prior.kind !== 'RESTORE' || prior.status !== 'POSTED' || prior.accountCreditId !== account.id || prior.relatedTransactionId !== redeem.id ||
-        prior.orderId !== input.orderId || prior.orderLineId !== input.orderLineId || prior.quantity !== input.quantity || prior.actor !== input.actor ||
-        prior.reason !== input.reason || prior.refundId !== input.refundId || prior.delta !== prior.amount ||
-        (input.expectedCents !== undefined && prior.amount !== input.expectedCents)) {
-      conflict('Restoration key conflicts with existing operation');
-    }
-    const units = redeem.operationalAllocation?.[input.orderLineId];
-    if (!Array.isArray(units)) throw new AccountCreditError('allocation', 'Proven credit allocation missing for returned line');
-    const restoredLine = await tx.select().from(s.accountCreditTransaction).where(and(
-      eq(s.accountCreditTransaction.storeId, account.storeId), eq(s.accountCreditTransaction.accountCreditId, account.id),
-      eq(s.accountCreditTransaction.orderId, input.orderId), eq(s.accountCreditTransaction.orderLineId, input.orderLineId),
-      eq(s.accountCreditTransaction.kind, 'RESTORE'), eq(s.accountCreditTransaction.status, 'POSTED')));
-    const restoredQuantity = restoredLine.reduce((sum, row) => sum + (row.quantity ?? Number.NaN), 0);
-    const restoredAmount = restoredLine.reduce((sum, row) => sum + row.amount, 0);
-    // Exact source restoration consumes a prefix of the immutable unit vector.
-    // Its cumulative amount proves replay integrity even after later refunds,
-    // without guessing operation order from timestamps or idempotency strings.
-    if (!Number.isSafeInteger(restoredQuantity) || restoredQuantity < 1 || restoredQuantity > units.length ||
-        !Number.isSafeInteger(restoredAmount) || restoredAmount > redeem.amount ||
-        restoredLine.some(row => !Number.isSafeInteger(row.quantity) || row.quantity! < 1 || row.delta !== row.amount || row.relatedTransactionId !== redeem.id) ||
-        restoredAmount !== restorationAmount(units, 0, restoredQuantity)) {
-      conflict('Restoration amount conflicts with original unit allocation');
+      prior.orderId !== input.orderId || prior.orderLineId !== input.orderLineId || prior.quantity !== originalQuantity ||
+      prior.actor !== input.actor || prior.reason !== input.reason || prior.refundId !== input.refundId ||
+      (input.expectedCents !== undefined && prior.amount !== input.expectedCents)) conflict('Restoration key conflicts with existing operation');
+    if (input.originalIndexes && prior.allocation) {
+      const envelope = JSON.parse(prior.allocation) as { type?: string; units?: Array<{ index: number }> };
+      if (envelope.type === 'account_credit.unit_restore' && JSON.stringify(envelope.units?.map(u => u.index)) !==
+        JSON.stringify(input.originalIndexes.filter(i => i !== null))) conflict('Restoration key conflicts with selected units');
     }
     return prior;
   }
-  const [line] = await tx.select({ id: s.orderLine.id }).from(s.orderLine).where(and(eq(s.orderLine.storeId, account.storeId), eq(s.orderLine.orderId, input.orderId), eq(s.orderLine.id, input.orderLineId)));
-  if (!line || !redeem.orderId || redeem.orderId !== input.orderId) throw new AccountCreditError('allocation', 'Proven linked order line required for restoration');
-  const units = redeem.operationalAllocation?.[input.orderLineId];
-  if (!Array.isArray(units)) throw new AccountCreditError('allocation', 'Proven credit allocation missing for returned line');
-  const restored = await tx.select().from(s.accountCreditTransaction).where(and(eq(s.accountCreditTransaction.storeId, account.storeId),
-    eq(s.accountCreditTransaction.accountCreditId, account.id), eq(s.accountCreditTransaction.orderId, input.orderId),
-    eq(s.accountCreditTransaction.kind, 'RESTORE'), eq(s.accountCreditTransaction.status, 'POSTED')));
-  // A historical restoration without a proven target line cannot safely identify
-  // which units remain. Preserve its balance and demand explicit reconciliation.
-  if (restored.some(row => !row.orderLineId || row.quantity === null)) throw new AccountCreditError('allocation', 'Historical restoration lacks proven unit linkage');
-  const quantity = restored.filter(row => row.orderLineId === input.orderLineId).reduce((sum, row) => sum + row.quantity!, 0);
-  const amount = restorationAmount(units, quantity, input.quantity, input.expectedCents);
-  const total = restored.reduce((sum, row) => sum + row.amount, 0);
-  if (!Number.isSafeInteger(total) || total + amount > redeem.amount) throw new AccountCreditError('invariant', 'Restoration exceeds redeemed credit');
-  const updated = await setBalance(tx, account, account.balance + amount);
-  const entry = await insertEntry(tx, { storeId: account.storeId, accountCreditId: account.id, orderId: input.orderId, orderCode: redeem.orderCode,
-    kind: 'RESTORE', status: 'POSTED', amount, delta: amount, balanceAfter: updated.balance, relatedTransactionId: redeem.id,
-    orderLineId: input.orderLineId, quantity: input.quantity, refundId: input.refundId, idempotencyKey: input.key, reason: input.reason, actor: input.actor });
-  // Multiple lines in one refund share the same locked account object.
-  account.balance = updated.balance;
-  return entry;
+  const [line] = await tx.select({ id: s.orderLine.id }).from(s.orderLine).where(and(eq(s.orderLine.storeId, account.storeId),
+    eq(s.orderLine.orderId, input.orderId), eq(s.orderLine.id, input.orderLineId)));
+  if (!line || redeem.orderId !== input.orderId) throw new AccountCreditError('allocation', 'Proven linked order line required for restoration');
+  // Legacy unchanged units have an identity mapping; residual state, never summed
+  // return quantity, selects their still-unconsumed original indexes.
+  const indexes = input.originalIndexes ?? state.state.remaining[input.orderLineId]?.map((_, i) => i)
+    .filter(i => !state.state.returnedIndexes[input.orderLineId]!.includes(i)).slice(0, input.quantity);
+  if (!indexes || indexes.length !== input.quantity) throw new AccountCreditError('allocation', 'Proven credit allocation missing for returned units');
+  const plan = planCreditUnitReturn({ ...evidence, orderLineId: input.orderLineId, originalIndexes: indexes,
+    operation: input.refundId ? { kind: 'refund', id: input.refundId } : { kind: 'manual_return', id: input.key.slice('manual:'.length) } });
+  if (!plan.ok) throw new AccountCreditError('allocation', plan.message);
+  if (!plan.posting) {
+    if (input.expectedCents !== undefined && input.expectedCents !== 0) conflict('Unfunded merchandise cannot restore credit');
+    return null;
+  }
+  if (input.expectedCents !== undefined && plan.posting.amount !== input.expectedCents) conflict('Restoration amount conflicts with expected cents');
+  return (await postFundingRows(tx, account, redeem, [plan.posting], input))[0]!;
 }
 
 export async function restoreRefund(tx: Tx, input: { storeId: string; orderId: string; refundId: string }): Promise<CreditTransaction[]> {
-  await lockOrder(tx, input.storeId, input.orderId);
+  const order = await lockOrder(tx, input.storeId, input.orderId);
   const [refund] = await tx.select().from(s.refund).where(and(eq(s.refund.storeId, input.storeId), eq(s.refund.orderId, input.orderId), eq(s.refund.id, input.refundId)));
   if (!refund || refund.state !== 'Settled') throw new AccountCreditError('unavailable', 'Credit restoration requires settled refund in store');
   const redeem = await redemptionForOrder(tx, input.storeId, input.orderId);
   if (!redeem) return [];
   const account = await lockAccount(tx, input.storeId, redeem.accountCreditId);
   const lines = await tx.select().from(s.refundLine).where(and(eq(s.refundLine.storeId, input.storeId), eq(s.refundLine.refundId, input.refundId)));
+  const evidence = (await readCurrentCreditEvidence(tx, input))!;
+  let frozen: ReturnType<typeof readCreditUnitReturns>;
+  try { frozen = readCreditRefundEvidence({ ...refund, lines }); }
+  catch { throw new AccountCreditError('allocation', 'Frozen refund unit identity requires reconciliation'); }
+  if (account.currency !== order.currency) conflict('Restoration currency differs from order');
+  if (frozen && (frozen.redemptionId !== redeem.id || frozen.lines.length !== lines.length ||
+    frozen.lines.some(unit => !lines.some(line => line.orderLineId === unit.orderLineId && line.quantity === unit.positions.length)))) {
+    conflict('Frozen refund unit closure differs from refund lines');
+  }
+  if (!frozen && (order.pricingSnapshot as { version?: number } | null)?.version === 2) throw new AccountCreditError('allocation', 'Edited credit refund lacks frozen unit identity');
+  const needsPosting = frozen?.lines.some(line => line.originalIndexes.some(index => index !== null) &&
+    !evidence.history.some(row => row.refundId === refund.id && row.orderLineId === line.orderLineId));
+  if (frozen && needsPosting) {
+    if (frozen.version === 1 && frozen.snapshotDigest !== creditReturnSnapshotDigest(order.pricingSnapshot)) conflict('Frozen refund pricing snapshot differs');
+    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
+      .from(s.orderLine).where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, order.id))), mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
+    const mapping = current?.originalUnitIndexes ?? Object.fromEntries(Object.entries(redeem.operationalAllocation ?? {}).map(([id, units]) => [id, units.map((_, i) => i)]));
+    if (frozen.version === 1 && frozen.lines.some(line => line.positions.some((position, i) => mapping[line.orderLineId]?.[position] !== line.originalIndexes[i]))) conflict('Frozen refund original identity differs');
+    if (frozen.version === 2 && (!current || frozen.lines.some(line => line.unitIds.some((id, i) => {
+      const position = current.unitIds[line.orderLineId]?.indexOf(id) ?? -1;
+      return position < 0 || mapping[line.orderLineId]?.[position] !== line.originalIndexes[i];
+    })))) conflict('Frozen refund stable identity differs');
+  }
   const entries: CreditTransaction[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
     if (seen.has(line.orderLineId)) conflict('Refund repeats an order line');
     seen.add(line.orderLineId);
-    entries.push(await postRestoration(tx, account, redeem, { orderId: input.orderId, orderLineId: line.orderLineId, quantity: line.quantity,
-      key: `refund:${input.refundId}:line:${line.orderLineId}`, reason: 'Settled merchandise refund', actor: null, refundId: input.refundId }));
+    const entry = await postRestoration(tx, account, redeem, { orderId: input.orderId, orderLineId: line.orderLineId, quantity: line.quantity,
+      key: `refund:${input.refundId}:line:${line.orderLineId}`, reason: 'Settled merchandise refund', actor: null, refundId: input.refundId,
+      ...(frozen ? { originalIndexes: frozen.lines.find(unit => unit.orderLineId === line.orderLineId)!.originalIndexes,
+        expectedCents: frozen.lines.find(unit => unit.orderLineId === line.orderLineId)!.creditCents.reduce((sum, cents) => sum + cents, 0) } : {}) });
+    if (entry) entries.push(entry);
   }
   return entries;
 }
 export async function restoreManual(tx: Tx, input: RestoreManualInput): Promise<CreditTransaction> {
   operator(input); assertCents(input.expectedCents, 'Expected restoration');
   if (!Number.isSafeInteger(input.quantity) || input.quantity < 1) throw new AccountCreditError('invalid_input', 'Positive return quantity required');
-  await lockOrder(tx, input.storeId, input.orderId);
+  const order = await lockOrder(tx, input.storeId, input.orderId);
   const redeem = await redemptionForOrder(tx, input.storeId, input.orderId, input.accountId);
   if (!redeem) throw new AccountCreditError('missing', 'No redeemed credit on linked order');
   const account = await lockAccount(tx, input.storeId, input.accountId);
-  return postRestoration(tx, account, redeem, { ...input, key: `manual:${input.operationKey}`, refundId: null });
+  if (account.currency !== order.currency) conflict('Restoration currency differs from order');
+  const key = `manual:${input.operationKey}`;
+  let originalIndexes: number[] | undefined;
+  if (!await priorOperation(tx, input.storeId, key)) {
+    const evidence = (await readCurrentCreditEvidence(tx, input))!, state = readCreditFundingState(evidence);
+    if (!state.ok) throw new AccountCreditError('allocation', state.message);
+    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
+      .from(s.orderLine).where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, order.id))), mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
+    const mapping = current?.originalUnitIndexes[input.orderLineId] ?? state.state.remaining[input.orderLineId]?.map((_, i) => i);
+    const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.storeId, input.storeId), eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
+    const reserved = new Set<number>();
+    for (const refund of refunds) {
+      let frozen: ReturnType<typeof readCreditUnitReturns>;
+      try { frozen = readCreditUnitReturns(refund.metadata); } catch { throw new AccountCreditError('allocation', 'Refund reservation requires reconciliation'); }
+      if (frozen) {
+        if (frozen.redemptionId !== redeem.id) throw new AccountCreditError('allocation', 'Refund reservation redemption differs');
+        for (const line of frozen.lines.filter(line => line.orderLineId === input.orderLineId)) {
+          for (const index of line.originalIndexes) if (index !== null) reserved.add(index);
+        }
+      } else {
+        const lines = await tx.select({ quantity: s.refundLine.quantity }).from(s.refundLine).where(and(eq(s.refundLine.storeId, input.storeId),
+          eq(s.refundLine.refundId, refund.id), eq(s.refundLine.orderLineId, input.orderLineId)));
+        if (!lines.length) continue;
+        const restored = evidence.history.filter(row => row.refundId === refund.id && row.orderLineId === input.orderLineId);
+        // Complete ledger validation above proves these rows. Another line's
+        // posting, or a partial quantity on this line, cannot release this hold.
+        if (refund.state !== 'Settled' || lines.length !== 1 || restored.length !== 1 || restored[0]!.quantity !== lines[0]!.quantity) {
+          throw new AccountCreditError('allocation', 'Unmapped refund reserves returned units');
+        }
+      }
+    }
+    originalIndexes = mapping?.filter((index): index is number => index !== null && !state.state.returnedIndexes[input.orderLineId]?.includes(index) && !reserved.has(index)).slice(0, input.quantity);
+    if (!originalIndexes || originalIndexes.length !== input.quantity) throw new AccountCreditError('allocation', 'Proven unreserved original return units required');
+  }
+  const entry = await postRestoration(tx, account, redeem, { ...input, key, refundId: null, originalIndexes });
+  if (!entry) throw new AccountCreditError('allocation', 'Manual return requires original funded-unit identity');
+  return entry;
 }
 
 /**

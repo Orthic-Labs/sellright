@@ -4,7 +4,7 @@ import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { customerOwnsOrder } from '../auth/order-access.js';
 import { resolveCustomer } from '../auth/session.js';
-import { amountDueForOrder, applyPaymentResult } from './settle.js';
+import { amountDueForOrder, applyPaymentResult, retryPreparedEditSettlement } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
 import { resolveConfiguredGatewayAccount, resolveGatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
@@ -18,6 +18,7 @@ import { checkPaymentAttempt, PAYMENT_POLICY_VETO_CODE, PaymentPolicyUnavailable
 import type { PaymentProvider, PaymentPurpose, PolicyOrder } from './policy/types.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
 
 /** Order editing (G13): states where a positive amount due is a balance for an
  *  edited order rather than an unpaid order (same rule as routes/pay.ts). */
@@ -81,10 +82,6 @@ export async function startGatewayPayment(input: {
   storeId: string; code: string; method: GatewayMethod; config: unknown;
   idempotencyKey: string; receiptToken?: string; customerSession?: string | null; token?: string;
 }) {
-  if (!isPaymentMethodEnabled(input.config, input.method)) throw new GatewayPaymentError(409, 'Payment method disabled');
-  let account;
-  try { account = await resolveConfiguredGatewayAccount(input.storeId, input.method, input.config); }
-  catch { throw new GatewayPaymentError(503, 'Payment account is not configured'); }
   const operation = input.method === 'sezzle' ? 'session' : 'charge';
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
     // Plan → lock → verify (PAYMENT-TIMING §3.5): the order id is read unlocked for planning, then
@@ -103,29 +100,45 @@ export async function startGatewayPayment(input: {
       const balance = isBalanceState(order.state);
       // Policy veto point (PAYMENT-TIMING §3.6): before the replay lookup, so a replay is vetoed too.
       await policyBeforeAttempt(tx, held, input.method, balance ? 'balance' : 'checkout', order);
-      let attemptKey = input.idempotencyKey;
-      if (balance) {
+      const durable = await retryPreparedEditSettlement(tx, input.storeId, order.id, { method: input.method, idempotencyKey: input.idempotencyKey });
+      if (durable) return { existing: durable.attempt };
+      if (!isPaymentMethodEnabled(input.config, input.method)) throw new GatewayPaymentError(409, 'Payment method disabled');
+      let account;
+      try { account = await resolveConfiguredGatewayAccount(input.storeId, input.method, input.config); }
+      catch { throw new GatewayPaymentError(503, 'Payment account is not configured'); }
+      const { preparedEditTender, bindPreparedEditTender } = await import('../orders/order-edit-service.js');
+      const editTender = await preparedEditTender(tx, { storeId: input.storeId, orderId: order.id });
+      try { await assertNoPendingOrderEdit(tx, input.storeId, order.id, { allowEditId: editTender?.editId }); }
+      catch (error) { throw new GatewayPaymentError(409, error instanceof Error ? error.message : 'Resolve the pending order edit first', 'ORDER_EDIT_PENDING'); }
+      let attemptKey = editTender ? `${input.idempotencyKey}:edit:${editTender.editId}` : input.idempotencyKey;
+      if (balance && !editTender) {
         const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
           .where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
         attemptKey = `${input.idempotencyKey}:balance:${n?.n ?? 0}`;
       }
       const found = await tx.select().from(s.paymentAttempt)
-        .where(inArray(s.paymentAttempt.idempotencyKey, balance ? [input.idempotencyKey, attemptKey] : [input.idempotencyKey])).limit(2);
+        .where(inArray(s.paymentAttempt.idempotencyKey, editTender ? [attemptKey] : balance ? [input.idempotencyKey, attemptKey] : [input.idempotencyKey])).limit(2);
       const existing = found.find((a) => a.idempotencyKey === input.idempotencyKey) ?? found[0];
       if (existing) {
-        if (existing.orderId !== order.id || existing.method !== input.method || existing.operation !== operation ||
-            existing.accountId !== account.accountId || existing.mode !== account.mode) {
+        if (existing.orderId !== order.id || existing.method !== input.method || existing.operation !== operation) {
           throw new GatewayPaymentError(409, 'Idempotency key belongs to a different payment');
         }
+        if (existing.status === 'settled') {
+          await retryPreparedEditSettlement(tx, input.storeId, order.id, { paymentAttemptId: existing.id });
+          return { existing };
+        }
+        if (existing.accountId !== account.accountId || existing.mode !== account.mode) throw new GatewayPaymentError(409, 'Idempotency key belongs to a different payment');
         try { assertGatewayEnvironment(account, existing.context); }
         catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
+        if (editTender) await bindPreparedEditTender(tx, { storeId: input.storeId, orderId: order.id, editId: editTender.editId, paymentAttemptId: existing.id });
         return { existing };
       }
       if (order.state !== 'PendingPayment' && !balance) throw new GatewayPaymentError(409, 'Order is not payable');
       const [active] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt)
         .where(and(eq(s.paymentAttempt.orderId, order.id), inArray(s.paymentAttempt.status, ['processing','unknown','pending']))).limit(1);
       if (active) throw new GatewayPaymentError(409, 'Resolve the existing payment before starting another');
-      const amount = await amountDueForOrder(tx, input.storeId, order.id, order.grandTotal);
+      const amount = editTender?.amount ?? await amountDueForOrder(tx, input.storeId, order.id, order.grandTotal);
+      if (editTender && editTender.currency !== order.currency) throw new GatewayPaymentError(409, 'Order edit tender currency differs');
       if (amount <= 0) throw new GatewayPaymentError(409, 'Order is already paid');
       if (input.method === 'nmi' && !input.token) throw new GatewayPaymentError(400, 'Payment token required');
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
@@ -138,7 +151,11 @@ export async function startGatewayPayment(input: {
       let session;
       if (input.method === 'sezzle') {
         try {
-          session = prepareSezzleSession({ order, lines, adjustments, account, amount, attemptId, customer,
+          // This is an additional tender, not the unpublished proposed cart.
+          // Its server-derived single line reconciles exactly to the amount due.
+          const sessionOrder = editTender ? { ...order, subtotal: amount, grandTotal: amount, discountTotal: 0, shippingTotal: 0, taxTotal: 0 } : order;
+          const sessionLines = editTender ? [{ variantName: `Order ${order.code} balance`, variantSku: 'order-edit-balance', quantity: 1, unitPrice: amount }] : lines;
+          session = prepareSezzleSession({ order: sessionOrder, lines: sessionLines, adjustments: editTender ? [] : adjustments, account, amount, attemptId, customer,
             storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl, balance });
         } catch (error) {
           throw new GatewayPaymentError(400, error instanceof Error ? error.message : 'Invalid checkout details');
@@ -153,10 +170,11 @@ export async function startGatewayPayment(input: {
         accountId: account.accountId, mode: account.mode, amount, currency: order.currency,
         idempotencyKey: attemptKey, fingerprint, context,
       }).returning();
-      return { attempt: attempt!, order, session };
+      if (editTender) await bindPreparedEditTender(tx, { storeId: input.storeId, orderId: order.id, editId: editTender.editId, paymentAttemptId: attempt!.id });
+      return { attempt: attempt!, order, session, account };
     });
     if ('existing' in prepared) return view(prepared.existing!);
-    const { attempt, order, session } = prepared;
+    const { attempt, order, session, account } = prepared;
     const common = { storeId: input.storeId, orderCode: input.code, amount: attempt.amount,
       currency: attempt.currency, attemptId: attempt.id, gateway: account };
     if (input.method === 'sezzle') {
@@ -198,7 +216,10 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
   return withLockedSet(storeId, { kind: 'order', orderId: pre.orderId }, async tx => {
     const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
     if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
-    if (attempt.status === 'settled') return view(attempt);
+    if (attempt.status === 'settled') {
+      await retryPreparedEditSettlement(tx, storeId, attempt.orderId, { paymentAttemptId: attempt.id });
+      return view(attempt);
+    }
     const [order] = await tx.select().from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1).for('update');
     if (!order) throw new GatewayPaymentError(404, 'Order not found');
     const metadata = {
@@ -207,13 +228,17 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
         ...(attempt.method === 'nmi' ? { nmiEnvironment: recordedNmiEnvironment(attempt.context, attempt.mode) } : {}) },
     };
     const applied = result.providerRef ? await applyPaymentResult(tx, {
-      storeId, order, method: attempt.method, result: { ...result, metadata }, amount: attempt.amount,
+      storeId, order, method: attempt.method, result: { ...result, metadata }, amount: attempt.amount, paymentAttemptId: attempt.id,
     }) : { orderState: order.state, paymentState: result.state };
     const status = result.state === 'Settled' ? 'settled'
       : result.state === 'Failed' || result.state === 'Declined' ? 'failed'
       : (result.metadata as Record<string, unknown> | null)?.needsReconciliation ? 'unknown' : 'pending';
+    const [payment] = result.providerRef ? await tx.select({ id: s.payment.id }).from(s.payment).where(and(
+      eq(s.payment.storeId, storeId), eq(s.payment.orderId, order.id), eq(s.payment.method, attempt.method), eq(s.payment.providerRef, result.providerRef),
+      sql`coalesce(${s.payment.gatewayAccount}, '') = ${attempt.accountId}`, sql`coalesce(${s.payment.gatewayMode}, '') = ${attempt.mode}`,
+    )).limit(1) : [];
     const [updated] = await tx.update(s.paymentAttempt).set({
-      status, providerRef: result.providerRef,
+      status, providerRef: result.providerRef, ...(payment ? { paymentId: payment.id } : {}),
       result: { state: applied.orderState, payment: result.state,
         ...(status === 'unknown' ? { error: 'Payment requires reconciliation' } : {}),
         // Customer-safe copy only (providers never put raw gateway text in
@@ -228,7 +253,9 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
 export async function verifySezzleAttempt(storeId: string, id: string) {
   const [attempt] = await withStore(storeId, tx =>
     tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1));
-  if (!attempt || attempt.method !== 'sezzle' || !attempt.providerRef) throw new GatewayPaymentError(404, 'Sezzle payment not found');
+  if (!attempt || attempt.method !== 'sezzle') throw new GatewayPaymentError(404, 'Sezzle payment not found');
+  if (attempt.status === 'settled') return finishAttempt(storeId, id, { state: 'Settled', providerRef: attempt.providerRef });
+  if (!attempt.providerRef) throw new GatewayPaymentError(404, 'Sezzle payment not found');
   const [order] = await withStore(storeId, tx =>
     tx.select({ code: s.order.code }).from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1));
   if (!order) throw new GatewayPaymentError(404, 'Order not found');
@@ -281,9 +308,6 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
     return { attempt, refund, payment };
   });
   if (!first.attempt) throw new GatewayPaymentError(404, 'Refund attempt not found');
-  if (first.refund?.state === 'Settled') {
-    return { attemptId: id, status: 'settled', refundId: first.refund.id, refundState: 'Settled' };
-  }
   return withAdvisoryLock('refund:' + storeId + ':' + first.attempt.orderId, async () => {
     // Re-read inside the lock — a concurrent finalize (request retry or
     // webhook) may have settled the reservation while we waited.
@@ -302,11 +326,9 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
     });
     const { attempt, refund, payment, claimed } = fresh;
     if (!attempt || !refund) throw new GatewayPaymentError(409, 'Refund reservation is incomplete');
-    if (refund.state === 'Settled') {
-      return { attemptId: id, status: 'settled', refundId: refund.id, refundState: 'Settled' };
-    }
     let result: RefundResult;
-    try {
+    if (refund.state === 'Settled') result = { state: 'Settled', providerRef: refund.providerRef };
+    else try {
       result = await discoverRefundOutcome(storeId, attempt, refund, payment, claimed);
     } catch (error) {
       if (error instanceof GatewayPaymentError) throw error;
@@ -410,6 +432,9 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
     .where(eq(s.paymentAttempt.id, id)).limit(1));
   if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
   if (attempt.operation === 'refund') return reconcileRefundAttempt(storeId, id);
+  if (attempt.status === 'settled' && ((attempt.method === 'nmi' && attempt.operation === 'charge') || (attempt.method === 'sezzle' && attempt.operation === 'session'))) {
+    return finishAttempt(storeId, id, { state: 'Settled', providerRef: attempt.providerRef });
+  }
   if (attempt.method === 'sezzle') return verifySezzleAttempt(storeId, id);
   if (attempt.method !== 'nmi' || attempt.operation !== 'charge') {
     throw new GatewayPaymentError(409, 'This operation requires separate reconciliation');

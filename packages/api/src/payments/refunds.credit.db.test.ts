@@ -105,6 +105,20 @@ describe.skipIf(!disposable)('settled refund credit restoration & explicit zero-
     await expect(requestRefund(request(f, 'zero-excess'))).rejects.toThrow('quantity');
     await expect(requestRefund({ ...input, creditMerchandiseReturn: false })).rejects.toThrow('Idempotency');
   });
+  it('keeps full-value order-edit difference refunds free of merchandise effects', async () => {
+    const f = await seed({ cashUnit: 10, method: 'manual' });
+    const before = await snapshot(f);
+    const result = await requestRefund(request(f, 'full-edit-difference', { amount: f.payment.amount,
+      lines: [], restock: false, creditMerchandiseReturn: false, source: 'order_edit' }));
+    expect(result.refundState).toBe('Settled');
+    const after = await snapshot(f);
+    expect(after.line.refundedQty).toBe(before.line.refundedQty);
+    expect(after.line.cancelledQty).toBe(before.line.cancelledQty);
+    expect(after.stock.onHand).toBe(before.stock.onHand);
+    expect(after.account.balance).toBe(before.account.balance);
+    expect(after.restores).toEqual([]);
+    expect(after.refunds.find(refund => refund.id === result.refundId)?.metadata).toMatchObject({ source: 'order_edit' });
+  });
   it('rejects implicit/money-only zero, missing redemption, missing allocation & positive cash overridden to zero', async () => {
     const f = await seed();
     await expect(requestRefund(request(f, 'implicit', { creditMerchandiseReturn: false }))).rejects.toThrow('balance');

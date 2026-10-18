@@ -6,7 +6,7 @@ import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-d
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
-import { adjust, currentDiscount, disable, issue, previewAvailable, redeem, redeemAfterSettlement, release, reserve, restoreManual, restoreRefund, restoreRefundAfterSettlement } from './service.js';
+import { adjust, currentDiscount, disable, issue, previewAvailable, redeem, redeemAfterSettlement, release, reserve, restoreManual, restoreRefund, restoreRefundAfterSettlement, prepareEditCreditFunding, postEditCreditFunding } from './service.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'account-credit/service.db.test.ts');
 const STORE = 'cccccccc-accc-4000-8000-000000000001';
@@ -227,6 +227,78 @@ describe('monetary account credit', () => {
     const r3 = await refund(o.order.id, payment.id, o.line.id, 1);
     expect(await withStore(STORE, tx => restoreRefundAfterSettlement(tx, { storeId: STORE, orderId: o.order.id, refundId: r3.id }))).toMatchObject({ ok: false, errorCode: 'allocation' });
     expect((await account()).balance).toBe(1000);
+  });
+  it('keeps unresolved legacy refund units reserved per target line & full quantity', async () => {
+    const o = await order('USD', 1);
+    const second = await withStore(STORE, async tx => (await tx.insert(s.orderLine).values({ storeId: STORE, orderId: o.order.id,
+      variantSku: 'SECOND', variantName: 'Second synthetic item', quantity: 2, unitPrice: 500,
+      lineSubtotal: 1000, lineDiscount: 67, lineTotal: 933 }).returning())[0]!);
+    await hold(o.order.id); const payment = await settled(o.order.id);
+    const redeemed = await withStore(STORE, tx => redeem(tx, { storeId: STORE, orderId: o.order.id, appliedAmount: 101,
+      allocation: { [o.line.id]: [34], [second.id]: [34, 33] } }));
+    const r = await refund(o.order.id, payment.id, o.line.id, 1);
+    const secondRefundLine = await withStore(STORE, async tx => (await tx.insert(s.refundLine).values({ storeId: STORE,
+      refundId: r.id, orderLineId: second.id, quantity: 1, amount: 466 }).returning())[0]!);
+    await withStore(STORE, async tx => {
+      await tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: accountId, orderId: o.order.id,
+        relatedTransactionId: redeemed!.id, orderLineId: o.line.id, refundId: r.id, kind: 'RESTORE', status: 'POSTED',
+        amount: 34, delta: 34, balanceAfter: 933, quantity: 1, idempotencyKey: 'legacy-refund-line-a',
+        reason: 'Settled merchandise refund', actor: null });
+      await tx.update(s.accountCredit).set({ balance: 933 }).where(eq(s.accountCredit.id, accountId));
+    });
+    const manual = { storeId: STORE, accountId, orderId: o.order.id, orderLineId: second.id, quantity: 1,
+      expectedCents: 34, operationKey: 'reserved-line-b', actor: op.actor, reason: op.reason };
+    await expect(withStore(STORE, tx => restoreManual(tx, manual))).rejects.toThrow('Unmapped refund reserves');
+    expect((await account()).balance).toBe(933);
+    expect((await entries()).filter(row => row.kind === 'RESTORE')).toHaveLength(1);
+    // Even a valid same-line POSTED row cannot release an incomplete quantity.
+    await withStore(STORE, async tx => {
+      await tx.update(s.refundLine).set({ quantity: 2 }).where(eq(s.refundLine.id, secondRefundLine.id));
+      await tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: accountId, orderId: o.order.id,
+        relatedTransactionId: redeemed!.id, orderLineId: second.id, refundId: r.id, kind: 'RESTORE', status: 'POSTED',
+        amount: 34, delta: 34, balanceAfter: 967, quantity: 1, idempotencyKey: 'legacy-refund-line-b-partial',
+        reason: 'Settled merchandise refund', actor: null });
+      await tx.update(s.accountCredit).set({ balance: 967 }).where(eq(s.accountCredit.id, accountId));
+    });
+    await expect(withStore(STORE, tx => restoreManual(tx, { ...manual, expectedCents: 33 }))).rejects.toThrow('Unmapped refund reserves');
+    expect((await account()).balance).toBe(967);
+    expect((await entries()).filter(row => row.kind === 'RESTORE')).toHaveLength(2);
+    expect((await entries()).some(row => row.idempotencyKey === 'manual:reserved-line-b')).toBe(false);
+  });
+  it('keeps preparation nonspendable, posts edit residual atomically & requires durable replay receipt', async () => {
+    const o = await order(); await hold(o.order.id); await settled(o.order.id);
+    const redeemed = await withStore(STORE, tx => redeem(tx, { storeId: STORE, orderId: o.order.id, appliedAmount: 101, allocation: { [o.line.id]: [34, 34, 33] } }));
+    const input = { storeId: STORE, orderId: o.order.id, editId: randomUUID(), lines: [{ orderLineId: o.line.id,
+      units: [{ originalIndex: 1, maximumCredit: 20 }, { originalIndex: 2, maximumCredit: 100 }, { originalIndex: null, maximumCredit: 100 }] }] };
+    const prepared = await withStore(STORE, tx => prepareEditCreditFunding(tx, input));
+    expect(prepared?.plan).toMatchObject({ ok: true, replay: false, allocation: { [o.line.id]: [20, 33, 0] } });
+    expect((await account()).balance).toBe(899);
+    expect((await entries()).filter(row => row.kind === 'RESTORE')).toEqual([]);
+    // An activation rollback cannot leak restored balance or ledger effects.
+    await expect(withStore(STORE, async tx => { await postEditCreditFunding(tx, input); throw new Error('activation rollback'); })).rejects.toThrow('activation rollback');
+    expect((await account()).balance).toBe(899);
+    expect((await entries()).filter(row => row.kind === 'RESTORE')).toEqual([]);
+    const activated = await withStore(STORE, tx => postEditCreditFunding(tx, input));
+    if (!activated || activated.plan.replay) throw new Error('Expected edit activation');
+    expect((await account()).balance).toBe(947);
+    const committedEdit = { editId: input.editId, requestDigest: activated.plan.requestDigest,
+      postingKeys: activated.plan.postings.map(row => row.idempotencyKey) };
+    expect(await withStore(STORE, tx => postEditCreditFunding(tx, { ...input, committedEdit }))).toMatchObject({ plan: { replay: true, postings: [] } });
+    expect((await account()).balance).toBe(947);
+    await expect(withStore(STORE, tx => postEditCreditFunding(tx, input))).rejects.toThrow('durable edit receipt');
+    const original = (await entries()).find(row => row.id === redeemed!.id)!;
+    expect(original.operationalAllocation).toEqual({ [o.line.id]: [34, 34, 33] });
+    expect(original.amount).toBe(101);
+    expect((await entries()).filter(row => row.kind === 'REDEEM')).toHaveLength(1);
+  });
+  it('loads malformed potential restorations & rolls back all edit restoration effects', async () => {
+    const o = await order(); await hold(o.order.id); await settled(o.order.id);
+    const redeemed = await withStore(STORE, tx => redeem(tx, { storeId: STORE, orderId: o.order.id, appliedAmount: 101, allocation: { [o.line.id]: [34, 34, 33] } }));
+    await withStore(STORE, tx => tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: accountId,
+      orderId: o.order.id, relatedTransactionId: redeemed!.id, orderLineId: o.line.id, kind: 'RESTORE', status: 'VOID',
+      amount: 1, delta: 0, quantity: 1, idempotencyKey: 'malformed-potential-restore' }));
+    await expect(withStore(STORE, tx => postEditCreditFunding(tx, { storeId: STORE, orderId: o.order.id, editId: randomUUID(), lines: [] }))).rejects.toThrow('posted amount');
+    expect((await account()).balance).toBe(899);
   });
   it('fails clearly without proven operational allocation and preserves historical raw text', async () => {
     const o = await order(); await hold(o.order.id); const payment = await settled(o.order.id);

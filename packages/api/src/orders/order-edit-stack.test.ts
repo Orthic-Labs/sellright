@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { calculatePromotionStack, type StackInput, type StackLine, type ResolvedPromotion } from '../money/promotion-stack.js';
 import { buildOrderPricingSnapshot, readOrderPricingSnapshot } from '../money/pricing-snapshot.js';
-import { priceOrderEditStack, type OrderEditStackInput, type EditStackWorkingLine } from './order-edit-stack.js';
+import { orderEditAcceptanceHash, orderEditStoredFingerprint, priceOrderEditStack, projectEditStackLines, readImportedOrderEditBasis, type OrderEditStackInput, type EditStackWorkingLine } from './order-edit-stack.js';
 
 const A = 'cccccccc-0000-4000-8000-000000000001';
 const B = 'cccccccc-0000-4000-8000-000000000002';
@@ -77,8 +77,8 @@ describe('pure ordinary-promotion order edit candidate', () => {
     const result = priceOrderEditStack(input);
     expect(result.result).toMatchObject({ subtotal: 102, discountTotal: 0, taxTotal: 21, grandTotal: 123 });
     expect(result.result.lineSnapshots).toEqual([
-      { lineKey: 'a', quantity: 2, proratedUnitPriceWithTax: 2, lineNet: 2, lineGross: 3 },
-      { lineKey: 'b', quantity: 1, proratedUnitPriceWithTax: 120, lineNet: 100, lineGross: 120 },
+      { lineKey: 'a', quantity: 2, proratedUnitPriceWithTax: 2, lineNet: 2, lineGross: 3, sourceAdjustmentTotal: 0, sourceAdjustmentDivisor: 2 },
+      { lineKey: 'b', quantity: 1, proratedUnitPriceWithTax: 120, lineNet: 100, lineGross: 120, sourceAdjustmentTotal: 0, sourceAdjustmentDivisor: 1 },
     ]);
     expect(result.perLine.get('a')!.unitPrice).toBe(1);
   });
@@ -127,6 +127,15 @@ describe('pure ordinary-promotion order edit candidate', () => {
     }
   });
 
+  it('admits signed discount only through independently normalized current pricing proof', () => {
+    const basis = fixture(), input = request(basis);
+    input.before.basis = { kind: 'current-proof', lines: basis.lines, pricesIncludeTax: false, economicHash: input.before.economicHash };
+    input.before.totals = { ...input.before.totals, discountTotal: -10 };
+    expect(priceOrderEditStack(input).result.grandTotal).toBe(110);
+    input.before.totals.grandTotal = -1;
+    refusal(input);
+  });
+
   it('binds item eligibility facts to logical line identities, beyond aggregate quantity', () => {
     const items = [
       { lineKey: 'a', quantity: 1, productId: 'eligible', tags: [], collectionIds: [] },
@@ -159,9 +168,9 @@ describe('pure ordinary-promotion order edit candidate', () => {
     input.lines[0] = touched; refusal(input);
   });
 
-  it('accepts independently retained item vectors, rejecting incomplete vector provenance', () => {
+  it('clears historic item vectors before current ordinary promotions & rejects incomplete refreshed vectors', () => {
     const input = request(fixture({ lines: [line('a', { priorAdjustments: [{ kind: 'item', amount: -1, units: [-1] }] })] }));
-    expect(priceOrderEditStack(input).input.lines[0]!.priorAdjustments).toEqual([{ kind: 'item', amount: -1, units: [-1] }]);
+    expect(priceOrderEditStack(input).input.lines[0]!.priorAdjustments).toEqual([]);
     const touched = refreshed(line('a', { priorAdjustments: [{ kind: 'item', amount: -1, units: [] }] }), 1);
     input.lines = [touched]; refusal(input);
   });
@@ -176,7 +185,6 @@ describe('pure ordinary-promotion order edit candidate', () => {
       input => { input.lines.push(structuredClone(input.lines[0]!)); },
       input => { input.lines[0]!.quantity += 1; },
       input => { input.pricing.couponCodes = ['HALF', 'half']; },
-      input => { input.pricing.couponCodes.push('UNRESOLVED'); },
       input => { input.pricing.pointsDiscount = undefined; },
       input => { input.pricing.couponContext.items = []; },
       input => { input.pricing.promotions[0]!.conditions = [{ code: 'minimum_order_amount', args: [{ name: 'amount', value: 'not money' }] }]; },
@@ -200,6 +208,51 @@ describe('pure ordinary-promotion order edit candidate', () => {
     refusal(input);
   });
 
+  it('retains unavailable ordinary coupon membership without applying an action', () => {
+    const input = request(); input.pricing.couponCodes.push('EXPIRED');
+    const candidate = priceOrderEditStack(input);
+    expect(candidate.couponCodes).toEqual(['HALF', 'ONE', 'EXPIRED']);
+    expect(candidate.result.coupons.at(-1)).toMatchObject({ code: 'EXPIRED', applied: false, promotionId: null });
+  });
+
+  it('projects inclusive net list with unrounded unit times quantity, independently of gross final total', () => {
+    const input = fixture({ lines: [line('a', { unitListPrice: 1, quantity: 3, placedQuantity: 3, priceIncludesTax: true, taxRateBps: 2000 })],
+      promotions: [], couponCodes: [], shipping: 0 });
+    expect(projectEditStackLines(input, calculatePromotionStack(input))).toEqual([
+      { key: 'a', quantity: 3, unitPrice: 1, lineSubtotal: 3, lineDiscount: 0, lineTax: 0, lineTotal: 3 },
+    ]);
+  });
+
+  it('binds equal-total edits to full before economics & ordered canonical operations', () => {
+    const before = orderEditStoredFingerprint({ lines: [{ id: A, refundedQty: 0 }], updatedAt: new Date('2026-01-01T00:00:00Z') });
+    const after = 'a'.repeat(64);
+    const hash = orderEditAcceptanceHash(before, after, [{ op: 'remove_coupon', code: 'Ten' }, { op: 'apply_coupon', code: 'VIP' }]);
+    expect(orderEditAcceptanceHash(before, after, [{ op: 'remove_coupon', code: 'tEN' }, { op: 'apply_coupon', code: 'vip' }])).toBe(hash);
+    expect(orderEditAcceptanceHash(before, after, [{ op: 'apply_coupon', code: 'VIP' }, { op: 'remove_coupon', code: 'Ten' }])).not.toBe(hash);
+    expect(orderEditAcceptanceHash(before, after, [{ op: 'remove_coupon', code: ' Ten ' }, { op: 'apply_coupon', code: 'VIP' }])).not.toBe(hash);
+    expect(orderEditStoredFingerprint({ lines: [{ id: A, refundedQty: 1 }], updatedAt: new Date('2026-01-01T00:00:00Z') })).not.toBe(before);
+    expect(orderEditStoredFingerprint({ lines: [{ id: A, refundedQty: 0 }], updatedAt: new Date('2026-01-02T00:00:00Z') })).not.toBe(before);
+  });
+
+  it('admits imported raw LIST only through complete digest/ownership/getter parity', () => {
+    const sourceLine = { id: 7, orderId: 9, quantity: 2, orderPlacedQuantity: 3, listPrice: 120, listPriceIncludesTax: true,
+      adjustments: [{ amount: -60, type: 'PROMOTION' }], taxLines: [{ taxRate: 20 }], shippingLineId: null };
+    const payload = { version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'source', sourceOrderId: '9',
+      sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', pricesIncludeTax: true, subTotal: 167, subTotalWithTax: 200, shipping: 0, shippingWithTax: 0, couponCodes: ['EXPIRED'] }),
+      header: { subTotal: '167', subTotalWithTax: '200', shipping: '0', shippingWithTax: '0' },
+      lines: [{ sourceId: '7', orderLineId: A, sourceRecord: JSON.stringify(sourceLine) }], shippingLines: [], surcharges: [] };
+    const metadata = { vendure: { id: 9, sourceKey: 'source', editBasisV1: { ...payload, sourceDigest: orderEditStoredFingerprint(payload) } } };
+    const native = { id: A, orderId: B, storeId: C, quantity: 2, unitPrice: 100, lineSubtotal: 200, lineDiscount: 33, lineTax: 33, lineTotal: 200, metadata: { vendure: { id: 7 } } };
+    const context = { storeId: C, orderId: B, currency: 'USD', orderLines: [native], couponCodes: ['EXPIRED'] };
+    const basis = readImportedOrderEditBasis(metadata, context);
+    expect(basis.lines).toEqual([{ key: A, quantity: 2, placedQuantity: 3, unitListPrice: 120, priceIncludesTax: true, taxRateBps: 2000, priorAdjustments: [] }]);
+    expect(() => readImportedOrderEditBasis(metadata, { ...context, orderLines: [{ ...native, unitPrice: 101 }] })).toThrow();
+    expect(() => readImportedOrderEditBasis(metadata, { ...context, couponCodes: ['OTHER'] })).toThrow();
+    const changed = structuredClone(metadata); changed.vendure.editBasisV1.lines[0]!.sourceRecord += ' ';
+    expect(() => readImportedOrderEditBasis(changed, context)).toThrow();
+    expect(() => readImportedOrderEditBasis({ vendure: { id: 9, sourceKey: 'source' } }, context)).toThrow();
+  });
+
   it('refuses every credit admission surface without inferring balances or eligibility', () => {
     const CREDIT = 'ORDER_EDIT_STACK_CREDIT_UNSUPPORTED';
     const cases: Array<(input: OrderEditStackInput) => void> = [
@@ -207,10 +260,10 @@ describe('pure ordinary-promotion order edit candidate', () => {
       input => { input.pricing.promotions[0]!.kind = 'account_credit'; },
       input => { input.pricing.promotions[0]!.credit = { accountId: ACCOUNT, availableCents: 0 }; },
       input => { input.pricing.promotions[0]!.conditions = [{ code: 'account_credit_eligible', args: [] }]; },
-      input => { if (input.before.basis.kind !== 'snapshot') input.before.basis.input.promotions[0]!.kind = 'account_credit'; },
-      input => { if (input.before.basis.kind !== 'snapshot') input.before.basis.result.applied[0]!.kind = 'account_credit'; },
-      input => { if (input.before.basis.kind !== 'snapshot') input.before.basis.result.selectedCredit = { accountId: ACCOUNT, promotionId: A, appliedAmount: 1, allocation: {} }; },
-      input => { if (input.before.basis.kind !== 'snapshot') input.before.basis.result.resolvedPromotions![0]!.credit = { accountId: ACCOUNT, availableCents: 0 }; },
+      input => { if ('input' in input.before.basis) input.before.basis.input.promotions[0]!.kind = 'account_credit'; },
+      input => { if ('result' in input.before.basis) input.before.basis.result.applied[0]!.kind = 'account_credit'; },
+      input => { if ('result' in input.before.basis) input.before.basis.result.selectedCredit = { accountId: ACCOUNT, promotionId: A, appliedAmount: 1, allocation: {} }; },
+      input => { if ('result' in input.before.basis) input.before.basis.result.resolvedPromotions![0]!.credit = { accountId: ACCOUNT, availableCents: 0 }; },
     ];
     for (const mutate of cases) { const input = request(); mutate(input); refusal(input, CREDIT); }
     const creditInput = fixture({ lines: [line('a')], promotions: [promo({ id: A, kind: 'account_credit', value: 0, credit: { accountId: ACCOUNT, availableCents: 1 } })], couponCodes: ['HALF'] });

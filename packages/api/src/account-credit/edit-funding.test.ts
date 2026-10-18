@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_CREDIT_CENTS } from './math.js';
-import { planEditCreditFunding, readCreditFundingState, type EditFundingInput, type EditFundingPosting,
+import { planEditCreditFunding, planCreditUnitReturn, readCreditFundingState, type EditFundingInput, type EditFundingPosting,
+  readCreditUnitReturns, readCreditRefundEvidence, creditReturnSnapshotDigest, originalCreditUnitId,
   type EditFundingHistoryRow, type EditFundingRedemption, type EditFundingTargetLine } from './edit-funding.js';
 
 const ORDER = '00000000-0000-0000-0000-000000000001';
@@ -30,6 +31,29 @@ function legacy(quantity: number, amount: number, line = LINE): EditFundingHisto
 }
 
 describe('immutable order-edit credit funding', () => {
+  it('preserves consumed original identities without reattaching returned funding', () => {
+    const returned = planCreditUnitReturn({ redemption: redemption(), history: [], historyComplete: true,
+      orderLineId: LINE, originalIndexes: [0], operation: { kind: 'manual_return', id: 'consumed' } });
+    if (!returned.ok || !returned.posting) throw new Error('Expected return');
+    const line = target([100, 100, 100]); line.units[0]!.consumed = true;
+    const result = candidate(input([line], posted([returned.posting])));
+    expect(result.allocation[LINE]).toEqual([0, 34, 33]); expect(result.postings).toEqual([]);
+    expect(planEditCreditFunding(input([target([100, 100, 100])], posted([returned.posting]))).ok).toBe(false);
+    expect(planEditCreditFunding(input([line])).ok).toBe(false);
+  });
+
+  it('binds frozen cash-only return custody to stable ID, source & actual refund line', () => {
+    const base = { version: 2 as const, redemptionId: REDEEM, snapshotHash: 'a'.repeat(64), snapshotDigest: 'b'.repeat(64),
+      lines: [{ orderLineId: LINE, positions: [0, 3], originalIndexes: [0, null], creditCents: [34, 0],
+        unitIds: [originalCreditUnitId(REDEEM, LINE, 0), `edit:${edit(1)}:${LINE}:0`],
+        unitEconomics: [{ net: 100, gross: 100, cashRefundGross: 66 }, { net: 100, gross: 100, cashRefundGross: 100 }] }] };
+    const frozen = { ...base, requestDigest: creditReturnSnapshotDigest(base) };
+    const refund = { id: OTHER, state: 'Settled', metadata: { creditUnitReturns: frozen }, lines: [{ orderLineId: LINE, quantity: 2, amount: 166 }] };
+    expect(readCreditRefundEvidence(refund)).toEqual(frozen);
+    expect(() => readCreditRefundEvidence({ ...refund, lines: [{ orderLineId: LINE, quantity: 2, amount: 167 }] })).toThrow(/closure/);
+    const foreign = { ...base, lines: [{ ...base.lines[0]!, unitIds: [originalCreditUnitId(REDEEM, OTHER, 0), base.lines[0]!.unitIds[1]!] }] };
+    expect(() => readCreditUnitReturns({ creditUnitReturns: { ...foreign, requestDigest: creditReturnSnapshotDigest(foreign) } })).toThrow(/identity/);
+  });
   it('preserves uneven original vectors & never funds new merchandise', () => {
     const i = input([target([100, 100, 100, 100], [0, 1, 2, null]), target([90], [null], OTHER)]);
     const before = structuredClone(i), result = candidate(i);
@@ -157,4 +181,40 @@ describe('immutable order-edit credit funding', () => {
     expect(planEditCreditFunding(input([target([10, 10], [0, 0])]))).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
     expect(planEditCreditFunding(input([target([10], [0], OTHER)]))).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
   });
+  it('shares original-index chains across edit correction, refund & manual return', () => {
+    const cut = candidate(input([target([10, 34, 33])]));
+    const evidence = { redemption: redemption(), history: posted(cut.postings), historyComplete: true as const };
+    const refund = planCreditUnitReturn({ ...evidence, orderLineId: LINE, originalIndexes: [2, null],
+      operation: { kind: 'refund', id: edit(20) } });
+    if (!refund.ok || !refund.posting) throw new Error('Expected refund posting');
+    expect(refund.posting).toMatchObject({ quantity: 1, amount: 33, idempotencyKey: `refund:${edit(20)}:line:${LINE}` });
+    expect(JSON.parse(refund.posting.allocation)).toMatchObject({ type: 'account_credit.unit_restore',
+      operation: { kind: 'refund', id: edit(20) }, units: [{ index: 2, before: 33, after: 0 }] });
+    const history = [...evidence.history, ...posted([refund.posting])];
+    const manual = planCreditUnitReturn({ ...evidence, history, orderLineId: LINE, originalIndexes: [0],
+      operation: { kind: 'manual_return', id: 'manual-op' } });
+    if (!manual.ok || !manual.posting) throw new Error('Expected manual posting');
+    expect(manual.posting).toMatchObject({ quantity: 1, amount: 10, idempotencyKey: 'manual:manual-op' });
+    expect(readCreditFundingState({ ...evidence, history: [...history, ...posted([manual.posting])].reverse() })).toMatchObject({ ok: true,
+      state: { remaining: { [LINE]: [0, 34, 0] }, returnedIndexes: { [LINE]: [0, 2] }, restored: 67, retained: 34 } });
+    expect(planCreditUnitReturn({ ...evidence, history, orderLineId: LINE, originalIndexes: [2],
+      operation: { kind: 'manual_return', id: 'double' } })).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
+    expect(readCreditFundingState({ ...evidence, history: [...evidence.history,
+      { ...posted([refund.posting])[0]!, refundId: edit(21) }] })).toMatchObject({ ok: false, code: 'AMBIGUOUS_HISTORY' });
+    expect(readCreditFundingState({ ...evidence, history: [...evidence.history,
+      { ...posted([refund.posting])[0]!, status: 'PENDING' }] })).toMatchObject({ ok: false, code: 'AMBIGUOUS_HISTORY' });
+  });
+
+  it('consumes exhausted original zero-cent units & never restores newly added units', () => {
+    const redeem = redemption([0, 1, 0]);
+    const result = planCreditUnitReturn({ redemption: redeem, history: [], historyComplete: true, orderLineId: LINE,
+      originalIndexes: [2, null], operation: { kind: 'manual_return', id: 'zero-original' } });
+    if (!result.ok || !result.posting) throw new Error('Expected zero-cent identity consumption');
+    expect(result.posting).toMatchObject({ quantity: 1, amount: 0 });
+    expect(readCreditFundingState({ redemption: redeem, history: posted([result.posting]), historyComplete: true })).toMatchObject({ ok: true,
+      state: { returnedIndexes: { [LINE]: [2] }, retained: 1 } });
+    expect(planCreditUnitReturn({ redemption: redeem, history: [], historyComplete: true, orderLineId: OTHER,
+      originalIndexes: [null], operation: { kind: 'manual_return', id: 'new-only' } })).toMatchObject({ ok: true, posting: null });
+  });
+
 });

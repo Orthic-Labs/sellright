@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection } from './refund-credit.js';
+import { refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, readCreditUnitReturns } from './refund-credit.js';
+import { buildCurrentCreditPricingSnapshot, readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
+import { planCreditUnitReturn, originalCreditUnitId, creditReturnSnapshotDigest } from '../account-credit/edit-funding.js';
 import { buildOrderPricingSnapshot } from '../money/pricing-snapshot.js';
 import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
 
@@ -8,7 +10,7 @@ const secondId = '22222222-2222-4222-8222-222222222222';
 const imported = (overrides: Record<string, unknown> = {}) => ({ id, quantity: 3, unitPrice: 100, lineTotal: 299,
   metadata: { vendure: { quantity: 3, placedQuantity: 3, listPrice: 100, listPriceIncludesTax: true,
     adjustments: [{ amount: -1, type: 'PROMOTION' }], taxLines: [], ...overrides } } });
-const redeem = { id: 'redeem', accountCreditId: 'credit', amount: 101, delta: -101, operationalAllocation: { [id]: [0, 50, 51] } };
+const redeem = { id: '33333333-3333-4333-8333-333333333333', accountCreditId: '44444444-4444-4444-8444-444444444444', orderId: '55555555-5555-4555-8555-555555555555', kind: 'REDEEM', status: 'POSTED', amount: 101, delta: -101, operationalAllocation: { [id]: [0, 50, 51] } };
 const selection = (quantity = 1) => [{ orderLineId: id, quantity }];
 const currentSnapshot = (lines: Array<{ id: string; unitListPrice: number; quantity: number }>) => {
   const input: StackInput = { currency: 'USD', pricesIncludeTax: true, couponCodes: [], phase: 'PaymentSettled',
@@ -66,9 +68,9 @@ describe('refund cash unit & independent credit unit authority', () => {
     expect(() => refundUnitBases({ currency: 'USD', pricingSnapshot: null }, [imported({ listPrice: '100' })])).toThrow();
   });
   it('accepts a zero-valued selected credit unit & advances exact posted prefix', () => {
-    expect(proveCreditMerchandiseReturn(redeem, [], selection())).toEqual({ redemptionId: 'redeem', accountId: 'credit' });
-    const prior = { accountCreditId: 'credit', relatedTransactionId: 'redeem', orderLineId: id, quantity: 1, amount: 0, delta: 0 };
-    expect(proveCreditMerchandiseReturn(redeem, [prior], selection(2))).toEqual({ redemptionId: 'redeem', accountId: 'credit' });
+    expect(proveCreditMerchandiseReturn(redeem, [], selection())).toEqual({ redemptionId: redeem.id, accountId: redeem.accountCreditId });
+    const prior = { id: 'legacy', idempotencyKey: 'legacy', kind: 'RESTORE', status: 'POSTED', orderId: redeem.orderId, accountCreditId: redeem.accountCreditId, relatedTransactionId: redeem.id, orderLineId: id, quantity: 1, amount: 0, delta: 0, allocation: null, operationalAllocation: null };
+    expect(proveCreditMerchandiseReturn(redeem, [prior], selection(2))).toEqual({ redemptionId: redeem.id, accountId: redeem.accountCreditId });
     expect(() => proveCreditMerchandiseReturn(redeem, [{ ...prior, amount: 1, delta: 1 }], selection())).toThrow();
     expect(() => proveCreditMerchandiseReturn(redeem, [{ ...prior, orderLineId: null }], selection())).toThrow();
     expect(() => proveCreditMerchandiseReturn(redeem, [{ ...prior, relatedTransactionId: 'other' }], selection())).toThrow();
@@ -86,4 +88,96 @@ describe('refund cash unit & independent credit unit authority', () => {
     expect(refundCreditProjection({ creditRestoration: { state: 'posted', amount: 0, private: 'hidden' } })).toEqual({ state: 'posted', amount: 0 });
     expect(refundCreditProjection({ creditRestoration: { state: 'other', amount: 0 } })).toBeNull();
   });
+  it('freezes actual reserved position sets & protects digest after JSONB key reordering', () => {
+    const order = { currency: 'USD', pricingSnapshot: null }, evidence = { redemption: redeem, history: [], historyComplete: true as const };
+    const lines = [imported()];
+    const first = prepareCreditUnitReturns(order, lines, evidence, selection(), []);
+    const second = prepareCreditUnitReturns(order, lines, evidence, selection(), [{ metadata: { creditUnitReturns: first }, lines: selection() }]);
+    expect(first.lines[0]).toMatchObject({ positions: [0], originalIndexes: [0], creditCents: [0] });
+    expect(second.lines[0]).toMatchObject({ positions: [1], originalIndexes: [1], creditCents: [50] });
+    const olderBase = { version: 1 as const, redemptionId: first.redemptionId, snapshotDigest: 'a'.repeat(64), lines: first.lines };
+    const older = { ...olderBase, requestDigest: creditReturnSnapshotDigest(olderBase) };
+    // Posted/settled status never releases immutable merchandise identity after
+    // repricing moves its capture position or changes snapshot digest.
+    expect(prepareCreditUnitReturns(order, lines, evidence, selection(), [{ metadata: { creditUnitReturns: older }, restored: true, state: 'Settled', lines: selection() }]).lines[0]?.positions).toEqual([1]);
+    expect(prepareCreditUnitReturns(order, lines, evidence, selection(), [{ metadata: { creditUnitReturns: first }, state: 'Failed', lines: selection() }]).lines[0]?.positions).toEqual([0]);
+    // Failed reservations are omitted by caller, so their exact positions release.
+    expect(prepareCreditUnitReturns(order, lines, evidence, selection(), [{ metadata: { creditUnitReturns: second }, lines: selection() }]).lines[0]?.positions).toEqual([0]);
+    const reordered = { lines: first.lines, requestDigest: first.requestDigest, snapshotDigest: first.snapshotDigest, redemptionId: first.redemptionId, version: first.version };
+    expect(readCreditUnitReturns({ creditUnitReturns: reordered })).toEqual(first);
+    expect(() => readCreditUnitReturns({ creditUnitReturns: { ...first, lines: [{ ...first.lines[0], creditCents: [1] }] } })).toThrow(/digest/);
+  });
+  it('sums explicit per-unit cash amounts without averaging edited residuals', () => {
+    expect(refundLineCashAmount(imported(), 2, [0, 17], true)).toBe(17);
+    expect(() => refundLineCashAmount(imported(), 2, [17], true)).toThrow();
+  });
+
+  it('returns uneven edited units by frozen current positions & refuses unfrozen V2 reservations', () => {
+    const account = redeem.accountCreditId, promotion = '66666666-6666-4666-8666-666666666666';
+    const input: StackInput = { currency: 'USD', pricesIncludeTax: true, couponCodes: ['CREDIT'], phase: 'PaymentSettled',
+      lines: [{ key: id, quantity: 3, placedQuantity: 3, unitListPrice: 100, priceIncludesTax: true, taxRateBps: 0 }],
+      promotions: [{ id: promotion, code: 'CREDIT', kind: 'account_credit', scope: 'order', value: 0, priority: 0,
+        sequence: 1, freeShipping: false, conditions: null, credit: { accountId: account, availableCents: 101 } }],
+      shipping: 0, shippingTaxRateBps: 0, shippingIncludesTax: true, couponContext: { activeVerifications: [] } };
+    const origin = buildOrderPricingSnapshot(input, calculatePromotionStack(input), new Map([[id, id]]));
+    const ordinaryInput = { ...input, couponCodes: [], promotions: [], lines: [{ ...input.lines[0]!, quantity: 4 }] };
+    const result = calculatePromotionStack(ordinaryInput);
+    const ordinary = buildOrderPricingSnapshot(ordinaryInput, result, new Map([[id, id]]));
+    const redemption = { ...redeem, operationalAllocation: origin.selectedCredit!.allocation };
+    const evidence = { redemption, history: [], historyComplete: true as const, refunds: [], refundsComplete: true as const };
+    const editId = '88888888-8888-4888-8888-888888888888';
+    const originView = readCurrentOrderPricingSnapshot(origin, { currency: 'USD', orderLines: origin.lines.map(line => ({ id: line.orderLineId, quantity: line.quantity })),
+      mode: 'settlement', creditEvidence: evidence })!;
+    const sourceRow = (saved: ReturnType<typeof buildCurrentCreditPricingSnapshot>, predecessor: NonNullable<ReturnType<typeof readCurrentOrderPricingSnapshot>>) => {
+      const requestDigest = '0'.repeat(64), postingKeys: string[] = [];
+      const payload = { editId: saved.lineage.editId, orderId: redemption.orderId, pricingSnapshot: saved, requestDigest, postingKeys,
+        lineIds: Object.fromEntries(saved.lines.map(line => [line.key, line.orderLineId])), activation: {
+          unitIds: saved.unitIds, indexes: saved.originalUnitIndexes, predecessor, lineage: saved.lineage,
+          origin: saved.origin, ordinary: saved.ordinary, ordinaryUnitFacts: saved.ordinaryUnitFacts } };
+      const proposalDigest = creditReturnSnapshotDigest(payload);
+      return { id: saved.lineage.editId, orderId: redemption.orderId, before: { currentPricing: predecessor.snapshot },
+        after: { activatedPricingSnapshot: saved, proposal: { ...payload, proposalDigest } },
+        settlement: { phase: 'activated', activationReceipt: { proposalDigest, requestDigest, postingKeys,
+          activatedSnapshotHash: creditReturnSnapshotDigest(saved) } } };
+    };
+    const snapshot = buildCurrentCreditPricingSnapshot({ origin, ordinary, couponCodes: ['CREDIT'], evidence,
+      ordinaryUnitFacts: { [id]: { sourceAdjustmentTotal: result.lineSnapshots[0]!.sourceAdjustmentTotal!,
+        sourceAdjustmentDivisor: result.lineSnapshots[0]!.sourceAdjustmentDivisor! } }, originalUnitIndexes: { [id]: [2, null, 0, 1] },
+      unitIds: { [id]: [originalCreditUnitId(redemption.id, id, 2), `edit:${editId}:${id}:0`, originalCreditUnitId(redemption.id, id, 0), originalCreditUnitId(redemption.id, id, 1)] },
+      lineage: { editId, predecessorSnapshotDigest: creditReturnSnapshotDigest(origin), consumedUnitIds: [] } });
+    const pricingSources = [sourceRow(snapshot, originView)];
+    const lines = [{ id, quantity: 4, unitPrice: 100, lineTotal: snapshot.lines[0]!.lineGross }];
+    const order = { currency: 'USD', pricingSnapshot: snapshot };
+    const first = prepareCreditUnitReturns(order, lines, evidence, selection(), [], pricingSources);
+    expect(first.lines[0]).toMatchObject({ positions: [0], originalIndexes: [2], creditCents: [33] });
+    const basis = refundUnitBases(order, lines, evidence, pricingSources).get(id)!;
+    expect(basis).toEqual([67, 100, 66, 66]);
+    expect(refundLineCashAmount(lines[0]!, 1, [67], true)).toBe(67);
+    expect(() => prepareCreditUnitReturns(order, lines, { ...evidence, refunds: [{ id: '77777777-7777-4777-8777-777777777777', state: 'Pending', metadata: null,
+      lines: [{ orderLineId: id, quantity: 1, amount: 67 }] }] }, selection(), [], pricingSources)).toThrow(/frozen/);
+    const returned = planCreditUnitReturn({ ...evidence, orderLineId: id, originalIndexes: [2],
+      operation: { kind: 'refund', id: '77777777-7777-4777-8777-777777777777' } });
+    if (!returned.ok || !returned.posting) throw new Error('Expected indexed return');
+    const originalRefund = { id: '77777777-7777-4777-8777-777777777777', state: 'Settled', metadata: { creditUnitReturns: first },
+      lines: [{ orderLineId: id, quantity: 1, amount: 67 }] };
+    const live = { ...evidence, history: [{ ...returned.posting, id: 'return-row' }], refunds: [originalRefund] };
+    const next = prepareCreditUnitReturns(order, lines, live, selection(), [], pricingSources);
+    expect(next.lines[0]).toMatchObject({ positions: [1], originalIndexes: [null], creditCents: [0] });
+    const cashOnly = { id: '99999999-9999-4999-8999-999999999999', state: 'Settled', metadata: { creditUnitReturns: next },
+      lines: [{ orderLineId: id, quantity: 1, amount: 100 }] };
+    expect(prepareCreditUnitReturns(order, lines, { ...live, refunds: [originalRefund, cashOnly] }, selection(), [], pricingSources).lines[0]?.positions).toEqual([2]);
+    expect(prepareCreditUnitReturns(order, lines, { ...live, refunds: [originalRefund, { ...cashOnly, state: 'Pending' }] }, selection(), [], pricingSources).lines[0]?.positions).toEqual([2]);
+    expect(prepareCreditUnitReturns(order, lines, { ...live, refunds: [originalRefund, { ...cashOnly, state: 'Failed' }] }, selection(), [], pricingSources).lines[0]?.positions).toEqual([1]);
+    const settled = { ...live, refunds: [originalRefund, cashOnly] };
+    const predecessor = readCurrentOrderPricingSnapshot(snapshot, { currency: 'USD', orderLines: lines, mode: 'refund', creditEvidence: settled, pricingSources })!;
+    const laterEditId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const later = buildCurrentCreditPricingSnapshot({ origin, ordinary, couponCodes: ['CREDIT'], evidence: settled, predecessor,
+      ordinaryUnitFacts: snapshot.ordinaryUnitFacts, originalUnitIndexes: snapshot.originalUnitIndexes, unitIds: snapshot.unitIds,
+      lineage: { editId: laterEditId, predecessorSnapshotDigest: creditReturnSnapshotDigest(snapshot),
+        consumedUnitIds: [snapshot.unitIds[id]![0]!, snapshot.unitIds[id]![1]!] } });
+    const laterSources = [...pricingSources, sourceRow(later, predecessor)];
+    expect(prepareCreditUnitReturns({ ...order, pricingSnapshot: later }, lines, settled, selection(), [], laterSources).lines[0]?.positions).toEqual([2]);
+    expect(refundUnitBases(order, lines, live, pricingSources).get(id)).toEqual(basis);
+  });
+
 });

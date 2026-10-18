@@ -29,7 +29,7 @@ import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import { withLockedSetInTx } from '../db/locks.js';
 import * as s from '../db/schema.js';
-import { applyPaymentResult, amountDueForOrder } from './settle.js';
+import { applyPaymentResult, amountDueForOrder, retryPreparedEditSettlement } from './settle.js';
 import { recordSettlementOperation } from './settlement/record.js';
 import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, searchStripeIntentsForOrder, resolveStripeConfigured, type IntentLike, type StripeMode } from './stripe.js';
 import { isPaymentMethodEnabled } from './provider.js';
@@ -185,17 +185,26 @@ async function applyStripeIntentLocked(
   if (pi.status === 'succeeded') {
     if (existing?.state === 'Settled') {
       await setAttempt(tx, attempt, 'settled', { paymentId: existing.id });
-      return { outcome: 'already_settled', orderState: order.state };
+      const applied = await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', amount: existing.amount, paymentAttemptId: attempt.id,
+        result: { state: 'Settled', providerRef: pi.id, metadata: { gateway: { mode } } } });
+      return { outcome: 'already_settled', orderState: applied.orderState };
     }
     // Order editing (G13): a Paid/PartiallyRefunded order with a positive amount
     // due (an edit raised the total) accepts a balance payment; with nothing
     // due it still falls through to the duplicate-capture handling below.
     const payable = order.state === 'PendingPayment' || order.state === 'Cancelled' || order.state === 'Paid' || order.state === 'PartiallyRefunded';
-    const amountDue = payable ? await amountDueForOrder(tx, storeId, order.id, order.grandTotal) : 0;
+    const { preparedEditTender } = await import('../orders/order-edit-service.js');
+    const editTender = await preparedEditTender(tx, { storeId, orderId: order.id });
+    // Only the bound staged attempt may supply its frozen additional tender.
+    const [staged] = editTender ? await tx.select({ settlement: s.orderEdit.settlement }).from(s.orderEdit).where(and(
+      eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.id, editTender.editId), eq(s.orderEdit.orderId, order.id),
+    )).limit(1) : [];
+    const linkedEditTender = editTender && (staged?.settlement as { paymentAttemptId?: string } | null)?.paymentAttemptId === attempt.id ? editTender : null;
+    const amountDue = payable ? linkedEditTender?.amount ?? await amountDueForOrder(tx, storeId, order.id, order.grandTotal) : 0;
     if (payable && amountDue > 0) {
       const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency, stripeMode: mode });
       if (result.state === 'Settled') {
-        const applied = await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result, amount: amountDue });
+        const applied = await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result, amount: amountDue, paymentAttemptId: attempt.id });
         const paid = await stripePaymentFor(tx, pi.id);
         await setAttempt(tx, attempt, 'settled', { paymentId: paid?.id, result: { state: 'Settled' } });
         if (order.state === 'Cancelled') {
@@ -348,8 +357,13 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
       .where('code' in ref ? eq(s.order.code, ref.code) : eq(s.order.id, ref.orderId)).limit(1);
     if (!order) return null;
     const attempts = await tx.select().from(s.paymentAttempt).where(and(
-      eq(s.paymentAttempt.orderId, order.id), eq(s.paymentAttempt.operation, 'intent'),
-      notInArray(s.paymentAttempt.status, ['settled', 'cancelled']),
+      eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.orderId, order.id), eq(s.paymentAttempt.method, 'stripe'), eq(s.paymentAttempt.operation, 'intent'),
+      or(notInArray(s.paymentAttempt.status, ['settled', 'cancelled']), and(
+        eq(s.paymentAttempt.status, 'settled'),
+        sql`EXISTS (SELECT 1 FROM order_edit e WHERE e.store_id = ${storeId} AND e.order_id = ${order.id}
+          AND e.settlement->>'phase' IN ('prepared', 'awaiting_refund', 'awaiting_tender', 'ready', 'failed')
+          AND e.settlement->>'paymentAttemptId' = ${s.paymentAttempt.id}::text)`,
+      )),
     ));
     const [anyIntent] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt).where(and(
       eq(s.paymentAttempt.orderId, order.id), eq(s.paymentAttempt.operation, 'intent'))).limit(1);
@@ -373,6 +387,15 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
     if (!a.providerRef) continue;
     const mode = asMode(a.mode);
     try {
+      const durable = await withAdvisoryLock(`pay:${storeId}:${order.code}`, () => withStore(storeId, tx =>
+        withLockedSetInTx(tx, storeId, { kind: 'order', orderId: order.id }, () =>
+          retryPreparedEditSettlement(tx, storeId, order.id, { paymentAttemptId: a.id, method: 'stripe' }))));
+      if (durable) {
+        out.intents.push({ intentId: a.providerRef, outcome: 'already_settled' });
+        out.state = durable.orderState;
+        continue;
+      }
+      if (a.status === 'settled') throw new Error('Settled edit tender requires reconciliation');
       const pi = await retrieveStripeIntent(storeId, mode, a.providerRef);
       // De-fork 2.9: a successful retrieval advances provider_status/observed_at
       // (a throw above leaves the previous observation untouched).
