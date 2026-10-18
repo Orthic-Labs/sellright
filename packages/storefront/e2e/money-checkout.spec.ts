@@ -1,6 +1,6 @@
 import { test, expect, skipExternal, setCardToken } from './fixtures';
-import { SHIPPING, SKU, clientIp, readRows, sentEmails, uniq, PRODUCT } from './support/api';
-import { API_URL } from './support/env.mjs';
+import type { Page, Request } from '@playwright/test';
+import { SHIPPING, SKU, readRows, sentEmails, uniq, PRODUCT } from './support/api';
 import { mock } from './support/mock';
 import { addToCart, applyPromoAtCheckout, fillShipping, goToCheckout, clickPay, payAndConfirm, payButton, placeOrder, placeOrderButton } from './support/flows';
 
@@ -180,42 +180,63 @@ test.describe('#2 coupons and promotions', () => {
 });
 
 test.describe('#3 changed-total consent gate', () => {
-	/**
-	 * The merchant has raised the flat rate to $8.00, but the quote the shopper's page holds is the old $5.00 one (a page
-	 * left open, a quote that ignores a server-side adjustment, ...): the quote endpoint is made to keep answering $5.00
-	 * while the server prices every order at $8.00. Returns the shipping method id so the caller can restore the rate.
-	 */
-	async function staleShippingQuote(page: import('@playwright/test').Page, api: import('./support/api').AdminApi) {
+	async function flatShippingId(api: import('./support/api').AdminApi): Promise<string> {
 		const flat = (await api.get<{ items: { id: string; code: string }[] }>('/shipping-methods')).items.find((m) => m.code === SHIPPING.flat)!;
-		await api.patch(`/shipping-methods/${flat.id}`, { calculator: { flat: 800 } });
-		await page.route((url) => url.pathname === '/v1/shop/shipping-methods', async (route) => {
-			const u = new URL(route.request().url());
-			const real = await fetch(API_URL + u.pathname + u.search, { headers: { 'x-real-ip': clientIp() } });
-			const body = (await real.json()) as { methods: Array<{ code: string; rate: number }> };
-			body.methods = body.methods.map((m) => (m.code === SHIPPING.flat ? { ...m, rate: 500 } : m));
-			await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-		});
 		return flat.id;
 	}
 
-	test('estimate $30.00, server total $33.00: PLACE ORDER never charges, only the second click (PAY) pays — exactly the server total, never the estimate', async ({ apiProxyPage: page, api }) => {
-		const flatId = await staleShippingQuote(page, api);
+	/** A real merchant rate change makes the live pre-submit cart read reject the shopper's previously shown quote. */
+	async function requestUpdatedQuote(page: Page) {
+		const checkoutRequests: Request[] = [];
+		page.on('request', (request) => {
+			if (new URL(request.url()).pathname === '/v1/shop/checkout' && request.method() === 'POST') checkoutRequests.push(request);
+		});
+		const refreshed = page.waitForResponse((response) => {
+			const url = new URL(response.url());
+			return /^\/v1\/shop\/cart\/[^/]+$/.test(url.pathname) && response.request().method() === 'GET'
+				&& url.searchParams.get('pricingIntent') === 'checkout';
+		});
+		await placeOrderButton(page).click();
+		const response = await refreshed;
+		expect(response.status(), 'live checkout quote').toBe(200);
+		const quote = await response.json() as { quoteHash: string; subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number };
+		expect(quote).toMatchObject({ subtotal: 2500, discountTotal: 0, shippingTotal: 800, taxTotal: 0, grandTotal: 3300 });
+		expect(quote.quoteHash).toMatch(/^[0-9a-f]{64}$/);
+		const notice = page.getByRole('alert', { name: 'Updated checkout quote' });
+		await expect(notice).toContainText('Your total changed');
+		await expect(notice.getByText('$8.00', { exact: true })).toBeVisible();
+		await expect(notice.getByText('$33.00', { exact: true })).toBeVisible();
+		expect(checkoutRequests, 'a fresh quote does not authorize order creation').toHaveLength(0);
+		await expect(payButton(page)).toBeHidden();
+		return { notice, quote, checkoutRequests };
+	}
+
+	test('shown $30.00, refreshed quote $33.00: confirming the quote and placing the order never charge; PAY charges exactly the accepted total', async ({ apiProxyPage: page, api }) => {
+		const flatId = await flatShippingId(api);
 		try {
 			await addToCart(page, PRODUCT.shirt.slug);
 			await goToCheckout(page);
 			await fillShipping(page, `${uniq('chg')}@example.net`);
-			await expect(page.getByText('$30.00').first()).toBeVisible(); // the estimate on screen: $25.00 + $5.00
+			await page.waitForLoadState('networkidle');
+			await expect(page.getByText('$30.00').first()).toBeVisible();
+			await api.patch(`/shipping-methods/${flatId}`, { calculator: { flat: 800 } });
 
 			const salesBefore = (await mock.nmiCalls()).filter((c) => c.type === 'sale').length;
+			const { notice, quote, checkoutRequests } = await requestUpdatedQuote(page);
+			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(salesBefore);
+			await notice.getByRole('button', { name: 'Confirm updated quote' }).click();
+			await expect(notice).toBeHidden();
+			expect(checkoutRequests, 'confirmation alone does not place an order').toHaveLength(0);
+			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(salesBefore);
 			const placed = await placeOrder(page);
-			expect(placed.grandTotal, 'the order is priced by the server, not by the estimate').toBe(2500 + 800);
+			expect(placed.grandTotal, 'the order is priced by the accepted server quote').toBe(2500 + 800);
+			expect(checkoutRequests).toHaveLength(1);
+			expect(checkoutRequests[0]!.postDataJSON().acceptedQuoteHash).toBe(quote.quoteHash);
 
-			// Click #1 (PLACE ORDER) did not start a payment: no gateway call, the order is unpaid, a PAY step is offered.
-			await expect(payButton(page)).toBeVisible();
+			await expect(payButton(page)).toContainText('$33.00');
 			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(salesBefore);
 			expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
-			// Click #2 (PAY) pays the server's total.
 			await payAndConfirm(page, placed.code);
 			const sales = (await mock.nmiCalls()).filter((c) => c.type === 'sale');
 			expect(sales).toHaveLength(salesBefore + 1);
@@ -226,25 +247,36 @@ test.describe('#3 changed-total consent gate', () => {
 		}
 	});
 
-	// Regression (was a product gap found by this suite): once the order exists the PAY step used to keep showing the
-	// client's own estimate instead of the order's grandTotal, and a total that moved needed no confirmation. Now the
-	// button/summary show the order total, and charging waits for an explicit confirmation of the old-vs-new amounts.
-	test('when the order total differs from the estimate, the PAY step shows the order total and waits for the shopper to confirm it', async ({ apiProxyPage: page, api }) => {
-		const flatId = await staleShippingQuote(page, api);
+	test('a changed quote blocks order creation and payment until the shopper explicitly confirms its updated amounts', async ({ apiProxyPage: page, api }) => {
+		const flatId = await flatShippingId(api);
 		try {
 			await addToCart(page, PRODUCT.shirt.slug);
 			await goToCheckout(page);
 			await fillShipping(page, `${uniq('chg2')}@example.net`);
+			await page.waitForLoadState('networkidle');
+			await expect(page.getByText('$30.00').first()).toBeVisible();
+			const before = await api.stock(SKU.shirt);
+			await api.patch(`/shipping-methods/${flatId}`, { calculator: { flat: 800 } });
+			const { notice, quote, checkoutRequests } = await requestUpdatedQuote(page);
+			// A repeated PLACE ORDER cannot accept the changed quote on the shopper's behalf.
+			await placeOrderButton(page).click();
+			await expect(page.getByText('Review updated amounts & confirm this quote before placing your order.', { exact: true })).toBeVisible();
+			await expect(notice).toBeVisible();
+			expect(checkoutRequests).toHaveLength(0);
+			await expect(payButton(page)).toBeHidden();
+			expect(await api.stock(SKU.shirt)).toEqual(before);
+			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
+
+			await notice.getByRole('button', { name: 'Confirm updated quote' }).click();
+			await expect(notice).toBeHidden();
+			expect(checkoutRequests).toHaveLength(0);
 			const placed = await placeOrder(page);
 			expect(placed.grandTotal).toBe(3300);
+			expect(checkoutRequests).toHaveLength(1);
+			expect(checkoutRequests[0]!.postDataJSON().acceptedQuoteHash).toBe(quote.quoteHash);
 			await expect(payButton(page)).toContainText('$33.00', { timeout: 5_000 });
-			// The old and the new amount are spelled out, and PAY stays locked until the shopper confirms the new one.
-			const notice = page.getByTestId('total-changed');
-			await expect(notice).toContainText('$30.00');
-			await expect(notice).toContainText('$33.00');
-			await expect(payButton(page)).toBeDisabled();
 			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
-			await page.getByRole('checkbox', { name: /i confirm i will be charged \$33\.00/i }).check();
+			expect((await api.order(placed.code)).state).toBe('PendingPayment');
 			await expect(payButton(page)).toBeEnabled();
 		} finally {
 			await api.patch(`/shipping-methods/${flatId}`, { calculator: { flat: 500 } });
