@@ -326,10 +326,12 @@ catalog.openapi(
         .select({
           slug: s.collection.slug,
           name: s.collection.name,
-          products: sql<number>`count(${s.collectionProduct.productId})::int`,
+          products: sql<number>`count(${s.product.id})::int`,
         })
         .from(s.collection)
         .leftJoin(s.collectionProduct, eq(s.collectionProduct.collectionId, s.collection.id))
+        .leftJoin(s.product, and(eq(s.product.id, s.collectionProduct.productId), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
+        .where(eq(s.collection.published, true))
         .groupBy(s.collection.id)
         .orderBy(asc(s.collection.name)),
     );
@@ -456,7 +458,7 @@ catalog.openapi(
         isNull(s.product.deletedAt),
         sql`(${s.product.name} ilike ${like} or ${s.product.description} ilike ${like})`,
       ];
-      if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug})`);
+      if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug} and c2.published = true)`);
       if (inStock) conds.push(productInStock());
       const where = and(...conds);
       const items = await tx

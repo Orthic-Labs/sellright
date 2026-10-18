@@ -203,7 +203,24 @@ export function isPrivateOrSpecialAddress(address: string): boolean {
   return true;
 }
 
-async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLookup } = {}): Promise<CheckedOutboundUrl> {
+// DNS lookup itself has no AbortSignal API. Stop awaiting it on cancellation,
+// consume late settlement, & never proceed to transport after the deadline.
+function abortableLookup(lookup: OutboundUrlLookup, hostname: string, signal?: AbortSignal | null): Promise<LookupAddress[]> {
+  signal?.throwIfAborted();
+  if (!signal) return lookup(hostname);
+  return new Promise((resolve, reject) => {
+    const aborted = () => { cleanup(); reject(signal.reason); };
+    const cleanup = () => signal.removeEventListener('abort', aborted);
+    signal.addEventListener('abort', aborted, { once: true });
+    Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return lookup(hostname);
+    }).then(records => { cleanup(); resolve(records); }, error => { cleanup(); reject(error); });
+  });
+}
+
+async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLookup; signal?: AbortSignal | null } = {}): Promise<CheckedOutboundUrl> {
+  opts.signal?.throwIfAborted();
   if (typeof rawUrl !== 'string' || rawUrl.trim() === '') throw new Error('Outbound URL is required');
   if (rawUrl.length > 2048) throw new Error('Outbound URL is too long');
 
@@ -227,7 +244,8 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   }
 
   const lookup = opts.lookup ?? defaultLookup;
-  const records = await lookup(hostname);
+  const records = await abortableLookup(lookup, hostname, opts.signal);
+  opts.signal?.throwIfAborted();
   if (!records.length) throw new Error('Outbound URL host could not be resolved');
   if (records.some((record) => isPrivateOrSpecialAddress(record.address))) {
     throw new Error('Outbound URL must not resolve to private network addresses');
@@ -241,7 +259,7 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   return { url, address: records[0]!.address, family: records[0]!.family };
 }
 
-export async function assertSafeOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLookup } = {}): Promise<string> {
+export async function assertSafeOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLookup; signal?: AbortSignal | null } = {}): Promise<string> {
   const checked = await checkOutboundUrl(rawUrl, opts);
   return checked.url.toString();
 }
@@ -389,19 +407,21 @@ export async function safeOutboundFetch(
   init: RequestInit = {},
   opts: SafeOutboundFetchOptions = {},
 ): Promise<Response> {
-  const checked = await checkOutboundUrl(rawUrl, opts);
+  const checked = await checkOutboundUrl(rawUrl, { ...opts, signal: init.signal });
+  init.signal?.throwIfAborted();
   const request = opts.request ?? nodeRequestWithPinnedLookup;
   const response = await request(checked.url, init, {
     lookup: pinnedLookup(checked.address, checked.family),
     address: checked.address,
     family: checked.family,
     servername: normalizeHostname(checked.url.hostname),
-  });
+  }).catch(error => { init.signal?.throwIfAborted(); throw error; });
+  init.signal?.throwIfAborted();
 
   if (response.status >= 300 && response.status < 400) {
     const location = response.headers.get('location');
     if (!location) throw new Error('Outbound redirects are not allowed');
-    await checkOutboundUrl(new URL(location, checked.url).toString(), opts);
+    await checkOutboundUrl(new URL(location, checked.url).toString(), { ...opts, signal: init.signal });
     throw new Error('Outbound redirects are not allowed');
   }
 
