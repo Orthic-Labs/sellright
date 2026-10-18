@@ -422,9 +422,13 @@ type PricingResolver = (hash: string) => CurrentOrderPricing;
 function shippingCarriers(source:RetainedShipping, prior:CurrentShippingSourceFacts, lines:OrderPricingSnapshotV1['lines']):ShippingCarrier[] {
   const keys = new Set(lines.map(l=>l.key)), ids = source.lines.map(l=>l.sourceId), priorIds = prior.basis.map(b=>b.sourceId);
   const sameIds = serial(ids) === serial(priorIds);
+  const activeKeys = new Set(lines.filter(l=>l.quantity > 0).map(l=>l.key));
+  let cursor=-1;
+  const orderedSubset = ids.every(id=>{const index=priorIds.indexOf(id);const ordered=index > cursor;cursor=index;return ordered;}) &&
+    prior.carriers.filter(carrier=>!ids.includes(carrier.sourceId)).every(carrier=>carrier.lineKeys.every(key=>!activeKeys.has(key)));
   const replacement = !!source.repricedBasis && ids.length === 1 && ids[0] === (priorIds[0] ?? 'current-shipping');
   const removal = source.repricedBasis?.length === 0 && ids.length === 0;
-  requireFact(sameIds || replacement || removal, 'shipping carrier custody differs');
+  requireFact(sameIds || orderedSubset || replacement || removal, 'shipping carrier custody differs');
   const derived = ids.map(sourceId=>{const carrier=prior.carriers.find(c=>c.sourceId === sourceId);
     return {sourceId,methodCode:carrier?.methodCode ?? null,lineKeys:(carrier?.lineKeys ?? []).filter(key=>keys.has(key))};});
   const carriers = source.carriers ?? derived;
@@ -546,7 +550,7 @@ function shippingSourceFacts(predecessor: CurrentOrderPricing, evidence: CreditP
     shippingCarriers(retained,facts,ordinary.lines);
     const expected = retained.mode === 'keep' ? priorFinal : retained.mode === 'revalidate-promotions' ? shippingPairs(retained.repricedBasis ?? facts.basis) :
       shippingPairs(retained.repricedBasis!,facts.adjustments);
-    requireFact(serial(expected) === serial(retained.lines), 'direct shipping source pairs differ');
+    requireFact(serial(expected.filter(line=>retained.lines.some(current=>current.sourceId === line.sourceId))) === serial(retained.lines), 'direct shipping source pairs differ');
     return currentShippingFacts(ordinary,facts);
   }
   requireFact(evidence, 'shipping durable credit evidence absent');
@@ -622,7 +626,7 @@ function validateSourceComponents(ordinary: OrderPricingSnapshotV1, origin: Cred
       });
     }
     shippingCarriers(source,facts,ordinary.lines);
-    requireFact(serial(source.lines) === serial(expected), 'shipping source pairs differ');
+    requireFact(serial(source.lines) === serial(expected.filter(line=>source.lines.some(current=>current.sourceId === line.sourceId))), 'shipping source pairs differ');
   }
   for (const adjustment of ordinary.adjustments) if (adjustment.sourceSurcharge) {
     const charge = adjustment.sourceSurcharge, original = imported?.surcharges.find(c=>c.sourceId === charge.sourceId);

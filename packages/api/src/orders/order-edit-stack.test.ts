@@ -345,6 +345,16 @@ describe('pure ordinary-promotion order edit candidate', () => {
     const fallback = priceEditShippingCarriers(input);
     expect(fallback.carriers).toEqual([{ sourceId: '11', methodCode: 'SECOND', lineKeys: ['a'] }, { sourceId: '12', methodCode: 'SECOND', lineKeys: ['b'] }]);
     expect(fallback.lines).toEqual([{ sourceId: '11', net: 20, gross: 24 }, { sourceId: '12', net: 35, gross: 42 }]);
+    // Disabled/deleted methods are absent from the service's enabled-method set.
+    // Their carriers retain custody & source adjustments through fallback.
+    const missingMethod = priceEditShippingCarriers({ ...input, methods: input.methods.filter(method => method.code !== 'OLD') });
+    expect(missingMethod.carriers).toEqual(fallback.carriers);
+    expect(missingMethod.lines).toEqual(fallback.lines);
+    const survivingSecond = priceEditShippingCarriers({ ...input, methods: input.methods.filter(method => method.code === 'POST'),
+      lines: [{ key: 'a', quantity: 0 }, { key: 'b', quantity: 1 }] });
+    expect(survivingSecond.carriers).toEqual([{ sourceId: '12', methodCode: 'POST', lineKeys: ['b'] }]);
+    expect(survivingSecond.lines).toEqual([{ sourceId: '12', net: 45, gross: 50 }]);
+    expect(survivingSecond.repricedBasis).toEqual([{ sourceId: '12', amount: 50, includesTax: false, taxRateBps: 1000 }]);
     const replacement = priceEditShippingCarriers({ ...input, selectedMethodCode: 'POST' });
     expect(replacement.carriers).toEqual([{ sourceId: '11', methodCode: 'POST', lineKeys: ['a', 'b', 'new'] }]);
     expect(replacement.lines).toEqual([{ sourceId: '11', net: 30, gross: 33 }]);

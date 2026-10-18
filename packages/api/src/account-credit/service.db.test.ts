@@ -79,7 +79,7 @@ async function retainedOrder() {
         orderChannelRecord: JSON.stringify({ orderId: 9, channelId: 1 }) }, shippingMethods: [],
       header: { subTotal: '133', subTotalWithTax: '133', shipping: '0', shippingWithTax: '0' },
       lines: [{ sourceId: '7', orderLineId: lineId, sourceRecord: JSON.stringify(rawLine) }], shippingLines: [], surcharges: [] };
-    const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currency: 'USD' });
+    const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currencyCode: 'USD' });
     const sourcePromotionRecord = JSON.stringify({ id: 5, actions: [{ code: 'account_credit_discount' }], conditions: [{ code: 'account_credit_eligible' }] });
     await tx.insert(s.promotion).values({ id: promoId, storeId: STORE, code: 'IMPORTED', type: 'account_credit', value: 0 });
     await tx.insert(s.accountCredit).values({ id: creditId, storeId: STORE, promotionId: promoId, currency: 'USD', emailNormalized: 'retained@example.invalid',

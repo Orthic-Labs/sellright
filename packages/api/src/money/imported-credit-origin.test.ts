@@ -17,7 +17,7 @@ const PROMOTION = mapped('promotion', '5'), REDEEM = mapped('account-credit-tran
 const EDIT = 'dddddddd-0000-4000-8000-000000000002';
 function fixture(quantity = 3, placed = 3): BuildImportedCreditOriginInput {
   const allocation = JSON.stringify({ 40: [34, 34, 33] });
-  const account = JSON.stringify({ id: 1, promotionId: 5, currency: 'USD', balance: 0, disabled: true });
+  const account = JSON.stringify({ id: 1, promotionId: 5, currencyCode: 'USD', balance: 0, disabled: true });
   const promotion = JSON.stringify({ id: 5, enabled: false, actions: [{ code: 'account_credit_discount', args: [] }],
     conditions: [{ code: 'account_credit_eligible', args: [] }] });
   const transaction = JSON.stringify({ id: 2, accountCreditId: 1, orderId: 10, kind: 'REDEEM', status: 'POSTED', amount: 101, delta: -101, allocation });
@@ -65,6 +65,17 @@ function ordinary(quantity: number) {
 }
 
 describe('retained imported credit origin', () => {
+  it('requires canonical retained account currencyCode without accepting a normalized currency alias', () => {
+    const valid=fixture();
+    expect(JSON.parse(buildImportedCreditOrigin(valid).accountSource.sourceRecord)).toMatchObject({currencyCode:'USD'});
+    for (const currencyCode of [undefined,'EUR']) {
+      const input=fixture(),account=JSON.parse(input.accountSource.sourceRecord);
+      input.accountSource.sourceRecord=JSON.stringify({...account,currencyCode,currency:'USD'});
+      input.accountSource.sourceDigest=orderEditStoredFingerprint({format:'retained-pg-jsonb-text-v1',
+        account:input.accountSource.sourceRecord,promotion:input.accountSource.sourcePromotionRecord});
+      expect(()=>buildImportedCreditOrigin(input)).toThrow('account/promotion native mapping');
+    }
+  });
   it('keeps real raw proof, reconciled native totals & distinct source refund rounding', () => {
     const input = fixture(), { origin, view } = adopt(input);
     expect(origin).not.toHaveProperty('applied');

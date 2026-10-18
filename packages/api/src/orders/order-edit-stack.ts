@@ -31,9 +31,8 @@ export function priceEditShippingCarriers(input: {
     carriers = carriers.flatMap(carrier => {
       if (!carrier.lineKeys.some(key => input.lines.some(line => line.key === key && line.quantity > 0))) return [];
       const previous = input.methods.find(method => method.code === carrier.methodCode);
-      if (!previous) return [];
-      const method = isMethodEligible(previous.calculator, input.context) ? previous : input.methods
-        .filter(method => method.code !== previous.code && isMethodEligible(method.calculator, input.context))
+      const method = previous && isMethodEligible(previous.calculator, input.context) ? previous : input.methods
+        .filter(method => method.code !== carrier.methodCode && isMethodEligible(method.calculator, input.context))
         .sort((a, b) => shippingRate(a.calculator) - shippingRate(b.calculator) || a.code.localeCompare(b.code) || a.id.localeCompare(b.id))[0];
       if (!method) return [];
       const calculator = (method.calculator && typeof method.calculator === 'object' ? method.calculator : {}) as ShippingCalculator;

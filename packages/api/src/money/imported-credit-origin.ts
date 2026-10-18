@@ -130,7 +130,7 @@ function validateSources(origin: ImportedCreditOriginV1, actual?: ImportedCredit
     a.id === mapped('account-credit', a.sourceId) && a.id === mapped('account-credit', account.id) &&
     a.promotionId === mapped('promotion', account.promotionId) && a.promotionId === mapped('promotion', promotion.id) &&
     a.promotion.id === a.promotionId && a.promotion.storeId === origin.storeId && a.promotion.type === 'account_credit' &&
-    a.currency === account.currency && a.currency === origin.capture.currency, 'account/promotion native mapping');
+    a.currency === account.currencyCode && a.currency === origin.capture.currency, 'account/promotion native mapping');
   fact(a.sourceDigest === retainedDigest({ format: 'retained-pg-jsonb-text-v1', account: a.sourceRecord, promotion: a.sourcePromotionRecord }) &&
     r.sourceDigest === retainedDigest({ format: 'retained-pg-jsonb-text-v1', transaction: r.sourceRecord }), 'retained raw digest');
   const actions = typeof promotion.actions === 'string' ? JSON.parse(promotion.actions) : promotion.actions;
