@@ -102,6 +102,31 @@ describe('pure ordinary-promotion order edit candidate', () => {
     expect(result.result.applied[0]!.amount).toBe(-50);
   });
 
+  it.each([false, true])('retains signed surcharge tax & exact zero/positive payables (snapshot=%s)', snapshot => {
+    for (const [amount, taxTotal, grandTotal] of [[-200, -10, 890], [-1009, -91, 0]] as const) {
+      const basis = fixture({ lines: [line('a', { unitListPrice: 100, taxRateBps: 1000 }), line('b', { unitListPrice: 1000 })],
+        promotions: [], couponCodes: [], shipping: 0, adjustments: [{ label: 'Signed taxable source adjustment', amount, taxable: true }] });
+      const input = request(basis, snapshot), before = structuredClone(input);
+      const candidate = priceOrderEditStack(input);
+      expect(candidate.result).toMatchObject({ subtotal: 1100, discountTotal: 0, shippingTotal: 0, taxTotal, grandTotal, pointsDiscount: 0 });
+      expect(candidate.balance).toBe(0);
+      expect(candidate.afterEconomicHash).toBe(candidate.beforeEconomicHash);
+      const persisted = buildOrderPricingSnapshot(candidate.snapshotDraft.input, candidate.snapshotDraft.result, new Map([['a', A], ['b', B]]));
+      expect(readOrderPricingSnapshot(JSON.parse(JSON.stringify(persisted)), { currency: 'USD', orderLines: input.before.orderLines,
+        totals: candidate.result, mode: 'settlement' })).toEqual(persisted);
+      expect(input).toEqual(before);
+    }
+  });
+
+  it('rejects invalid signed tax & preserves nonnegative bounds for all other totals', () => {
+    for (const taxTotal of [NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1, -2_147_483_648, 2_147_483_648]) {
+      const input = request(); input.before.totals.taxTotal = taxTotal; refusal(input);
+    }
+    for (const key of ['subtotal', 'discountTotal', 'shippingTotal', 'grandTotal', 'pointsDiscount'] as const) {
+      const input = request(); input.before.totals[key] = -1; refusal(input);
+    }
+  });
+
   it('binds item eligibility facts to logical line identities, beyond aggregate quantity', () => {
     const items = [
       { lineKey: 'a', quantity: 1, productId: 'eligible', tags: [], collectionIds: [] },

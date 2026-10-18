@@ -5,6 +5,7 @@ import { buildOrderPricingSnapshot, promotionQuoteHash, readOrderPricingSnapshot
 const ACCOUNT = 'cccccccc-0000-4000-8000-000000000001';
 const PROMOTION = 'cccccccc-0000-4000-8000-000000000002';
 const LINE = 'cccccccc-0000-4000-8000-000000000003';
+const SECOND_LINE = 'cccccccc-0000-4000-8000-000000000004';
 function fixture(): StackInput {
   return { lines: [{ key: 'synthetic-sku', quantity: 3, placedQuantity: 3, unitListPrice: 100, priceIncludesTax: false, taxRateBps: 875 }],
     promotions: [{ id: PROMOTION, code: 'SYNTHETIC', kind: 'account_credit', scope: 'order', value: 0,
@@ -77,5 +78,37 @@ describe('immutable accepted pricing snapshots', () => {
     expect(readOrderPricingSnapshot(snapshot, context)).toEqual(snapshot);
     const altered = structuredClone(snapshot); altered.applied[0]!.amount -= 1;
     expect(() => readOrderPricingSnapshot(altered, context)).toThrow('shipping discount sum');
+  });
+  it.each([
+    { amount: -200, taxTotal: -10, grandTotal: 890 },
+    { amount: -1009, taxTotal: -91, grandTotal: 0 },
+  ])('round-trips signed surcharge tax $taxTotal with payable $grandTotal', ({ amount, taxTotal, grandTotal }) => {
+    // Captured Surcharge.priceWithTax rounds negative gross too: -1009 @ 10% => -1110.
+    const input: StackInput = { ...fixture(), lines: [
+      { key: 'taxed', quantity: 1, placedQuantity: 1, unitListPrice: 100, priceIncludesTax: false, taxRateBps: 1000 },
+      { key: 'untaxed', quantity: 1, placedQuantity: 1, unitListPrice: 1000, priceIncludesTax: false, taxRateBps: 0 },
+    ], promotions: [], couponCodes: [], shipping: 0, shippingTaxRateBps: 0, pointsDiscount: 0,
+    adjustments: [{ label: 'Signed taxable source adjustment', amount, taxable: true }] };
+    const result = calculatePromotionStack(input);
+    expect(result).toMatchObject({ subtotal: 1100, discountTotal: 0, shippingTotal: 0, pointsDiscount: 0, taxTotal, grandTotal });
+    const snapshot = buildOrderPricingSnapshot(input, result, new Map([['taxed', LINE], ['untaxed', SECOND_LINE]]));
+    const native = [{ id: LINE, quantity: 1 }, { id: SECOND_LINE, quantity: 1 }];
+    const persisted: unknown = JSON.parse(JSON.stringify(snapshot));
+    expect(readOrderPricingSnapshot(persisted, { currency: 'USD', orderLines: native, totals: result, mode: 'settlement' })).toEqual(snapshot);
+    expect(readOrderPricingSnapshot(persisted, { currency: 'USD', orderLines: native, mode: 'refund' })?.quoteHash).toBe(result.quoteHash);
+    expect(promotionQuoteHash(input, result)).toBe(result.quoteHash);
+    expect(promotionQuoteHash(input, { ...result, taxTotal: taxTotal + 1 })).not.toBe(result.quoteHash);
+    const changed = structuredClone(snapshot); changed.totals.taxTotal += 1;
+    expect(() => readOrderPricingSnapshot(changed, { currency: 'USD', orderLines: native, mode: 'settlement' })).toThrow('economic hash');
+  });
+  it('rejects noninteger, unsafe or out-of-range tax & keeps other totals nonnegative', () => {
+    for (const taxTotal of [NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER + 1, -2_147_483_648, 2_147_483_648]) {
+      const snapshot = saved(); snapshot.totals.taxTotal = taxTotal;
+      expect(() => readOrderPricingSnapshot(snapshot, context)).toThrow('money must fit integer cents');
+    }
+    for (const key of ['subtotal', 'discountTotal', 'shippingTotal', 'grandTotal', 'pointsDiscount'] as const) {
+      const snapshot = saved(); snapshot.totals[key] = -1;
+      expect(() => readOrderPricingSnapshot(snapshot, context)).toThrow('money must fit integer cents');
+    }
   });
 });

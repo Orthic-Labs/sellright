@@ -86,7 +86,8 @@ export function readOrderPricingSnapshot(raw: unknown, context: { currency: stri
   requireValue(typeof snap.pricesIncludeTax === 'boolean' && Array.isArray(snap.couponCodes) && snap.couponCodes.every(code => typeof code === 'string' && code.length > 0), 'coupon stack');
   requireValue(new Set(snap.couponCodes.map(code => code.toLowerCase())).size === snap.couponCodes.length, 'duplicate code');
   requireValue(snap.totals && snap.shippingBasis && Array.isArray(snap.lines) && Array.isArray(snap.applied) && Array.isArray(snap.adjustments), 'economic facts');
-  for (const amount of Object.values(economicTotals(snap.totals))) cents(amount);
+  // Negative taxable surcharges can outweigh positive merchandise tax.
+  for (const [key, amount] of Object.entries(economicTotals(snap.totals))) cents(amount, key === 'taxTotal');
   cents(snap.shippingBasis.amount); cents(snap.shippingBasis.taxRateBps); cents(snap.pointsDiscount);
   requireValue(typeof snap.shippingBasis.includesTax === 'boolean' && typeof snap.shippingBasis.taxable === 'boolean', 'shipping tax basis');
   for (const a of snap.adjustments) { requireValue(a && typeof a === 'object', 'adjustment'); cents(a.amount, true); }

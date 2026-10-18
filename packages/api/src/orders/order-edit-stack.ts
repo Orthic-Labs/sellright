@@ -51,7 +51,7 @@ function totals(value: EditStackMoney): EditStackMoney {
   requireFact(value && typeof value === 'object', 'Missing stored totals');
   const out = { subtotal: value.subtotal, discountTotal: value.discountTotal, shippingTotal: value.shippingTotal,
     taxTotal: value.taxTotal, grandTotal: value.grandTotal, pointsDiscount: value.pointsDiscount };
-  for (const amount of Object.values(out)) money(amount, 'stored total');
+  for (const [key, amount] of Object.entries(out)) money(amount, 'stored total', key === 'taxTotal');
   return out;
 }
 function canonicalCodes(codes: string[]) {
