@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired, IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED } from '../orders/imported-financial-reconciliation.js';
 /**
  * Gateway attempt recovery (payments audit D7/D8, D22 for Sezzle).
  *
@@ -104,7 +105,7 @@ async function orderContext(storeId: string, attempt: Attempt) {
     const [order] = await tx.select().from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1);
     if (!order) return null;
     const due = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
-    return { code: order.code, payable: (order.state === 'PendingPayment' || order.state === 'Paid' || order.state === 'PartiallyRefunded') && due === attempt.amount };
+    return { code: order.code, financialReconciliationRequired: importedFinancialReconciliationRequired(order.metadata), payable: (order.state === 'PendingPayment' || order.state === 'Paid' || order.state === 'PartiallyRefunded') && due === attempt.amount };
   });
 }
 
@@ -125,6 +126,7 @@ async function recoverOne(storeId: string, attempt: Attempt, opts: RecoveryOptio
   if (order.uuid !== attempt.providerRef) return { resolved: false, note: 'order_identity_mismatch' };
   // De-fork 2.9: successful GET bound to this attempt (uuid == providerRef).
   await recordProviderObservationDetached(storeId, { attemptId: attempt.id }, { status: sezzleObservedStatus(order, { amount: attempt.amount, currency: attempt.currency }) });
+  if (ctx.financialReconciliationRequired) return { resolved: false, note: IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED };
   const decision = decideSezzleRecovery({
     order, attemptReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
     amount: attempt.amount, currency: attempt.currency, payable: ctx.payable,
@@ -139,6 +141,8 @@ async function recoverOne(storeId: string, attempt: Attempt, opts: RecoveryOptio
   // which COMMITS before the provider capture HTTP call: no row lock is held across HTTP. The capture
   // record (finishAttempt) takes its own lock set with mustCommit (X-45).
   return withAdvisoryLock('pay:' + storeId + ':' + ctx.code, async () => {
+    const currentContext = await orderContext(storeId, attempt);
+    if (currentContext?.financialReconciliationRequired) return { resolved: false, note: IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED };
     let cancelReason: string | null = decision.kind === 'release' ? decision.reason : null;
     if (decision.kind === 'capture') {
       const verdict = await decideSezzleCapture(storeId, attempt, ref);
@@ -192,6 +196,8 @@ async function decideSezzleCapture(storeId: string, attempt: Attempt, ref: strin
   return withLockedSet(storeId, { kind: 'order', orderId: attempt.orderId }, async (tx, held): Promise<CaptureVerdict> => {
     const [row] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attempt.id)).limit(1).for('update');
     if (!row) return { action: 'unavailable', reason: 'attempt_missing' };
+    const [quarantineOrder] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1);
+    if (importedFinancialReconciliationRequired(quarantineOrder?.metadata)) return { action: 'unavailable', reason: IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED };
     const prior = (row.context as { capture_decision?: { action?: string; reason?: string } } | null)?.capture_decision;
     if (prior?.action === 'capture') return { action: 'capture' };
     if (prior?.action === 'cancel') return { action: 'cancel', reason: prior.reason ?? 'policy' };

@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Reconcile Stripe events that happen OUTSIDE our app — dashboard-initiated
  * refunds and chargebacks — back into our ledger. Used by the inbound webhook.
@@ -303,8 +304,8 @@ export async function reconcileStripeRefund(
 }
 
 async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: string): Promise<void> {
-  const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
-  if (!ord) return;
+  const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
+  if (!ord || importedFinancialReconciliationRequired(ord.metadata)) return;
   const basis = await orderRefundBasis(tx, storeId, orderId);
   const refunded = basis.refunded;
   const target = refundStateFromBasis(basis);
@@ -345,7 +346,8 @@ export async function recordStripeDispute(tx: Tx, storeId: string, d: DisputeDes
   // Fork parity: a chargeback that is OPENED reverses the order's entitlement (not only a lost one). Only the first
   // observation of the dispute reaches here (res.created); the operation identity makes a replay add nothing.
   // The order is in moneyOrderIds(charge.dispute.created), so the webhook's lock set already covers it.
-  if (res.created && res.orderId) await recordSettlementOperation(tx, {
+  const [order] = res.orderId ? await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, res.orderId)).limit(1) : [];
+  if (res.created && res.orderId && !importedFinancialReconciliationRequired(order?.metadata)) await recordSettlementOperation(tx, {
     storeId, kind: 'dispute_opened', operationId: `stripe_dispute:${d.disputeId}`, orderId: res.orderId, mutations: [],
     effects: [{ kind: 'entitlement_reversal', payload: { orderId: res.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
   });

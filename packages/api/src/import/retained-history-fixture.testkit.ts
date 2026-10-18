@@ -22,7 +22,7 @@ export function retainedDetachedHistoryFixture(input: {
     channels: [{ id: '1', sourceRecord: '{"id":1,"defaultCurrencyCode":"USD","pricesIncludeTax":false,"defaultTaxZoneId":null}' }],
     orderChannels: [{ orderId: '1', channelId: '1', sourceRecord: '{"orderId":1,"channelId":1}' }],
   })[0]!;
-  if (Object.hasOwn(capture, 'editBasisV1') || !capture.retainedHistoryV1) {
+  if (Object.hasOwn(capture, 'editBasisV1') || !('retainedHistoryV1' in capture) || !capture.retainedHistoryV1) {
     throw new Error('Detached history fixture must not provide an operational edit basis');
   }
   return { ...input.metadata,

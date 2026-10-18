@@ -4,6 +4,7 @@
  * against the settlement chokepoint. Runs against a *_test database only (truncates).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -11,7 +12,8 @@ import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { onInvoicePaid, type InvoiceLike } from '../subscriptions.js';
 import { recordSettlementOperation } from './record.js';
-import { runEffectsPass } from './effects.js';
+import { enqueueEffects, runEffectsPass } from './effects.js';
+import { _resetPaymentPoliciesForTests, registerPaymentPolicy } from '../policy/host.js';
 import { setInvoiceHistoryPolicy } from './invoice.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -61,8 +63,8 @@ const subRow = () => withStore(STORE, async (tx) => (await tx.select().from(s.su
 const orderRow = (id: string) => withStore(STORE, async (tx) => (await tx.select().from(s.order).where(eq(s.order.id, id)))[0]!);
 const dueNow = (kind: string) => withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET next_attempt_at = now() - interval '1 second' WHERE effect_kind = ${kind}`));
 
-beforeEach(async () => { await wipe(); setInvoiceHistoryPolicy(null); });
-afterAll(async () => { setInvoiceHistoryPolicy(null); await wipe(); });
+beforeEach(async () => { await wipe(); setInvoiceHistoryPolicy(null); _resetPaymentPoliciesForTests(); });
+afterAll(async () => { setInvoiceHistoryPolicy(null); _resetPaymentPoliciesForTests(); await wipe(); });
 
 describe('F2 renewal and first-cycle payment rows match main', () => {
   it('first cycle: the Settled row carries no gateway mode and the order currency (main shape)', async () => {
@@ -178,5 +180,85 @@ describe('F7 order purge cancels the order\'s pending effects instead of leaving
     await runEffectsPass();
     expect((await effects()).some((r) => r.effectKind === 'admin_review')).toBe(false);
     expect((await audits('effect_terminal')).length).toBe(0);
+  });
+});
+
+
+describe('imported financial quarantine preserves invoices without fulfillment', () => {
+  it.each(['subscription_create', 'subscription_cycle'])('%s keeps actual foreign-currency observation without changing imported order or licence', async (reason) => {
+    const { orderId } = await seedOrder({ code: 'QUAR-INVOICE' });
+    await seedSubscription(orderId);
+    if (reason === 'subscription_cycle') await deliver(invoice('in_before', 'subscription_create', 'pi_before'));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
+    const beforeOrder = await orderRow(orderId);
+    const beforeLicences = await licences();
+    const beforePayments = await payments();
+    const inv = { ...invoice('in_quarantine', reason, 'pi_quarantine', 777), currency: 'eur' };
+    await deliver(inv);
+    await deliver(inv);
+    expect(await orderRow(orderId)).toEqual(beforeOrder);
+    expect(await licences()).toEqual(beforeLicences);
+    expect(await payments()).toEqual(beforePayments);
+    const observed = await withStore(STORE, (tx) => tx.select().from(s.subscriptionInvoicePayment));
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({ orderId, amount: 777, currency: 'EUR', state: 'Settled', invoiceId: inv.id, providerRef: 'pi_quarantine' });
+    const [operation] = await withStore(STORE, (tx) => tx.select().from(s.settlementOperation).where(eq(s.settlementOperation.operationId, inv.id)));
+    expect(operation).toMatchObject({ orderId, disposition: 'imported_financial_reconciliation_required', authorizedEffects: [] });
+    expect((await effects()).filter((e) => e.operationId === inv.id)).toEqual([]);
+  });
+
+  it('settlement chokepoint keeps captured money while suppressing a requested Paid transition & fanout', async () => {
+    const { orderId } = await seedOrder({ code: 'QUAR-CHOKE' });
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(false))}::jsonb WHERE id = ${orderId}`));
+    const before = await orderRow(orderId);
+    await withStore(STORE, (tx) => recordSettlementOperation(tx, {
+      storeId: STORE, kind: 'order_paid_transition', operationId: orderId, orderId,
+      mutations: [{ type: 'payment_insert', rows: [{ storeId: STORE, orderId, amount: 777, currency: 'USD', method: 'manual', state: 'Settled', providerRef: 'observed-quarantined-money' }] },
+        { type: 'order_paid', orderId, placedAt: new Date() }],
+      effects: [{ kind: 'license_issue', payload: { orderId, customerId: null, paidAt: new Date().toISOString() } }, { kind: 'notification', payload: { orderId, variant: 'settle' } }],
+    }));
+    expect(await orderRow(orderId)).toEqual(before);
+    expect(await payments()).toMatchObject([{ amount: 777, currency: 'USD', state: 'Settled' }]);
+    expect(await effects()).toEqual([]);
+    expect(await licences()).toEqual([]);
+  });
+
+  it('every previously queued built-in effect rechecks a newly quarantined order before economic effects', async () => {
+    const { orderId } = await seedOrder({ code: 'QUAR-QUEUED' });
+    await seedSubscription(orderId);
+    await deliver(invoice('in_seed_queue', 'subscription_create', 'pi_seed_queue'));
+    const paidAt = new Date().toISOString();
+    const queued = await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO settlement_operation (store_id, operation_kind, operation_id, order_id) VALUES (${STORE}, 'order_paid_transition', 'queued-before-marker', ${orderId})`);
+      return enqueueEffects(tx, STORE, { kind: 'order_paid_transition', id: 'queued-before-marker' }, [
+        { kind: 'license_issue', payload: { orderId, customerId: null, paidAt, issue: false, link: { operationKind: 'stripe_invoice_paid', operationId: 'in_seed_queue', stripeSubscriptionId: SUB } } },
+        { kind: 'license_extend', payload: { stripeSubscriptionId: SUB, invoiceId: 'in_deferred' } },
+        { kind: 'edit_reconcile', payload: { orderId, customerId: null, paidAt } },
+        { kind: 'loyalty_earn', payload: { orderId, variant: 'settle', paidAt } },
+        { kind: 'notification', payload: { orderId, variant: 'settle' } },
+        { kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } },
+      ]);
+    });
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
+    let policyCalls = 0;
+    registerPaymentPolicy({ id: 'queued-quarantine-spy', async beforePaymentAttempt() { return { allow: true }; },
+      async authorizeInvoiceEffect() { policyCalls++; throw new Error('unexpected authorization'); },
+      async revalidateForIssuance() { policyCalls++; throw new Error('unexpected issuance'); },
+      async onEntitlementReversal() { policyCalls++; throw new Error('unexpected reversal'); },
+    });
+    const beforeOrder = await orderRow(orderId);
+    const beforeLicences = await licences();
+    const beforeSub = await subRow();
+    const beforeEmails = await withStore(STORE, (tx) => tx.select().from(s.emailOutbox));
+    await runEffectsPass({ rounds: 12 });
+    const ids = new Set(queued.map((e) => e.id));
+    const blocked = (await effects()).filter((e) => ids.has(e.id));
+    expect(blocked).toHaveLength(6);
+    expect(policyCalls).toBe(0);
+    expect(blocked.every((e) => e.status === 'terminal' && e.lastError === 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED')).toBe(true);
+    expect(await orderRow(orderId)).toEqual(beforeOrder);
+    expect(await licences()).toEqual(beforeLicences);
+    expect(await subRow()).toEqual(beforeSub);
+    expect(await withStore(STORE, (tx) => tx.select().from(s.emailOutbox))).toEqual(beforeEmails);
   });
 });

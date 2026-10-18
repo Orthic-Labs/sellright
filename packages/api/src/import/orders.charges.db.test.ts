@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
@@ -13,6 +13,7 @@ if (!URL) throw new Error('Set IMPORT_TARGET_DATABASE_URL or DATABASE_URL to a d
 assertTestDatabase(URL, 'orders.charges.db.test.ts');
 const pool = new Pool({ connectionString: URL, max: 1 });
 afterAll(async () => { await pool.end(); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 function source(options: { stale?: boolean; paid?: number; refund?: number; quantity?: string } = {}) {
   const header = options.stale ? { sub: '200', subt: '240', ship: '20', shipt: '24' }
@@ -75,8 +76,11 @@ async function fixture<T>(options: Parameters<typeof source>[0], fn: (input: {
 
 describe('persisted imported signed charges', () => {
   it('seeds real deterministic signed & zero adjustments with independent shipping tax', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     await fixture({}, async ({ ctx, tx, data }) => {
       await importOrders(ctx);
+      expect(output).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(output.mock.calls[0]![0] as string)).toMatchObject({ orders: 1, moneyReconciled: true });
       const [order] = await tx.select().from(s.order).where(eq(s.order.storeId, ctx.storeId));
       expect(order).toMatchObject({ subtotal: 200, discountTotal: 10, shippingTotal: 95, taxTotal: 63, grandTotal: 377 });
       const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.storeId, ctx.storeId));
@@ -98,19 +102,23 @@ describe('persisted imported signed charges', () => {
     });
   });
 
-  it('requires full settled minus refunded grand & retains raw stale header/proof', async () => {
+  it('retains stored header even when settled minus refunded grand corroborates reconstructed charges', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     await fixture({ stale: true, paid: 400, refund: 23 }, async ({ ctx, tx, data }) => {
       await importOrders(ctx);
+      expect(output).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(output.mock.calls[0]![0] as string)).toMatchObject({ orders: 1, moneyReconciled: false });
       const [order] = await tx.select().from(s.order).where(eq(s.order.storeId, ctx.storeId));
-      expect(order).toMatchObject({ subtotal: 200, discountTotal: 10, shippingTotal: 95, taxTotal: 63, grandTotal: 377 });
+      expect(order).toMatchObject({ subtotal: 200, discountTotal: 0, shippingTotal: 20, taxTotal: 44, grandTotal: 264 });
       const projection = (order!.metadata as { vendure: { chargeProjectionV1: Record<string, unknown> } }).vendure.chargeProjectionV1;
       expect(projection).toMatchObject({ status: 'settled-corroborated',
         sourceHeader: { subTotal: '200', subTotalWithTax: '240', shipping: '20', shippingWithTax: '24' },
         settlementProof: { netSettled: '377', payments: [{ sourceId: '51', sourceRecord: expect.any(String) }],
           refunds: [{ sourceId: '61', sourceRecord: expect.any(String) }] } });
       expect((order!.metadata as { vendure: { sourceOrderRecord: string } }).vendure.sourceOrderRecord).toBe(data.order.source_record);
-      expect(await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.storeId, ctx.storeId))).toHaveLength(3);
-      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', sourceValues: [expect.any(String)] })]);
+      expect(await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.storeId, ctx.storeId))).toEqual([]);
+      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', blocking: false,
+        detail: expect.stringContaining('known_historical_financial_quarantine HEADER_CHARGE_CONTRADICTION'), sourceValues: [expect.any(String)] })]);
       expect(JSON.parse(ctx.exclusions[0]!.sourceValues![0]!)).toEqual(projection);
     });
   });
@@ -122,7 +130,8 @@ describe('persisted imported signed charges', () => {
       expect(order).toMatchObject({ subtotal: 200, discountTotal: 0, shippingTotal: 20, taxTotal: 44, grandTotal: 264 });
       expect((order!.metadata as { vendure: { chargeProjectionV1: unknown } }).vendure.chargeProjectionV1).toMatchObject({ status: 'unresolved' });
       expect(await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.storeId, ctx.storeId))).toEqual([]);
-      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', blocking: true, sourceValues: expect.any(Array) })]);
+      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', blocking: false,
+        detail: expect.stringContaining('known_historical_financial_quarantine HEADER_CHARGE_CONTRADICTION'), sourceValues: expect.any(Array) })]);
     });
   });
 

@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Shared order-detail facts (R18/R20 parity): every surface that shows a
  * customer their own order — the public receipt (orders.ts), guest tracking
@@ -56,16 +57,16 @@ export async function loadOrderFulfillments(tx: Tx, orderId: string): Promise<Or
 
 /** Cents still owed per order (grand total - settled payments + edit-handed-back
  *  refunds; same arithmetic as payments/settle.ts `amountDueForOrder`), batched. */
-async function amountDueByOrder(tx: Tx, ids: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+async function amountDueByOrder(tx: Tx, ids: string[]): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
   if (!ids.length) return out;
   const idList = sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `);
   const r = await tx.execute(sql`
-    select o.id as id, (o.grand_total
+    select o.id as id, o.metadata as metadata, (o.grand_total
       - coalesce((select sum(p.amount) from payment p where p.order_id = o.id and ${usableTenderRawSql('p')}), 0)
       + coalesce((select sum(rf.amount) from refund rf where rf.order_id = o.id and rf.state <> 'Failed' and rf.metadata->>'source' = ${EDIT_REFUND_SOURCE}), 0))::bigint as due
     from "order" o where o.id in (${idList})`);
-  for (const row of (r as unknown as { rows: Array<{ id: string; due: string | number }> }).rows) out.set(row.id, Number(row.due));
+  for (const row of (r as unknown as { rows: Array<{ id: string; due: string | number; metadata: unknown }> }).rows) out.set(row.id, importedFinancialReconciliationRequired(row.metadata) ? null : Number(row.due));
   return out;
 }
 
@@ -95,7 +96,7 @@ export async function loadOrderStatusFacts(
     tx.select({ quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty }).from(s.orderLine).where(eq(s.orderLine.orderId, order.id)),
     tx.select({ state: s.fulfillment.state }).from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)),
   ]);
-  const due = (await amountDueByOrder(tx, [order.id])).get(order.id) ?? 0;
+  const due = (await amountDueByOrder(tx, [order.id])).get(order.id);
   return {
     status: order.status as OrderStatus,
     paymentStatus: derivePaymentStatus(order.state, payments, due),
@@ -138,7 +139,7 @@ export async function loadOrderStatusFactsBatch(
   for (const order of orders) {
     out.set(order.id, {
       status: order.status as OrderStatus,
-      paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? [], dueByOrder.get(order.id) ?? 0),
+      paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? [], dueByOrder.get(order.id)),
       fulfillmentStatus: deriveFulfillmentStatus(linesByOrder.get(order.id) ?? [], fulfillmentsByOrder.get(order.id) ?? []),
     });
   }

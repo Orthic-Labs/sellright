@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired, ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { refundQuantity, refundStockEffectsProjection, refundMerchandiseCompletionProjection } from '../payments/refunds.js';
 import { refundUnitBases, refundLineCashAmount, availableCreditRefundUnits, refundCreditProjection } from '../payments/refund-credit.js';
@@ -252,7 +253,7 @@ admin.openapi(
       }
       // Order editing (G13): what the customer still owes after an edit (+) or is
       // owed back (-); a positive amount reads as paymentStatus `balance_due`.
-      const amountDue = await amountDueForOrder(tx, st.storeId, o.id, o.grandTotal);
+      const amountDue = importedFinancialReconciliationRequired(o.metadata) ? null : await amountDueForOrder(tx, st.storeId, o.id, o.grandTotal);
       const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
       const paymentStatus = derivePaymentStatus(o.state, payments, amountDue);
       const fulfillmentStatus = deriveFulfillmentStatus(lines, fulfillments);
@@ -352,6 +353,7 @@ admin.openapi(
       // state or remaining quantities, including the first fulfillment row.
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
       const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
       // Fulfillment state only advances: Pending -> Shipped -> Delivered. Block
@@ -466,6 +468,7 @@ admin.openapi(
     const res: Res = await withStore(st.storeId, async (tx): Promise<Res> => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' };
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate', state: o.state };
       if (body.locationId) {
         const [loc] = await tx.select({ id: s.location.id }).from(s.location)
@@ -561,6 +564,7 @@ admin.openapi(
           ok: z.boolean(),
           fulfillment: z.string().optional(),
           error: z.string().optional(),
+          errorCode: z.literal('IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED').optional(),
         })),
         succeeded: z.number().int(),
         skipped: z.number().int(),
@@ -573,7 +577,7 @@ admin.openapi(
     const st = requireStore(admin, c);
     requireWrite(st);
     const { orders } = c.req.valid('json');
-    const results: { code: string; ok: boolean; fulfillment?: string; error?: string }[] = [];
+    const results: { code: string; ok: boolean; fulfillment?: string; error?: string; errorCode?: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' }[] = [];
     // De-duplicate by code within a single request — last write wins, but we
     // only emit one row to the caller. Keeps the result panel honest.
     const seen = new Map<string, typeof orders[number]>();
@@ -581,11 +585,12 @@ admin.openapi(
     const deduped = [...seen.values()];
     for (const o of deduped) {
       let stockChanged = false;
-      const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string }> => {
+      const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress' | 'quarantined'; state?: string }> => {
         // Match single/partial fulfillment's order lock before shipment reads.
         // Each order commits separately, preserving the batch's lock ordering.
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
+        if (importedFinancialReconciliationRequired(order.metadata)) return { kind: 'quarantined' };
         if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return { kind: 'badstate', state: order.state };
         const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
         if (existing && existing.state === 'Delivered' && o.state === 'Shipped') return { kind: 'regress', state: existing.state };
@@ -631,6 +636,9 @@ admin.openapi(
       if (stockChanged) onStockChanged(st.slug);
       if (res.kind === 'ok') {
         results.push({ code: o.code, ok: true, fulfillment: res.state });
+      } else if (res.kind === 'quarantined') {
+        const refusal = new ImportedFinancialReconciliationError();
+        results.push({ code: o.code, ok: false, error: refusal.message, errorCode: refusal.code });
       } else if (res.kind === 'notfound') {
         results.push({ code: o.code, ok: false, error: 'not found' });
       } else if (res.kind === 'badstate') {
@@ -669,6 +677,7 @@ admin.openapi(
     const res = !orderId ? { kind: 'notfound' as const } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       // Only unpaid orders can be cancelled directly — cancelling releases stock
       // but does not touch money. A Paid order must go through Refund so the
       // payment (and any issued licenses) are handled explicitly.

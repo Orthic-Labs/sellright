@@ -20,12 +20,14 @@ export interface SourceCreditTransaction {
   allocation: string | null; sourceRecord: string; sourceCreatedAt: string; sourceUpdatedAt: string;
 }
 export interface CreditSourceGraph {
+  /** Complete global tables from the same digest-bound source snapshot, not
+   * only selected/channel-filtered rows. Absence is evidence only here. */
   orders: ReadonlyMap<string, { selected: boolean; hasChannel: boolean }>;
   lines: ReadonlyMap<string, string | null>;
   refunds: ReadonlyMap<string, string | null>;
 }
 export interface CreditTargetGraph {
-  orders: ReadonlyMap<string, { id: string; storeId: string }>;
+  orders: ReadonlyMap<string, { id: string; storeId: string; currency?: string; metadata?: unknown }>;
   lines: ReadonlyMap<string, { id: string; storeId: string; orderId: string }>;
   refunds: ReadonlyMap<string, { id: string; storeId: string; orderId: string }>;
 }
@@ -118,7 +120,7 @@ export function parseCreditAllocation(raw: string | null): Record<string, number
   return value as Record<string, number[]>;
 }
 
-export function buildCreditTransactions(ctx: Pick<ImportContext, 'storeId' | 'sourceKey' | 'id'>,
+export function buildCreditTransactions(ctx: Pick<ImportContext, 'storeId' | 'sourceKey' | 'id' | 'channelId' | 'currency'>,
   credits: readonly SourceCredit[], transactions: readonly SourceCreditTransaction[], source: CreditSourceGraph, target: CreditTargetGraph) {
   validateCreditHistory(credits, transactions);
   const creditsById = new Map(credits.map(row => [row.id, row]));
@@ -136,14 +138,18 @@ export function buildCreditTransactions(ctx: Pick<ImportContext, 'storeId' | 'so
     const classify = (detail: string, blocking: boolean) => { exclusions.push(exclusion('account_credit_transaction', detail, blocking)); if (blocking) blocked = true; };
     const sourceOrder = tx.orderId == null ? undefined : source.orders.get(tx.orderId);
     const order = sourceOrder?.selected && tx.orderId != null ? target.orders.get(ctx.id('order', tx.orderId)) : undefined;
-    if (order && order.storeId !== ctx.storeId) throw new Error('Cross-store credit order link refused');
-    if (tx.orderId != null && !sourceOrder) classify('source_order_absent: original credit order reference retained privately', false);
+    if (order && (order.storeId !== ctx.storeId || order.id !== ctx.id('order', tx.orderId))) throw new Error('Cross-store or wrong-order credit order link refused');
+    const absentOrderExclusion = tx.orderId != null && !source.orders.has(tx.orderId)
+      ? exclusion('account_credit_transaction', 'source_order_absent: original credit order reference retained privately', false) : undefined;
+    if (absentOrderExclusion) exclusions.push(absentOrderExclusion);
     else if (sourceOrder && !sourceOrder.selected) classify(sourceOrder.hasChannel ? 'other_channel_order: original credit order reference retained privately' : 'unresolved_order_channel: semantic projection blocked', !sourceOrder.hasChannel);
     else if (sourceOrder && !order) classify('target_order_unmapped: original credit order reference retained privately', tx.kind === 'REDEEM' || tx.kind === 'RESTORE');
     if (tx.kind === 'RESERVE' && tx.status === 'PENDING' && !order) classify('pending_order_unresolved: original hold retained; reconciliation required', true);
+    const missingAllocationLines = new Set<string>();
     const mapLine = (sourceLineId: string) => {
+      if (!source.lines.has(sourceLineId)) { missingAllocationLines.add(sourceLineId); return null; }
       const parent = source.lines.get(sourceLineId);
-      if (parent == null) { classify('source_allocation_line_absent: original reference retained; operational projection blocked', true); return null; }
+      if (parent == null) { classify('source_allocation_line_unresolved_owner: original reference retained; operational projection blocked', true); return null; }
       if (tx.orderId == null || parent !== tx.orderId || !source.orders.get(parent)?.selected) { classify('allocation_line_wrong_order_or_channel: operational projection blocked', true); return null; }
       const line = target.lines.get(ctx.id('order-line', sourceLineId));
       if (!line || !order) { classify('target_allocation_line_unmapped: operational projection blocked', true); return null; }
@@ -173,13 +179,49 @@ export function buildCreditTransactions(ctx: Pick<ImportContext, 'storeId' | 'so
       }
       if (tx.kind === 'REDEEM' && total !== BigInt(tx.amount)) throw new Error('Source credit allocation differs from redemption amount');
     } else if (tx.kind === 'REDEEM') classify('redemption_allocation_absent: operational restoration projection blocked', true);
-    if (blocked) operationalAllocation = null;
     const related = tx.relatedTransactionId == null ? undefined : txById.get(tx.relatedTransactionId);
     if (tx.relatedTransactionId != null && (!related || related.accountCreditId !== credit.id)) throw new Error('Related source credit transaction is absent or belongs to another account');
+    if (missingAllocationLines.size) {
+      const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+      const metadata = order?.metadata;
+      const parent = object(metadata) && object(metadata.vendure) ? metadata.vendure : undefined;
+      const marker = parent && object(parent.financialReconciliationV1) ? parent.financialReconciliationV1 : undefined;
+      const retained = parent && object(parent.retainedHistoryV1) ? parent.retainedHistoryV1 : undefined;
+      const { sourceDigest, ...retainedPayload } = retained ?? {};
+      const retainedParent = !!parent && !Object.hasOwn(parent, 'editBasisV1') && parent.sourceKey === ctx.sourceKey &&
+        String(parent.id) === tx.orderId && retained?.version === 1 && retained.format === 'retained-pg-jsonb-text-v1' &&
+        retained.sourceKey === ctx.sourceKey && retained.sourceOrderId === tx.orderId &&
+        typeof sourceDigest === 'string' && /^[a-f0-9]{64}$/.test(sourceDigest) && sourceDigest === digest(retainedPayload) &&
+        marker?.version === 1 && marker.status === 'required' && marker.sourceDigest === sourceDigest &&
+        Array.isArray(marker.reasons) && marker.reasons.length === 1 && marker.reasons[0] === 'HEADER_CHARGE_CONTRADICTION';
+      const historicalRedemption = !blocked && tx.kind === 'REDEEM' && tx.status === 'POSTED' && tx.amount > 0 &&
+        tx.delta === -tx.amount && allocation !== null && Object.keys(allocation).length > 0 &&
+        tx.orderLineId === null && tx.refundId === null && credit.currency === ctx.currency && credit.channelId === String(ctx.channelId);
+      const mappedHistoricalOrphan = historicalRedemption && sourceOrder?.selected === true && sourceOrder.hasChannel === true &&
+        order?.currency === ctx.currency && retainedParent;
+      // No operational order exists for this separately proven history. Never
+      // synthesize a parent or quarantine marker to make a ledger row executable.
+      const unlinkedHistoricalOrphan = historicalRedemption && tx.orderId !== null && !source.orders.has(tx.orderId) &&
+        !target.orders.has(ctx.id('order', tx.orderId)) && tx.quantity === null && allocation !== null &&
+        Object.keys(allocation).every(sourceLineId => !source.lines.has(sourceLineId));
+      if (mappedHistoricalOrphan || unlinkedHistoricalOrphan) {
+        if (unlinkedHistoricalOrphan) Object.assign(absentOrderExclusion!, { reason: 'SOURCE_ORDER_ABSENT', reviewRequired: true,
+          sourceValues: [JSON.stringify({ sourceId: tx.id, sourceOrderId: tx.orderId })] });
+        const retainedExclusion: ManifestExclusion & { reason: string; reviewRequired: true } = {
+          ...exclusion('account_credit_transaction', 'source_allocation_line_absent: known historical redemption retained; no operational restoration allocation', false),
+          reason: 'CREDIT_ALLOCATION_LINE_ABSENT', reviewRequired: true,
+          sourceValues: [JSON.stringify({ sourceId: tx.id, sourceOrderId: tx.orderId, missingSourceLineIds: [...missingAllocationLines].sort() })],
+        };
+        exclusions.push(retainedExclusion);
+      } else classify('source_allocation_line_absent: original reference retained; operational projection blocked', true);
+    }
+    if (blocked || missingAllocationLines.size) operationalAllocation = null;
     rows.push({ id: ctx.id('account-credit-transaction', tx.id), storeId: ctx.storeId,
       accountCreditId: ctx.id('account-credit', credit.id), kind: tx.kind as s.AccountCreditKind, status: tx.status as s.AccountCreditStatus,
       amount: tx.amount, delta: tx.delta, balanceAfter: tx.balanceAfter, relatedTransactionId: related ? ctx.id('account-credit-transaction', related.id) : null,
-      idempotencyKey: tx.idempotencyKey, reason: tx.reason, actor: tx.actor, orderId: blocked ? null : order?.id ?? null,
+      // Parent identity is independently proven above. A missing allocation
+      // line must not hide a historical redemption from restoration guards.
+      idempotencyKey: tx.idempotencyKey, reason: tx.reason, actor: tx.actor, orderId: order?.id ?? null,
       orderCode: tx.orderCode, refundId: blocked ? null : refundId, orderLineId: blocked ? null : lineId,
       sourceOrderId: tx.orderId, sourceRefundId: tx.refundId, sourceOrderLineId: tx.orderLineId, quantity: tx.quantity,
       allocation: tx.allocation, operationalAllocation, sourceKey: ctx.sourceKey, sourceId: tx.id,

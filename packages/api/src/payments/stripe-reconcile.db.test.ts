@@ -5,6 +5,7 @@
  * against a *_test database.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stripeState = new Map<string, Record<string, unknown>>();
@@ -49,7 +50,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { listPaymentAlerts } from './payment-alerts.js';
-import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconcileSlot, sweepStaleStripeIntents, cancelOrderStripeIntents, STRIPE_SWEEP_MAX_TRIES } from './stripe-reconcile.js';
+import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconcileSlot, sweepStaleStripeIntents, sweepStaleBalanceIntents, cancelOrderStripeIntents, STRIPE_SWEEP_MAX_TRIES } from './stripe-reconcile.js';
 import { hasUnresolvedPayment } from './hold.js';
 import { releaseStaleAllocations } from '../jobs/release-stale-allocations.js';
 import { requestRefund } from './refunds.js';
@@ -107,6 +108,52 @@ const paymentsOf = (orderId: string) => q((tx) => tx.select().from(s.payment).wh
 const audits = (action: string) => q((tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, action)));
 const outbox = (kind: string) => q((tx) => tx.select().from(s.emailOutbox).where(eq(s.emailOutbox.kind, kind)));
 const allocated = () => q(async (tx) => (await tx.select({ a: s.stock.allocated }).from(s.stock).where(eq(s.stock.variantId, VARIANT)))[0]!.a);
+
+describe('imported financial quarantine in Stripe recovery', () => {
+  it.each(['stale', 'balance'] as const)('keeps %s retrieval observation when quarantine appears before cancellation', async sweep => {
+    const { order } = await makeOrder({ ageMin: 120 });
+    if (sweep === 'balance') await q(tx => tx.update(s.order).set({ state: 'Paid' }).where(eq(s.order.id, order.id)));
+    await track(order.id, 'pi_quarantine_cancel');
+    const snapshot = pi('pi_quarantine_cancel', order.code);
+    const { retrieveStripeIntent } = await import('./stripe.js');
+    vi.mocked(retrieveStripeIntent).mockImplementationOnce(async () => {
+      await q(tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, order.id)));
+      return snapshot;
+    });
+    const now = new Date(Date.now() + 120 * 60_000);
+    const result = sweep === 'stale'
+      ? await sweepStaleStripeIntents(STORE, new Date(), 50, () => {}, now)
+      : await sweepStaleBalanceIntents(STORE, 50, () => {}, now, 60);
+    expect(result).toMatchObject({ checked: 1, held: 1, cancelled: 0, errors: 0 });
+    expect(cancelCalls).toEqual([]);
+    const attempt = await attemptOf('pi_quarantine_cancel');
+    expect(attempt).toMatchObject({ status: 'open', providerStatus: 'requires_payment_method' });
+    expect(attempt.providerObservedAt).toBeInstanceOf(Date);
+    expect((await orderOf(order.id)).state).toBe(sweep === 'stale' ? 'PendingPayment' : 'Paid');
+    expect(await allocated()).toBe(2);
+    expect(await paymentsOf(order.id)).toEqual([]);
+  });
+
+  it('retains mismatched observed provider currency without fabricating an order-currency settlement', async () => {
+    const { order } = await makeOrder();
+    await q(tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, order.id)));
+    await track(order.id, 'pi_quarantine_eur');
+    pi('pi_quarantine_eur', order.code, { status: 'succeeded', amount: 1300, currency: 'eur' });
+    const before = await orderOf(order.id);
+    const result = await reconcileStripeOrder(STORE, { orderId: order.id });
+    expect(result.intents).toEqual([{ intentId: 'pi_quarantine_eur', outcome: 'verify_failed' }]);
+    expect(await paymentsOf(order.id)).toEqual([]);
+    expect(await orderOf(order.id)).toEqual(before);
+    const attempt = await attemptOf('pi_quarantine_eur');
+    expect(attempt).toMatchObject({ status: 'unknown', providerStatus: 'succeeded',
+      result: { providerObservation: { id: 'pi_quarantine_eur', amount: 1300, currency: 'EUR', status: 'succeeded' } } });
+    expect(attempt.providerObservedAt).toBeInstanceOf(Date);
+    const alerts = await q(tx => listPaymentAlerts(tx));
+    expect(alerts).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'stripe_verify_failed' })]));
+    expect(await outbox('order_confirmation')).toEqual([]);
+    expect(await allocated()).toBe(2);
+  });
+});
 
 describe('D1: server-side settlement fallback', () => {
   it('settles a missed-webhook PI exactly once (paid effects + confirmation email once), idempotent on repeat', async () => {

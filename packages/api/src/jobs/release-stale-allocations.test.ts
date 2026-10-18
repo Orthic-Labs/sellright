@@ -10,6 +10,7 @@
  * false), so the shared DB is safe between files.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Zero-cache stock rule (this task): releasing allocated stock must trigger an
@@ -106,6 +107,28 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
   afterAll(async () => {
     await wipe();
     await pool.end();
+  });
+
+  it.each([null, false, { status: 'resolved' }])('quarantined oldest history never consumes batch capacity or starves later normal orders: %j', async (marker) => {
+    await seedStoreAndStock(15);
+    const blocked = await seedStaleOrder('HISTORY-BLOCKED', 5);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET created_at = now() - interval '4 hours', metadata = ${JSON.stringify(financialReconciliationMetadata(marker))}::jsonb WHERE id = ${blocked}`));
+    await seedStaleOrder('STALE-NORMAL-A', 5);
+    await seedStaleOrder('STALE-NORMAL-B', 5);
+    const snapshot = () => withStore(STORE, async (tx) => ({
+      order: (await tx.execute(sql`SELECT * FROM "order" WHERE id = ${blocked}`)).rows,
+      lines: (await tx.execute(sql`SELECT * FROM order_line WHERE order_id = ${blocked} ORDER BY id`)).rows,
+      audits: (await tx.execute(sql`SELECT * FROM audit_log WHERE entity_id = ${blocked} ORDER BY id`)).rows,
+    }));
+    const before = await snapshot();
+    expect(await releaseStaleAllocations({ apply: false, ttlMin: 60, batchLimit: 1 })).toMatchObject({ orders: 1, released: 5 });
+    expect(await stockAllocated()).toBe(15);
+    expect(await releaseStaleAllocations({ apply: true, ttlMin: 60, batchLimit: 1 })).toMatchObject({ orders: 1, released: 5 });
+    expect(await releaseStaleAllocations({ apply: true, ttlMin: 60, batchLimit: 1 })).toMatchObject({ orders: 1, released: 5 });
+    expect(await releaseStaleAllocations({ apply: true, ttlMin: 60, batchLimit: 1 })).toMatchObject({ orders: 0, released: 0 });
+    expect(await stockAllocated()).toBe(5);
+    expect(await orderStates()).toEqual(['PendingPayment', 'Cancelled', 'Cancelled']);
+    expect(await snapshot()).toEqual(before);
   });
 
   it('two concurrent passes release each stale allocation exactly once (no double-subtract)', async () => {

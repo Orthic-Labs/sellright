@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { digest } from './artifacts.js';
 import { migrationId } from './context.js';
 import { buildImportedEditBasis, type EditBasisSourceChild, type EditBasisSourceLine, type EditBasisSourceOrder, type EditBasisSourceShippingLine } from './history.js';
+import { importedFinancialReconciliationRequired } from './source-compatibility.js';
 
 const storeId = '11111111-1111-4111-8111-111111111111', sourceKey = 'synthetic-edit-basis';
 const id = (entity: string, source: unknown) => migrationId(storeId, sourceKey, entity, source);
@@ -36,7 +37,65 @@ function detachedFixture() {
   return input;
 }
 
+function retainedCapture(capture: ReturnType<typeof buildImportedEditBasis>[number] | undefined) {
+  if (!capture || !('retainedHistoryV1' in capture) || !capture.retainedHistoryV1) {
+    throw new Error('Expected retained imported history');
+  }
+  return capture;
+}
+
 describe('imported edit basis source capture', () => {
+  it.each(['unresolved', 'settled-corroborated'])('archives full contradictory history & quarantines money even with settlement proof (%s)', status => {
+    const input = fixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { version: 1, status } });
+    const capture = retainedCapture(buildImportedEditBasis(input)[0]);
+    expect(capture).not.toHaveProperty('editBasisV1');
+    const retained = capture.retainedHistoryV1!;
+    expect(retained).toMatchObject({ reason: 'HEADER_CHARGE_CONTRADICTION', sourceOrderRecord: sourceRecord,
+      header: { subTotal: '9007199254740993', subTotalWithTax: '9007199254740995', shipping: '101', shippingWithTax: '111' },
+      channel: { sourceId: '1', sourceRecord: input.channels[0]!.sourceRecord,
+        orderChannelRecord: input.orderChannels[0]!.sourceRecord },
+      shippingMethods: expect.arrayContaining(input.shippingMethods.map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }))),
+      lines: expect.arrayContaining(input.lines.map(line => ({ sourceId: line.id, orderLineId: id('order-line', line.id), sourceRecord: line.sourceRecord }))),
+      shippingLines: expect.arrayContaining(input.shippingLines.map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }))),
+      referencedDetachedShippingLines: [], surcharges: [{ sourceId: '3', sourceRecord: input.surcharges[0]!.sourceRecord }] });
+    const { sourceDigest, ...payload } = retained;
+    expect(sourceDigest).toBe(digest(payload));
+    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+      reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest });
+    expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
+    const changed = fixture();
+    Object.assign(changed.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status } });
+    changed.lines[0]!.sourceRecord += ' ';
+    expect(retainedCapture(buildImportedEditBasis(changed)[0]).retainedHistoryV1.sourceDigest).not.toBe(sourceDigest);
+  });
+
+  it('combines detached-source retention with financial quarantine without hiding invalid source facts', () => {
+    const input = detachedFixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unresolved' } });
+    const capture = retainedCapture(buildImportedEditBasis(input)[0]);
+    expect(capture.retainedHistoryV1!.reason).toBe('DETACHED_SHIPPING_LINE');
+    expect(capture.retainedHistoryV1!.referencedDetachedShippingLines).toHaveLength(1);
+    expect(capture.financialReconciliationV1!.sourceDigest).toBe(capture.retainedHistoryV1!.sourceDigest);
+    input.surcharges[0]!.sourceRecord = '{"id":3,"orderId":999}';
+    expect(() => buildImportedEditBasis(input)).toThrow(/ownership mismatch/);
+  });
+
+  it('fails money closed on malformed quarantine markers & leaves normal native/history metadata alone', () => {
+    for (const marker of [null, {}, false, { version: 1, status: 'resolved' }]) {
+      expect(importedFinancialReconciliationRequired({ vendure: { financialReconciliationV1: marker } })).toBe(true);
+    }
+    for (const metadata of [null, {}, { vendure: {} }, { unrelated: { financialReconciliationV1: {} } }]) {
+      expect(importedFinancialReconciliationRequired(metadata)).toBe(false);
+    }
+    const input = fixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'exact-header' } });
+    expect(buildImportedEditBasis(input)[0]).toHaveProperty('editBasisV1');
+    expect(buildImportedEditBasis(input)[0]).not.toHaveProperty('financialReconciliationV1');
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unknown' } });
+    expect(() => buildImportedEditBasis(input)).toThrow(/projection classification/);
+  });
+
   it('retains complete detached history without publishing an operational basis or rewriting raw relations', () => {
     const input = detachedFixture(), exactId = '9007199254740993';
     input.shippingLines[0]!.id = exactId;
@@ -45,7 +104,7 @@ describe('imported edit basis source capture', () => {
     input.lines[0]!.shippingLineId = exactId;
     input.lines[0]!.sourceRecord = input.lines[0]!.sourceRecord.replace('"shippingLineId":10', `"shippingLineId":${exactId}`);
     const copy = () => ({ ...structuredClone({ ...input, id: null }), id: input.id });
-    const original = copy(), capture = buildImportedEditBasis(input)[0]!;
+    const original = copy(), capture = retainedCapture(buildImportedEditBasis(input)[0]);
     expect(capture).not.toHaveProperty('editBasisV1');
     const retained = capture.retainedHistoryV1!;
     expect(retained).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', reason: 'DETACHED_SHIPPING_LINE',
@@ -71,7 +130,7 @@ describe('imported edit basis source capture', () => {
       (changed: ReturnType<typeof fixture>) => { changed.surcharges[0]!.sourceRecord += ' '; },
     ]) {
       const changed = copy(); change(changed);
-      expect(buildImportedEditBasis(changed)[0]!.retainedHistoryV1!.sourceDigest).not.toBe(sourceDigest);
+      expect(retainedCapture(buildImportedEditBasis(changed)[0]).retainedHistoryV1.sourceDigest).not.toBe(sourceDigest);
     }
   });
 
@@ -85,7 +144,7 @@ describe('imported edit basis source capture', () => {
     input.orderChannels.push({ orderId: '2', channelId: '1', sourceRecord: '{"orderId":2,"channelId":1}' });
     input.lines.push({ id: '3', orderId: '2', shippingLineId: '10', sourceRecord: '{"id":3,"orderId":2,"shippingLineId":10}' });
     input.targetLines.push({ id: id('order-line', '3'), storeId, orderId: id('order', '2'), metadata: { vendure: { id: 3, listPrice: 1 } } });
-    const captures = buildImportedEditBasis(input);
+    const captures = buildImportedEditBasis(input).map(retainedCapture);
     expect(captures).toHaveLength(2);
     for (const capture of captures) {
       expect(capture).not.toHaveProperty('editBasisV1');
@@ -102,7 +161,7 @@ describe('imported edit basis source capture', () => {
     multiple.shippingLines[1]!.sourceRecord = multiple.shippingLines[1]!.sourceRecord.replace('"orderId":1', '"orderId":null');
     multiple.lines[1]!.shippingLineId = '2';
     multiple.lines[1]!.sourceRecord = multiple.lines[1]!.sourceRecord.replace('"shippingLineId":null', '"shippingLineId":2');
-    expect(buildImportedEditBasis(multiple)[0]!.retainedHistoryV1!.referencedDetachedShippingLines.map(row => row.sourceId)).toEqual(['2', '10']);
+    expect(retainedCapture(buildImportedEditBasis(multiple)[0]).retainedHistoryV1.referencedDetachedShippingLines.map(row => row.sourceId)).toEqual(['2', '10']);
   });
 
   it('does not let detached history hide missing, cross-order, substituted or unused shipping facts', () => {

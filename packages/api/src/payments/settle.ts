@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * WP3: shared settle path. Records a PaymentResult against an order and, when it
  * Settled, transitions PendingPayment -> Paid through the FSM. Used by both
@@ -83,6 +84,8 @@ export interface SettleOrderRef {
 export async function retryPreparedEditSettlement(tx: Tx, storeId: string, orderId: string, match: {
   paymentAttemptId?: string; providerRef?: string; idempotencyKey?: string; method?: string;
 } = {}) {
+  const [quarantineOrder] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.id, orderId))).limit(1);
+  if (importedFinancialReconciliationRequired(quarantineOrder?.metadata)) return null;
   const edits = await tx.select({ id: s.orderEdit.id, settlement: s.orderEdit.settlement }).from(s.orderEdit)
     .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, orderId)));
   for (const edit of edits) {
@@ -196,7 +199,7 @@ async function applyPaymentResultLocked(
       if (existing.state === 'Settled' ||
           (existing.state === 'Authorized' && result.state === 'Pending') ||
           (existing.state !== 'Pending' && result.state !== 'Settled' && existing.state === result.state)) {
-        if (existing.state === 'Settled') {
+        if (existing.state === 'Settled' && !importedFinancialReconciliationRequired(order.metadata)) {
           const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');
           const activated = await activatePreparedOrderEdit(tx, { storeId, orderId: order.id, paymentId: existing.id, paymentAttemptId: opts.paymentAttemptId });
           if (activated) {
@@ -213,8 +216,9 @@ async function applyPaymentResultLocked(
   if (!mutations.length) mutations.push({ type: 'payment_insert', rows: [{ ...row, id: paymentId }] });
 
   // ── not a captured payment: a monotone progression, no first-paid effects ──
-  if (!settled) {
-    const r = await recordSettlementOperation(tx, { storeId, kind: 'payment_state_progress', operationId: paymentId, effects: [], mutations });
+  if (!settled || importedFinancialReconciliationRequired(order.metadata)) {
+    // Observed provider money remains durable; quarantined economics authorize no effects.
+    const r = await recordSettlementOperation(tx, { storeId, orderId: order.id, kind: settled ? 'payment_settled' : 'payment_state_progress', operationId: paymentId, effects: [], mutations });
     if (r.paymentId === undefined) throw mismatch();
     return { orderState: order.state as OrderState, paymentState: result.state };
   }

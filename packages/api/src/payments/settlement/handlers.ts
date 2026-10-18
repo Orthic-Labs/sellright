@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired, IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED } from '../../orders/imported-financial-reconciliation.js';
 /**
  * Built-in effect handlers (de-fork plan 2.8). Each one is the body of what the
  * Paid / renewal paths used to call inline, moved behind the pending-effects
@@ -89,9 +90,10 @@ async function loadStore(tx: Tx, storeId: string) {
  */
 const PAID_LIFECYCLE = new Set(['Paid', 'PartiallyRefunded']);
 async function requirePaidLifecycle(tx: Tx, e: EffectRow, orderId: string): Promise<EffectOutcome> {
-  const [row] = await tx.select({ state: s.order.state }).from(s.order)
-    .where(and(eq(s.order.id, orderId), eq(s.order.storeId, e.storeId))).limit(1);
+  const [row] = await tx.select({ state: s.order.state, metadata: s.order.metadata }).from(s.order)
+    .where(and(eq(s.order.id, orderId), eq(s.order.storeId, e.storeId))).limit(1).for('update');
   if (!row) return { terminal: 'order_missing' };
+  if (importedFinancialReconciliationRequired(row.metadata)) return { terminal: IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED };
   if (!PAID_LIFECYCLE.has(row.state)) return { terminal: `order_state_${row.state}` };
   return undefined;
 }
@@ -502,15 +504,48 @@ async function extendLicence(tx: Tx, e: EffectRow, p: LicenseExtendPayload, lice
   });
 }
 
+/** Every execution rechecks linked orders under their lock sets, including previously queued effects. */
+function quarantineGuard(handler: LocalEffectHandler): LocalEffectHandler {
+  return { async run(tx, e) {
+    const payload = e.payload !== null && typeof e.payload === 'object' ? e.payload : {};
+    const orderIds = new Set<string>();
+    const subjects: LockSubject[] = [];
+    if ('orderId' in payload && typeof payload.orderId === 'string') orderIds.add(payload.orderId);
+    const [operation] = await tx.select({ orderId: s.settlementOperation.orderId }).from(s.settlementOperation)
+      .where(and(eq(s.settlementOperation.storeId, e.storeId), eq(s.settlementOperation.operationKind, e.operationKind), eq(s.settlementOperation.operationId, e.operationId))).limit(1);
+    if (operation?.orderId) orderIds.add(operation.orderId);
+    if ('stripeSubscriptionId' in payload && typeof payload.stripeSubscriptionId === 'string') {
+      const stripeSubscriptionId = payload.stripeSubscriptionId;
+      const [sub] = await tx.select().from(s.subscription).where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, stripeSubscriptionId))).limit(1);
+      if (sub?.orderId) orderIds.add(sub.orderId);
+      if (sub?.licenseId) {
+        subjects.push({ kind: 'checkout', sourceLicenseId: sub.licenseId });
+        const [license] = await tx.select({ orderId: s.license.orderId }).from(s.license).where(and(eq(s.license.storeId, e.storeId), eq(s.license.id, sub.licenseId))).limit(1);
+        if (license?.orderId) orderIds.add(license.orderId);
+      }
+    }
+    subjects.push(...[...orderIds].sort().map((orderId) => ({ kind: 'order' as const, orderId })));
+    if (!subjects.length) return handler.run(tx, e);
+    return withLockedSetInTx(tx, e.storeId, subjects, async (inner) => {
+      for (const orderId of [...orderIds].sort()) {
+        const [order] = await inner.select({ metadata: s.order.metadata }).from(s.order)
+          .where(and(eq(s.order.storeId, e.storeId), eq(s.order.id, orderId))).limit(1).for('update');
+        if (importedFinancialReconciliationRequired(order?.metadata)) return { terminal: IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED };
+      }
+      return handler.run(inner, e);
+    });
+  } };
+}
+
 let registered = false;
 /** Idempotent; called by settlement.ts so any process that can record an operation can also execute inline. */
 export function registerBuiltinEffectHandlers(): void {
   if (registered) return;
   registered = true;
-  registerEffectHandler('license_issue', licenseIssue);
-  registerEffectHandler('edit_reconcile', editReconcile);
-  registerEffectHandler('loyalty_earn', loyaltyEarn);
-  registerEffectHandler('notification', notification);
-  registerEffectHandler('license_extend', licenseExtend);
-  registerEffectHandler('entitlement_reversal', entitlementReversal);
+  registerEffectHandler('license_issue', quarantineGuard(licenseIssue));
+  registerEffectHandler('edit_reconcile', quarantineGuard(editReconcile));
+  registerEffectHandler('loyalty_earn', quarantineGuard(loyaltyEarn));
+  registerEffectHandler('notification', quarantineGuard(notification));
+  registerEffectHandler('license_extend', quarantineGuard(licenseExtend));
+  registerEffectHandler('entitlement_reversal', quarantineGuard(entitlementReversal));
 }

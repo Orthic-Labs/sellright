@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
 import { importedSourceMetadata } from '../import/source-compatibility.js';
 /**
  * Transaction-only monetary coupon lifecycle. Every caller supplies a withStore
@@ -52,6 +53,7 @@ async function lockOrder(tx: Tx, storeId: string, orderId: string) {
   await lockOrderRowsInTx(tx, storeId, [orderId]);
   const [order] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.id, orderId)));
   if (!order) throw new AccountCreditError('missing', 'Credit order missing in store');
+  assertImportedFinancialReconciliationAllowed(order.metadata);
   return order;
 }
 async function pendingForOrder(tx: Tx, storeId: string, orderId: string) {
@@ -90,6 +92,9 @@ async function setBalance(tx: Tx, account: CreditAccount, balance: number) {
   return updated!;
 }
 function conflict(message: string): never { throw new AccountCreditError('conflict', message); }
+function assertRedemptionAllocation(redemption: CreditTransaction): void {
+  if (redemption.operationalAllocation === null) throw new AccountCreditError('allocation', 'Imported credit allocation requires reconciliation before restoration or edit funding.');
+}
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /** Includes disabled accounts so a code can release its own hold after disabling. */
@@ -427,6 +432,7 @@ export async function prepareEditCreditFunding(tx: Tx, input: EditCreditInput) {
   const order = await lockOrder(tx, input.storeId, input.orderId);
   const redemption = await redemptionForOrder(tx, input.storeId, input.orderId);
   if (!redemption) return null;
+  assertRedemptionAllocation(redemption);
   const account = await lockAccount(tx, input.storeId, redemption.accountCreditId);
   if (account.currency !== order.currency) conflict('Credit funding currency differs from order');
   const evidence = (await readCreditFundingEvidence(tx, input))!;
@@ -503,6 +509,7 @@ export async function restoreRefund(tx: Tx, input: { storeId: string; orderId: s
   if (!refund || refund.state !== 'Settled') throw new AccountCreditError('unavailable', 'Credit restoration requires settled refund in store');
   const redeem = await redemptionForOrder(tx, input.storeId, input.orderId);
   if (!redeem) return [];
+  assertRedemptionAllocation(redeem);
   const account = await lockAccount(tx, input.storeId, redeem.accountCreditId);
   const lines = await tx.select().from(s.refundLine).where(and(eq(s.refundLine.storeId, input.storeId), eq(s.refundLine.refundId, input.refundId)));
   const evidence = (await readCurrentCreditEvidence(tx, input))!;
@@ -550,6 +557,7 @@ export async function restoreManual(tx: Tx, input: RestoreManualInput): Promise<
   catch { conflict('Resolve pending order edit before manual credit restoration'); }
   const redeem = await redemptionForOrder(tx, input.storeId, input.orderId, input.accountId);
   if (!redeem) throw new AccountCreditError('missing', 'No redeemed credit on linked order');
+  assertRedemptionAllocation(redeem);
   const account = await lockAccount(tx, input.storeId, input.accountId);
   if (account.currency !== order.currency) conflict('Restoration currency differs from order');
   const key = `manual:${input.operationKey}`;

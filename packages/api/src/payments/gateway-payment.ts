@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
@@ -90,6 +91,7 @@ export async function startGatewayPayment(input: {
     if (!orderId) throw new GatewayPaymentError(404, 'Order not found');
     const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const order = await ownedOrder(tx, input.code, input.receiptToken, input.customerSession);
+      assertImportedFinancialReconciliationAllowed(order.metadata);
       // Order editing (G13): a Paid / PartiallyRefunded order with a positive
       // amount due is a BALANCE payment for an edit that raised the total. It is
       // a second payment on the order, so its idempotency key is namespaced by

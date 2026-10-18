@@ -1,3 +1,4 @@
+import { ImportedFinancialReconciliationError, importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 import { release as releaseAccountCredit } from '../account-credit/service.js';
 // Order reservation lifecycle (de-fork plan 3.3; PAYMENT-TIMING.md §3.2–§3.4, §3.7).
 //
@@ -52,6 +53,16 @@ async function orderState(tx: Tx, storeId: string, orderId: string): Promise<str
     .limit(1);
   if (!row) throw new ReservationRuleError(`order ${orderId} not found in store ${storeId}`);
   return row.state;
+}
+
+/** Current marker is checked under the order row lock before any projection or credit release. */
+async function financiallyQuarantined(tx: Tx, storeId: string, orderId: string): Promise<boolean> {
+  const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order)
+    .where(and(eq(s.order.id, orderId), eq(s.order.storeId, storeId))).limit(1).for('update');
+  return importedFinancialReconciliationRequired(order?.metadata);
+}
+async function assertFinancialEffectsAllowed(tx: Tx, storeId: string, orderId: string): Promise<void> {
+  if (await financiallyQuarantined(tx, storeId, orderId)) throw new ImportedFinancialReconciliationError();
 }
 
 /**
@@ -115,6 +126,7 @@ export async function reserve(
   },
 ): Promise<ReservationRow> {
   const { storeId, orderId, kind, ownerKey } = input;
+  await assertFinancialEffectsAllowed(tx, storeId, orderId);
   const state = await orderState(tx, storeId, orderId);
   if (state === 'Cancelled' || state === 'Refunded') {
     throw new ReservationConflict('order_terminal', `order is ${state}`);
@@ -188,6 +200,7 @@ async function consumeCore(
   input: { storeId: string; orderId: string; paymentId: string | null; operationId: string },
   opts: { isolateProjection?: boolean } = {},
 ): Promise<ReservationRow[]> {
+  if (await financiallyQuarantined(tx, input.storeId, input.orderId)) return [];
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(CONSUMABLE_STATES as readonly string[]).includes(state)) {
     throw new ReservationRuleError(`cannot consume reservations of a ${state} order (I3: consume implies Paid)`);
@@ -266,6 +279,7 @@ export async function requestRelease(
   _held: HeldLocks,
   input: { storeId: string; orderId: string; reason: string },
 ): Promise<ReservationRow[]> {
+  await assertFinancialEffectsAllowed(tx, input.storeId, input.orderId);
   return tx
     .update(s.orderReservation)
     .set({
@@ -295,6 +309,7 @@ async function settleReleaseCore(
   tx: Tx,
   input: { storeId: string; orderId: string; stripeDiscoverable: boolean },
 ): Promise<ReservationRow[]> {
+  if (await financiallyQuarantined(tx, input.storeId, input.orderId)) return [];
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(TERMINAL_RELEASE_STATES as readonly string[]).includes(state)) return [];
   if (state === 'Cancelled' && await providerQuiescent(tx, input.storeId, input.orderId, { stripeDiscoverable: input.stripeDiscoverable })) {
@@ -376,6 +391,7 @@ export async function releaseOnFullRefund(
   _held: HeldLocks,
   input: { storeId: string; orderId: string },
 ): Promise<ReservationRow[]> {
+  if (await financiallyQuarantined(tx, input.storeId, input.orderId)) return [];
   const state = await orderState(tx, input.storeId, input.orderId);
   if (state !== 'Refunded') return [];
   const released = await tx
@@ -456,6 +472,7 @@ export async function overrideRelease(
   _held: HeldLocks,
   input: { storeId: string; orderId: string; reason: string },
 ): Promise<ReservationRow[]> {
+  await assertFinancialEffectsAllowed(tx, input.storeId, input.orderId);
   if (input.reason.trim().length < 10) throw new ReservationRuleError('override reason must be at least 10 characters');
   const state = await orderState(tx, input.storeId, input.orderId);
   if (state !== 'Cancelled') throw new ReservationRuleError(`operator override requires a Cancelled order (order is ${state})`);
@@ -499,6 +516,7 @@ export async function purgeReservations(
   _held: HeldLocks,
   input: { storeId: string; orderId: string },
 ): Promise<ReservationRow[]> {
+  await assertFinancialEffectsAllowed(tx, input.storeId, input.orderId);
   const rows = await tx.select().from(s.orderReservation).where(and(
     eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId)));
   for (const row of rows) {

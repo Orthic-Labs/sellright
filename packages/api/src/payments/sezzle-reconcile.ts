@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Sezzle out-of-band reconciliation (payments audit D15/D16).
  *
@@ -219,9 +220,9 @@ export async function reconcileSezzleRefunds(
 }
 
 async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: string): Promise<void> {
-  const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code })
+  const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code, metadata: s.order.metadata })
     .from(s.order).where(eq(s.order.id, orderId)).limit(1).for('update');
-  if (!ord) return;
+  if (!ord || importedFinancialReconciliationRequired(ord.metadata)) return;
   const basis = await orderRefundBasis(tx, storeId, orderId);
   const refunded = basis.refunded;
   const target = refundStateFromBasis(basis);

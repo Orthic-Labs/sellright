@@ -2,6 +2,7 @@
 // Route-level cases drive the real handlers (admin cancel, bulk cancel, operator override) under an admin session;
 // the R5 and sweep cases drive the service and the job. DB-gated: *_test only.
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -269,5 +270,26 @@ describe('R6 — operator override (PAYMENT-TIMING §5.3.3)', () => {
     const res = await post(`/v1/admin/payment-reconciliation/reservations/${await reservationId(id)}/override-release`, { reason: 'a long enough reason' }, adminGatewayPayments);
     expect(res.status).toBe(409);
     expect((await reservations(id))[0]!.state).toBe('held');
+  });
+});
+
+
+describe('imported financial quarantine holds reservation projections', () => {
+  it.each(['consumed', 'held'])('sweep & direct recovery retain %s holds without invoking projection hooks', async (state) => {
+    const id = await order('RW-QUAR-' + state, 'Paid');
+    await hold(id, 'quarantined-owner', true);
+    if (state === 'consumed') await markPaidAndConsume(id, 'quarantined-owner');
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE "order" SET state = 'Refunded', metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${id}`);
+      await tx.execute(sql`UPDATE order_reservation SET release_requested_at = now(), release_reason = 'order_refunded' WHERE order_id = ${id}`);
+    });
+    let projections = 0;
+    registerPaymentPolicy({ id: 'quarantine-projection-spy', async beforePaymentAttempt() { return { allow: true }; }, async onReservationTransition() { projections++; } });
+    const before = await reservations(id);
+    const direct = await withStore(STORE, (tx) => releaseOnFullRefundInSet(tx, { storeId: STORE, orderId: id }));
+    expect(direct).toEqual({ released: [], deferred: false });
+    expect((await reservationReleaseSweep({})).released).toBe(0);
+    expect(await reservations(id)).toEqual(before);
+    expect(projections).toBe(0);
   });
 });

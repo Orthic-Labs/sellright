@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, gt } from 'drizzle-orm';
 import { resolveOrderRecipient } from '../orders/recipient.js';
@@ -75,8 +76,8 @@ orders.openapi(
                 image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
               })),
               /** Points snapshot taken at checkout (REWARDS-1); null when the program was off. Earned points post when the order is paid. */
-              /** Order editing: amount still owed on a Paid / PartiallyRefunded order after an edit raised the total (0 otherwise), plus a customer-safe summary of the latest edit. Same receipt-token / owner scope as the rest of this read. */
-              amountDue: z.number().int(),
+              /** Order editing: amount still owed on a Paid / PartiallyRefunded order after an edit raised the total (0 otherwise; null when imported finances require reconciliation), plus a customer-safe summary of the latest edit. Same receipt-token / owner scope as the rest of this read. */
+              amountDue: z.number().int().nullable(),
               balanceChange: z.object({ previousGrandTotal: z.number().int().nullable(), changes: z.array(z.string()), editedAt: z.string().nullable() }).nullable(),
               loyalty: z.object({ earnPoints: z.number().int(), redeemPoints: z.number().int(), pointsDiscount: z.number().int() }).nullable(),
             }),
@@ -149,9 +150,9 @@ orders.openapi(
       const couponCodes = await loadOrderCouponCodes(tx, o);
       const { status, paymentStatus, fulfillmentStatus } = await loadOrderStatusFacts(tx, o);
       const balanceState = o.state === 'Paid' || o.state === 'PartiallyRefunded';
-      const due = balanceState ? Math.max(0, await amountDueForOrder(tx, st.id, o.id, o.grandTotal)) : 0;
+      const due = importedFinancialReconciliationRequired(o.metadata) ? null : balanceState ? Math.max(0, await amountDueForOrder(tx, st.id, o.id, o.grandTotal)) : 0;
       let balanceChange: ReturnType<typeof summarizeEdit> | null = null;
-      if (due > 0) {
+      if (due != null && due > 0) {
         const [edit] = await tx.select({ before: s.orderEdit.before, after: s.orderEdit.after, createdAt: s.orderEdit.createdAt })
           .from(s.orderEdit).where(and(eq(s.orderEdit.orderId, o.id), gt(s.orderEdit.balance, 0)))
           .orderBy(desc(s.orderEdit.createdAt)).limit(1);

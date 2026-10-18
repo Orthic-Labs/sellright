@@ -27,6 +27,7 @@
  *      (not the order id), distinct from the direct-refund key shape.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { finalizeRefund } from '../payments/refunds.js';
 import type { RefundResult } from '../payments/provider.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -326,6 +327,18 @@ async function returnLineRestock(returnId: string): Promise<boolean[]> {
 describe('POST /v1/admin/returns/{id}/approve — the Returns page "Restock" choice', () => {
   // The admin Returns page sends { restock } with Approve; the request schema used to strip it, so the flag chosen when
   // the request was OPENED always won (and a customer-opened request is never pre-restocked).
+  it('refuses quarantined approval before updating return lines or calling a provider', async () => {
+    const { orderId, lineId } = await seedPaidOrder('SR-RET-QUARANTINE');
+    const id = await createReturn('SR-RET-QUARANTINE', lineId, 1);
+    await withStore(STORE, tx => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
+    const result = await approveReturn(id, { restock: false });
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' } });
+    expect(await returnLineRestock(id)).toEqual([true]);
+    expect(await refundRowCount(orderId)).toBe(0);
+    expect(refundCalls).toEqual([]);
+  });
+
   it('an explicit restock on approve overrides the flag the request was opened with, in both directions', async () => {
     const a = await seedPaidOrder('SR-RET-RS1');
     const opened = await createReturn('SR-RET-RS1', a.lineId, 1); // opened with restock: true
@@ -421,6 +434,31 @@ describe('POST /v1/admin/orders/{code}/refund — gift_card tender', () => {
 });
 
 describe('durable refund reservations', () => {
+  it('retains a late provider refund observation on quarantine without applying stock or order effects', async () => {
+    const { orderId, lineId } = await seedPaidOrder('SR-OBSERVED-QUARANTINE', 2000);
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE order_line SET fulfilled_qty=1 WHERE id=${lineId}`);
+      await tx.execute(sql`UPDATE stock SET on_hand=99 WHERE variant_id=${VARIANT}`);
+    });
+    refundImpl = async () => ({ state: 'Pending', providerRef: 're_observed_quarantine' });
+    expect((await refundOrder('SR-OBSERVED-QUARANTINE', { amount: 2000, restock: true, lines: [{ orderLineId: lineId, quantity: 1 }] })).status).toBe(200);
+    const attemptId = await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id=${orderId}`);
+      const row = await tx.execute(sql`SELECT attempt_id FROM refund WHERE order_id=${orderId}`);
+      return (row.rows[0] as { attempt_id: string }).attempt_id;
+    });
+    for (const state of ['Settled', 'Failed'] as const) await withStore(STORE, tx => finalizeRefund(tx, STORE, attemptId, { state, providerRef: 're_observed_quarantine' }));
+    const observed = await withStore(STORE, async tx => {
+      const row = await tx.execute(sql`SELECT r.state AS refund_state, r.amount, r.provider_ref, pa.status AS attempt_status,
+        o.state AS order_state, o.grand_total, ol.refunded_qty, st.on_hand
+        FROM refund r JOIN payment_attempt pa ON pa.id=r.attempt_id JOIN "order" o ON o.id=r.order_id
+        JOIN order_line ol ON ol.id=${lineId} JOIN stock st ON st.variant_id=${VARIANT} WHERE r.order_id=${orderId}`);
+      return row.rows[0];
+    });
+    expect(observed).toMatchObject({ refund_state: 'Settled', amount: 2000, provider_ref: 're_observed_quarantine',
+      attempt_status: 'settled', order_state: 'Paid', grand_total: 2000, refunded_qty: 0, on_hand: 99 });
+    expect(refundCalls).toHaveLength(1);
+  });
   it('preserves pending money and applies stock and order effects exactly once after confirmation', async () => {
     const { orderId, lineId } = await seedPaidOrder('SR-PENDING', 2000);
     await withStore(STORE, async tx => {

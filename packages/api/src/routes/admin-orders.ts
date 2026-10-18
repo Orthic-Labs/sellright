@@ -1,7 +1,9 @@
+import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import { errJson } from '../lib/api-error.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requirePermission, guard } from './admin-helpers.js';
@@ -106,6 +108,7 @@ adminOrders.openapi(
     const res: R = await withStore(st.storeId, async (tx): Promise<R> => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' };
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       if (o.state !== 'PendingPayment') return { kind: 'badstate', state: o.state };
 
       // Match the main edit service's protection before stock or line writes.
@@ -281,7 +284,12 @@ adminOrders.openapi(createRoute({
   // dropped by the request schema, so the flag set when the request was opened always won. An explicit choice
   // here overrides every line of an unresolved request (a resolved one is refused by the refund engine below).
   if (body.restock !== undefined && ['requested', 'approved', 'received'].includes(rma.status) && !rma.refundId) {
-    await withStore(st.storeId, (tx) => tx.update(s.returnLine).set({ restock: body.restock! }).where(eq(s.returnLine.returnId, id)));
+    await withLockedSet(st.storeId, { kind: 'order', orderId: rma.orderId }, async tx => {
+      const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, rma.orderId)).limit(1).for('update');
+      if (!order) throw new HttpError(404, 'Order not found');
+      assertImportedFinancialReconciliationAllowed(order.metadata);
+      await tx.update(s.returnLine).set({ restock: body.restock! }).where(eq(s.returnLine.returnId, id));
+    });
   }
   try {
     const result = await requestRefund({ storeId: st.storeId, orderId: rma.orderId, actor: admin.email,

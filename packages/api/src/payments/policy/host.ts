@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed } from '../../orders/imported-financial-reconciliation.js';
 // Payment policy host (de-fork plan 3.4; PAYMENT-TIMING.md §3.1, §3.6, §3.7).
 //
 // Mirrors licensing/storekit/policy.ts: policies register at startup (createApp / plugin init),
@@ -43,6 +44,7 @@ const policies = (): readonly PaymentPolicy[] => registeredPaymentPolicies();
  */
 export async function runBeforePaymentAttempt(tx: Tx, input: BeforePaymentAttemptInput): Promise<void> {
   await assertHeld(tx, input.held);
+  assertImportedFinancialReconciliationAllowed(input.order.metadata);
   const requests: { policyId: string; request: ReservationRequest }[] = [];
   for (const policy of policies()) {
     const result = await inSavepoint(tx, policy.id, () => policy.beforePaymentAttempt(tx, input));
@@ -250,6 +252,7 @@ export async function runLegacyCheckoutFingerprints(tx: Tx, i: {
  */
 export async function runBeforeCapture(tx: Tx, input: BeforeCaptureInput): Promise<BeforeCaptureResult> {
   await assertHeld(tx, input.held);
+  assertImportedFinancialReconciliationAllowed(input.order.metadata);
   for (const policy of policies()) {
     if (!policy.beforeCapture) continue;
     const result = await inSavepoint(tx, policy.id, () => policy.beforeCapture!(tx, input));

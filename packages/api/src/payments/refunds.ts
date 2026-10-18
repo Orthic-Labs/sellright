@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { importedSourceMetadata } from '../import/source-compatibility.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -216,6 +217,7 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
     const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId: input.orderId }, async tx => {
       let [order] = await tx.select().from(s.order).where(eq(s.order.id, input.orderId)).for('update');
       if (!order || order.deletedAt) throw new RefundError(404, 'Order not found');
+      assertImportedFinancialReconciliationAllowed(order.metadata);
       try { await assertNoPendingOrderEdit(tx, input.storeId, order.id, { allowEditId: input.source === 'order_edit' ? input.editId : undefined }); }
       catch (error) { throw new RefundError(409, error instanceof Error ? error.message : 'Resolve the pending order edit first'); }
       const [prior] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.idempotencyKey, key));
@@ -426,7 +428,7 @@ export async function enqueueRefundSettledEmail(
   const [order] = await tx.select().from(s.order).where(eq(s.order.id, refundRow.orderId)).limit(1);
   const [store] = await tx.select({ name: s.store.name, currency: s.store.currency, config: s.store.config })
     .from(s.store).where(eq(s.store.id, storeId)).limit(1);
-  if (!order || !store) return;
+  if (!order || !store || importedFinancialReconciliationRequired(order.metadata)) return;
   const [customer] = order.customerId
     ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
   const contact = (order.metadata as { contact?: { email?: string } } | null)?.contact;
@@ -463,6 +465,17 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attemptId)).for('update');
   const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, attemptId)).for('update');
   if (!order || !attempt || !refund) throw new RefundError(409, 'Refund reservation is incomplete');
+  if (importedFinancialReconciliationRequired(order.metadata)) {
+    // Keep provider observations monotonic without inventing stock, credit, or order effects.
+    if (refund.providerRef && result.providerRef && refund.providerRef !== result.providerRef) throw new RefundError(409, 'Refund reference mismatch');
+    const state = refund.state === 'Settled' ? 'Settled' : refund.state === 'Failed' && result.state !== 'Settled' ? 'Failed' : result.state;
+    const providerRef = result.providerRef ?? refund.providerRef;
+    const metadata = { ...(refund.metadata as Record<string, unknown> | null), financialReconciliation: { state: 'required', errorCode: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' } };
+    await tx.update(s.refund).set({ state, providerRef, metadata }).where(eq(s.refund.id, refund.id));
+    await tx.update(s.paymentAttempt).set({ status: state === 'Settled' ? 'settled' : state === 'Failed' ? 'failed' : providerRef ? 'pending' : 'unknown',
+      providerRef, result: { state }, updatedAt: new Date() }).where(eq(s.paymentAttempt.id, attempt.id));
+    return refundView(tx, { ...refund, state, providerRef, metadata });
+  }
   // Already settled: never downgrade on a delayed/out-of-order status. A late
   // providerRef (e.g. internal tender reconciled by webhook) is still adopted.
   if (refund.state === 'Settled') {

@@ -6925,7 +6925,7 @@ export interface paths {
                                 code: string;
                                 error?: string;
                                 /** @enum {string} */
-                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED";
+                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED" | "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 ok: boolean;
                             }[];
                             skipped: number;
@@ -6994,6 +6994,8 @@ export interface paths {
                             results: {
                                 code: string;
                                 error?: string;
+                                /** @enum {string} */
+                                errorCode?: "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 fulfillment?: string;
                                 ok: boolean;
                             }[];
@@ -7058,7 +7060,7 @@ export interface paths {
                                 code: string;
                                 error?: string;
                                 /** @enum {string} */
-                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED";
+                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED" | "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 ok: boolean;
                             }[];
                             skipped: number;
@@ -7128,7 +7130,7 @@ export interface paths {
                                 code: string;
                                 error?: string;
                                 /** @enum {string} */
-                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED";
+                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED" | "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 ok: boolean;
                             }[];
                             skipped: number;
@@ -7189,7 +7191,7 @@ export interface paths {
                                 code: string;
                                 error?: string;
                                 /** @enum {string} */
-                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED";
+                                errorCode?: "ACCOUNT_CREDIT_HOLD_UNRESOLVED" | "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 ok: boolean;
                             }[];
                             skipped: number;
@@ -18929,7 +18931,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            amountDue: number;
+                            amountDue: number | null;
                             balanceChange: {
                                 changes: string[];
                                 editedAt: string | null;

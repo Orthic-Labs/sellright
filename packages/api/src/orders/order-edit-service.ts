@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired } from './imported-financial-reconciliation.js';
 /**
  * Order editing (spec G13 / G5) — the DB-bound half. `orders/order-edit.ts`
  * holds the pure model; this loads the facts, builds a PLAN (new totals, line
@@ -259,6 +260,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     ? await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update')
     : await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
   if (!order || order.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+  assertImportedFinancialReconciliationAllowed(order.metadata);
   assertImportedEditAllowed(importedEditAdmission(order.metadata), 'plan');
   assertEditable(order.state, ops);
   const stages = await tx.select({ settlement: s.orderEdit.settlement }).from(s.orderEdit)
@@ -897,6 +899,8 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
 
 /** Cash success is durable even when activation proof/posting fails. Retry only this proposal. */
 export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string; orderId: string; refundId?: string; paymentAttemptId?: string; paymentId?: string }): Promise<boolean> {
+  const [quarantineOrder] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(and(eq(s.order.storeId, input.storeId), eq(s.order.id, input.orderId))).limit(1).for('update');
+  if (importedFinancialReconciliationRequired(quarantineOrder?.metadata)) return false;
   const rows = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, input.storeId), eq(s.orderEdit.orderId, input.orderId)));
   const selected = rows.find(row => {
     const settlement = row.settlement as unknown as EditStageSettlement | null;
@@ -1147,6 +1151,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       if (prior) {
         const [o] = await tx.select().from(s.order).where(eq(s.order.id, prior.orderId)).limit(1);
         if (!o || o.code !== input.code || prior.fingerprint !== fp) throw new OrderEditError(409, 'IDEMPOTENCY_KEY_REUSED', 'this idempotency key was used for a different edit');
+        assertImportedFinancialReconciliationAllowed(o.metadata);
         let st = await liveEditSettlement(tx, storeId, (prior.settlement ?? { type: 'none', status: 'none' }) as SettlementOutcome);
         if (isPendingEditStage(st)) {
           await activatePreparedOrderEdit(tx, { storeId, orderId: o.id, ...(st.refundId ? { refundId: st.refundId } : {}), ...(st.paymentAttemptId ? { paymentAttemptId: st.paymentAttemptId } : {}) });
@@ -1434,6 +1439,7 @@ export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise
     const ctx = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx) => {
       const [o] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.code, input.code))).limit(1).for('update');
       if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       const [edit] = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, o.id), eq(s.orderEdit.id, input.editId))).limit(1);
       if (!edit) throw new OrderEditError(404, 'EDIT_NOT_FOUND', 'order edit not found');
       let st = await liveEditSettlement(tx, storeId, (edit.settlement ?? {}) as SettlementOutcome);
@@ -1526,6 +1532,7 @@ export async function saveOrderAddress(input: SaveAddressInput): Promise<SaveAdd
     assertEditable(o.state, [{ op: 'set_address', kind: input.kind, address: input.address as never }]);
     const before = readAddress(input.kind === 'shipping' ? o.shippingAddress : o.billingAddress);
     if (input.kind === 'shipping' && countryChanged(before, input.address)) {
+      assertImportedFinancialReconciliationAllowed(o.metadata);
       throw new OrderEditError(409, 'COUNTRY_CHANGE_REQUIRES_EDIT', 'changing the shipping country changes tax and shipping — use the order edit preview', { requiresPreview: true });
     }
     const changed = !sameAddress(before, input.address);
@@ -1583,16 +1590,16 @@ export async function loadEditContext(storeId: string, code: string) {
     const history = await tx.select({ id: s.orderEdit.id, actor: s.orderEdit.actor, reason: s.orderEdit.reason, balance: s.orderEdit.balance, settlement: s.orderEdit.settlement, createdAt: s.orderEdit.createdAt, before: s.orderEdit.before, after: s.orderEdit.after })
       .from(s.orderEdit).where(eq(s.orderEdit.orderId, o.id)).orderBy(desc(s.orderEdit.createdAt)).limit(25);
     const meta = (o.metadata ?? {}) as OrderMeta;
-    const amountDue = await amountDueForOrder(tx, storeId, o.id, o.grandTotal);
+    const amountDue = importedFinancialReconciliationRequired(o.metadata) ? null : await amountDueForOrder(tx, storeId, o.id, o.grandTotal);
     const unresolved = await hasUnresolvedPayment(tx, o.id);
     const protectedPricing = await pricingEditProtected(tx, storeId, o);
     const couponCodes = await loadOrderCouponCodes(tx, o);
     const pending = history.find(edit => isPendingEditStage(edit.settlement));
-    const items = EDITABLE_STATES.has(o.state) && !protectedPricing && !sourceAdmission.planRefusal && !pending;
+    const items = !importedFinancialReconciliationRequired(o.metadata) && EDITABLE_STATES.has(o.state) && !protectedPricing && !sourceAdmission.planRefusal && !pending;
     const address = o.state !== 'Cancelled' && !sourceAdmission.addressRefusal && !pending;
     return {
       code: o.code, state: o.state, currency: o.currency, couponCodes, pricingOptions: editPricingOptions({}),
-      editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: pending ? 'Resolve the prepared order edit before changing its economics.' : sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
+      editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: importedFinancialReconciliationRequired(o.metadata) ? 'Imported financial history requires reconciliation before changing money.' : pending ? 'Resolve the prepared order edit before changing its economics.' : sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
       pendingEdit: pending ? pendingEditContext(pending) : null,
       lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
       adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount, actor: a.actor, createdAt: a.createdAt.toISOString() })),

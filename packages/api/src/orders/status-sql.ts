@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationPath } from '../import/source-compatibility.js';
 /**
  * SQL projections of `derivePaymentStatus`/`deriveFulfillmentStatus`
  * (orders/status.ts), for the ONE place that genuinely needs them in SQL: the
@@ -85,7 +86,7 @@ export function balanceDueSql(): SQL<number> {
  *  edit left owing money) — the SQL twin of `derivePaymentStatus(.., amountDue)`. */
 export function paymentStatusWithBalanceSql(): SQL<string> {
   return sql<string>`(case
-    when ${orderState} in ('Paid', 'PartiallyRefunded') and ${balanceDueSql()} > 0 then 'balance_due'
+    when ("order"."metadata" #> ARRAY[${importedFinancialReconciliationPath[0]}, ${importedFinancialReconciliationPath[1]}]::text[]) IS NULL and ${orderState} in ('Paid', 'PartiallyRefunded') and ${balanceDueSql()} > 0 then 'balance_due'
     else ${paymentStatusSql()}
   end)`;
 }

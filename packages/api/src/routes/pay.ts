@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
@@ -99,6 +100,7 @@ pay.openapi(
       const prepared = !preId ? { kind: 'notfound' as const } : await withLockedSet(st.id, { kind: 'order', orderId: preId }, async (tx) => {
         const order = await ownsOrder(tx, code, receipt, session);
         if (!order) return { kind: 'notfound' as const };
+        assertImportedFinancialReconciliationAllowed(order.metadata);
         const intentId = typeof token === 'string' ? token : (token as { paymentIntentId?: string } | undefined)?.paymentIntentId;
         const durable = await retryPreparedEditSettlement(tx, st.id, order.id, { method, ...(intentId ? { providerRef: intentId } : {}) });
         if (durable) return { kind: 'noop' as const, state: durable.orderState };
@@ -317,8 +319,9 @@ pay.openapi(
         // hook and before the mint. It re-checks payability under the lock, so an order that stopped
         // being payable since the prepare step is not minted for.
         const pendingId = await withLockedSet(st.id, { kind: 'order', orderId: order.id }, async (tx) => {
-          const [cur] = await tx.select({ state: s.order.state }).from(s.order).where(eq(s.order.id, order.id)).limit(1).for('update');
+          const [cur] = await tx.select({ state: s.order.state, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, order.id)).limit(1).for('update');
           if (!cur || (cur.state !== 'PendingPayment' && !isBalanceState(cur.state))) return null;
+          assertImportedFinancialReconciliationAllowed(cur.metadata);
           const { preparedEditTender, bindPreparedEditTender } = await import('../orders/order-edit-service.js');
           const currentTender = await preparedEditTender(tx, { storeId: st.id, orderId: order.id });
           await assertNoPendingOrderEdit(tx, st.id, order.id, { allowEditId: editTender?.editId });

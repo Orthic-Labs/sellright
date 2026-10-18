@@ -1,5 +1,6 @@
 /** Real PostgreSQL contention: full fulfillment consumes each reserved unit once. */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -12,6 +13,7 @@ import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { admin } from './admin.js';
+import { adminOrderOps } from './admin-order-ops.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'admin-fulfillment-race.db.test.ts');
 
@@ -22,6 +24,7 @@ const VARIANT = 'f0010000-0000-4000-8000-000000000003';
 const CODE = 'FULFILL-RACE';
 const app = new OpenAPIHono();
 app.route('/', admin);
+app.route('/', adminOrderOps);
 
 let token = '';
 let orderId = '';
@@ -183,5 +186,55 @@ describe('serialized full fulfillment', () => {
     expect(delivered.emails).toEqual(shipped.emails);
     expect(delivered.webhooks).toEqual(shipped.webhooks);
     expect(onStockChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('quarantined imported orders cannot ship or consume stock', () => {
+  it.each(['single', 'partial', 'tracking'])('%s refuses before fulfillment, stock, notification or audit effects', async (mode) => {
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = metadata || ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
+    const before = await persisted();
+    const response = mode === 'single' ? await fulfill('single') : await app.request(
+      mode === 'partial' ? `/v1/admin/orders/${CODE}/fulfillments` : '/v1/admin/import-tracking', {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+        body: JSON.stringify(mode === 'partial' ? { lines: [{ orderLineId: lineId, quantity: 1 }] } : { rows: [{ code: CODE, tracking: '9400111899223856928499', carrier: 'USPS' }] }),
+      });
+    const body = await response.json();
+    if (mode === 'tracking') {
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ updated: 0, skipped: 1, emailsQueued: 0, rows: [{ code: CODE, status: 'not_shippable', imported: false }] });
+    } else {
+      expect(response.status).toBe(409);
+      expect(body).toMatchObject({ error: { code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' } });
+    }
+    expect(await persisted()).toEqual(before);
+    expect(onStockChanged).not.toHaveBeenCalled();
+  });
+
+  it('bulk fulfillment continues around a quarantined item without shipping its units', async () => {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE "order" SET metadata = metadata || ${JSON.stringify(financialReconciliationMetadata(false))}::jsonb WHERE id = ${orderId}`);
+      for (const code of ['NORMAL-BEFORE', 'NORMAL-AFTER']) {
+        const row = await tx.execute(sql`INSERT INTO "order" (store_id, code, state, currency, grand_total) VALUES (${STORE}, ${code}, 'Paid', 'USD', 1000) RETURNING id`);
+        const id = (row.rows[0] as { id: string }).id;
+        await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total) VALUES (${STORE}, ${id}, ${VARIANT}, 'FULFILL-RACE', 'Race variant', 1, 1000, 1000, 1000)`);
+      }
+    });
+    const before = await persisted();
+    const response = await app.request('/v1/admin/orders/bulk-fulfill', { method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+      body: JSON.stringify({ orders: [{ code: 'NORMAL-BEFORE' }, { code: CODE }, { code: 'NORMAL-AFTER' }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ succeeded: 2, skipped: 1, results: [
+      { code: 'NORMAL-BEFORE', ok: true }, { code: CODE, ok: false, errorCode: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' }, { code: 'NORMAL-AFTER', ok: true },
+    ] });
+    const after = await persisted();
+    expect(after.order).toEqual(before.order);
+    expect(after.lines).toEqual(before.lines);
+    expect(after.fulfillments).toEqual([]);
+    expect(after.movements).toEqual([]);
+    expect(after.audits).toEqual([]);
+    expect(after.stock).toMatchObject({ on_hand: 8, allocated: 1 });
   });
 });

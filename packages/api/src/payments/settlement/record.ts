@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired } from '../../orders/imported-financial-reconciliation.js';
 /**
  * THE settlement chokepoint (de-fork plan 2.8; SETTLEMENT-OPS.md section 7).
  *
@@ -171,6 +172,34 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
   for (const e of op.effects) {
     if (!(policy.effects as readonly string[]).includes(e.kind)) throw new Error(`settlement operation "${op.kind}" is not eligible for effect "${e.kind}"`);
     if (!authorized.includes(e.kind)) throw new Error(`effect "${e.kind}" is not authorized for classification "${op.classification}"`);
+  }
+
+  // Revalidate current order metadata before any mutation/effect. Provider money & its operation
+  // journal remain durable; imported uncertainty cannot authorize state transitions or fulfillment.
+  const orderIds = new Set<string>(op.orderId ? [op.orderId] : []);
+  for (const mutation of op.mutations) {
+    if (mutation.type === 'order_paid' || mutation.type === 'order_purge') orderIds.add(mutation.orderId);
+    if (mutation.type === 'payment_insert') for (const row of mutation.rows) orderIds.add(row.orderId);
+    if (mutation.type === 'invoice_payment_record' && mutation.row.orderId) orderIds.add(mutation.row.orderId);
+    if (mutation.type === 'payment_state' || mutation.type === 'payment_gateway_identity') {
+      const id = await paymentOrderId(tx, op.storeId, mutation.paymentId);
+      if (id) orderIds.add(id);
+    }
+  }
+  for (const effect of op.effects) if (typeof effect.payload?.orderId === 'string') orderIds.add(effect.payload.orderId);
+  let quarantined = false;
+  for (const orderId of [...orderIds].sort()) {
+    const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order)
+      .where(and(eq(s.order.storeId, op.storeId), eq(s.order.id, orderId))).limit(1).for('update');
+    if (importedFinancialReconciliationRequired(order?.metadata)) {
+      if (op.mutations.some((m) => m.type === 'order_purge' && m.orderId === orderId)) assertImportedFinancialReconciliationAllowed(order?.metadata);
+      quarantined = true;
+    }
+  }
+  if (quarantined) {
+    op = { ...op, disposition: 'imported_financial_reconciliation_required',
+      mutations: op.mutations.filter((m) => m.type !== 'order_paid'), effects: [] };
+    authorized = [];
   }
 
   // 3. resolve the identity first. A ref-bearing payment is keyed by its PROVIDER REF: lock the ref,
@@ -377,8 +406,10 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
     const orderId = applied.orderId ?? op.orderId ?? (applied.paymentId ? await paymentOrderId(tx, op.storeId, applied.paymentId) : null);
     // The Paid transition op carries no payment row of its own: the consumed payment is the order's latest Settled one.
     const paymentId = applied.paymentId ?? (orderId ? await latestSettledPaymentId(tx, op.storeId, orderId) : null);
-    if (orderId) creditReconciliation = await postAcceptedCredit(tx, op.storeId, orderId);
-    if (orderId) consumedReservationIds = (await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId })).map((r) => r.id);
+    const [order] = orderId ? await tx.select({ metadata: s.order.metadata }).from(s.order).where(and(eq(s.order.storeId, op.storeId), eq(s.order.id, orderId))).limit(1) : [];
+    const financialEffectsAllowed = !importedFinancialReconciliationRequired(order?.metadata);
+    if (orderId && financialEffectsAllowed) creditReconciliation = await postAcceptedCredit(tx, op.storeId, orderId);
+    if (orderId && financialEffectsAllowed) consumedReservationIds = (await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId })).map((r) => r.id);
   }
   // PAYMENT-TIMING §3.7.1: issuance-class effects carry the reservations this settlement consumed (informational;
   // the effect re-reads and revalidates them under its own lock set).
