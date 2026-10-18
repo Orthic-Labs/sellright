@@ -52,7 +52,12 @@ JSON
   *"image inspect"*)
     for a in "$@"; do ref="$a"; done
     case "$ref" in
-      target-image:*) echo "ghcr.io/orthic-labs/sellright-x@sha256:$(printf '%064d' 1)" ;;
+      target-image:*)
+        if [ "${TEST_REPO_MISMATCH:-0}" = 1 ]; then
+          printf '["ghcr.io/wrong/repo@sha256:%064d"]\n' 9
+        else
+          printf '["ghcr.io/wrong/repo@sha256:%064d","target-image@sha256:%064d"]\n' 9 1
+        fi ;;
       postgres-image:*) echo "ghcr.io/library/postgres@sha256:$(printf '%064d' 2)" ;;
       caddy-image:*) echo "ghcr.io/library/caddy@sha256:$(printf '%064d' 3)" ;;
       RUNNING-CONTAINER-IMAGE-ID) echo "ghcr.io/orthic-labs/sellright-x@sha256:$(printf '%064d' 9)" ;;
@@ -73,6 +78,7 @@ last="$*"
 case "$last" in
   *"$(printf '%064d' 2)"*) exit 1 ;;
   *"$(printf '%064d' 3)"*) exit 1 ;;
+  *"$(printf '%064d' 9)"*) exit 1 ;;
   *) exit 0 ;;
 esac
 SH
@@ -94,31 +100,36 @@ resolved="$(PATH="$tmp/bin:$PATH" compose config --format json 2>/dev/null | jq 
 [ "$resolved" = "target-image:api" ] || fail "compose config --format json | jq did not resolve api's image as expected (got: $resolved)"
 pass "compose config --format json resolves api to its own image, not postgres's/caddy's"
 
-if PATH="$tmp/bin:$PATH" cosign_verify_images >/tmp/cosign-verify.out 2>&1; then
+if PATH="$tmp/bin:$PATH" cosign_verify_images "$tmp/verified.yaml" >"$tmp/cosign-verify.out" 2>&1; then
   pass "cosign_verify_images succeeds against target (pulled) images"
 else
-  cat /tmp/cosign-verify.out >&2
+  cat "$tmp/cosign-verify.out" >&2
   fail "cosign_verify_images should have succeeded (each service must get its OWN image, not postgres's/caddy's)"
 fi
 
-if grep -q 'RUNNING-CONTAINER-IMAGE-ID' /tmp/cosign-verify.out 2>/dev/null; then
+if grep -q 'RUNNING-CONTAINER-IMAGE-ID' "$tmp/cosign-verify.out" 2>/dev/null; then
   fail "cosign_verify_images called 'compose images -q' (running container) instead of 'compose config --format json' (target)"
 fi
 pass "cosign_verify_images never queries the running container's image"
 
+if TEST_REPO_MISMATCH=1 PATH="$tmp/bin:$PATH" cosign_verify_images "$tmp/mismatch.yaml" >"$tmp/mismatch.out" 2>&1; then
+  fail "cosign_verify_images accepted another repository's digest"
+fi
+pass "cosign_verify_images selects matching repository digest & refuses unrelated aliases"
+
 set +e
-(SELLRIGHT_HOME="$tmp/home" cmd_update --bogus-flag) >/tmp/badflag.out 2>&1
+(SELLRIGHT_HOME="$tmp/home" cmd_update --bogus-flag) >"$tmp/badflag.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "cmd_update accepted an unknown flag"
-grep -q "unknown argument" /tmp/badflag.out || fail "expected an 'unknown argument' error, got: $(cat /tmp/badflag.out)"
+grep -q "unknown argument" "$tmp/badflag.out" || fail "expected an 'unknown argument' error, got: $(cat "$tmp/badflag.out")"
 pass "cmd_update rejects unknown flags"
 
 set +e
 (
   unset SELLRIGHT_SOURCE
   : "${SELLRIGHT_SOURCE:?--from-source requires SELLRIGHT_SOURCE=/path/to/checked-out/sellright}"
-) >/tmp/nosource.out 2>&1
+) >"$tmp/nosource.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "--from-source should require SELLRIGHT_SOURCE to be set"

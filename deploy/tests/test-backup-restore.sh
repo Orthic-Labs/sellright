@@ -33,6 +33,10 @@ find "$SELLRIGHT_HOME/backups" "$TMPDIR" -type d ! -perm 700 -print > "$TEST_ROO
 find "$SELLRIGHT_HOME/backups" "$TMPDIR" -type f ! -perm 600 -print >> "$TEST_ROOT/bad-modes"
 [ ! -s "$TEST_ROOT/bad-modes" ] || { cat "$TEST_ROOT/bad-modes" >&2; exit 92; }
 case "$*" in
+  *' ps -q api')
+    [ "${TEST_FAIL:-}" != no-api ] || exit 34
+    printf '%064d\n' 7 ;;
+  inspect*'{{.Image}}'*) printf 'sha256:%064d\n' 8 ;;
   *' pg_dump '*)
     printf 'database-fixture\n'
     [ "${TEST_FAIL:-}" != dump ] || exit 31 ;;
@@ -140,7 +144,7 @@ if TEST_FOREIGN_OWNER=1 sh "$SCRIPT" backup >> "$tmp/rejected.log" 2>&1; then fa
 pass 'symlink, non-directory & foreign-owned backup parents rejected'
 
 before=$(find "$SELLRIGHT_HOME/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
-for step in dump assets; do
+for step in no-api dump assets; do
   if TEST_FAIL="$step" sh "$SCRIPT" backup > "$tmp/failed-backup.log" 2>&1; then fail "injected $step failure accepted"; fi
   [ "$(find "$SELLRIGHT_HOME/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq "$before" ] || fail 'incomplete backup survived'
 done
