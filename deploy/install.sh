@@ -136,21 +136,24 @@ write_recovery_kit() {
   if [ -f "$kit_file" ]; then
     return 0
   fi
-  # shellcheck disable=SC1090,SC1091
-  . "${SELLRIGHT_HOME}/.env"
+  # Read Compose's resolved environment as data. A preserved .env is not a
+  # shell program, and must never execute before signature verification.
+  config_json=$(cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml config --format json) || die "could not read recovery kit configuration"
   umask 077
-  cat > "$kit_file" <<EOF
-{
-  "kitId": "${RECOVERY_KIT_ID}",
-  "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "masterKey": "${SELLRIGHT_MASTER_KEY}",
-  "backupLocation": "${SELLRIGHT_HOME}/backups",
-  "offsite": {
-    "configured": false,
-    "note": "Run 'sellright backup --offsite' after configuring deploy/.env's SELLRIGHT_S3_* / rclone remote to enable encrypted off-site copies."
-  }
-}
-EOF
+  # Keep resolved secrets on stdin, never in jq argv or exported variables.
+  printf '%s' "$config_json" | jq -e --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg backupLocation "${SELLRIGHT_HOME}/backups" \
+    '.services.api.environment |
+      if type != "object" then error("missing recovery environment")
+      elif (.RECOVERY_KIT_ID | type) != "string" or
+           (.SELLRIGHT_MASTER_KEY | type) != "string"
+      then error("invalid recovery values")
+      elif (.SELLRIGHT_MASTER_KEY | length) == 0 then error("missing recovery master key")
+      else {kitId: .RECOVERY_KIT_ID, generatedAt: $generatedAt,
+        masterKey: .SELLRIGHT_MASTER_KEY, backupLocation: $backupLocation,
+        offsite: {configured: false,
+        note: "Run sellright backup --offsite after configuring SELLRIGHT_S3_* / rclone remote to enable encrypted off-site copies."}}
+      end' > "$kit_file" || { rm -f "$kit_file"; die "could not write recovery kit"; }
   chmod 600 "$kit_file"
   log "Recovery kit written to ${kit_file} (600, root-owned). Download and store it offline — it is required to restore this install and is never re-derivable."
 }
@@ -170,21 +173,56 @@ fetch_release_files() {
   chmod 755 /usr/local/bin/sellright
 }
 
+# Select only a digest for the configured repository (including Docker Hub's
+# familiar-name aliases). Never trust RepoDigests[0] when an image has aliases.
+pulled_image_digest() {
+  repo_digests=$(docker image inspect --format '{{json .RepoDigests}}' "$1") || return 1
+  printf '%s' "$repo_digests" | jq -er --arg ref "$1" '
+    def repository:
+      split("@")[0] | sub(":[^/:]+$"; "") |
+      if startswith("index.docker.io/") then sub("^index.docker.io/"; "docker.io/")
+      elif (contains("/") | not) then "docker.io/library/" + .
+      elif (split("/")[0] | contains(".") or contains(":") or . == "localhost") then .
+      else "docker.io/" + . end |
+      if startswith("docker.io/") and (split("/") | length) == 2
+      then sub("^docker.io/"; "docker.io/library/") else . end;
+    if type != "array" then error("missing repository digests")
+    elif any(.[]; type != "string") then error("invalid repository digests")
+    else map(select(test("^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$") and (contains("\n") | not)) |
+      select(repository == ($ref | repository)) |
+      select(($ref | contains("@") | not) or (split("@")[1] == ($ref | split("@")[1])))) |
+      unique | if length == 1 then .[0] else error("missing or ambiguous configured repository digest") end
+    end'
+}
+
+# Freeze the actual Compose-selected application images, not installer defaults.
+# Tags are used only for pulling; signature verification & execution use digests.
 verify_and_pull() {
-  images="api admin storefront"
-  for svc in $images; do
-    ref="${IMAGE_PREFIX}-${svc}:${IMAGE_TAG}"
-    log "Verifying signature for ${ref}..."
+  verified_override=$(mktemp)
+  trap 'rm -f "$verified_override"' 0
+  command -v jq >/dev/null 2>&1 || die "jq is required to resolve configured images"
+  ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml pull ) || die "image pull failed"
+  config_json=$(cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml config --format json) || die "could not read compose config"
+  printf 'services:\n' > "$verified_override" || die "could not write verified image override"
+  for svc in api admin storefront; do
+    ref=$(printf '%s' "$config_json" | jq -er --arg svc "$svc" '.services[$svc] | select(.build == null and .pull_policy != "build") | .image | select(type == "string" and length > 0)') || die "could not resolve image for ${svc}"
+    case "$ref" in -*) die "invalid image reference for ${svc}" ;; esac
+    docker pull "$ref" || die "image pull failed for ${svc}"
+    digest=$(pulled_image_digest "$ref" 2>/dev/null) || die "could not resolve pulled digest for ${svc}"
+    case "$digest" in ''|*[!A-Za-z0-9._:/@-]*) die "invalid pulled digest for ${svc}" ;; esac
+    printf '%s\n' "$digest" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$' || die "invalid pulled digest for ${svc}"
+    log "Verifying signature for ${digest}..."
     cosign verify \
       --certificate-identity-regexp "^https://github.com/Orthic-Labs/sellright/" \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-      "$ref" >/dev/null || die "cosign verification failed for ${ref}; refusing to run an unsigned image"
+      "$digest" >/dev/null || die "cosign verification failed for ${svc}; refusing to run an unsigned image"
+    printf '  %s:\n    image: %s\n' "$svc" "$digest" >> "$verified_override" || die "could not write verified image override"
   done
-  ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml pull )
 }
 
 start_stack() {
-  ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml up -d )
+  [ -n "${verified_override:-}" ] && [ -s "$verified_override" ] || die "verified image override missing"
+  ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml -f "$verified_override" up --pull never --no-build -d )
 }
 
 wait_for_api() {

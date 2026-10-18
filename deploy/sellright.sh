@@ -56,12 +56,20 @@ cmd_backup() (
   fi
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   out_dir=$(mktemp -d "${backup_root}/${stamp}.XXXXXX")
+  # Backup runs before the registry gate. Execute tar in the existing API
+  # container, never a fresh container from a mutable configured image tag.
+  backup_api_container=$(compose ps -q api) || die "could not resolve existing API container for backup"
+  case "$backup_api_container" in ''|*[!a-f0-9]*) die "existing API container required for backup" ;; esac
+  [ "${#backup_api_container}" -eq 64 ] || die "invalid existing API container identity"
+  backup_api_image=$(docker inspect --format '{{.Image}}' "$backup_api_container") || die "could not resolve existing API image for backup"
+  case "$backup_api_image" in ''|*[!a-z0-9:]*) die "invalid existing API image identity" ;; esac
+  printf '%s\n' "$backup_api_image" | grep -Eq '^sha256:[a-f0-9]{64}$' || die "invalid existing API image identity"
   log "Backing up database..."
-  compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump"
-  log "Backing up assets and downloads volumes..."
-  compose run --rm --no-deps -T api tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz"
-  compose run --rm --no-deps -T api tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz"
-  api_ref="${COMPOSE_API_IMAGE:-$(compose images -q api)}"
+  compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump" || die "database backup failed"
+  log "Backing up assets and downloads volumes from existing API..."
+  docker exec "$backup_api_container" tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz" || die "existing API assets backup failed"
+  docker exec "$backup_api_container" tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz" || die "existing API downloads backup failed"
+  api_ref="$backup_api_image"
   database_sha=$(sha256sum "${out_dir}/database.dump")
   assets_sha=$(sha256sum "${out_dir}/assets.tar.gz")
   downloads_sha=$(sha256sum "${out_dir}/downloads.tar.gz")
@@ -422,23 +430,23 @@ cmd_functional_check() {
   compose exec -T api node dist/scripts/functional-check.js
 }
 
-# Records each running service's current image digest (repo@sha256:...), one
-# `service digest` pair per line. Used by cmd_update to remember what to
-# restart if the new images fail their functional checks.
-capture_digests() {
+# Capture existing container image IDs, including locally built images with no
+# RepoDigests. A complete content-addressed rollback plan is required pre-build.
+capture_digests() (
   for svc in api admin storefront; do
-    ref=$(compose images -q "$svc" 2>/dev/null || true)
-    [ -n "$ref" ] || continue
-    digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
-    [ -n "$digest" ] && printf '%s %s\n' "$svc" "$digest"
+    container=$(compose ps -q "$svc") || return 1
+    case "$container" in ''|*[!a-f0-9]*) log "missing existing ${svc} container for rollback"; return 1 ;; esac
+    [ "${#container}" -eq 64 ] || return 1
+    image=$(docker inspect --format '{{.Image}}' "$container") || return 1
+    case "$image" in ''|*[!a-z0-9:]*) return 1 ;; esac
+    printf '%s\n' "$image" | grep -Eq '^sha256:[a-f0-9]{64}$' || return 1
+    printf '%s %s\n' "$svc" "$image" || return 1
   done
-}
+)
 
-# Re-pins each service to the exact digest captured by capture_digests, via a
-# throwaway Compose override file, then recreates just those containers. A
-# digest (not a floating tag like "latest") is used deliberately — this is
-# the rollback path, so it must not depend on the registry still serving
-# whatever the tag currently resolves to.
+# Recreate only existing services from captured immutable image IDs. compose()
+# retains the target project/host overrides; rollback never pulls or builds.
+
 restart_digests() {
   digests_file="$1"
   [ -s "$digests_file" ] || { log "no previous digests recorded; cannot roll back automatically"; return 1; }
@@ -459,8 +467,18 @@ restart_digests() {
   # .github/workflows/ci.yml's verify-update job) must not have the rollback
   # path silently fall back to the default project and operate on the wrong
   # containers.
-  compose -f "$override_file" up -d --no-deps api admin storefront
+  rollback_status=0
+  compose -f "$override_file" up --pull never --no-build -d --no-deps api admin storefront || rollback_status=$?
   rm -f "$override_file"
+  return "$rollback_status"
+}
+
+update_compose() {
+  if [ -n "${verified_override:-}" ]; then
+    compose -f "$verified_override" "$@"
+  else
+    compose "$@"
+  fi
 }
 
 cmd_update() {
@@ -474,7 +492,8 @@ cmd_update() {
   done
 
   digests_file=$(mktemp)
-  trap 'rm -f "$digests_file"' EXIT
+  verified_override=""
+  trap 'rm -f "$digests_file"; [ -z "$verified_override" ] || rm -f "$verified_override"' EXIT
 
   log "1/7 entering maintenance mode..."
   cmd_maintenance on
@@ -483,7 +502,7 @@ cmd_update() {
   cmd_backup
 
   log "recording current image digests (for rollback)..."
-  capture_digests > "$digests_file"
+  capture_digests > "$digests_file" || die "could not capture all existing application images; refusing to update without rollback"
 
   if [ "$from_source" -eq 1 ]; then
     # Owner-operated private forks: no registry to pull signed images from,
@@ -498,7 +517,9 @@ cmd_update() {
     : "${SELLRIGHT_SOURCE:?--from-source requires SELLRIGHT_SOURCE=/path/to/checked-out/sellright}"
     [ -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" ] || die "SELLRIGHT_SOURCE (${SELLRIGHT_SOURCE}) has no deploy/compose.build.yaml — not a sellright checkout?"
     log "3/7 building images from source (${SELLRIGHT_SOURCE}), no registry pull, no cosign verify..."
-    if ! compose -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" build; then
+    # Compose resolves all relative build contexts from its project directory,
+    # otherwise the installed first -f file would anchor them at SELLRIGHT_HOME.
+    if ! compose --project-directory "${SELLRIGHT_SOURCE}/deploy" -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" build; then
       log "source build failed; leaving maintenance on, no changes made"
       exit 1
     fi
@@ -508,21 +529,20 @@ cmd_update() {
       log "pull failed; leaving maintenance on, no changes made"
       exit 1
     fi
-    # Installer writes env, then verifies configured tag refs before pulling.
-    # Update independently verifies each locally pulled content digest here.
-    cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
+    verified_override=$(mktemp)
+    cosign_verify_images "$verified_override" || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
   fi
 
   log "4/7 migrating..."
   # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
   # must expand inside the container's sh, not here on the host.
-  if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
+  if ! update_compose run --pull never --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
     log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: see sellright backup output above"
     exit 1
   fi
 
   log "5/7 starting updated services..."
-  compose up -d api admin storefront
+  update_compose up --pull never --no-build -d api admin storefront
 
   log "6/7 running functional checks..."
   if ! cmd_functional_check; then
@@ -592,25 +612,45 @@ ensure_cosign() {
 # Fix: `compose config --format json` renders the FULLY RESOLVED config as
 # one document; jq indexes `.services.<name>.image` directly by key — no
 # filtering flag, no cross-invocation ordering assumption, no ambiguity.
-cosign_verify_images() {
+# Select only a digest for the configured repository (including Docker Hub's
+# familiar-name aliases). Never trust RepoDigests[0] when an image has aliases.
+pulled_image_digest() {
+  repo_digests=$(docker image inspect --format '{{json .RepoDigests}}' "$1") || return 1
+  printf '%s' "$repo_digests" | jq -er --arg ref "$1" '
+    def repository:
+      split("@")[0] | sub(":[^/:]+$"; "") |
+      if startswith("index.docker.io/") then sub("^index.docker.io/"; "docker.io/")
+      elif (contains("/") | not) then "docker.io/library/" + .
+      elif (split("/")[0] | contains(".") or contains(":") or . == "localhost") then .
+      else "docker.io/" + . end |
+      if startswith("docker.io/") and (split("/") | length) == 2
+      then sub("^docker.io/"; "docker.io/library/") else . end;
+    if type != "array" then error("missing repository digests")
+    elif any(.[]; type != "string") then error("invalid repository digests")
+    else map(select(test("^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$") and (contains("\n") | not)) |
+      select(repository == ($ref | repository)) |
+      select(($ref | contains("@") | not) or (split("@")[1] == ($ref | split("@")[1])))) |
+      unique | if length == 1 then .[0] else error("missing or ambiguous configured repository digest") end
+    end'
+}
+
+# $1 is a private temporary override consumed by BOTH migration & recreation.
+# Resolve config once, then pull & verify its refs individually: a later tag or
+# .env change cannot change executable application content.
+cosign_verify_images() (
   ensure_cosign || return 1
-  # jq resolves the per-service image out of the compose config JSON below.
-  # Installer provisions jq; retain this check for older/manual installs.
-  # Fail closed rather than use an ambiguous security-critical parser.
-  command -v jq >/dev/null 2>&1 || { log "jq not found — required to resolve target image refs; install it (e.g. 'apt-get install -y jq') and retry. Refusing to update without it."; return 1; }
+  command -v jq >/dev/null 2>&1 || { log "jq not found — required to resolve target image refs; refusing to update"; return 1; }
+  [ "$#" -eq 1 ] && [ -n "$1" ] || { log "verified image override path required"; return 1; }
+  output_file=$1
   config_json=$(compose config --format json 2>/dev/null) || { log "could not read compose config; refusing to update"; return 1; }
-  verified_any=0
+  printf 'services:\n' > "$output_file" || return 1
   for svc in api admin storefront; do
-    ref=$(printf '%s' "$config_json" | jq -r --arg svc "$svc" '.services[$svc].image // empty')
-    if [ -z "$ref" ]; then
-      log "could not resolve the target image for service '${svc}'; refusing to update without verifying it"
-      return 1
-    fi
-    digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
-    if [ -z "$digest" ]; then
-      log "could not resolve a content digest for service '${svc}' (ref: ${ref}); refusing to update without verifying it"
-      return 1
-    fi
+    ref=$(printf '%s' "$config_json" | jq -er --arg svc "$svc" '.services[$svc] | select(.build == null and .pull_policy != "build") | .image | select(type == "string" and length > 0)') || { log "could not resolve target image for ${svc}; refusing to update"; return 1; }
+    case "$ref" in -*) log "invalid image reference for ${svc}"; return 1 ;; esac
+    docker pull "$ref" || { log "pull failed for ${svc}; refusing to update"; return 1; }
+    digest=$(pulled_image_digest "$ref" 2>/dev/null) || { log "could not resolve pulled digest for ${svc}; refusing to update"; return 1; }
+    case "$digest" in ''|*[!A-Za-z0-9._:/@-]*) log "invalid pulled digest for ${svc}"; return 1 ;; esac
+    printf '%s\n' "$digest" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$' || { log "invalid pulled digest for ${svc}; refusing to update"; return 1; }
     if ! cosign verify \
         --certificate-identity-regexp '^https://github.com/Orthic-Labs/sellright/' \
         --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
@@ -618,11 +658,9 @@ cosign_verify_images() {
       log "cosign verify FAILED for ${svc} (${digest}); refusing to update"
       return 1
     fi
-    verified_any=$((verified_any + 1))
+    printf '  %s:\n    image: %s\n' "$svc" "$digest" >> "$output_file" || return 1
   done
-  [ "$verified_any" -eq 3 ] || { log "expected to verify 3 images (api, admin, storefront), verified ${verified_any}"; return 1; }
-  return 0
-}
+)
 
 usage() {
   cat <<'EOF'
