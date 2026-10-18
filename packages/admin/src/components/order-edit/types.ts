@@ -3,7 +3,7 @@ import type { OrderDetail } from '../../api';
 /** Order detail plus the order-editing fields the API adds (G13). */
 export type OrderDetailX = Omit<OrderDetail, 'events'> & {
   paymentStatus?: string;
-  amountDue?: number;
+  amountDue?: number | null;
   adjustments?: { id: string; label: string; amount: number }[];
   shippingOverride?: boolean;
   events: (Omit<OrderDetail['events'][number], 'data'> & { data?: { note?: string; reason?: string | null; changes?: string[]; kind?: string } })[];
@@ -32,7 +32,7 @@ export interface EditContext {
   adjustments: { id: string; label: string; amount: number; actor: string | null; createdAt: string }[];
   shipping: { amount: number; override: boolean; methodCode: string | null };
   shippingMethods: { code: string; name: string; rate: number }[];
-  amountDue: number;
+  amountDue: number | null;
   shippingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   billingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   hasCustomer: boolean;

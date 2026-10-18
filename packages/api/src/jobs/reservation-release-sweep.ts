@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 // Reservation release safety net (PAYMENT-TIMING §5.2, de-fork plan 3.3).
 //
 // Every cancel path requests release (R3) and settles it in the same transaction when provider work is
@@ -34,9 +35,9 @@ export async function reservationReleaseSweep(opts: ReservationSweepOpts = {}): 
     for (const orderId of ids) {
       try {
         const out = await withLockedSet(st.id, { kind: 'order', orderId }, async (tx, held) => {
-          const [o] = await tx.execute(sql`SELECT state FROM "order" WHERE id = ${orderId} AND store_id = ${st.id}`)
-            .then((r) => (r as unknown as { rows: Array<{ state: string }> }).rows);
-          if (!o) return { released: 0, deferred: 0 };
+          const [o] = await tx.execute(sql`SELECT state, metadata FROM "order" WHERE id = ${orderId} AND store_id = ${st.id} FOR UPDATE`)
+            .then((r) => (r as unknown as { rows: Array<{ state: string; metadata: unknown }> }).rows);
+          if (!o || importedFinancialReconciliationRequired(o.metadata)) return { released: 0, deferred: 0 };
           let released = 0;
           let deferred = 0;
           if (o.state === 'Refunded') {

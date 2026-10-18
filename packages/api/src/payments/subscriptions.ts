@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Subscription lifecycle — the issue-then-extend heart (invoice.paid is one frozen
  * settlement operation per invoice; see recordInvoicePaid). A subscription IS a
@@ -198,8 +199,27 @@ async function recordInvoicePaidLocked(tx: Tx, storeId: string, sub: Subscriptio
   }
 
   const [order] = sub.orderId
-    ? await tx.select().from(s.order).where(eq(s.order.id, sub.orderId)).limit(1)
+    ? await tx.select().from(s.order).where(eq(s.order.id, sub.orderId)).limit(1).for('update')
     : [];
+  // A paid invoice is an observed provider fact, even when its backing order cannot be settled.
+  // Keep actual provider amount/currency in the invoice journal; do not infer money from imported headers.
+  if (order && importedFinancialReconciliationRequired(order.metadata)) {
+    await recordSettlementOperation(tx, {
+      storeId, kind: 'stripe_invoice_paid', operationId: invoice.id, orderId: order.id,
+      classification: classificationForBillingReason(invoice.billing_reason) ?? 'unresolved',
+      disposition: 'imported_financial_reconciliation_required',
+      provider: { account: ctx.accountId ?? 'default', mode: ctx.mode ?? 'live', ref: idOf(invoice.payment_intent) ?? invoice.id },
+      mutations: invoice.amount_paid == null ? [] : [{ type: 'invoice_payment_record', row: {
+        storeId, orderId: order.id, stripeAccountId: ctx.accountId ?? 'default', mode: ctx.mode ?? 'live',
+        stripeSubscriptionId: subId, invoiceId: invoice.id, providerRef: idOf(invoice.payment_intent) ?? invoice.id,
+        amount: invoice.amount_paid, currency: invoice.currency?.toUpperCase() ?? null, state: 'Settled',
+        paidAt: epochToDate(invoice.status_transitions?.paid_at), billingReason: invoice.billing_reason ?? null,
+        origin: 'live', disposition: 'imported_financial_reconciliation_required',
+        metadata: { financialReconciliation: 'required', amountPaid: invoice.amount_paid ?? null },
+      } }], effects: [],
+    });
+    return;
+  }
   const [priorFirst] = sub.orderId
     ? await tx.select({ id: s.settlementOperation.id }).from(s.settlementOperation).where(and(
         eq(s.settlementOperation.storeId, storeId), eq(s.settlementOperation.operationKind, 'stripe_invoice_paid'),

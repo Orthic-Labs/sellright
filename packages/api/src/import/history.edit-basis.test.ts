@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { digest } from './artifacts.js';
 import { migrationId } from './context.js';
 import { buildImportedEditBasis, type EditBasisSourceChild, type EditBasisSourceLine, type EditBasisSourceOrder, type EditBasisSourceShippingLine } from './history.js';
+import { importedFinancialReconciliationRequired } from './source-compatibility.js';
 
 const storeId = '11111111-1111-4111-8111-111111111111', sourceKey = 'synthetic-edit-basis';
 const id = (entity: string, source: unknown) => migrationId(storeId, sourceKey, entity, source);
@@ -37,6 +38,57 @@ function detachedFixture() {
 }
 
 describe('imported edit basis source capture', () => {
+  it.each(['unresolved', 'settled-corroborated'])('archives full contradictory history & quarantines money even with settlement proof (%s)', status => {
+    const input = fixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { version: 1, status } });
+    const capture = buildImportedEditBasis(input)[0]!;
+    expect(capture).not.toHaveProperty('editBasisV1');
+    const retained = capture.retainedHistoryV1!;
+    expect(retained).toMatchObject({ reason: 'HEADER_CHARGE_CONTRADICTION', sourceOrderRecord: sourceRecord,
+      header: { subTotal: '9007199254740993', subTotalWithTax: '9007199254740995', shipping: '101', shippingWithTax: '111' },
+      channel: { sourceId: '1', sourceRecord: input.channels[0]!.sourceRecord,
+        orderChannelRecord: input.orderChannels[0]!.sourceRecord },
+      shippingMethods: expect.arrayContaining(input.shippingMethods.map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }))),
+      lines: expect.arrayContaining(input.lines.map(line => ({ sourceId: line.id, orderLineId: id('order-line', line.id), sourceRecord: line.sourceRecord }))),
+      shippingLines: expect.arrayContaining(input.shippingLines.map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }))),
+      referencedDetachedShippingLines: [], surcharges: [{ sourceId: '3', sourceRecord: input.surcharges[0]!.sourceRecord }] });
+    const { sourceDigest, ...payload } = retained;
+    expect(sourceDigest).toBe(digest(payload));
+    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+      reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest });
+    expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
+    const changed = fixture();
+    Object.assign(changed.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status } });
+    changed.lines[0]!.sourceRecord += ' ';
+    expect(buildImportedEditBasis(changed)[0]!.retainedHistoryV1!.sourceDigest).not.toBe(sourceDigest);
+  });
+
+  it('combines detached-source retention with financial quarantine without hiding invalid source facts', () => {
+    const input = detachedFixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unresolved' } });
+    const capture = buildImportedEditBasis(input)[0]!;
+    expect(capture.retainedHistoryV1!.reason).toBe('DETACHED_SHIPPING_LINE');
+    expect(capture.retainedHistoryV1!.referencedDetachedShippingLines).toHaveLength(1);
+    expect(capture.financialReconciliationV1!.sourceDigest).toBe(capture.retainedHistoryV1!.sourceDigest);
+    input.surcharges[0]!.sourceRecord = '{"id":3,"orderId":999}';
+    expect(() => buildImportedEditBasis(input)).toThrow(/ownership mismatch/);
+  });
+
+  it('fails money closed on malformed quarantine markers & leaves normal native/history metadata alone', () => {
+    for (const marker of [null, {}, false, { version: 1, status: 'resolved' }]) {
+      expect(importedFinancialReconciliationRequired({ vendure: { financialReconciliationV1: marker } })).toBe(true);
+    }
+    for (const metadata of [null, {}, { vendure: {} }, { unrelated: { financialReconciliationV1: {} } }]) {
+      expect(importedFinancialReconciliationRequired(metadata)).toBe(false);
+    }
+    const input = fixture();
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'exact-header' } });
+    expect(buildImportedEditBasis(input)[0]).toHaveProperty('editBasisV1');
+    expect(buildImportedEditBasis(input)[0]).not.toHaveProperty('financialReconciliationV1');
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unknown' } });
+    expect(() => buildImportedEditBasis(input)).toThrow(/projection classification/);
+  });
+
   it('retains complete detached history without publishing an operational basis or rewriting raw relations', () => {
     const input = detachedFixture(), exactId = '9007199254740993';
     input.shippingLines[0]!.id = exactId;

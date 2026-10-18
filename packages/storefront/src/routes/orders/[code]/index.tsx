@@ -114,7 +114,7 @@ export default component$(() => {
 				if (!state.method && methods[0]) state.method = methods[0];
 			}
 			// Landing back from Sezzle with nothing due means the attempt settled.
-			if (attempt && !afterPayment && (order.amountDue ?? 0) <= 0 && order.state !== 'PendingPayment') state.justPaid = true;
+			if (attempt && !afterPayment && order.amountDue != null && order.amountDue <= 0 && order.state !== 'PendingPayment') state.justPaid = true;
 		} catch (e) {
 			if (signal?.aborted) return;
 			state.errorStatus = e instanceof SellRightError ? e.status : 0;
@@ -140,7 +140,7 @@ export default component$(() => {
 				try {
 					const o = await getOrder(code, rt, signal);
 					state.order = o;
-					return o.amountDue ?? 0;
+					return o.amountDue ?? null;
 				} catch {
 					return null;
 				}
@@ -189,10 +189,10 @@ export default component$(() => {
 	// Re-minted if that amount moves (the API keys intents on the amount due).
 	useVisibleTask$(async ({ track, cleanup }) => {
 		const method = track(() => state.method);
-		const due = track(() => state.order?.amountDue ?? 0);
+		const due = track(() => state.order?.amountDue ?? null);
 		const locked = track(() => state.intentId);
 		const rt = receiptTokenFrom(loc.url.searchParams);
-		if (method !== 'stripe' || !rt || due <= 0 || locked || state.justPaid) return;
+		if (method !== 'stripe' || !rt || due == null || due <= 0 || locked || state.justPaid) return;
 		if (state.clientSecret && state.intentShownDue === due) return;
 		let stale = false;
 		cleanup(() => { stale = true; });
@@ -226,9 +226,9 @@ export default component$(() => {
 		// Never charge an amount the shopper has not seen: re-read, and stop if it moved.
 		try {
 			const fresh = await getOrder(code, rt);
-			if ((fresh.amountDue ?? 0) !== state.intentShownDue) {
+			if (fresh.amountDue !== state.intentShownDue) {
 				state.order = fresh;
-				state.formError = (fresh.amountDue ?? 0) > 0 ? 'The amount due has changed. Please review it and pay again.' : '';
+				state.formError = fresh.amountDue != null && fresh.amountDue > 0 ? 'The amount due has changed. Please review it and pay again.' : '';
 				return;
 			}
 		} catch {
@@ -243,7 +243,7 @@ export default component$(() => {
 		? 'loading'
 		: balancePageState({ hasToken: !!rt, order: state.order, errorStatus: state.errorStatus, justPaid: state.justPaid });
 	const order = state.order;
-	const due = order?.amountDue ?? 0;
+	const due = order?.amountDue ?? null;
 	const currency = order?.currency;
 	const methods = availableBalanceMethods(state.config);
 	const change = order?.balanceChange;
@@ -298,7 +298,7 @@ export default component$(() => {
 					</div>
 				)}
 
-				{view === 'due' && order && (
+				{view === 'due' && order && due != null && (
 					<div data-testid="balance-state-due">
 						<div class="text-center mb-10">
 							<p class={`${LABEL} mb-3`}>Order #{order.code}</p>

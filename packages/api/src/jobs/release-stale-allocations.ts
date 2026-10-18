@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationPath } from '../import/source-compatibility.js';
 /**
  * Reservation expiry — the "release on timeout" half of the soft-reservation
  * pattern (rulebook: allocate at order-creation + release on timeout; research
@@ -42,6 +43,8 @@ const DEFAULT_BATCH_LIMIT = 200;
 /** Stale-unpaid predicates (shared by the unlocked candidate read and the re-check under the set). */
 function stalePredicate(storeId: string, cutoff: Date, requireDiscovery: boolean) {
   return sql`state = 'PendingPayment' AND created_at < ${cutoff} AND store_id = ${storeId}
+    -- A present marker (including JSON null) holds imported history outside expiry batches.
+    AND (metadata #> ARRAY[${importedFinancialReconciliationPath[0]}, ${importedFinancialReconciliationPath[1]}]::text[]) IS NULL
     AND NOT EXISTS (SELECT 1 FROM payment_attempt pa
       WHERE pa.order_id = "order".id AND pa.store_id = "order".store_id
         AND (pa.status IN ('processing', 'unknown', 'pending')

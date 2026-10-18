@@ -1,3 +1,4 @@
+import { ImportedFinancialReconciliationError } from './orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
@@ -441,6 +442,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // HttpError is the explicit route-level contract for safe client errors.
     // Honor it even when a route is not wrapped in guard(); otherwise a route
     // that correctly throws 400/409/etc. is silently flattened to 500.
+    if (err instanceof ImportedFinancialReconciliationError) return c.json(errorEnvelope(c, err.code, err.message), err.status);
     if (err instanceof HttpError) {
       return c.json(errorEnvelope(c, err.code, err.message, { param: err.param, extra: err.extra }), err.status);
     }

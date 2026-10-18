@@ -1,3 +1,4 @@
+import { ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
 /**
  * Shared building blocks for the admin API surface (split across admin*.ts files
  * as it grows toward Shopify-parity). Auth/role guards, the error wrapper, and
@@ -151,8 +152,8 @@ export async function guard<T>(c: Context, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof HttpError) {
-      return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status) as unknown as T;
+    if (e instanceof HttpError || e instanceof ImportedFinancialReconciliationError) {
+      return c.json(errorEnvelope(c, e.code, e.message, e instanceof HttpError ? { param: e.param, extra: e.extra } : {}), e.status) as unknown as T;
     }
     throw e;
   }

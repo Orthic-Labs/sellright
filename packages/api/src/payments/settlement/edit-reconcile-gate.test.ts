@@ -31,12 +31,12 @@ const effect = { id: 'eff-1', storeId: 's1', operationId: 'op-1', effectKind: 'e
 
 let audits: Record<string, unknown>[];
 /** Selects in handler order: lifecycle state, order row, the order row for the funding check, the order row for the policy gate, reservations. */
-function fakeTx() {
-  const queue: unknown[][] = [[{ state: 'Paid' }], [ORDER], [ORDER], []];
+function fakeTx(metadata: unknown = {}) {
+  const queue: unknown[][] = [[{ state: 'Paid', metadata }], [ORDER], [ORDER], []];
   const chain = (): unknown => {
     const rows = queue.shift() ?? [];
     const c: Record<string, unknown> = {};
-    for (const m of ['from', 'where', 'limit']) c[m] = () => c;
+    for (const m of ['from', 'where', 'limit', 'for']) c[m] = () => c;
     c.then = (resolve: (v: unknown) => unknown) => resolve(rows);
     return c;
   };
@@ -57,6 +57,14 @@ beforeEach(() => {
 });
 
 describe('edit_reconcile issuance gate', () => {
+  it('quarantined Paid order refuses before licence reconciliation or policy calls', async () => {
+    const out = await editReconcile.run(fakeTx({ vendure: { financialReconciliationV1: null } }), effect);
+    expect(out).toEqual({ terminal: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(audits).toEqual([]);
+  });
+
   it('no policy registered (ok, no patch): proceeds, no patch, result identical to before', async () => {
     revalidate.mockResolvedValue({ ok: true });
     const out = await editReconcile.run(fakeTx(), effect);

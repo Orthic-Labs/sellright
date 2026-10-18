@@ -177,7 +177,7 @@ export default function OrderDetailPage() {
   const canMarkDelivered = latestFulfillment?.state === 'Shipped';
   const canEditItems = o.state === 'PendingPayment' || o.state === 'Paid' || o.state === 'PartiallyRefunded';
   const canEditAddress = o.state !== 'Cancelled';
-  const amountDue = o.amountDue ?? 0;
+  const amountDue = o.amountDue;
 
   const openDoc = (kind: 'invoice' | 'packing-slip') => {
     openOrderDocument(o.code, kind).catch((e) => toast.error(kind === 'invoice' ? 'Could not open the invoice' : 'Could not open the packing slip', getErrorMessage(e)));
@@ -192,7 +192,7 @@ export default function OrderDetailPage() {
         subtitle={dateTime(o.placedAt ?? o.createdAt)}
         actions={<div className="flex items-center gap-2">
           <StatusBadge value={o.state} />{latestFulfillment && <StatusBadge value={latestFulfillment.state} />}
-          {amountDue > 0 && <StatusBadge value="balance_due" tone="attention" label="Balance due" />}
+          {amountDue != null && amountDue > 0 && <StatusBadge value="balance_due" tone="attention" label="Balance due" />}
           {canEditItems && !editing && <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}><Pencil size={13} /> Edit order</button>}
           <button className="btn-ghost btn-sm" onClick={() => openDoc('invoice')}><FileText size={13} /> Invoice</button>
           <button className="btn-ghost btn-sm" onClick={() => openDoc('packing-slip')}><Package size={13} /> Packing slip</button>
@@ -379,8 +379,8 @@ export default function OrderDetailPage() {
             onCountryChange={() => undefined} />
 
           <FormSection title="Payment">
-            {amountDue > 0 && <InlineAlert tone="attention" title="Balance due">The customer still owes {money(amountDue, cur)} after an edit. Edit the order to send a pay link or record a payment.</InlineAlert>}
-            {amountDue < 0 && <InlineAlert tone="info" title="Credit">{money(-amountDue, cur)} is owed back to the customer. Use Refund to return it.</InlineAlert>}
+            {amountDue != null && amountDue > 0 && <InlineAlert tone="attention" title="Balance due">The customer still owes {money(amountDue, cur)} after an edit. Edit the order to send a pay link or record a payment.</InlineAlert>}
+            {amountDue != null && amountDue < 0 && <InlineAlert tone="info" title="Credit">{money(-amountDue, cur)} is owed back to the customer. Use Refund to return it.</InlineAlert>}
             {o.payments.length === 0 ? <span className="text-sm text-gray-400">No payments</span> : o.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between text-sm py-1">
                 <span className="capitalize text-gray-600">{p.method}</span>

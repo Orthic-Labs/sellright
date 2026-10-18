@@ -180,6 +180,41 @@ beforeEach(async () => {
 afterEach(wipe);
 afterAll(() => pool.end());
 
+describe('bulk imported financial quarantine', () => {
+  it.each(['bulk-cancel', 'bulk-purge'] as const)('continues %s around a quarantined item without changing its money or stock', async (path) => {
+    const purge = path === 'bulk-purge';
+    await seedOrder({ code: 'O-BEFORE', deleted: purge, allocated: purge ? 0 : 2 });
+    const blocked = await seedOrder({ code: 'O-BLOCKED', deleted: purge, allocated: purge ? 0 : 3, withChildren: purge });
+    await seedOrder({ code: 'O-AFTER', deleted: purge, allocated: purge ? 0 : 1 });
+    const marker = { vendure: { financialReconciliationV1: null } };
+    await withStore(STORE, (tx) => tx.update(s.order).set({ metadata: marker }).where(eq(s.order.id, blocked)));
+
+    const result = await callBulk(path, { codes: ['O-BEFORE', 'O-BLOCKED', 'O-AFTER'] });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ succeeded: 2, skipped: 1, results: [
+      { code: 'O-BEFORE', ok: true },
+      { code: 'O-BLOCKED', ok: false, errorCode: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' },
+      { code: 'O-AFTER', ok: true },
+    ] });
+    expect(await orderState('O-BEFORE')).toBe(purge ? null : 'Cancelled');
+    expect(await orderState('O-AFTER')).toBe(purge ? null : 'Cancelled');
+    expect(await orderState('O-BLOCKED')).toBe('PendingPayment');
+    expect(await stockAllocated()).toBe(purge ? 0 : 3);
+    const retained = await withStore(STORE, async (tx) => {
+      const [order] = await tx.select().from(s.order).where(eq(s.order.id, blocked));
+      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, blocked));
+      const payments = await tx.select().from(s.payment).where(eq(s.payment.orderId, blocked));
+      const audits = await tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, blocked));
+      return { order, lines, payments, audits };
+    });
+    expect(retained.order).toMatchObject({ grandTotal: 1000, metadata: marker });
+    expect(retained.lines).toHaveLength(1);
+    expect(retained.lines[0]!.cancelledQty).toBe(0);
+    expect(retained.payments).toHaveLength(purge ? 1 : 0);
+    expect(retained.audits).toHaveLength(0);
+  });
+});
+
 describe('bulk-cancel', () => {
   it('(1) cancels a PendingPayment order → Cancelled + releases stock', async () => {
     await seedOrder({ code: 'O-CANCEL-1', state: 'PendingPayment', allocated: 3 });

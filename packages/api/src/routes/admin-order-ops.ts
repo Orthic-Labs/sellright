@@ -1,3 +1,4 @@
+import { importedFinancialReconciliationRequired, ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { PassThrough, Readable } from 'node:stream';
 import ExcelJS from 'exceljs';
@@ -46,8 +47,10 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
+type BulkErrorCode = 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' | 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED';
+
 const BulkResult = z.object({
-  results: z.array(z.object({ code: z.string(), ok: z.boolean(), error: z.string().optional(), errorCode: z.literal('ACCOUNT_CREDIT_HOLD_UNRESOLVED').optional() })),
+  results: z.array(z.object({ code: z.string(), ok: z.boolean(), error: z.string().optional(), errorCode: z.enum(['ACCOUNT_CREDIT_HOLD_UNRESOLVED', 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED']).optional() })),
   succeeded: z.number().int(),
   skipped: z.number().int(),
 });
@@ -290,6 +293,10 @@ async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: bo
       continue;
     }
     seen.add(code);
+    if (importedFinancialReconciliationRequired(o.metadata)) {
+      out.push({ ...base, code: o.code, status: 'not_shippable', message: new ImportedFinancialReconciliationError().message, items: [] });
+      continue;
+    }
     const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
     const fulfillments = await tx.select().from(s.fulfillment).where(and(eq(s.fulfillment.orderId, o.id), sql`${s.fulfillment.state} <> 'Cancelled'`)).orderBy(desc(s.fulfillment.createdAt));
     const verdict = classifyTrackingRow(tracking, {
@@ -510,7 +517,7 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'cancel_orders');
     const { codes } = c.req.valid('json');
-    const results: { code: string; ok: boolean; error?: string }[] = [];
+    const results: { code: string; ok: boolean; error?: string; errorCode?: BulkErrorCode }[] = [];
     // PAYMENT-TIMING §3.4: the discovery flag is computed per store before any transaction (no I/O inside one).
     const [bulkStore] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const stripeDiscover = await stripeDiscoverable(st.storeId, bulkStore?.config ?? {});
@@ -519,9 +526,13 @@ adminOrderOps.openapi(
       let stockChanged = false;
       const preId = await orderIdByCode(st.storeId, code);
       // X-46: L0 pay advisory per order (one at a time, never nested across codes), before its lock set.
-      const r = !preId ? { ok: false as const, error: 'order not found' } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
+      const r: { ok: true; orderId: string } | { ok: false; error: string; errorCode?: BulkErrorCode } = !preId ? { ok: false, error: 'order not found' } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true; orderId: string } | { ok: false; error: string; errorCode?: BulkErrorCode }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
+        if (importedFinancialReconciliationRequired(o.metadata)) {
+          const refusal = new ImportedFinancialReconciliationError();
+          return { ok: false, error: refusal.message, errorCode: refusal.code };
+        }
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
         if (o.state === 'Cancelled') return { ok: false, error: 'already cancelled' };
         if (o.state !== 'PendingPayment') return { ok: false, error: `paid order — use Refund (state ${o.state})` };
@@ -556,7 +567,7 @@ adminOrderOps.openapi(
       if (stockChanged) onStockChanged(st.slug);
       // After commit: cancel the order's open Stripe intents (best-effort, audited).
       if (r.ok) await cancelOrderStripeIntents(st.storeId, r.orderId, admin.email);
-      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error, errorCode: r.errorCode });
     }
     const succeeded = results.filter((r) => r.ok).length;
     return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);
@@ -635,17 +646,21 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { codes, force, reason } = c.req.valid('json');
-    const results: { code: string; ok: boolean; error?: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }[] = [];
+    const results: { code: string; ok: boolean; error?: string; errorCode?: BulkErrorCode }[] = [];
     // PAYMENT-TIMING §3.5: the Stripe discovery flag is evaluated before any transaction (no I/O inside one).
     const [purgeStore] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const stripeDiscover = await stripeDiscoverable(st.storeId, purgeStore?.config ?? {});
     for (const code of [...new Set(codes)] as string[]) {
       const preId = await orderIdByCode(st.storeId, code);
-      const r: { ok: true } | { ok: false; error: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' } = !preId
+      const r: { ok: true } | { ok: false; error: string; errorCode?: BulkErrorCode } = !preId
         ? { ok: false, error: 'order not found' }
-        : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }> => {
+        : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string; errorCode?: BulkErrorCode }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
+        if (importedFinancialReconciliationRequired(o.metadata)) {
+          const refusal = new ImportedFinancialReconciliationError();
+          return { ok: false, error: refusal.message, errorCode: refusal.code };
+        }
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before purging' };
         if (await purgeBlockedByReservations(tx, st.storeId, o.id, { stripeDiscoverable: stripeDiscover })) return { ok: false, error: 'Resolve the pending payment before purging' };

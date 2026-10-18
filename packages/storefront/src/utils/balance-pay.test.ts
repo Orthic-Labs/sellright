@@ -13,6 +13,10 @@ describe('balancePageState', () => {
 		expect(balancePageState({ hasToken: true, errorStatus: 500 })).toBe('unavailable');
 		expect(balancePageState({ hasToken: true })).toBe('unavailable');
 	});
+	it('never offers collection or reports settled for an unknown imported balance', () => {
+		expect(balancePageState({ hasToken: true, order: { state: 'Paid', amountDue: null }, justPaid: true })).toBe('unavailable');
+		expect(balancePageState({ hasToken: true, order: { state: 'PartiallyRefunded', amountDue: null } })).toBe('unavailable');
+	});
 	it('is due for Paid / PartiallyRefunded orders with a positive balance', () => {
 		expect(balancePageState({ hasToken: true, order: paid(1000) })).toBe('due');
 		expect(balancePageState({ hasToken: true, order: paid(1, 'PartiallyRefunded') })).toBe('due');
@@ -20,7 +24,7 @@ describe('balancePageState', () => {
 	it('is settled right after paying and nothing-due otherwise', () => {
 		expect(balancePageState({ hasToken: true, order: paid(0), justPaid: true })).toBe('settled');
 		expect(balancePageState({ hasToken: true, order: paid(0) })).toBe('nothing-due');
-		expect(balancePageState({ hasToken: true, order: { state: 'Paid' } })).toBe('nothing-due');
+		expect(balancePageState({ hasToken: true, order: { state: 'Paid' } })).toBe('unavailable');
 	});
 	it('is not-payable for unpaid, cancelled and refunded orders even with a due amount', () => {
 		for (const state of ['PendingPayment', 'Cancelled', 'Refunded']) {

@@ -3,6 +3,12 @@ import { vendureProratedUnitPriceWithTax } from './vendure-money.js';
 import { MAX_CREDIT_CENTS } from '../account-credit/math.js';
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+export const importedFinancialReconciliationPath = ['vendure', 'financialReconciliationV1'] as const;
+/** Presence is a quarantine, including malformed markers. Only a separately
+ * reconciled operational record may regain monetary capabilities. */
+export function importedFinancialReconciliationRequired(metadata: unknown): boolean {
+  return object(metadata) && object(metadata.vendure) && Object.hasOwn(metadata.vendure, 'financialReconciliationV1');
+}
 export function importedSourceMetadata(metadata: unknown) {
   return (metadata as { vendure?: { sourceKey?: unknown; id?: unknown; editBasisV1?: unknown; placedQuantity?: number } } | null)?.vendure;
 }

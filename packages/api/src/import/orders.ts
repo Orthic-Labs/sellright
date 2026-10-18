@@ -140,9 +140,8 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     );
     const selectedSourceOrders = new Set(sourceOrders.map(row => Number(row.id)));
 
-    // Captured money is the strongest evidence when source aggregates disagree:
-    // real DD data has orders whose header subTotalWithTax is stale relative to
-    // their order_lines, while the settled payment matches the lines exactly.
+    // Settlement corroboration is retained diagnostic evidence. It cannot select
+    // reconstructed charges over a contradictory stored source header.
     // Net captured = settled payments - settled refunds, per source order.
     const netPaidByOrder = new Map<number, number>();
     const settlementByOrder = new Map<number, { payments: Array<{ sourceId: string; sourceRecord: string }>;
@@ -229,9 +228,8 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
           sourceHeader: { subTotal: String(o.sub), subTotalWithTax: String(o.subt), shipping: String(o.ship), shippingWithTax: String(o.shipt) },
         } as Record<string, unknown>, contact: { email: o.email } },
         state: mapVendureOrderState(String(o.state)), currency: o.cur ?? 'USD',
-        // Replaced below with line-derived pre-discount subtotal/discount/tax
-        // after exact line reconciliation. Initialize from source header so the
-        // object remains complete while building the line map.
+        // Preserve source header values unless every reconstructed header field
+        // agrees. Settlement corroboration cannot override stored history.
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
         taxTotal: vendureMoneySum([sourceSubTotalWithTax, -sub, shipt, -ship]), grandTotal: vendureMoneySum([sourceSubTotalWithTax, shipt]),
         isPreOrder: o.ispre ?? false,
@@ -293,15 +291,12 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
           adjustmentId: ctx.id('order-adjustment', charge.sourceId), net: charge.net, gross: charge.gross })), shipping,
         ...(projection.status === 'settled-corroborated' ? { settlementProof: { ...settlementByOrder.get(source.vendureOid)!,
           netSettled: String(netPaidByOrder.get(source.vendureOid)) } } : {}) };
-      if (projection.status === 'unresolved') {
-        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order', blocking: true,
-          detail: `order ${row.code}: source header disagrees with reconstructed merchandise, signed surcharges or shipping; net settled payment=${netPaidByOrder.get(source.vendureOid) ?? 'none'} does not corroborate full expected grand=${projection.totals.grandTotal} — source header retained, reconciliation required`,
+      if (projection.status !== 'exact-header') {
+        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order', blocking: false,
+          detail: `order ${row.code}: known_historical_financial_quarantine HEADER_CHARGE_CONTRADICTION; source header retained; reconstructed charges & net settlement are diagnostic only; financial reconciliation required`,
           sourceValues: [JSON.stringify(row.metadata.vendure.chargeProjectionV1)] });
         continue;
       }
-      if (projection.status === 'settled-corroborated') ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order',
-        detail: `order ${row.code}: stale source header; settled payment corroborates full reconstructed merchandise, signed surcharges & shipping — imported getter-derived totals`,
-        sourceValues: [JSON.stringify(row.metadata.vendure.chargeProjectionV1)] });
       Object.assign(row, projection.totals);
       for (const charge of surcharges) adjustmentRows.push({ id: ctx.id('order-adjustment', charge.sourceId),
         storeId: ctx.storeId, orderId: row.id, label: charge.label, amount: charge.net });
@@ -443,7 +438,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
 
     // eslint-disable-next-line no-console
     console.log(JSON.stringify({ store: ctx.storeId, orders: orderRows.length, lines: lineRows.length, payments: payRows.length,
-      moneyReconciled: orderRows.every(row => (row.metadata.vendure.chargeProjectionV1 as { status: string }).status !== 'unresolved') }, null, 2));
+      moneyReconciled: orderRows.every(row => (row.metadata.vendure.chargeProjectionV1 as { status: string }).status === 'exact-header') }, null, 2));
   }
 
 }

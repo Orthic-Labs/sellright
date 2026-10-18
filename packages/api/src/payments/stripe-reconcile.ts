@@ -1,3 +1,4 @@
+import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Stripe settlement fallback + durable PaymentIntent tracking (payments audit
  * D1/D3/D4/D5/D10/D14/D18).
@@ -141,7 +142,10 @@ async function setAttempt(tx: Tx, attempt: Attempt, status: string, extra: { pay
   }).where(eq(s.paymentAttempt.id, attempt.id));
   // PAYMENT-TIMING §5.2: a confirmed provider cancellation is a provider-terminal event. Release the
   // order's requested holds in this transaction (no-op unless the order is terminal and quiescent).
-  if (status === 'cancelled') await releaseOnProviderTerminal(tx, { storeId: attempt.storeId, orderId: attempt.orderId });
+  if (status === 'cancelled') {
+    const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1).for('update');
+    if (order && !importedFinancialReconciliationRequired(order.metadata)) await releaseOnProviderTerminal(tx, { storeId: attempt.storeId, orderId: attempt.orderId });
+  }
 }
 
 /** PAYMENT-TIMING §5.4 / decision X-10: the age after which an unconfirmed PaymentIntent is cancelled at Stripe. */
@@ -176,12 +180,32 @@ async function applyStripeIntentLocked(
   const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
   if (!order) return { outcome: 'ignored' };
   const attempt = await trackStripeIntent(tx, storeId, {
-    orderId: order.id, intentId: pi.id, amount: pi.amount, currency: order.currency, mode, source: 'reconcile',
+    orderId: order.id, intentId: pi.id, amount: pi.amount, currency: importedFinancialReconciliationRequired(order.metadata) ? pi.currency : order.currency, mode, source: 'reconcile',
   });
   if (attempt.orderId !== order.id) return { outcome: 'ignored', orderState: order.state };
   const existing = await stripePaymentFor(tx, pi.id);
   const actor = opts.actor ?? 'system:stripe';
 
+  if (pi.status === 'succeeded' && importedFinancialReconciliationRequired(order.metadata)) {
+    // The imported due is unknown; provider currency & order identity still must match.
+    const verified = verifyIntent(pi, { orderCode: code, amount: pi.amount, currency: order.currency, stripeMode: mode });
+    if (verified.state !== 'Settled') {
+      const observation = { id: pi.id, amount: pi.amount, currency: pi.currency.toUpperCase(), status: pi.status };
+      await setAttempt(tx, attempt, 'unknown', { result: { state: 'Settled', verifyError: verified.errorMessage ?? 'verification failed', providerObservation: observation } });
+      if (attempt.status !== 'unknown') await recordPaymentAlert(tx, storeId, {
+        kind: 'stripe_verify_failed', actor, orderId: order.id, orderCode: code, providerRef: pi.id,
+        amount: pi.amount, currency: pi.currency.toUpperCase(),
+        detail: `Stripe captured this payment but it did not match the imported order (${verified.errorMessage ?? 'verification failed'}). It was not applied.`,
+        data: { orderState: order.state, financialReconciliationRequired: true, providerObservation: observation },
+      });
+      return { outcome: 'verify_failed', orderState: order.state };
+    }
+    const applied = await applyPaymentResult(tx, { storeId, order, method: 'stripe', amount: pi.amount, paymentAttemptId: attempt.id,
+      result: { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: pi.latest_charge ?? null, gateway: { mode }, financialReconciliation: { state: 'required' } } } });
+    const paid = await stripePaymentFor(tx, pi.id);
+    await setAttempt(tx, attempt, 'settled', { paymentId: paid?.id, result: { state: 'Settled', reconciliationRequired: true } });
+    return { outcome: existing?.state === 'Settled' ? 'already_settled' : 'settled', orderState: applied.orderState };
+  }
   if (pi.status === 'succeeded') {
     if (existing?.state === 'Settled') {
       await setAttempt(tx, attempt, 'settled', { paymentId: existing.id });
@@ -422,13 +446,24 @@ async function resolveIntentForCancel(storeId: string, code: string, intentId: s
   const obsKey = { storeId, method: 'stripe', operation: 'intent', providerRef: intentId } as const;
   let pi: StripeIntent = await retrieveStripeIntent(storeId, mode, intentId);
   await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
-  if (pi.status !== 'succeeded' && !HOLD_STATUSES.has(pi.status) && pi.status !== 'canceled') {
-    pi = await cancelStripeIntent(storeId, mode, intentId);
-    // The cancel response is the provider's post-cancel PaymentIntent.
-    await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
-  }
-  return withAdvisoryLock(`pay:${storeId}:${code}`, () =>
-    withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, { actor })));
+  return withAdvisoryLock(`pay:${storeId}:${code}`, async () => {
+    if (pi.status !== 'succeeded' && !HOLD_STATUSES.has(pi.status) && pi.status !== 'canceled') {
+      // Revalidate under the order set immediately before provider mutation; keep HTTP outside row locks.
+      const order = await withStore(storeId, async tx => {
+        const [planned] = await tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.code, code)).limit(1);
+        if (!planned) return null;
+        return withLockedSetInTx(tx, storeId, { kind: 'order', orderId: planned.id }, async () => {
+          const [current] = await tx.select({ state: s.order.state, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, planned.id)).limit(1).for('update');
+          return current ?? null;
+        });
+      });
+      if (!order) return { outcome: 'ignored' as const };
+      if (importedFinancialReconciliationRequired(order.metadata)) return { outcome: 'held' as const, orderState: order.state };
+      pi = await cancelStripeIntent(storeId, mode, intentId);
+      await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
+    }
+    return withStore(storeId, tx => applyStripeIntent(tx, storeId, pi, mode, { actor }));
+  });
 }
 
 /**
@@ -442,6 +477,9 @@ async function resolveIntentForCancel(storeId: string, code: string, intentId: s
  */
 export async function cancelOpenIntentsForOrder(tx: Tx, storeId: string, orderId: string): Promise<{ cancelled: string[]; captured: string[] }> {
   const out = { cancelled: [] as string[], captured: [] as string[] };
+  const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, orderId)).limit(1).for('update');
+  if (!order) return out;
+  assertImportedFinancialReconciliationAllowed(order.metadata);
   const attempts = await tx.select().from(s.paymentAttempt).where(and(
     eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.orderId, orderId),
     eq(s.paymentAttempt.operation, 'intent'), eq(s.paymentAttempt.method, 'stripe'),
@@ -610,13 +648,16 @@ export async function sweepOrphanPreMints(storeId: string, limit: number, log: (
       // with the same amount, never cancel blindly.
       const legacy = intents.filter((pi) => !(pi.metadata as Record<string, string> | null)?.mintKey && pi.amount === attempt.amount);
       if (legacy.length) throw new Error(`untracked PaymentIntent ${legacy[0]!.id} without mint key may be this attempt`);
-      await withStore(storeId, async (tx) => {
+      const cancelled = await withStore(storeId, tx => withLockedSetInTx(tx, storeId, { kind: 'order', orderId }, async () => {
+        const [order] = await tx.select({ metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, orderId)).limit(1).for('update');
+        if (!order || importedFinancialReconciliationRequired(order.metadata)) return false;
         await tx.update(s.paymentAttempt).set({
           status: 'cancelled', result: { orphan: 'no_intent_found', resolved_at: now.toISOString() }, updatedAt: now,
         }).where(and(eq(s.paymentAttempt.id, attempt.id), eq(s.paymentAttempt.status, 'open'), isNull(s.paymentAttempt.providerRef)));
         await releaseOnProviderTerminal(tx, { storeId, orderId });
-      });
-      stats.cancelled++;
+        return true;
+      }));
+      if (cancelled) stats.cancelled++;
     } catch (e) {
       stats.errors++;
       const msg = (e instanceof Error ? e.message : 'error').slice(0, 200);

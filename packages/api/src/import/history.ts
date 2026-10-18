@@ -175,11 +175,23 @@ export function buildImportedEditBasis(input: {
       shippingLines: records(orderShippingLines), surcharges: records(surchargesByOrder.get(sourceOrderId) ?? []),
       lines: sorted(orderLines).map(line => ({ sourceId: line.id,
         orderLineId: lineTargets.get(line.id)!.id, sourceRecord: line.sourceRecord })) };
-    if (detached.length) {
+    const projection = (target.metadata as { vendure: { chargeProjectionV1?: unknown } }).vendure.chargeProjectionV1;
+    const projectionStatus = projection && typeof projection === 'object' && !Array.isArray(projection)
+      ? (projection as { status?: unknown }).status : undefined;
+    if (projection !== undefined && (typeof projectionStatus !== 'string' ||
+        !['exact-header', 'settled-corroborated', 'unresolved'].includes(projectionStatus))) {
+      throw new Error('Invalid imported financial projection classification');
+    }
+    const financialContradiction = projection !== undefined && projectionStatus !== 'exact-header';
+    if (detached.length || financialContradiction) {
       // Archive exact history without granting operational carrier ownership.
-      const retained = { ...payload, reason: 'DETACHED_SHIPPING_LINE' as const,
+      const retained = { ...payload, reason: detached.length ? 'DETACHED_SHIPPING_LINE' as const : 'HEADER_CHARGE_CONTRADICTION' as const,
         referencedDetachedShippingLines: records(detached) };
-      return { orderId: target.id, retainedHistoryV1: { ...retained, sourceDigest: digest(retained) } };
+      const retainedHistoryV1 = { ...retained, sourceDigest: digest(retained) };
+      return { orderId: target.id, retainedHistoryV1, ...(financialContradiction ? {
+        financialReconciliationV1: { version: 1 as const, status: 'required' as const,
+          reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest: retainedHistoryV1.sourceDigest },
+      } : {}) };
     }
     return { orderId: target.id, editBasisV1: { ...payload, sourceDigest: digest(payload) } };
   });
@@ -240,8 +252,10 @@ async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonl
     const vendure = { ...metadata.vendure };
     delete vendure.editBasisV1;
     delete vendure.retainedHistoryV1;
+    delete vendure.financialReconciliationV1;
     if (capture.retainedHistoryV1) vendure.retainedHistoryV1 = capture.retainedHistoryV1;
     else vendure.editBasisV1 = capture.editBasisV1;
+    if (capture.financialReconciliationV1) vendure.financialReconciliationV1 = capture.financialReconciliationV1;
     await ctx.tx.update(s.order).set({ metadata: { ...metadata, vendure } })
       .where(and(eq(s.order.storeId, ctx.storeId), eq(s.order.id, order.id)));
   }

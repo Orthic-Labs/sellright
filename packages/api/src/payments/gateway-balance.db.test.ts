@@ -39,8 +39,12 @@ vi.mock('./gateway-account.js', async (original) => {
 vi.mock('../manifest/stock-hook.js', () => ({ onStockChanged: vi.fn() }));
 
 import { sezzleProvider } from './sezzle.js';
-import { startGatewayPayment, verifyGatewayAttempt } from './gateway-payment.js';
+import { readGatewayAttempt, startGatewayPayment, verifyGatewayAttempt } from './gateway-payment.js';
 import { orders } from '../routes/orders.js';
+import { applyPaymentResult } from './settle.js';
+import { requestRefund } from './refunds.js';
+import { reserve as reserveCredit, restoreRefund as restoreCreditRefund } from '../account-credit/service.js';
+import { previewOrderEdit, saveOrderAddress } from '../orders/order-edit-service.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'gateway-balance.db.test.ts');
@@ -94,6 +98,79 @@ const payments = (orderId: string) => withStore(STORE, (tx) => tx.select().from(
 const attempts = (orderId: string) => withStore(STORE, (tx) => tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, orderId)));
 const start = (code: string, method: 'nmi' | 'sezzle', idempotencyKey: string) => startGatewayPayment({
   storeId: STORE, code, method, config: CONFIG, idempotencyKey, receiptToken: RT, token: method === 'nmi' ? 'tok_1' : undefined,
+});
+
+describe('imported financial quarantine', () => {
+  async function imported(code: string, state: 'PendingPayment' | 'Paid' = 'Paid') {
+    const id = await makeOrder({ code, state, paid: 1500 });
+    await withStore(STORE, tx => tx.update(s.order).set({ metadata: {
+      contact: { email: 'cust@example.test' },
+      vendure: { financialReconciliationV1: { version: 1, status: 'required', reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest: 'retained-source' } },
+    } }).where(eq(s.order.id, id)));
+    return id;
+  }
+
+  it.each(['nmi', 'sezzle'] as const)('rejects %s without attempts, provider calls, or historical money changes', async method => {
+    const id = await imported('QUARANTINED');
+    const before = await orderRow('QUARANTINED');
+    await expect(start('QUARANTINED', method, 'quarantine')).rejects.toMatchObject({ status: 409, code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' });
+    expect(await attempts(id)).toEqual([]);
+    expect(nmiCalls).toEqual([]);
+    expect(sessions).toEqual([]);
+    expect(await orderRow('QUARANTINED')).toEqual(before);
+    expect((await payments(id)).map(row => row.amount)).toEqual([1500]);
+  });
+
+  it('keeps an existing payment attempt readable after quarantine', async () => {
+    const id = await makeOrder({ code: 'ATTEMPT-READ', state: 'Paid', paid: 1500 });
+    const started = await start('ATTEMPT-READ', 'nmi', 'existing-attempt');
+    await withStore(STORE, tx => tx.update(s.order).set({ metadata: { vendure: { financialReconciliationV1: null } } }).where(eq(s.order.id, id)));
+    const before = await attempts(id);
+    expect(await readGatewayAttempt({ storeId: STORE, code: 'ATTEMPT-READ', id: started.attemptId, receiptToken: RT })).toMatchObject({ status: 'settled', method: 'nmi' });
+    expect(await attempts(id)).toEqual(before);
+    expect(nmiCalls).toHaveLength(1);
+  });
+
+  it('blocks edit, refund, reserve, & restoration before resolving unrelated missing money resources', async () => {
+    const id = await imported('GUARDS');
+    const refusal = { status: 409, code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' };
+    await expect(previewOrderEdit(STORE, 'GUARDS', [{ op: 'remove_line', lineId: 'not-an-order-line' }])).rejects.toMatchObject(refusal);
+    await expect(requestRefund({ storeId: STORE, orderId: id, actor: 'test:admin', idempotencyKey: 'quarantine', amount: 100 })).rejects.toMatchObject(refusal);
+    await expect(withStore(STORE, tx => reserveCredit(tx, { storeId: STORE, orderId: id, accountId: STORE, appliedAmount: 100, phase: 'ArrangingPayment' }))).rejects.toMatchObject(refusal);
+    await expect(withStore(STORE, tx => restoreCreditRefund(tx, { storeId: STORE, orderId: id, refundId: STORE }))).rejects.toMatchObject(refusal);
+    expect(await attempts(id)).toEqual([]);
+    expect(nmiCalls).toEqual([]);
+  });
+
+  it('retains actual incoming capture & settlement journal without paying or issuing effects', async () => {
+    const id = await imported('OBSERVATION', 'PendingPayment');
+    const before = await orderRow('OBSERVATION');
+    await withStore(STORE, tx => applyPaymentResult(tx, { storeId: STORE, order: before, method: 'stripe', amount: 777,
+      result: { state: 'Settled', providerRef: 'pi_actual_observation', metadata: { gateway: { mode: 'test' } } } }));
+    expect((await payments(id)).map(row => row.amount).sort((a, b) => a - b)).toEqual([777, 1500]);
+    expect(await orderRow('OBSERVATION')).toEqual(before);
+    const journals = await withStore(STORE, tx => tx.select().from(s.settlementOperation).where(eq(s.settlementOperation.orderId, id)));
+    expect(journals.some(row => row.operationKind === 'payment_settled')).toBe(true);
+    const effects = await withStore(STORE, tx => tx.select().from(s.orderPendingEffect).where(eq(s.orderPendingEffect.storeId, STORE)));
+    expect(effects).toEqual([]);
+  });
+
+  it('keeps source totals, line prices, & same-country address saves available with amount due unknown', async () => {
+    const id = await imported('READABLE');
+    const before = await orderRow('READABLE');
+    await saveOrderAddress({ storeId: STORE, code: 'READABLE', actor: 'test:admin', kind: 'shipping',
+      address: { fullName: 'Ship Er', line1: '2 Main St', line2: null, city: 'Austin', province: 'TX', postalCode: '78701', country: 'US', phone: null } });
+    const response = await orders.request(`/v1/shop/orders/READABLE?rt=${RT}`, { headers: { 'x-store-slug': 'balpay' } });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { grandTotal: number; amountDue: number | null; paymentStatus: string; lines: Array<{ unitPrice: number; lineTotal: number }> };
+    expect(body).toMatchObject({ grandTotal: before.grandTotal, amountDue: null, lines: [{ unitPrice: 2500, lineTotal: 2500 }] });
+    expect(body.paymentStatus).not.toBe('balance_due');
+    const after = await orderRow('READABLE');
+    expect(after.grandTotal).toBe(before.grandTotal);
+    expect(after.metadata).toEqual(before.metadata);
+    expect((after.shippingAddress as { line1: string }).line1).toBe('2 Main St');
+    expect((await payments(id)).map(row => row.amount)).toEqual([1500]);
+  });
 });
 
 describe('NMI balance payment', () => {

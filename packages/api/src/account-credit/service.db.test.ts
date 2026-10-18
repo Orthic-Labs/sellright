@@ -461,8 +461,18 @@ describe('monetary account credit', () => {
     const raw = '{"source-opaque-line":[34,34,33]}';
     await withStore(STORE, tx => tx.update(s.accountCreditTransaction).set({ allocation: raw, operationalAllocation: null }).where(eq(s.accountCreditTransaction.id, redeemRow!.id)));
     const r = await refund(o.order.id, payment.id, o.line.id, 1);
-    await expect(withStore(STORE, tx => restoreRefund(tx, { storeId: STORE, orderId: o.order.id, refundId: r.id }))).rejects.toThrow('Proven credit allocation missing');
-    expect((await entries()).find(row => row.id === redeemRow!.id)?.allocation).toBe(raw);
+    const before = await entries();
+    await expect(withStore(STORE, tx => restoreRefund(tx, { storeId: STORE, orderId: o.order.id, refundId: r.id }))).rejects.toMatchObject({ code: 'allocation' });
+    await expect(withStore(STORE, tx => restoreManual(tx, { storeId: STORE, accountId, orderId: o.order.id,
+      orderLineId: o.line.id, quantity: 1, expectedCents: 34, ...op }))).rejects.toMatchObject({ code: 'allocation' });
+    await expect(withStore(STORE, tx => postEditCreditFunding(tx, { storeId: STORE, orderId: o.order.id,
+      editId: randomUUID(), lines: [] }))).rejects.toMatchObject({ code: 'allocation' });
+    expect(await entries()).toEqual(before);
+    expect((await entries()).find(row => row.id === redeemRow!.id)).toMatchObject({
+      orderId: o.order.id, allocation: raw, operationalAllocation: null, amount: 101, delta: -101,
+    });
+    expect((await account()).balance).toBe(899);
+    expect(await withStore(STORE, tx => previewAvailable(tx, { storeId: STORE, code, currency: 'USD' }))).toBe(899);
   });
   it('replays imported numeric-key restorations by mapped refund identity without restoring next units twice', async () => {
     const o = await order(); await hold(o.order.id); const payment = await settled(o.order.id);

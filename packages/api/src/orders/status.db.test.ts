@@ -194,6 +194,23 @@ describe('balance_due (order edit left money owed) — shared by list SQL, detai
   beforeEach(async () => { await wipe(); await seedStore(); });
   afterAll(async () => { await wipe(); });
 
+  it.each([null, { version: 1, status: 'required' }])('suppresses balance collection in SQL & single/batch facts for marker %j', async marker => {
+    const { loadOrderStatusFacts, loadOrderStatusFactsBatch } = await import('../routes/order-facts.js');
+    const { paymentStatusWithBalanceSql } = await import('./status-sql.js');
+    const id = await seedOrder({ code: 'QUARANTINED-BALANCE', state: 'Paid', payments: ['Settled'] });
+    const metadata = { vendure: { financialReconciliationV1: marker } };
+    await withStore(STORE, tx => tx.execute(sql`UPDATE "order" SET grand_total = 1600, metadata = ${JSON.stringify(metadata)}::jsonb WHERE id = ${id}`));
+    const statuses = await withStore(STORE, async tx => {
+      const o = { id, state: 'Paid' as const, status: 'completed' };
+      const single = await loadOrderStatusFacts(tx, o);
+      const batch = (await loadOrderStatusFactsBatch(tx, [o])).get(id)!;
+      const [row] = await tx.select({ status: paymentStatusWithBalanceSql() }).from(s.order).where(sql`${s.order.id} = ${id}`);
+      return [single.paymentStatus, batch.paymentStatus, row!.status];
+    });
+    expect(statuses).toEqual(['paid', 'paid', 'paid']);
+    expect(await orderStatus(id)).toBe('completed');
+  });
+
   it('single + batch loaders and the SQL twin agree; edit-handed-back refunds are not owed', async () => {
     const { loadOrderStatusFacts, loadOrderStatusFactsBatch } = await import('../routes/order-facts.js');
     const { paymentStatusWithBalanceSql } = await import('./status-sql.js');

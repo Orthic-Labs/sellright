@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { migrationId } from './context.js';
+import { digest } from './artifacts.js';
+import { buildImportedEditBasis } from './history.js';
 import { assertCreditAccountMapping, buildCreditAccounts, buildCreditTransactions, parseCreditAllocation, validateCreditHistory,
   type SourceCredit, type SourceCreditPromotion, type SourceCreditTransaction, type CreditSourceGraph, type CreditTargetGraph } from './account-credit.js';
 import { assertSourceSchema, OPTIONAL_SOURCE_TABLES, REQUIRED_SOURCE_COLUMNS } from './source-schema.js';
@@ -30,6 +32,24 @@ const target = (): CreditTargetGraph => ({ orders: new Map([[id('order', '10'), 
   lines: new Map([[id('order-line', '40'), { id: id('order-line', '40'), storeId, orderId: id('order', '10') }]]),
   refunds: new Map([[id('refund', '50'), { id: id('refund', '50'), storeId, orderId: id('order', '10') }]]) });
 const build = (transactions = [issue(), transaction()], src = source(), dst = target()) => buildCreditTransactions(ctx, [credit()], transactions, src, dst);
+
+function quarantinedMetadata() {
+  const capture = buildImportedEditBasis({ ...ctx, channelId: '1',
+    orders: [{ id: '10', selected: true, sourceRecord: '{"id":10,"exact":900719925474099312345}',
+      subTotal: '100', subTotalWithTax: '100', shipping: '0', shippingWithTax: '0' }],
+    lines: [{ id: '40', orderId: '10', shippingLineId: null, sourceRecord: '{"id":40,"orderId":10,"shippingLineId":null}' }],
+    shippingLines: [], shippingMethods: [], surcharges: [],
+    channels: [{ id: '1', sourceRecord: '{"id":1,"defaultCurrencyCode":"USD","pricesIncludeTax":false,"defaultTaxZoneId":null}' }],
+    orderChannels: [{ orderId: '10', channelId: '1', sourceRecord: '{"orderId":10,"channelId":1}' }],
+    targetOrders: [{ id: id('order', '10'), storeId, metadata: { vendure: { id: 10, sourceKey, chargeProjectionV1: { status: 'unresolved' } } } }],
+    targetLines: [{ id: id('order-line', '40'), storeId, orderId: id('order', '10'), metadata: { vendure: { id: 40 } } }],
+  })[0]!;
+  return { vendure: { id: 10, sourceKey, retainedHistoryV1: capture.retainedHistoryV1!,
+    financialReconciliationV1: capture.financialReconciliationV1! } };
+}
+function quarantinedTarget(metadata: unknown = quarantinedMetadata()): CreditTargetGraph {
+  return { ...target(), orders: new Map([[id('order', '10'), { id: id('order', '10'), storeId, currency: 'USD', metadata }]]) };
+}
 
 describe('monetary credit import', () => {
   it('retains 142 accounts/promotions & 168 historical rows, including 9 zero balances & soft deletion', () => {
@@ -78,7 +98,7 @@ describe('monetary credit import', () => {
     expect(orphan.rows[1]).toMatchObject({ sourceOrderId: '99', orderId: null });
     expect(orphan.exclusions[0]).toMatchObject({ blocking: false, detail: expect.stringContaining('source_order_absent') });
     const absentLine = build([issue(), transaction({ allocation: '{"41":[100]}' })]);
-    expect(absentLine.rows[1]).toMatchObject({ allocation: '{"41":[100]}', operationalAllocation: null, orderId: null });
+    expect(absentLine.rows[1]).toMatchObject({ allocation: '{"41":[100]}', operationalAllocation: null, orderId: id('order', '10') });
     expect(absentLine.exclusions[0]).toMatchObject({ blocking: true, detail: expect.stringContaining('source_allocation_line_absent') });
     const wrongOrder = build([issue(), transaction()], { ...source(), lines: new Map([['40', '11']]) });
     expect(wrongOrder.rows[1]!.operationalAllocation).toBeNull();
@@ -90,6 +110,7 @@ describe('monetary credit import', () => {
 
   it('refuses wrong-store native links, source channel collisions & source related-link account mismatches', () => {
     expect(() => build([issue(), transaction()], source(), { ...target(), orders: new Map([[id('order', '10'), { id: id('order', '10'), storeId: otherStoreId }]]) })).toThrow(/Cross-store/);
+    expect(() => build([issue(), transaction()], source(), { ...target(), orders: new Map([[id('order', '10'), { id: id('order', '11'), storeId }]]) })).toThrow(/wrong-order/);
     expect(() => build([issue(), transaction()], source(), { ...target(), lines: new Map([[id('order-line', '40'), { id: id('order-line', '40'), storeId: otherStoreId, orderId: id('order', '10') }]]) })).toThrow(/Cross-store/);
     expect(() => buildCreditAccounts(ctx, [credit({ channelId: '2' })], [promotion()])).toThrow(/another source channel/);
     expect(() => build([issue(), transaction({ relatedTransactionId: '99' })])).toThrow(/Related source credit/);
@@ -98,6 +119,133 @@ describe('monetary credit import', () => {
     expect(() => assertCreditAccountMapping(ctx, [credit()], [account])).not.toThrow();
     expect(() => assertCreditAccountMapping(ctx, [credit()], [{ ...account, storeId: otherStoreId }])).toThrow(/source\/tenant/);
     expect(() => assertCreditAccountMapping(ctx, [credit()], [{ ...account, sourceKey: 'other-source' }])).toThrow(/source\/tenant/);
+  });
+
+  it('retains a proven historical absent allocation only under full financial quarantine without inventing restoration units', () => {
+    const historical = transaction({ allocation: '{ "41": [60, 40] }' });
+    const metadata = quarantinedMetadata(), before = structuredClone(metadata);
+    const result = build([issue(), historical], source(), quarantinedTarget(metadata));
+    expect(result.rows[1]).toMatchObject({ amount: 100, delta: -100, balanceAfter: 900,
+      orderId: id('order', '10'), sourceOrderId: '10', sourceId: '2',
+      allocation: historical.allocation, operationalAllocation: null, orderLineId: null, refundId: null,
+      sourceRecord: historical.sourceRecord, relatedTransactionId: id('account-credit-transaction', '1'),
+      sourceDigest: digest({ format: 'retained-pg-jsonb-text-v1', transaction: historical.sourceRecord }) });
+    expect(result.rows.reduce((total, row) => total + row.delta!, 0)).toBe(credit().balance);
+    expect(result.exclusions).toEqual([expect.objectContaining({ blocking: false,
+      reason: 'CREDIT_ALLOCATION_LINE_ABSENT', reviewRequired: true,
+      sourceValues: [JSON.stringify({ sourceId: '2', sourceOrderId: '10', missingSourceLineIds: ['41'] })] })]);
+    expect(metadata).toEqual(before);
+    expect(metadata.vendure.retainedHistoryV1.sourceOrderRecord).toContain('900719925474099312345');
+    expect(metadata.vendure.financialReconciliationV1.sourceDigest).toBe(metadata.vendure.retainedHistoryV1.sourceDigest);
+  });
+
+  it('retains exact unlinked posted debits when parent & every allocation line are globally absent', () => {
+    const transactions = [issue(), transaction({ amount: 500, delta: -500, balanceAfter: 500, orderId: '99', allocation: '{ "41": [500] }' }),
+      transaction({ id: '3', amount: 500, delta: -500, balanceAfter: 0, orderId: '100', allocation: '{"42":[250,250]}',
+        relatedTransactionId: '2', sourceRecord: '{"id":3,"opaque":900719925474099312345}' })];
+    const src = source(), dst = target(), before = structuredClone({ src, dst });
+    const result = buildCreditTransactions(ctx, [credit({ balance: 0 })], transactions, src, dst);
+    expect(result.rows.map(row => row.delta)).toEqual([1000, -500, -500]);
+    expect(result.rows.map(row => row.balanceAfter)).toEqual([1000, 500, 0]);
+    expect(result.rows.reduce((total, row) => total + row.delta!, 0)).toBe(0);
+    for (const [index, row] of result.rows.slice(1).entries()) {
+      const raw = transactions[index + 1]!;
+      expect(row).toMatchObject({ sourceOrderId: raw.orderId, sourceId: raw.id,
+        orderId: null, refundId: null, orderLineId: null, operationalAllocation: null,
+        allocation: raw.allocation, sourceRecord: raw.sourceRecord,
+        relatedTransactionId: id('account-credit-transaction', raw.relatedTransactionId),
+        sourceDigest: digest({ format: 'retained-pg-jsonb-text-v1', transaction: raw.sourceRecord }) });
+    }
+    expect(result.exclusions).toHaveLength(4);
+    expect(result.exclusions.every(row => row.blocking === false)).toBe(true);
+    expect(result.exclusions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'SOURCE_ORDER_ABSENT', reviewRequired: true,
+        sourceValues: [JSON.stringify({ sourceId: '2', sourceOrderId: '99' })] }),
+      expect.objectContaining({ reason: 'CREDIT_ALLOCATION_LINE_ABSENT', reviewRequired: true,
+        sourceValues: [JSON.stringify({ sourceId: '3', sourceOrderId: '100', missingSourceLineIds: ['42'] })] }),
+    ]));
+    expect({ src, dst }).toEqual(before);
+  });
+
+  it('does not waive unresolved, present or partially mapped references for unlinked credit history', () => {
+    const historical = transaction({ orderId: '99', allocation: '{"41":[100]}' });
+    const cases = [
+      { tx: historical, src: { ...source(), lines: new Map([['41', null]]) }, dst: target() },
+      { tx: historical, src: { ...source(), lines: new Map([['41', '10']]) }, dst: target() },
+      { tx: historical, src: { ...source(), orders: new Map([['99', { selected: true, hasChannel: true }]]) }, dst: target() },
+      { tx: historical, src: { ...source(), orders: new Map([['99', { selected: false, hasChannel: true }]]) }, dst: target() },
+      { tx: historical, src: source(), dst: { ...target(), orders: new Map([[id('order', '99'), { id: id('order', '99'), storeId: otherStoreId }]]) } },
+      ...[{ quantity: 1 }, { status: 'PENDING' }, { kind: 'RESERVE', status: 'PENDING' },
+        { orderId: null }, { orderLineId: '41' }, { refundId: '50' }]
+        .map(change => ({ tx: { ...historical, ...change }, src: source(), dst: target() })),
+    ];
+    for (const { tx, src, dst } of cases) {
+      const result = build([issue(), tx], src, dst);
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+      expect(result.exclusions).not.toContainEqual(expect.objectContaining({ reason: 'CREDIT_ALLOCATION_LINE_ABSENT' }));
+      expect(result.rows[1]!.operationalAllocation).toBeNull();
+    }
+    const wrongDelta = buildCreditTransactions(ctx, [credit({ balance: 901 })], [issue(), { ...historical, delta: -99 }], source(), target());
+    expect(wrongDelta.exclusions.some(row => row.blocking === true)).toBe(true);
+    const zeroDebit = buildCreditTransactions(ctx, [credit({ balance: 1000 })],
+      [issue(), { ...historical, amount: 0, delta: 0, balanceAfter: 1000, allocation: '{"41":[0]}' }], source(), target());
+    expect(zeroDebit.exclusions.some(row => row.blocking === true)).toBe(true);
+    for (const account of [credit({ channelId: '2' }), credit({ currency: 'EUR' })]) {
+      const result = buildCreditTransactions(ctx, [account], [issue(), historical], source(), target());
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+    }
+    expect(() => build([issue(), { ...historical, allocation: '{"41":[99]}' }])).toThrow(/redemption amount/);
+    expect(() => build([issue(), { ...historical, relatedTransactionId: '99' }])).toThrow(/Related source credit/);
+  });
+
+  it('does not turn unknown allocation or parent evidence into a retained historical exception', () => {
+    const metadata = quarantinedMetadata(), parent = metadata.vendure;
+    const invalidParents: unknown[] = [undefined,
+      { vendure: { ...parent, editBasisV1: {} } },
+      { vendure: { ...parent, sourceKey: 'another-source' } },
+      { vendure: { ...parent, retainedHistoryV1: { ...parent.retainedHistoryV1, sourceOrderRecord: '{"id":10}' } } },
+      { vendure: { ...parent, financialReconciliationV1: { ...parent.financialReconciliationV1, sourceDigest: '0'.repeat(64) } } },
+      { vendure: { ...parent, financialReconciliationV1: { ...parent.financialReconciliationV1, status: 'resolved' } } },
+    ];
+    for (const invalid of invalidParents) {
+      const result = build([issue(), transaction({ allocation: '{"41":[100]}' })], source(), quarantinedTarget(invalid ?? {}));
+      expect(result.rows[1]).toMatchObject({ orderId: id('order', '10'), operationalAllocation: null });
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+      expect(result.exclusions).not.toContainEqual(expect.objectContaining({ reason: 'CREDIT_ALLOCATION_LINE_ABSENT' }));
+    }
+    for (const src of [
+      { ...source(), lines: new Map([['41', null]]) },
+      { ...source(), lines: new Map([['41', '11']]) },
+      { ...source(), lines: new Map([['41', '10']]) },
+    ]) {
+      const result = build([issue(), transaction({ allocation: '{"41":[100]}' })], src, quarantinedTarget());
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+      expect(result.rows[1]!.operationalAllocation).toBeNull();
+    }
+    const mixed = build([issue(), transaction({ allocation: '{"41":[50],"40":[50]}' })],
+      { ...source(), lines: new Map([['40', '11']]) }, quarantinedTarget());
+    expect(mixed.exclusions.some(row => row.blocking === true)).toBe(true);
+    expect(mixed.exclusions).not.toContainEqual(expect.objectContaining({ reason: 'CREDIT_ALLOCATION_LINE_ABSENT' }));
+  });
+
+  it('keeps status, raw references, channel, currency & exact money requirements on retained credit history', () => {
+    for (const change of [{ status: 'PENDING' }, { kind: 'ADJUST' }, { orderLineId: '41' }, { refundId: '50' }]) {
+      const result = build([issue(), transaction({ allocation: '{"41":[100]}', ...change })], source(), quarantinedTarget());
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+      expect(result.exclusions).not.toContainEqual(expect.objectContaining({ reason: 'CREDIT_ALLOCATION_LINE_ABSENT' }));
+    }
+    for (const account of [credit({ channelId: '2' }), credit({ currency: 'EUR' })]) {
+      const result = buildCreditTransactions(ctx, [account], [issue(), transaction({ allocation: '{"41":[100]}' })], source(), quarantinedTarget());
+      expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+    }
+    const wrongCurrency = quarantinedTarget();
+    const parent = wrongCurrency.orders.get(id('order', '10'))!;
+    const result = build([issue(), transaction({ allocation: '{"41":[100]}' })], source(),
+      { ...wrongCurrency, orders: new Map([[parent.id, { ...parent, currency: 'EUR' }]]) });
+    expect(result.exclusions.some(row => row.blocking === true)).toBe(true);
+    expect(() => build([issue(), transaction({ allocation: '{"41":[99]}' })], source(), quarantinedTarget())).toThrow(/redemption amount/);
+    expect(() => build([issue(), transaction({ delta: -99, allocation: '{"41":[100]}' })], source(), quarantinedTarget())).toThrow(/historical deltas/);
+    expect(() => build([issue(), transaction({ relatedTransactionId: '99', allocation: '{"41":[100]}' })], source(), quarantinedTarget())).toThrow(/Related source credit/);
   });
 
   it('keeps currency private truth, disables deleted promos, retains related links & stable source identities', () => {

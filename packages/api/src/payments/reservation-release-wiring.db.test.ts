@@ -271,3 +271,24 @@ describe('R6 — operator override (PAYMENT-TIMING §5.3.3)', () => {
     expect((await reservations(id))[0]!.state).toBe('held');
   });
 });
+
+
+describe('imported financial quarantine holds reservation projections', () => {
+  it.each(['consumed', 'held'])('sweep & direct recovery retain %s holds without invoking projection hooks', async (state) => {
+    const id = await order('RW-QUAR-' + state, 'Paid');
+    await hold(id, 'quarantined-owner', true);
+    if (state === 'consumed') await markPaidAndConsume(id, 'quarantined-owner');
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE "order" SET state = 'Refunded', metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${id}`);
+      await tx.execute(sql`UPDATE order_reservation SET release_requested_at = now(), release_reason = 'order_refunded' WHERE order_id = ${id}`);
+    });
+    let projections = 0;
+    registerPaymentPolicy({ id: 'quarantine-projection-spy', async beforePaymentAttempt() { return { allow: true }; }, async onReservationTransition() { projections++; } });
+    const before = await reservations(id);
+    const direct = await withStore(STORE, (tx) => releaseOnFullRefundInSet(tx, { storeId: STORE, orderId: id }));
+    expect(direct).toEqual({ released: [], deferred: false });
+    expect((await reservationReleaseSweep({})).released).toBe(0);
+    expect(await reservations(id)).toEqual(before);
+    expect(projections).toBe(0);
+  });
+});

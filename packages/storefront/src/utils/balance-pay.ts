@@ -29,9 +29,9 @@ export function balancePageState(input: {
 	const { hasToken, order, errorStatus, justPaid } = input;
 	if (!hasToken) return 'invalid';
 	if (errorStatus === 404 || errorStatus === 401 || errorStatus === 403) return 'invalid';
-	if (!order) return 'unavailable';
+	if (!order || order.amountDue == null) return 'unavailable';
 	if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return 'not-payable';
-	if ((order.amountDue ?? 0) > 0) return 'due';
+	if (order.amountDue > 0) return 'due';
 	return justPaid ? 'settled' : 'nothing-due';
 }
 
