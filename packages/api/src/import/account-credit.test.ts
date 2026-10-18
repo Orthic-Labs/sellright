@@ -44,8 +44,12 @@ function quarantinedMetadata() {
     targetOrders: [{ id: id('order', '10'), storeId, metadata: { vendure: { id: 10, sourceKey, chargeProjectionV1: { status: 'unresolved' } } } }],
     targetLines: [{ id: id('order-line', '40'), storeId, orderId: id('order', '10'), metadata: { vendure: { id: 40 } } }],
   })[0]!;
-  return { vendure: { id: 10, sourceKey, retainedHistoryV1: capture.retainedHistoryV1!,
-    financialReconciliationV1: capture.financialReconciliationV1! } };
+  if (!('retainedHistoryV1' in capture) || !capture.retainedHistoryV1 ||
+      !('financialReconciliationV1' in capture) || !capture.financialReconciliationV1) {
+    throw new Error('Credit quarantine fixture requires retained history & financial reconciliation');
+  }
+  return { vendure: { id: 10, sourceKey, retainedHistoryV1: capture.retainedHistoryV1,
+    financialReconciliationV1: capture.financialReconciliationV1 } };
 }
 function quarantinedTarget(metadata: unknown = quarantinedMetadata()): CreditTargetGraph {
   return { ...target(), orders: new Map([[id('order', '10'), { id: id('order', '10'), storeId, currency: 'USD', metadata }]]) };

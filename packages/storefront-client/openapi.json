@@ -10054,7 +10054,8 @@
                       }
                     },
                     "amountDue": {
-                      "type": "integer"
+                      "type": "integer",
+                      "nullable": true
                     },
                     "balanceChange": {
                       "type": "object",
@@ -13135,6 +13136,12 @@
                           },
                           "error": {
                             "type": "string"
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "enum": [
+                              "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED"
+                            ]
                           }
                         },
                         "required": [
@@ -19410,7 +19417,8 @@
                           "errorCode": {
                             "type": "string",
                             "enum": [
-                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED",
+                              "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED"
                             ]
                           }
                         },
@@ -19500,7 +19508,8 @@
                           "errorCode": {
                             "type": "string",
                             "enum": [
-                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED",
+                              "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED"
                             ]
                           }
                         },
@@ -19590,7 +19599,8 @@
                           "errorCode": {
                             "type": "string",
                             "enum": [
-                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED",
+                              "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED"
                             ]
                           }
                         },
@@ -19688,7 +19698,8 @@
                           "errorCode": {
                             "type": "string",
                             "enum": [
-                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED",
+                              "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED"
                             ]
                           }
                         },

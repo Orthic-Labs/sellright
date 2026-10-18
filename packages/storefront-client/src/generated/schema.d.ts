@@ -6994,6 +6994,7 @@ export interface paths {
                             results: {
                                 code: string;
                                 error?: string;
+                                /** @enum {string} */
                                 errorCode?: "IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED";
                                 fulfillment?: string;
                                 ok: boolean;
