@@ -14,7 +14,10 @@ import {
   bigint,
   timestamp,
   jsonb,
+  check,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { customer, store, ts } from './schema-core.js';
 import { order, payment } from './schema-orders.js';
 
@@ -71,13 +74,15 @@ export const sheeridVerification = pgTable('sheerid_verification', {
 });
 
 // PAR-07: canonical per-store dispute ledger for every provider (stripe | nmi).
-// Unique (store_id, provider, provider_ref) makes provider webhook retries a
-// no-op — the operator email is enqueued only on the FIRST insert.
+// NMI transaction refs are scoped to a signed account & mode. Historical
+// unresolved rows occupy a separate namespace; other providers retain theirs.
 export const dispute = pgTable('dispute', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().notNull().references(() => store.id),
   provider: text().notNull(), // 'stripe' | 'nmi'
   providerRef: text().notNull(), // Stripe dispute id (dp_…) / NMI chargeback txn id
+  gatewayAccount: text(),
+  gatewayMode: text(),
   paymentId: uuid().references(() => payment.id),
   orderId: uuid().references(() => order.id),
   amount: integer(), // cents when known; NMI reports dollars — parsed to cents at ingest
@@ -88,4 +93,13 @@ export const dispute = pgTable('dispute', {
   notifiedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: ts(),
-});
+}, t => [
+  check('dispute_gateway_identity_check', sql`(${t.gatewayAccount} IS NULL AND ${t.gatewayMode} IS NULL) OR
+    (${t.provider} = 'nmi' AND ${t.gatewayAccount} IS NOT NULL AND btrim(${t.gatewayAccount}) <> ''
+      AND ${t.gatewayMode} IS NOT NULL AND ${t.gatewayMode} IN ('test', 'live'))`),
+  uniqueIndex('dispute_provider_ref_key').on(t.storeId, t.provider, t.providerRef).where(sql`${t.provider} <> 'nmi'`),
+  uniqueIndex('dispute_nmi_identity_key').on(t.storeId, t.provider, t.gatewayAccount, t.gatewayMode, t.providerRef)
+    .where(sql`${t.provider} = 'nmi' AND ${t.gatewayAccount} IS NOT NULL AND ${t.gatewayMode} IS NOT NULL`),
+  uniqueIndex('dispute_nmi_unresolved_key').on(t.storeId, t.provider, t.providerRef)
+    .where(sql`${t.provider} = 'nmi' AND ${t.gatewayAccount} IS NULL AND ${t.gatewayMode} IS NULL`),
+]);

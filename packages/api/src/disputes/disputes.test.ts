@@ -41,6 +41,17 @@ describe('nmiAmountToCents', () => {
   });
 });
 
+describe('recordDispute identity admission', () => {
+  it.each([
+    {}, { gatewayAccount: 'account' }, { gatewayMode: 'live' },
+    { gatewayAccount: '', gatewayMode: 'live' }, { gatewayAccount: '   ', gatewayMode: 'live' },
+    { gatewayAccount: 'account', gatewayMode: 'sandbox' },
+  ])('rejects incomplete NMI identity before touching a transaction: %j', async identity => {
+    await expect(recordDispute({} as Parameters<typeof recordDispute>[0], STORE,
+      { provider: 'nmi', providerRef: 'ref', ...identity } as never)).rejects.toThrow('authenticated gateway account and mode');
+  });
+});
+
 // ── DB-gated: recordDispute persistence + operator email dedupe ──────────────
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 const isTestDb = isDisposablePostgresUrl(DB);
@@ -101,7 +112,7 @@ describe.skipIf(!isTestDb)('recordDispute — DB integration', () => {
     const { orderId } = await seedOrderPayment();
 
     const res = await withStore(STORE, (tx) => recordDispute(tx, STORE, {
-      provider: 'nmi', providerRef: 'txn-cb-1', orderId, orderCode: 'DSP-1',
+      provider: 'nmi', providerRef: 'txn-cb-1', gatewayAccount: 'account', gatewayMode: 'live', orderId, orderCode: 'DSP-1',
       amountCents: 4200, currency: 'USD', reason: 'fraudulent', status: 'open',
     }));
     expect(res.created).toBe(true);
@@ -122,7 +133,7 @@ describe.skipIf(!isTestDb)('recordDispute — DB integration', () => {
 
     // Provider retry — same (provider, providerRef): no row, no email.
     const retry = await withStore(STORE, (tx) => recordDispute(tx, STORE, {
-      provider: 'nmi', providerRef: 'txn-cb-1', orderId, orderCode: 'DSP-1', amountCents: 4200, reason: 'fraudulent',
+      provider: 'nmi', providerRef: 'txn-cb-1', gatewayAccount: 'account', gatewayMode: 'live', orderId, orderCode: 'DSP-1', amountCents: 4200, reason: 'fraudulent',
     }));
     expect(retry.created).toBe(false);
     expect(retry.notified).toBe(0);
@@ -159,11 +170,29 @@ describe.skipIf(!isTestDb)('recordDispute — DB integration', () => {
   it('a dispute with no operator recipients still persists (email skipped, never blocks)', async () => {
     await seedStore();
     const res = await withStore(STORE, (tx) => recordDispute(tx, STORE, {
-      provider: 'nmi', providerRef: 'txn-cb-2', amountCents: 100, reason: 'general',
+      provider: 'nmi', providerRef: 'txn-cb-2', gatewayAccount: 'account', gatewayMode: 'live', amountCents: 100, reason: 'general',
     }));
     expect(res.created).toBe(true);
     expect(res.notified).toBe(0);
     expect(await disputeRows()).toHaveLength(1);
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it('rolls back event claim, dispute, audit, webhook & alert together', async () => {
+    await seedStore({ notifications: { disputeEmail: 'ops@x.test' } });
+    await withStore(STORE, tx => tx.execute(sql`INSERT INTO webhook_endpoint (store_id, url, secret, topics)
+      VALUES (${STORE}, 'https://example.test/disputes', 'synthetic', ARRAY['order.dispute_opened'])`));
+    await expect(withStore(STORE, async tx => {
+      await tx.execute(sql`INSERT INTO processed_event (id, store_id, type) VALUES ('nmi:v2:rollback', ${STORE}, 'chargeback.batch.complete')`);
+      await recordDispute(tx, STORE, { provider: 'nmi', providerRef: 'txn-rollback', gatewayAccount: 'account', gatewayMode: 'live' });
+      throw new Error('synthetic transaction failure');
+    })).rejects.toThrow('synthetic transaction failure');
+    const counts = await withStore(STORE, tx => tx.execute(sql`SELECT
+      (SELECT count(*)::int FROM processed_event WHERE id = 'nmi:v2:rollback') AS claims,
+      (SELECT count(*)::int FROM dispute) AS disputes,
+      (SELECT count(*)::int FROM audit_log WHERE action = 'dispute_opened') AS audits,
+      (SELECT count(*)::int FROM webhook_delivery) AS deliveries,
+      (SELECT count(*)::int FROM email_outbox) AS emails`));
+    expect(counts.rows).toEqual([{ claims: 0, disputes: 0, audits: 0, deliveries: 0, emails: 0 }]);
   });
 });
