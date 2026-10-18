@@ -5,6 +5,7 @@
  * against a *_test database.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stripeState = new Map<string, Record<string, unknown>>();
@@ -116,7 +117,7 @@ describe('imported financial quarantine in Stripe recovery', () => {
     const snapshot = pi('pi_quarantine_cancel', order.code);
     const { retrieveStripeIntent } = await import('./stripe.js');
     vi.mocked(retrieveStripeIntent).mockImplementationOnce(async () => {
-      await q(tx => tx.update(s.order).set({ metadata: { vendure: { financialReconciliationV1: null } } }).where(eq(s.order.id, order.id)));
+      await q(tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, order.id)));
       return snapshot;
     });
     const now = new Date(Date.now() + 120 * 60_000);
@@ -135,7 +136,7 @@ describe('imported financial quarantine in Stripe recovery', () => {
 
   it('retains mismatched observed provider currency without fabricating an order-currency settlement', async () => {
     const { order } = await makeOrder();
-    await q(tx => tx.update(s.order).set({ metadata: { vendure: { financialReconciliationV1: null } } }).where(eq(s.order.id, order.id)));
+    await q(tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, order.id)));
     await track(order.id, 'pi_quarantine_eur');
     pi('pi_quarantine_eur', order.code, { status: 'succeeded', amount: 1300, currency: 'eur' });
     const before = await orderOf(order.id);

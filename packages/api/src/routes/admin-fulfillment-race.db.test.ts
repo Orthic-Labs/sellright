@@ -1,5 +1,6 @@
 /** Real PostgreSQL contention: full fulfillment consumes each reserved unit once. */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -191,7 +192,7 @@ describe('serialized full fulfillment', () => {
 
 describe('quarantined imported orders cannot ship or consume stock', () => {
   it.each(['single', 'partial', 'tracking'])('%s refuses before fulfillment, stock, notification or audit effects', async (mode) => {
-    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = metadata || '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = metadata || ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
     const before = await persisted();
     const response = mode === 'single' ? await fulfill('single') : await app.request(
       mode === 'partial' ? `/v1/admin/orders/${CODE}/fulfillments` : '/v1/admin/import-tracking', {
@@ -212,7 +213,7 @@ describe('quarantined imported orders cannot ship or consume stock', () => {
 
   it('bulk fulfillment continues around a quarantined item without shipping its units', async () => {
     await withStore(STORE, async (tx) => {
-      await tx.execute(sql`UPDATE "order" SET metadata = metadata || '{"vendure":{"financialReconciliationV1":false}}'::jsonb WHERE id = ${orderId}`);
+      await tx.execute(sql`UPDATE "order" SET metadata = metadata || ${JSON.stringify(financialReconciliationMetadata(false))}::jsonb WHERE id = ${orderId}`);
       for (const code of ['NORMAL-BEFORE', 'NORMAL-AFTER']) {
         const row = await tx.execute(sql`INSERT INTO "order" (store_id, code, state, currency, grand_total) VALUES (${STORE}, ${code}, 'Paid', 'USD', 1000) RETURNING id`);
         const id = (row.rows[0] as { id: string }).id;

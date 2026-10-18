@@ -27,6 +27,7 @@
  *      (not the order id), distinct from the direct-refund key shape.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { finalizeRefund } from '../payments/refunds.js';
 import type { RefundResult } from '../payments/provider.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -329,7 +330,7 @@ describe('POST /v1/admin/returns/{id}/approve — the Returns page "Restock" cho
   it('refuses quarantined approval before updating return lines or calling a provider', async () => {
     const { orderId, lineId } = await seedPaidOrder('SR-RET-QUARANTINE');
     const id = await createReturn('SR-RET-QUARANTINE', lineId, 1);
-    await withStore(STORE, tx => tx.execute(sql`UPDATE "order" SET metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE, tx => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
     const result = await approveReturn(id, { restock: false });
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ error: { code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' } });
@@ -442,7 +443,7 @@ describe('durable refund reservations', () => {
     refundImpl = async () => ({ state: 'Pending', providerRef: 're_observed_quarantine' });
     expect((await refundOrder('SR-OBSERVED-QUARANTINE', { amount: 2000, restock: true, lines: [{ orderLineId: lineId, quantity: 1 }] })).status).toBe(200);
     const attemptId = await withStore(STORE, async tx => {
-      await tx.execute(sql`UPDATE "order" SET metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id=${orderId}`);
+      await tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id=${orderId}`);
       const row = await tx.execute(sql`SELECT attempt_id FROM refund WHERE order_id=${orderId}`);
       return (row.rows[0] as { attempt_id: string }).attempt_id;
     });

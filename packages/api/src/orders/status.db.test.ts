@@ -18,6 +18,7 @@
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -198,7 +199,7 @@ describe('balance_due (order edit left money owed) — shared by list SQL, detai
     const { loadOrderStatusFacts, loadOrderStatusFactsBatch } = await import('../routes/order-facts.js');
     const { paymentStatusWithBalanceSql } = await import('./status-sql.js');
     const id = await seedOrder({ code: 'QUARANTINED-BALANCE', state: 'Paid', payments: ['Settled'] });
-    const metadata = { vendure: { financialReconciliationV1: marker } };
+    const metadata = financialReconciliationMetadata(marker);
     await withStore(STORE, tx => tx.execute(sql`UPDATE "order" SET grand_total = 1600, metadata = ${JSON.stringify(metadata)}::jsonb WHERE id = ${id}`));
     const statuses = await withStore(STORE, async tx => {
       const o = { id, state: 'Paid' as const, status: 'completed' };

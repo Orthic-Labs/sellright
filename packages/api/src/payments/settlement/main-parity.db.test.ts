@@ -4,6 +4,7 @@
  * against the settlement chokepoint. Runs against a *_test database only (truncates).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -188,7 +189,7 @@ describe('imported financial quarantine preserves invoices without fulfillment',
     const { orderId } = await seedOrder({ code: 'QUAR-INVOICE' });
     await seedSubscription(orderId);
     if (reason === 'subscription_cycle') await deliver(invoice('in_before', 'subscription_create', 'pi_before'));
-    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
     const beforeOrder = await orderRow(orderId);
     const beforeLicences = await licences();
     const beforePayments = await payments();
@@ -208,7 +209,7 @@ describe('imported financial quarantine preserves invoices without fulfillment',
 
   it('settlement chokepoint keeps captured money while suppressing a requested Paid transition & fanout', async () => {
     const { orderId } = await seedOrder({ code: 'QUAR-CHOKE' });
-    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = '{"vendure":{"financialReconciliationV1":false}}'::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(false))}::jsonb WHERE id = ${orderId}`));
     const before = await orderRow(orderId);
     await withStore(STORE, (tx) => recordSettlementOperation(tx, {
       storeId: STORE, kind: 'order_paid_transition', operationId: orderId, orderId,
@@ -238,7 +239,7 @@ describe('imported financial quarantine preserves invoices without fulfillment',
         { kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } },
       ]);
     });
-    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${orderId}`));
     let policyCalls = 0;
     registerPaymentPolicy({ id: 'queued-quarantine-spy', async beforePaymentAttempt() { return { allow: true }; },
       async authorizeInvoiceEffect() { policyCalls++; throw new Error('unexpected authorization'); },

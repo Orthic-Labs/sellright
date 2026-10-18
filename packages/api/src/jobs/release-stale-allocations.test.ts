@@ -10,6 +10,7 @@
  * false), so the shared DB is safe between files.
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Zero-cache stock rule (this task): releasing allocated stock must trigger an
@@ -111,7 +112,7 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
   it.each([null, false, { status: 'resolved' }])('quarantined oldest history never consumes batch capacity or starves later normal orders: %j', async (marker) => {
     await seedStoreAndStock(15);
     const blocked = await seedStaleOrder('HISTORY-BLOCKED', 5);
-    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET created_at = now() - interval '4 hours', metadata = ${JSON.stringify({ vendure: { financialReconciliationV1: marker } })}::jsonb WHERE id = ${blocked}`));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET created_at = now() - interval '4 hours', metadata = ${JSON.stringify(financialReconciliationMetadata(marker))}::jsonb WHERE id = ${blocked}`));
     await seedStaleOrder('STALE-NORMAL-A', 5);
     await seedStaleOrder('STALE-NORMAL-B', 5);
     const snapshot = () => withStore(STORE, async (tx) => ({

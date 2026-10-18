@@ -20,6 +20,7 @@
  *   7. purge refuses a Paid order without force
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -186,7 +187,7 @@ describe('bulk imported financial quarantine', () => {
     await seedOrder({ code: 'O-BEFORE', deleted: purge, allocated: purge ? 0 : 2 });
     const blocked = await seedOrder({ code: 'O-BLOCKED', deleted: purge, allocated: purge ? 0 : 3, withChildren: purge });
     await seedOrder({ code: 'O-AFTER', deleted: purge, allocated: purge ? 0 : 1 });
-    const marker = { vendure: { financialReconciliationV1: null } };
+    const marker = financialReconciliationMetadata(null);
     await withStore(STORE, (tx) => tx.update(s.order).set({ metadata: marker }).where(eq(s.order.id, blocked)));
 
     const result = await callBulk(path, { codes: ['O-BEFORE', 'O-BLOCKED', 'O-AFTER'] });

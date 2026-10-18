@@ -2,6 +2,7 @@
 // Route-level cases drive the real handlers (admin cancel, bulk cancel, operator override) under an admin session;
 // the R5 and sweep cases drive the service and the job. DB-gated: *_test only.
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -279,7 +280,7 @@ describe('imported financial quarantine holds reservation projections', () => {
     await hold(id, 'quarantined-owner', true);
     if (state === 'consumed') await markPaidAndConsume(id, 'quarantined-owner');
     await withStore(STORE, async (tx) => {
-      await tx.execute(sql`UPDATE "order" SET state = 'Refunded', metadata = '{"vendure":{"financialReconciliationV1":null}}'::jsonb WHERE id = ${id}`);
+      await tx.execute(sql`UPDATE "order" SET state = 'Refunded', metadata = ${JSON.stringify(financialReconciliationMetadata(null))}::jsonb WHERE id = ${id}`);
       await tx.execute(sql`UPDATE order_reservation SET release_requested_at = now(), release_reason = 'order_refunded' WHERE order_id = ${id}`);
     });
     let projections = 0;

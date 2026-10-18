@@ -2,6 +2,7 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Tx } from '../../db/client.js';
+import { financialReconciliationMetadata } from '../../import/financial-reconciliation.testkit.js';
 import type { HeldLocks } from '../../db/locks.js';
 
 const assertHeld = vi.fn(async () => undefined);
@@ -74,7 +75,7 @@ describe('runBeforePaymentAttempt', () => {
     const hook = vi.fn(async () => ({ allow: true as const, reserve: [{ kind: 'test', ownerKey: 'one' }] }));
     registerPaymentPolicy({ id: 'would-reserve', beforePaymentAttempt: hook });
     await expect(runBeforePaymentAttempt(fakeTx, { ...input, provider,
-      order: { ...input.order, metadata: { vendure: { financialReconciliationV1: null } } },
+      order: { ...input.order, metadata: financialReconciliationMetadata(null) },
     })).rejects.toMatchObject({ status: 409, code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' });
     expect(hook).not.toHaveBeenCalled();
     expect(executed).toEqual([]);
@@ -84,7 +85,7 @@ describe('runBeforePaymentAttempt', () => {
     const capture = vi.fn(async () => ({ action: 'capture' as const }));
     registerPaymentPolicy({ id: 'capture', beforePaymentAttempt: async () => ({ allow: true }), beforeCapture: capture });
     await expect(runBeforeCapture(fakeTx, {
-      provider: 'sezzle', order: { ...input.order, metadata: { vendure: { financialReconciliationV1: { version: 1, status: 'required' } } } },
+      provider: 'sezzle', order: { ...input.order, metadata: financialReconciliationMetadata({ version: 1, status: 'required' }) },
       attempt: { id: 'a', amount: 100, currency: 'USD', providerRef: 'provider-observed' }, reservations: [], held: input.held,
     })).rejects.toMatchObject({ status: 409, code: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' });
     expect(capture).not.toHaveBeenCalled();

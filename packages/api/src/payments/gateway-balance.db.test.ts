@@ -7,6 +7,7 @@
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -105,7 +106,7 @@ describe('imported financial quarantine', () => {
     const id = await makeOrder({ code, state, paid: 1500 });
     await withStore(STORE, tx => tx.update(s.order).set({ metadata: {
       contact: { email: 'cust@example.test' },
-      vendure: { financialReconciliationV1: { version: 1, status: 'required', reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest: 'retained-source' } },
+      ...financialReconciliationMetadata({ version: 1, status: 'required', reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest: 'retained-source' }),
     } }).where(eq(s.order.id, id)));
     return id;
   }
@@ -124,7 +125,7 @@ describe('imported financial quarantine', () => {
   it('keeps an existing payment attempt readable after quarantine', async () => {
     const id = await makeOrder({ code: 'ATTEMPT-READ', state: 'Paid', paid: 1500 });
     const started = await start('ATTEMPT-READ', 'nmi', 'existing-attempt');
-    await withStore(STORE, tx => tx.update(s.order).set({ metadata: { vendure: { financialReconciliationV1: null } } }).where(eq(s.order.id, id)));
+    await withStore(STORE, tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, id)));
     const before = await attempts(id);
     expect(await readGatewayAttempt({ storeId: STORE, code: 'ATTEMPT-READ', id: started.attemptId, receiptToken: RT })).toMatchObject({ status: 'settled', method: 'nmi' });
     expect(await attempts(id)).toEqual(before);

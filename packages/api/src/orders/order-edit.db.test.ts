@@ -18,7 +18,7 @@ import * as s from '../db/schema.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { derivePaymentStatus } from './status.js';
-import { retainedDetachedHistoryFixture } from '../import/retained-history-fixture.js';
+import { retainedDetachedHistoryFixture } from '../import/retained-history-fixture.testkit.js';
 
 const refundCalls: Array<{ providerRef: string | null; amount: number; idempotencyKey?: string }> = [];
 const chargeCalls: Array<{ orderCode: string; amount: number }> = [];

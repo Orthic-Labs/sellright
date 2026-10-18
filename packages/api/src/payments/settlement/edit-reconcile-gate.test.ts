@@ -1,6 +1,7 @@
 // edit_reconcile gates NEW licence issuance through revalidateForIssuance (PAYMENT-TIMING §4.3); pure, no database.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Tx } from '../../db/client.js';
+import { financialReconciliationMetadata } from '../../import/financial-reconciliation.testkit.js';
 import type { EffectRow } from './effects.js';
 
 const HELD = {} as never;
@@ -58,7 +59,7 @@ beforeEach(() => {
 
 describe('edit_reconcile issuance gate', () => {
   it('quarantined Paid order refuses before licence reconciliation or policy calls', async () => {
-    const out = await editReconcile.run(fakeTx({ vendure: { financialReconciliationV1: null } }), effect);
+    const out = await editReconcile.run(fakeTx(financialReconciliationMetadata(null)), effect);
     expect(out).toEqual({ terminal: 'IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED' });
     expect(reconcile).not.toHaveBeenCalled();
     expect(revalidate).not.toHaveBeenCalled();
