@@ -128,7 +128,7 @@ describe('request-id middleware', () => {
     expect(access.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('logs the matched route TEMPLATE, never a token carried in the path; unmatched paths are redacted (incl. %-encoding)', async () => {
+  it('logs the matched route TEMPLATE, with a fixed sentinel for unmatched paths', async () => {
     const { requestIdMiddleware, accessLogMiddleware } = await import('./request-id.js');
     const app = new Hono();
     app.use('*', requestIdMiddleware());
@@ -143,7 +143,30 @@ describe('request-id middleware', () => {
     expect(all).not.toContain('Zx9abc');
     const parsed = all.split('\n').filter(Boolean).map((l) => JSON.parse(l));
     expect(parsed.find((p) => p.requestId === 'req-tpl-1')!.path).toBe('/v1/shop/subscriber/confirm/:token');
-    expect(parsed.find((p) => p.requestId === 'req-tpl-2')!.path).toBe('/v1/nowhere/:redacted');
-    expect(parsed.find((p) => p.requestId === 'req-tpl-3')!.path).toBe('/v1/nowhere/:redacted');
+    expect(parsed.find((p) => p.requestId === 'req-tpl-2')!.path).toBe('<unmatched>');
+    expect(parsed.find((p) => p.requestId === 'req-tpl-3')!.path).toBe('<unmatched>');
+  });
+
+  it.each([
+    { label: 'short alphabetic segment', path: '/v1/nowhere/alpha' },
+    { label: '24-letter segment', path: '/v1/nowhere/abcdefghijklmnopqrstuvwx' },
+    { label: 'percent-encoded segment', path: '/v1/nowhere/%61%6c%70%68%61' },
+    { label: 'nested percent-encoding', path: '/v1/nowhere/%2561%256c%2570%2568%2561' },
+  ])('logs no unmatched path content for $label while preserving request metrics', async ({ path }) => {
+    const { requestIdMiddleware, accessLogMiddleware } = await import('./request-id.js');
+    const app = new Hono();
+    app.use('*', requestIdMiddleware());
+    app.use('*', accessLogMiddleware());
+    app.get('/probe', (c) => c.json({ ok: true }));
+
+    const res = await app.request(path, { headers: { 'x-request-id': 'req-unmatched' } });
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get('x-request-id')).toBe('req-unmatched');
+    const access = captured.join('').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      .find((line) => line.msg === 'request' && line.requestId === 'req-unmatched');
+    expect(access).toMatchObject({ requestId: 'req-unmatched', method: 'GET', path: '<unmatched>', status: 404 });
+    expect(typeof access.durationMs).toBe('number');
+    expect(access.durationMs).toBeGreaterThanOrEqual(0);
   });
 });
