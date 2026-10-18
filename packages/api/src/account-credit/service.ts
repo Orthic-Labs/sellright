@@ -10,6 +10,9 @@ import type { Tx } from '../db/client.js';
 import { lockOrderRowsInTx } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
+import { buildImportedCreditOrigin, decodeCreditPricingOrigin, isImportedCreditOrigin } from '../money/imported-credit-origin.js';
+import { assertNoPendingOrderEdit, isPendingEditStage, readEditStageProposal } from '../orders/edit-stage.js';
+import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
 import { err as logger } from '../lib/logger.js';
 import { assertCents, availableCredit, equalAllocation, MAX_CREDIT_CENTS, normalizeCreditEmail, validateAllocation } from './math.js';
 import { planCreditUnitReturn, planEditCreditFunding, readCreditFundingState, readCreditUnitReturns, readCreditRefundEvidence, creditReturnSnapshotDigest, type EditFundingInput, type EditFundingPosting } from './edit-funding.js';
@@ -86,6 +89,7 @@ async function setBalance(tx: Tx, account: CreditAccount, balance: number) {
   return updated!;
 }
 function conflict(message: string): never { throw new AccountCreditError('conflict', message); }
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /** Includes disabled accounts so a code can release its own hold after disabling. */
 export async function findByCode(tx: Tx, input: { storeId: string; code: string; now?: Date; includeInactive?: boolean }) {
@@ -297,17 +301,125 @@ export async function readCreditFundingEvidence(tx: Tx, input: { storeId: string
 export async function readCurrentCreditEvidence(tx: Tx, input: { storeId: string; orderId: string }) {
   const funding = await readCreditFundingEvidence(tx, input);
   if (!funding) return null;
+  const [account] = await tx.select().from(s.accountCredit).where(and(eq(s.accountCredit.storeId, input.storeId), eq(s.accountCredit.id, funding.redemption.accountCreditId)));
+  if (!account) throw new AccountCreditError('allocation', 'Credit source account is missing');
+  const [promotion] = await tx.select({ id: s.promotion.id, storeId: s.promotion.storeId, type: s.promotion.type }).from(s.promotion)
+    .where(and(eq(s.promotion.storeId, input.storeId), eq(s.promotion.id, account.promotionId)));
+  if (!promotion || promotion.type !== 'account_credit') throw new AccountCreditError('allocation', 'Credit source promotion linkage differs');
+  const importedSource = account.sourceKey !== null || account.sourceId !== null || funding.redemption.sourceKey !== null || funding.redemption.sourceId !== null ? {
+    accountSource: { id: account.id, storeId: account.storeId, promotionId: account.promotionId, currency: account.currency,
+      sourceKey: account.sourceKey, sourceId: account.sourceId, sourceRecord: account.sourceRecord,
+      sourcePromotionRecord: account.sourcePromotionRecord, sourceDigest: account.sourceDigest, promotion },
+    redemptionSource: { id: funding.redemption.id, storeId: funding.redemption.storeId, orderId: funding.redemption.orderId,
+      accountCreditId: funding.redemption.accountCreditId, kind: funding.redemption.kind, status: funding.redemption.status,
+      amount: funding.redemption.amount, delta: funding.redemption.delta, operationalAllocation: funding.redemption.operationalAllocation,
+      sourceKey: funding.redemption.sourceKey, sourceId: funding.redemption.sourceId, sourceRecord: funding.redemption.sourceRecord,
+      sourceDigest: funding.redemption.sourceDigest, allocation: funding.redemption.allocation, sourceOrderId: funding.redemption.sourceOrderId },
+  } : undefined;
   const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.storeId, input.storeId), eq(s.refund.orderId, input.orderId)));
-  const lines = await tx.select({ refundId: s.refundLine.refundId, orderLineId: s.refundLine.orderLineId,
+  const lines = await tx.select({ id: s.refundLine.id, refundId: s.refundLine.refundId, orderLineId: s.refundLine.orderLineId,
     quantity: s.refundLine.quantity, amount: s.refundLine.amount }).from(s.refundLine)
     .innerJoin(s.refund, and(eq(s.refund.id, s.refundLine.refundId), eq(s.refund.storeId, s.refundLine.storeId)))
     .where(and(eq(s.refundLine.storeId, input.storeId), eq(s.refund.orderId, input.orderId)));
-  const pricingSources = await tx.select({ id: s.orderEdit.id, orderId: s.orderEdit.orderId, before: s.orderEdit.before,
+  const pricingSources = await tx.select({ id: s.orderEdit.id, orderId: s.orderEdit.orderId, fingerprint: s.orderEdit.fingerprint, before: s.orderEdit.before,
     after: s.orderEdit.after, settlement: s.orderEdit.settlement }).from(s.orderEdit)
     .where(and(eq(s.orderEdit.storeId, input.storeId), eq(s.orderEdit.orderId, input.orderId)));
-  return { ...funding, refunds: refunds.map(refund => ({ id: refund.id, state: refund.state, metadata: refund.metadata,
-    lines: lines.filter(line => line.refundId === refund.id).map(({ orderLineId, quantity, amount }) => ({ orderLineId, quantity, amount })) })),
-    refundsComplete: true as const, pricingSources };
+  const evidence = { ...funding, refunds: refunds.map(refund => ({ id: refund.id, state: refund.state, metadata: refund.metadata, amount: refund.amount,
+    lines: lines.filter(line => line.refundId === refund.id).map(({ id, orderLineId, quantity, amount }) => ({ id, orderLineId, quantity, amount })) })),
+    refundsComplete: true as const, pricingSources, ...(importedSource ? { importedSource } : {}) };
+  if (!importedSource) return { ...evidence, importedOrigin: undefined };
+  const [order] = await tx.select().from(s.order).where(and(eq(s.order.storeId, input.storeId), eq(s.order.id, input.orderId)));
+  if (!order) throw new AccountCreditError('allocation', 'Imported credit order is missing');
+  if (order.pricingSnapshot !== null) {
+    if (!isImportedCreditOrigin(order.pricingSnapshot)) return { ...evidence, importedOrigin: undefined };
+    decodeCreditPricingOrigin(order.pricingSnapshot, evidence);
+    return { ...evidence, importedOrigin: order.pricingSnapshot };
+  }
+  const nativeLines = await tx.select({ id: s.orderLine.id, storeId: s.orderLine.storeId, orderId: s.orderLine.orderId,
+    quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineSubtotal: s.orderLine.lineSubtotal,
+    lineDiscount: s.orderLine.lineDiscount, lineTax: s.orderLine.lineTax, lineTotal: s.orderLine.lineTotal, metadata: s.orderLine.metadata })
+    .from(s.orderLine).where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, input.orderId)));
+  const metadata = order.metadata && typeof order.metadata === 'object' && !Array.isArray(order.metadata) ? order.metadata as Record<string, unknown> : {};
+  const loyalty = metadata.loyalty && typeof metadata.loyalty === 'object' && !Array.isArray(metadata.loyalty) ? metadata.loyalty as Record<string, unknown> : {};
+  const pointsDiscount = loyalty.pointsDiscount ?? 0;
+  if (typeof pointsDiscount !== 'number' || !Number.isSafeInteger(pointsDiscount) || pointsDiscount < 0 || pointsDiscount > MAX_CREDIT_CENTS) {
+    throw new AccountCreditError('allocation', 'Imported credit loyalty money is invalid');
+  }
+  const totals = { subtotal: order.subtotal, discountTotal: order.discountTotal,
+    shippingTotal: order.shippingTotal, taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount };
+  const pending = pricingSources.filter(row => isPendingEditStage(row.settlement));
+  if (pending.length) {
+    const invalid = (): never => { throw new AccountCreditError('allocation', 'Pending imported origin proof differs'); };
+    if (pending.length !== 1) invalid();
+    const row = pending[0]!;
+    const before = row.before, after = row.after;
+    if (!record(before) || !record(after)) invalid();
+    const storedOrder = before.storedOrder, importedOrigin = before.currentPricing, beforeLines = before.financialLines;
+    if (!isImportedCreditOrigin(importedOrigin) || !record(storedOrder) || !Array.isArray(beforeLines)) invalid();
+    const proposal = readEditStageProposal(after.proposal), activation = proposal.activation;
+    const equal = (left: unknown, right: unknown) => orderEditStoredFingerprint(left) === orderEditStoredFingerprint(right);
+    if (row.orderId !== input.orderId || proposal.editId !== row.id || proposal.orderId !== row.orderId ||
+      proposal.requestFingerprint !== row.fingerprint || proposal.beforeFingerprint !== before.storedFingerprint ||
+      importedOrigin.orderId !== input.orderId || importedOrigin.storeId !== input.storeId ||
+      !record(activation) || !record(activation.predecessor) || !equal(activation.beforeOrder, storedOrder) ||
+      !equal(activation.origin, importedOrigin) || !equal(activation.predecessor.snapshot, importedOrigin)) invalid();
+    // A durable row is not source authority by itself: bind its financial capture
+    // to live DB facts, then rebuild only its independently proven frozen prefix.
+    const financialOrder = (value: unknown) => {
+      if (!record(value)) return invalid();
+      const meta = record(value.metadata) ? value.metadata : {}, loyalty = record(meta.loyalty) ? meta.loyalty : {};
+      return { ...Object.fromEntries(['id', 'storeId', 'currency', 'couponCodes', 'subtotal', 'discountTotal', 'shippingTotal', 'taxTotal', 'grandTotal'].map(key => [key, value[key]])),
+        pointsDiscount: loyalty.pointsDiscount ?? 0, sourceMetadata: meta.vendure };
+    };
+    const lineFields = ['id', 'storeId', 'orderId', 'quantity', 'unitPrice', 'lineSubtotal', 'lineDiscount', 'lineTax', 'lineTotal', 'metadata'];
+    const financialLines = beforeLines.map((value: unknown) => {
+      if (!record(value)) return invalid();
+      return Object.fromEntries(lineFields.map(key => [key, value[key]]));
+    });
+    const sorted = <T extends { id: unknown }>(values: T[]) => [...values].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+    if (!equal(financialOrder(storedOrder), financialOrder(order)) ||
+      !equal(financialLines.sort((left, right) => String(left.id).localeCompare(String(right.id))), sorted(nativeLines))) invalid();
+    decodeCreditPricingOrigin(importedOrigin, evidence);
+    const prefixIds = new Set(importedOrigin.capture.restoreIds);
+    const capturedEvidence = { ...evidence, history: evidence.history.filter(row => prefixIds.has(row.id)), refunds: importedOrigin.capture.legacyRefunds };
+    const capturedLines = importedOrigin.capture.lines.map(line => nativeLines.find(actual => actual.id === line.id) ?? invalid());
+    if (capturedLines.length !== nativeLines.length) invalid();
+    const canonical = buildImportedCreditOrigin({ ...input, currency: order.currency, metadata: order.metadata,
+      couponCodes: order.couponCodes, totals, lines: capturedLines, evidence: capturedEvidence, ...importedSource });
+    if (!equal(canonical, importedOrigin) || proposal.beforeLedgerPrefixDigest !== orderEditStoredFingerprint({
+      redemption: evidence.redemption, history: [...capturedEvidence.history].sort((left, right) => left.id.localeCompare(right.id)) })) invalid();
+    const predecessor = readCurrentOrderPricingSnapshot(importedOrigin, { currency: order.currency, orderLines: nativeLines,
+      totals, mode: 'settlement', creditEvidence: { ...capturedEvidence, importedOrigin } });
+    if (!predecessor || !equal(activation.predecessor, predecessor)) invalid();
+    readCurrentOrderPricingSnapshot(importedOrigin, { currency: order.currency, orderLines: nativeLines, totals,
+      mode: 'settlement', creditEvidence: { ...evidence, importedOrigin }, pricingSources });
+    return { ...evidence, importedOrigin };
+  }
+  const importedOrigin = buildImportedCreditOrigin({ ...input, currency: order.currency, metadata: order.metadata,
+    couponCodes: order.couponCodes, totals,
+    lines: nativeLines, evidence, ...importedSource });
+  return { ...evidence, importedOrigin };
+}
+/** Adopt retained source custody once, before any new refund or return changes
+ * its captured history. Call inside the same transaction as preparation. */
+export async function anchorImportedCreditOrigin(tx: Tx, input: { storeId: string; orderId: string }) {
+  let order = await lockOrder(tx, input.storeId, input.orderId);
+  const redemption = await redemptionForOrder(tx, input.storeId, input.orderId);
+  if (redemption) await lockAccount(tx, input.storeId, redemption.accountCreditId);
+  let evidence = await readCurrentCreditEvidence(tx, input);
+  if (order.pricingSnapshot !== null || !evidence?.importedOrigin) return { order, evidence };
+  const lines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity }).from(s.orderLine)
+    .where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, input.orderId)));
+  readCurrentOrderPricingSnapshot(evidence.importedOrigin, { currency: order.currency, orderLines: lines,
+    mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
+  await tx.update(s.order).set({ pricingSnapshot: evidence.importedOrigin }).where(and(eq(s.order.storeId, input.storeId),
+    eq(s.order.id, input.orderId), sql`${s.order.pricingSnapshot} IS NULL`));
+  order = await lockOrder(tx, input.storeId, input.orderId);
+  evidence = await readCurrentCreditEvidence(tx, input);
+  if (!evidence || order.pricingSnapshot === null) conflict('Imported origin adoption lost canonical snapshot');
+  readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines,
+    mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
+  return { order, evidence };
 }
 type EditCreditInput = { storeId: string; orderId: string } & Pick<EditFundingInput, 'editId' | 'lines' | 'committedEdit'>;
 export async function prepareEditCreditFunding(tx: Tx, input: EditCreditInput) {
@@ -406,12 +518,13 @@ export async function restoreRefund(tx: Tx, input: { storeId: string; orderId: s
     !evidence.history.some(row => row.refundId === refund.id && row.orderLineId === line.orderLineId));
   if (frozen && needsPosting) {
     if (frozen.version === 1 && frozen.snapshotDigest !== creditReturnSnapshotDigest(order.pricingSnapshot)) conflict('Frozen refund pricing snapshot differs');
-    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
+    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot ?? evidence.importedOrigin, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
       .from(s.orderLine).where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, order.id))), mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
-    const mapping = current?.originalUnitIndexes ?? Object.fromEntries(Object.entries(redeem.operationalAllocation ?? {}).map(([id, units]) => [id, units.map((_, i) => i)]));
+    const mapping = current ? Object.fromEntries(Object.entries(current.sourceRefundUnits).map(([line, units]) => [line, units.map(unit => unit.originalIndex)])) :
+      Object.fromEntries(Object.entries(redeem.operationalAllocation ?? {}).map(([id, units]) => [id, units.map((_, i) => i)]));
     if (frozen.version === 1 && frozen.lines.some(line => line.positions.some((position, i) => mapping[line.orderLineId]?.[position] !== line.originalIndexes[i]))) conflict('Frozen refund original identity differs');
     if (frozen.version === 2 && (!current || frozen.lines.some(line => line.unitIds.some((id, i) => {
-      const position = current.unitIds[line.orderLineId]?.indexOf(id) ?? -1;
+      const position = current.sourceRefundUnits[line.orderLineId]?.findIndex(unit => unit.unitId === id) ?? -1;
       return position < 0 || mapping[line.orderLineId]?.[position] !== line.originalIndexes[i];
     })))) conflict('Frozen refund stable identity differs');
   }
@@ -432,6 +545,8 @@ export async function restoreManual(tx: Tx, input: RestoreManualInput): Promise<
   operator(input); assertCents(input.expectedCents, 'Expected restoration');
   if (!Number.isSafeInteger(input.quantity) || input.quantity < 1) throw new AccountCreditError('invalid_input', 'Positive return quantity required');
   const order = await lockOrder(tx, input.storeId, input.orderId);
+  try { await assertNoPendingOrderEdit(tx, input.storeId, order.id); }
+  catch { conflict('Resolve pending order edit before manual credit restoration'); }
   const redeem = await redemptionForOrder(tx, input.storeId, input.orderId, input.accountId);
   if (!redeem) throw new AccountCreditError('missing', 'No redeemed credit on linked order');
   const account = await lockAccount(tx, input.storeId, input.accountId);
@@ -439,14 +554,16 @@ export async function restoreManual(tx: Tx, input: RestoreManualInput): Promise<
   const key = `manual:${input.operationKey}`;
   let originalIndexes: number[] | undefined;
   if (!await priorOperation(tx, input.storeId, key)) {
-    const evidence = (await readCurrentCreditEvidence(tx, input))!, state = readCreditFundingState(evidence);
+    const anchored = await anchorImportedCreditOrigin(tx, input);
+    const evidence = anchored.evidence!, state = readCreditFundingState(evidence);
     if (!state.ok) throw new AccountCreditError('allocation', state.message);
-    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
+    const current = readCurrentOrderPricingSnapshot(anchored.order.pricingSnapshot ?? evidence.importedOrigin, { currency: order.currency, orderLines: await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity })
       .from(s.orderLine).where(and(eq(s.orderLine.storeId, input.storeId), eq(s.orderLine.orderId, order.id))), mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
-    const mapping = current?.originalUnitIndexes[input.orderLineId] ?? state.state.remaining[input.orderLineId]?.map((_, i) => i);
+    const mapping = current?.sourceRefundUnits[input.orderLineId]?.map(unit => unit.originalIndex) ?? state.state.remaining[input.orderLineId]?.map((_, i) => i);
     const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.storeId, input.storeId), eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
     const reserved = new Set<number>();
     for (const refund of refunds) {
+      if (current?.admittedLegacyRefundIds.includes(refund.id)) continue;
       let frozen: ReturnType<typeof readCreditUnitReturns>;
       try { frozen = readCreditUnitReturns(refund.metadata); } catch { throw new AccountCreditError('allocation', 'Refund reservation requires reconciliation'); }
       if (frozen) {

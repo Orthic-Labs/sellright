@@ -53,6 +53,7 @@ async function seed(): Promise<void> {
     await tx.insert(s.order).values({
       id: ORDER, storeId: STORE, code: CODE, state: 'Paid', currency: 'USD', customerId: CUSTOMER,
       subtotal: t.subtotal, discountTotal: t.discountTotal, shippingTotal: t.shippingTotal, taxTotal: t.taxTotal, grandTotal: t.grandTotal,
+      shippingMethodCode: 'std', shippingMethodName: 'Standard',
       shippingAddress: { fullName: 'Ship Er', line1: '1 Main St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US', phone: '555' },
       billingAddress: { fullName: 'Bill Er', line1: '2 Bill St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US' },
       metadata: {},
@@ -77,10 +78,10 @@ const orderQty = async () => withStore(STORE, async (tx) => {
 
 const ops: EditOpT[] = [{ op: 'set_quantity', lineId: LINE, quantity: 3 }];
 
-function commitEdit(idempotencyKey: string) {
-  return previewOrderEdit(STORE, CODE, ops).then((prev) => commitOrderEdit({
-    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: prev.after.grandTotal,
-    idempotencyKey, notifyCustomer: false, settlement: { type: 'leave_due' },
+function commitEdit(idempotencyKey: string, pricingOptions: { recalculateShipping?: boolean; recalculateShippingPromotions?: boolean } = {}, editOps = ops) {
+  return previewOrderEdit(STORE, CODE, editOps, pricingOptions).then((prev) => commitOrderEdit({
+    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops: editOps, expectedGrandTotal: prev.after.grandTotal,
+    previewAcceptanceHash: prev.previewAcceptanceHash, ...pricingOptions, idempotencyKey, notifyCustomer: false, settlement: { type: 'leave_due' },
   }));
 }
 
@@ -105,8 +106,12 @@ describe.skipIf(!isTestDb)('T-L2 order-edit commit vs licence revoke on one orde
   it('revoke holds the licence first, commit waits for the set; both finish, edit applied once', async () => {
     const revoke = revokeLicence();
     await pause(50);
-    const commit = commitEdit('lock-c-revoke-first');
-    const [r, c] = await Promise.all([revoke, commit]);
+    const commit = commitEdit('lock-c-revoke-first').then(result => ({ result }), error => ({ error }));
+    const [r, attempt] = await Promise.all([revoke, commit]);
+    // Revocation advances the full before fingerprint while commit waits. A
+    // fresh accepted preview is required; the refused attempt writes no edit.
+    if ('error' in attempt) expect(attempt.error).toMatchObject({ code: 'PREVIEW_STALE' });
+    const c = 'result' in attempt ? attempt.result : await commitEdit('lock-c-revoke-first');
     expect(r).toBe('revoked');
     expect(c.replay).toBe(false);
     expect(c.code).toBe(CODE);
@@ -124,4 +129,37 @@ describe.skipIf(!isTestDb)('T-L2 order-edit commit vs licence revoke on one orde
     expect(await licenseStatus()).toBe('revoked');
     expect(await orderQty()).toBe(3);
   }, 20000);
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])('accepts unchanged preview shipping flags %s/%s under locks', async (recalculateShipping, recalculateShippingPromotions) => {
+    const options = { recalculateShipping, recalculateShippingPromotions };
+    const result = await commitEdit(`shipping-flags-${recalculateShipping}-${recalculateShippingPromotions}`, options);
+    expect(result.replay).toBe(false);
+    expect(await orderQty()).toBe(3);
+    const follow = await previewOrderEdit(STORE, CODE, [{ op: 'set_quantity', lineId: LINE, quantity: 4 }], { recalculateShipping: false, recalculateShippingPromotions: true });
+    expect(follow.after.shippingTotal).toBe(500);
+  });
+
+  it('rejects changed shipping options even when payable cents match accepted preview', async () => {
+    const preview = await previewOrderEdit(STORE, CODE, ops, { recalculateShipping: false, recalculateShippingPromotions: false });
+    await expect(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops,
+      expectedGrandTotal: preview.after.grandTotal, previewAcceptanceHash: preview.previewAcceptanceHash,
+      recalculateShipping: true, recalculateShippingPromotions: false, idempotencyKey: 'shipping-flags-stale', notifyCustomer: false, settlement: { type: 'leave_due' },
+    })).rejects.toMatchObject({ code: 'PREVIEW_STALE' });
+    expect(await orderQty()).toBe(2);
+  });
+
+  it.each([
+    { action: { op: 'set_shipping_amount', amount: 70 } as EditOpT, shipping: 70 },
+    { action: { op: 'remove_shipping' } as EditOpT, shipping: 0 },
+  ])('preserves explicit shipping transition $shipping through next retained edit', async ({ action, shipping }) => {
+    const options = { recalculateShipping: false, recalculateShippingPromotions: false };
+    await commitEdit(`carrier-before-${shipping}`, options);
+    await commitEdit(`carrier-replace-${shipping}`, options, [action]);
+    const followOps: EditOpT[] = [{ op: 'set_quantity', lineId: LINE, quantity: 4 }];
+    const follow = await previewOrderEdit(STORE, CODE, followOps, options);
+    expect(follow.after.shippingTotal).toBe(shipping);
+    await commitEdit(`carrier-after-${shipping}`, options, followOps);
+    const [order] = await withStore(STORE, tx => tx.select().from(s.order).where(eq(s.order.id, ORDER)));
+    expect(order!.shippingTotal).toBe(shipping);
+  });
 });

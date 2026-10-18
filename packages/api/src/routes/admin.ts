@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { refundQuantity } from '../payments/refunds.js';
+import { refundQuantity, refundStockEffectsProjection, refundMerchandiseCompletionProjection } from '../payments/refunds.js';
 import { refundUnitBases, refundLineCashAmount, availableCreditRefundUnits, refundCreditProjection } from '../payments/refund-credit.js';
 import { readCurrentCreditEvidence } from '../account-credit/service.js';
 import { hasUnresolvedPayment } from '../payments/hold.js';
@@ -215,7 +215,7 @@ admin.openapi(
       const refundLines = refunds.length
         ? await tx.select().from(s.refundLine).where(inArray(s.refundLine.refundId, refunds.map((r) => r.id)))
         : [];
-      const refundQuotes = new Map<string, { unitPrice: number | null; cashAmounts: number[]; quantity: number }>();
+      const refundQuotes = new Map<string, { unitPrice: number | null; cashAmounts: number[]; quantity: number; totalQuantity: number }>();
       try {
         const evidence = await readCurrentCreditEvidence(tx, { storeId: st.storeId, orderId: o.id });
         const units = refundUnitBases(o, lines, evidence ?? undefined, evidence?.pricingSources);
@@ -236,7 +236,8 @@ admin.openapi(
           const cashAmounts = Array.from({ length: quantity }, (_, index) => refundLineCashAmount(line, index + 1, available, postedCredit.length > 0));
           const first = cashAmounts[0];
           const uniform = first !== undefined && cashAmounts.every((amount, index) => amount === first * (index + 1));
-          refundQuotes.set(line.id, { unitPrice: uniform ? first : null, cashAmounts, quantity });
+          refundQuotes.set(line.id, { unitPrice: uniform ? first : null, cashAmounts, quantity,
+            totalQuantity: Array.isArray(basis) ? basis.length : refundQuantity(line) });
         }
       } catch { /* Read remains available; refund admission refuses unproven money. */ }
       // Locations feed the partial-fulfillment picker — enabled-only, this
@@ -268,7 +269,7 @@ admin.openapi(
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.
         hasPostedCredit: postedCredit.length === 1,
-        lines: lines.map((l) => ({ refundQuantity: refundQuantity(l),
+        lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
           refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
           refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
           id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
@@ -286,6 +287,8 @@ admin.openapi(
         refunds: refunds.map((r) => ({
           id: r.id, state: r.state, amount: r.amount, itemsAmount: r.itemsAmount, shippingAmount: r.shippingAmount,
           creditRestoration: refundCreditProjection(r.metadata),
+          stockEffects: refundStockEffectsProjection(r.metadata),
+          merchandiseCompletion: refundMerchandiseCompletionProjection(r.metadata),
           reason: r.reason, createdAt: r.createdAt.toISOString(),
           lines: refundLines.filter((rl) => rl.refundId === r.id).map((rl) => ({ orderLineId: rl.orderLineId, quantity: rl.quantity, amount: rl.amount, restock: rl.restock })),
         })),

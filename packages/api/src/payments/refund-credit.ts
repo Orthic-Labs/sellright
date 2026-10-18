@@ -13,9 +13,11 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * Only legacy orders without snapshots use retained source unit authority.
  * Null is the existing legacy generic refund basis, never a credit unit proof. */
 export function refundUnitBases(order: { currency: string; pricingSnapshot: unknown }, lines: RefundMoneyLine[], creditEvidence?: CreditPricingEvidence, pricingSources?: Parameters<typeof readCurrentOrderPricingSnapshot>[1]['pricingSources']): Map<string, number | readonly number[] | null> {
-  const snapshot = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'refund', creditEvidence, pricingSources });
-  if (snapshot) return new Map(snapshot.lines.map(line => [line.orderLineId,
-    snapshot.snapshot.version === 2 ? line.cashRefundGrossUnits : line.proratedUnitPriceWithTax]));
+  const snapshot = readCurrentOrderPricingSnapshot(order.pricingSnapshot ?? creditEvidence?.importedOrigin, { currency: order.currency, orderLines: lines, mode: 'refund', creditEvidence, pricingSources });
+  if (snapshot && (snapshot.snapshot.version === 2 || 'kind' in snapshot.snapshot)) {
+    return new Map(Object.entries(snapshot.sourceRefundUnits).map(([line, units]) => [line, units.map(unit => unit.cashRefundGross)]));
+  }
+  if (snapshot) return new Map(snapshot.lines.map(line => [line.orderLineId, line.proratedUnitPriceWithTax]));
   return new Map(lines.map(line => {
     const raw = object(line.metadata) ? line.metadata.vendure : undefined;
     if (raw !== undefined) {
@@ -68,15 +70,17 @@ function creditRefundSelection(order: { currency: string; pricingSnapshot: unkno
   pricingSources?: Parameters<typeof readCurrentOrderPricingSnapshot>[1]['pricingSources']) {
   const state = readCreditFundingState(evidence);
   if (!state.ok) throw new Error(state.message);
-  const snapshot = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'refund', creditEvidence: evidence, pricingSources });
-  const mapping = snapshot?.originalUnitIndexes ?? Object.fromEntries(Object.entries(state.state.remaining).map(([line, units]) => [line, units.map((_, i) => i)]));
-  const unitIds = snapshot?.unitIds ?? Object.fromEntries(Object.entries(mapping).map(([line, indexes]) => [line, indexes.map(index => {
+  const snapshot = readCurrentOrderPricingSnapshot(order.pricingSnapshot ?? evidence.importedOrigin, { currency: order.currency, orderLines: lines, mode: 'refund', creditEvidence: evidence, pricingSources });
+  const mapping = snapshot ? Object.fromEntries(Object.entries(snapshot.sourceRefundUnits).map(([line, units]) => [line, units.map(unit => unit.originalIndex)])) :
+    Object.fromEntries(Object.entries(state.state.remaining).map(([line, units]) => [line, units.map((_, i) => i)]));
+  const unitIds = snapshot ? Object.fromEntries(Object.entries(snapshot.sourceRefundUnits).map(([line, units]) => [line, units.map(unit => unit.unitId)])) :
+    Object.fromEntries(Object.entries(mapping).map(([line, indexes]) => [line, indexes.map(index => {
     if (index === null) throw new Error('Unfunded unit requires durable identity');
     return originalCreditUnitId(evidence.redemption.id, line, index);
   })]));
-  const used = new Set<string>();
+  const used = new Set<string>([...(snapshot?.consumedSourceUnitIds ?? []), ...(snapshot?.reservedSourceUnitIds ?? [])]);
   for (const [line, indexes] of Object.entries(mapping)) indexes.forEach((index, position) => {
-    if ((index !== null && state.state.returnedIndexes[line]?.includes(index)) || snapshot?.consumedPositions[line]?.includes(position)) used.add(unitIds[line]![position]!);
+    if (index !== null && state.state.returnedIndexes[line]?.includes(index)) used.add(unitIds[line]![position]!);
   });
   const reservations = evidence.refundsComplete === true ? (evidence.refunds ?? []).map(refund => ({ ...refund,
     restored: refund.state === 'Settled' && refund.lines.every(line => {
@@ -86,6 +90,7 @@ function creditRefundSelection(order: { currency: string; pricingSnapshot: unkno
   for (const reservation of reservations) {
     if (reservation.state === 'Failed') continue;
     if (!reservation.lines.length) continue;
+    if ('id' in reservation && typeof reservation.id === 'string' && snapshot?.admittedLegacyRefundIds.includes(reservation.id)) continue;
     const frozen = readCreditUnitReturns(reservation.metadata);
     if (frozen) {
       if (frozen.redemptionId !== evidence.redemption.id) throw new Error('Refund reservation redemption differs');
@@ -93,7 +98,7 @@ function creditRefundSelection(order: { currency: string; pricingSnapshot: unkno
         const index = line.originalIndexes[i]!;
         const id = frozen.version === 2 ? (line as CreditUnitReturnLineV2).unitIds[i]! :
           index !== null ? originalCreditUnitId(evidence.redemption.id, line.orderLineId, index) :
-          frozen.snapshotDigest === digest(order.pricingSnapshot) ? unitIds[line.orderLineId]?.[position] : undefined;
+          frozen.snapshotDigest === digest(snapshot?.snapshot ?? order.pricingSnapshot) ? unitIds[line.orderLineId]?.[position] : undefined;
         if (!id) throw new Error('Legacy unfunded reservation lacks durable unit identity');
         // Identity survives edits & completed cash-only returns. Positions are
         // capture evidence, never an offset in a later pricing snapshot.
@@ -131,15 +136,21 @@ export function prepareCreditUnitReturns(order: { currency: string; pricingSnaps
     if (positions.length !== line.quantity) throw new Error('Selected credit units already reserved');
     return { orderLineId: line.orderLineId, positions, originalIndexes: positions.map(i => indexes[i]!),
       creditCents: positions.map(i => indexes[i] === null ? 0 : state.remaining[line.orderLineId]![indexes[i]!]!),
-      unitIds: positions.map(i => ids[i]!), unitEconomics: positions.map(i => snapshot?.unitEconomics[line.orderLineId]![i]!) };
+      unitIds: positions.map(i => ids[i]!),
+      ...(snapshot ? { presentUnitIds: positions.flatMap(i => snapshot.sourceRefundUnits[line.orderLineId]?.[i]?.present ? [ids[i]!] : []) } : {}),
+      unitEconomics: snapshot ? positions.map(i => {
+        const unit = snapshot.sourceRefundUnits[line.orderLineId]?.[i];
+        if (!unit) throw new Error('Selected source unit economics missing');
+        return { net: unit.net, gross: unit.gross, cashRefundGross: unit.cashRefundGross };
+      }) : [] };
   });
   if (snapshot) {
     const base = { version: 2 as const, redemptionId: evidence.redemption.id, snapshotHash: snapshot.quoteHash,
-      snapshotDigest: digest(order.pricingSnapshot), lines: returns };
+      snapshotDigest: digest(snapshot.snapshot), lines: returns };
     return { ...base, requestDigest: digest(base) };
   }
   const base = { version: 1 as const, redemptionId: evidence.redemption.id, snapshotDigest: digest(order.pricingSnapshot),
-    lines: returns.map(({ unitIds: _ids, unitEconomics: _economics, ...line }) => line) };
+    lines: returns.map(({ unitIds: _ids, unitEconomics: _economics, presentUnitIds: _present, ...line }) => line) };
   return { ...base, requestDigest: digest(base) };
 }
 

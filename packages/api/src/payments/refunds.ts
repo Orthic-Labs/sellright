@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx, type HeldAdvisoryLocks } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
-import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
+import { assertNoPendingOrderEdit, isPendingEditStage } from '../orders/edit-stage.js';
 import * as s from '../db/schema.js';
 import { resolveGatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
 import { getProvider, type RefundResult } from './provider.js';
@@ -15,8 +15,10 @@ import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
 import { isEditRefund } from './edit-refund.js';
 import { releaseOnFullRefundInSet } from './reservation.js';
 import { recordSettlementOperation } from './settlement/record.js';
-import { restoreRefundAfterSettlement, readCurrentCreditEvidence } from '../account-credit/service.js';
+import { restoreRefundAfterSettlement, readCurrentCreditEvidence, anchorImportedCreditOrigin } from '../account-credit/service.js';
 import { refundUnitBases, refundLineCashAmount, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, availableCreditRefundUnits, type CreditUnitReturns } from './refund-credit.js';
+import { readCreditRefundEvidence } from '../account-credit/edit-funding.js';
+import { isImportedCreditOrigin, readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -56,7 +58,148 @@ function requestFingerprint(input: RefundRequest) {
 async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
   const [order] = await tx.select({ state: s.order.state }).from(s.order).where(eq(s.order.id, row.orderId));
   return { refundId: row.id, refundState: row.state, state: order!.state,
-    refunded: row.state === 'Settled' ? row.amount : 0, pending: row.state === 'Pending' ? row.amount : 0, creditRestoration: refundCreditProjection(row.metadata) };
+    refunded: row.state === 'Settled' ? row.amount : 0, pending: row.state === 'Pending' ? row.amount : 0,
+    creditRestoration: refundCreditProjection(row.metadata), stockEffects: refundStockEffectsProjection(row.metadata),
+    merchandiseCompletion: refundMerchandiseCompletionProjection(row.metadata) };
+}
+
+type RefundStockEffects = { state: 'pending' | 'applied'; requestDigest: string; reason?: string };
+export function refundStockEffectsProjection(metadata: unknown): RefundStockEffects | null {
+  const value = (metadata as { stockEffects?: RefundStockEffects } | null)?.stockEffects;
+  return value && (value.state === 'pending' || value.state === 'applied') && typeof value.requestDigest === 'string'
+    ? { state: value.state, requestDigest: value.requestDigest,
+      ...(typeof value.reason === 'string' && /^[a-z_]{1,80}$/.test(value.reason) ? { reason: value.reason } : {}) } : null;
+}
+export function refundMerchandiseCompletionProjection(metadata: unknown): { state: 'pending' | 'applied' | 'incomplete'; reason?: string } | null {
+  const value = (metadata as { merchandiseCompletion?: { state?: unknown; reason?: unknown } } | null)?.merchandiseCompletion;
+  if (!value || (value.state !== 'pending' && value.state !== 'applied' && value.state !== 'incomplete')) return null;
+  return { state: value.state, ...(typeof value.reason === 'string' && /^[a-z_]{1,80}$/.test(value.reason) ? { reason: value.reason } : {}) };
+}
+
+/** Cash outcome is already durable in this transaction. A stock/proof failure
+ * rolls back only stock & quantity effects; settled replay retries this receipt. */
+async function applyRefundStockEffects(tx: Tx, storeId: string, order: typeof s.order.$inferSelect,
+  refund: typeof s.refund.$inferSelect, lines: Array<typeof s.refundLine.$inferSelect>, fingerprint: string): Promise<RefundStockEffects> {
+  const metadata = refund.metadata as Record<string, unknown> | null;
+  const prior = refundStockEffectsProjection(metadata);
+  if (prior?.state === 'applied') return prior;
+  let requestDigest = prior?.requestDigest ?? fingerprint;
+  await tx.execute(sql`SAVEPOINT refund_stock_effects`);
+  try {
+    const frozen = readCreditRefundEvidence({ ...refund, lines });
+    if (frozen) {
+      if (prior && prior.requestDigest !== frozen.requestDigest) throw new Error('Stock receipt digest differs');
+      requestDigest = frozen.requestDigest;
+    }
+    const needsPresenceProof = lines.length > 0 && (!frozen || frozen.version !== 2 || frozen.lines.some(line => line.presentUnitIds === undefined));
+    let imported = false;
+    if (needsPresenceProof) {
+      const raw = order.pricingSnapshot as { origin?: unknown } | null;
+      imported = isImportedCreditOrigin(raw) || isImportedCreditOrigin(raw?.origin);
+      if (!imported) {
+        const redemptions = await tx.select({ sourceKey: s.accountCreditTransaction.sourceKey, sourceId: s.accountCreditTransaction.sourceId })
+          .from(s.accountCreditTransaction).where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id),
+            eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED')));
+        imported = redemptions.some(row => row.sourceKey !== null || row.sourceId !== null);
+      }
+    }
+    for (const line of lines) {
+      const selected = frozen?.version === 2 ? frozen.lines.find(unit => unit.orderLineId === line.orderLineId) : undefined;
+      if (imported && selected?.presentUnitIds === undefined) throw new Error('Imported stock custody is unresolved');
+      const currentQuantity = selected?.presentUnitIds?.length ?? line.quantity;
+      const [row] = await tx.select().from(s.orderLine).where(eq(s.orderLine.id, line.orderLineId)).for('update');
+      if (!row || row.orderId !== order.id) throw new Error('Refund line is missing');
+      const unfulfilled = Math.min(currentQuantity, Math.max(0, row.quantity - row.fulfilledQty - row.cancelledQty));
+      const returned = currentQuantity - unfulfilled;
+      await tx.update(s.orderLine).set({ refundedQty: sql`${s.orderLine.refundedQty} + ${line.quantity}`,
+        cancelledQty: sql`${s.orderLine.cancelledQty} + ${unfulfilled}` }).where(eq(s.orderLine.id, row.id));
+      if (row.variantId) {
+        if (unfulfilled) await tx.update(s.stock).set({ allocated: sql`greatest(0, ${s.stock.allocated} - ${unfulfilled})` }).where(eq(s.stock.variantId, row.variantId));
+        if (line.restock && returned) {
+          await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${returned}` }).where(eq(s.stock.variantId, row.variantId));
+          await tx.insert(s.stockMovement).values({ storeId, variantId: row.variantId, delta: returned, reason: 'refund_restock',
+            refOrderId: order.id, actor: typeof metadata?.actor === 'string' ? metadata.actor : null });
+        }
+      }
+    }
+    const stockEffects: RefundStockEffects = { state: 'applied', requestDigest };
+    await tx.update(s.refund).set({ metadata: { ...metadata, stockEffects } }).where(eq(s.refund.id, refund.id));
+    await tx.execute(sql`RELEASE SAVEPOINT refund_stock_effects`);
+    return stockEffects;
+  } catch {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT refund_stock_effects`);
+    await tx.execute(sql`RELEASE SAVEPOINT refund_stock_effects`);
+    const stockEffects: RefundStockEffects = { state: 'pending', requestDigest, reason: 'stock_effects_reconciliation_required' };
+    await tx.update(s.refund).set({ metadata: { ...metadata, stockEffects } }).where(eq(s.refund.id, refund.id));
+    return stockEffects;
+  }
+}
+
+async function fullCreditMerchandiseProof(tx: Tx, storeId: string, order: typeof s.order.$inferSelect) {
+  await tx.execute(sql`SAVEPOINT refund_merchandise_proof`);
+  try {
+    const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+    const evidence = await readCurrentCreditEvidence(tx, { storeId, orderId: order.id });
+    if (!evidence) throw new Error('Credit merchandise evidence missing');
+    const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot ?? evidence.importedOrigin, {
+      currency: order.currency, orderLines: lines, mode: 'refund', creditEvidence: evidence, pricingSources: evidence.pricingSources });
+    if (!current && evidence.importedSource) throw new Error('Imported merchandise domain is unresolved');
+    // Native pre-snapshot orders retain their original unchanged quantity path.
+    // Current pricing instead proves coverage by stable identity, so old counts
+    // cannot conceal detached source units or units introduced by later edits.
+    const domain = current ? Object.values(current.sourceRefundUnits).flat() : [];
+    const consumed = new Set(current?.consumedSourceUnitIds ?? []);
+    const full = current ? domain.length > 0 && domain.every(unit => consumed.has(unit.unitId)) :
+      lines.length > 0 && lines.every(line => line.refundedQty >= refundQuantity(line));
+    await tx.execute(sql`RELEASE SAVEPOINT refund_merchandise_proof`);
+    return { full, pending: false };
+  } catch {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT refund_merchandise_proof`);
+    await tx.execute(sql`RELEASE SAVEPOINT refund_merchandise_proof`);
+    return { full: false, pending: true };
+  }
+}
+
+async function revokeRefundLicenses(tx: Tx, storeId: string, orderId: string) {
+  const now = new Date();
+  const licenses = await tx.update(s.license).set({ status: 'revoked', updatedAt: now })
+    .where(and(eq(s.license.storeId, storeId), eq(s.license.orderId, orderId))).returning({ id: s.license.id });
+  if (licenses.length) await tx.update(s.licenseActivation).set({ state: 'revoked', revokedAt: now, updatedAt: now,
+    generation: sql`${s.licenseActivation.generation} + 1` }).where(and(eq(s.licenseActivation.storeId, storeId),
+    inArray(s.licenseActivation.licenseId, licenses.map(line => line.id)), eq(s.licenseActivation.state, 'active')));
+}
+
+/** A repaired receipt can finish zero-cash merchandise reversal on replay.
+ * Existing settlement-operation identity & revoked activation guard dedupe it. */
+async function retryCreditMerchandiseCompletion(tx: Tx, storeId: string, order: typeof s.order.$inferSelect,
+  refund: typeof s.refund.$inferSelect) {
+  const metadata = refund.metadata as { authority?: string; stockEffects?: RefundStockEffects; [key: string]: unknown } | null;
+  if (metadata?.authority !== 'credit_merchandise' || refund.amount !== 0) return;
+  if (refundMerchandiseCompletionProjection(metadata)?.state === 'applied') return;
+  await tx.execute(sql`SAVEPOINT refund_merchandise_completion`);
+  try {
+    const proof = await fullCreditMerchandiseProof(tx, storeId, order);
+    const basis = await orderRefundBasis(tx, storeId, order.id);
+    if (proof.pending) throw new Error('Merchandise completion proof requires reconciliation');
+    const fullReversal = proof.full && basis.refunded >= basis.captured;
+    if (fullReversal) {
+      await revokeRefundLicenses(tx, storeId, order.id);
+      if (order.state !== 'Cancelled') {
+        await tx.update(s.order).set({ state: 'Refunded', updatedAt: new Date() }).where(eq(s.order.id, order.id));
+        await releaseOnFullRefundInSet(tx, { storeId, orderId: order.id, refundId: refund.id });
+        await recordSettlementOperation(tx, { storeId, kind: 'order_refunded', operationId: order.id, orderId: order.id, mutations: [],
+          effects: [{ kind: 'entitlement_reversal', payload: { orderId: order.id, reason: 'full_refund' } }], effectMode: 'deferred' });
+      }
+    }
+    await tx.update(s.refund).set({ metadata: { ...metadata, merchandiseCompletion: { state: fullReversal ? 'applied' : 'incomplete' } } })
+      .where(eq(s.refund.id, refund.id));
+    await tx.execute(sql`RELEASE SAVEPOINT refund_merchandise_completion`);
+  } catch {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT refund_merchandise_completion`);
+    await tx.execute(sql`RELEASE SAVEPOINT refund_merchandise_completion`);
+    await tx.update(s.refund).set({ metadata: { ...metadata,
+      merchandiseCompletion: { state: 'pending', reason: 'merchandise_completion_reconciliation_required' } } }).where(eq(s.refund.id, refund.id));
+  }
 }
 
 export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLocks) {
@@ -70,7 +213,7 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
     // STOREKIT §5.3: the order's lock set (licences L2, order L3, reservations L4) is taken
     // before any refund row is written; the request path never locks an order outside it.
     const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId: input.orderId }, async tx => {
-      const [order] = await tx.select().from(s.order).where(eq(s.order.id, input.orderId)).for('update');
+      let [order] = await tx.select().from(s.order).where(eq(s.order.id, input.orderId)).for('update');
       if (!order || order.deletedAt) throw new RefundError(404, 'Order not found');
       try { await assertNoPendingOrderEdit(tx, input.storeId, order.id, { allowEditId: input.source === 'order_edit' ? input.editId : undefined }); }
       catch (error) { throw new RefundError(409, error instanceof Error ? error.message : 'Resolve the pending order edit first'); }
@@ -81,13 +224,14 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
         if (!row) throw new RefundError(409, 'Refund reservation requires reconciliation');
         const resumeInternal = prior.method === 'credit_merchandise' && row.state === 'Pending' &&
           (row.metadata as { authority?: unknown } | null)?.authority === 'credit_merchandise';
+        const resumeStock = row.state === 'Settled' && refundStockEffectsProjection(row.metadata)?.state === 'pending';
         if (resumeInternal) await finalizeRefund(tx, input.storeId, prior.id, { state: 'Settled', providerRef: null });
         else if (row.state === 'Settled') {
-          if (isEditRefund(row.metadata)) await finalizeRefund(tx, input.storeId, prior.id, { state: 'Settled', providerRef: row.providerRef });
+          if (isEditRefund(row.metadata) || resumeStock || prior.method === 'credit_merchandise') await finalizeRefund(tx, input.storeId, prior.id, { state: 'Settled', providerRef: row.providerRef });
           else await restoreSettledRefundCredit(tx, input.storeId, row);
         }
         const [current] = await tx.select().from(s.refund).where(eq(s.refund.id, row.id));
-        const [store] = resumeInternal ? await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, input.storeId)) : [];
+        const [store] = resumeInternal || resumeStock ? await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, input.storeId)) : [];
         return { existing: await refundView(tx, current!), storeSlug: store?.slug };
       }
       // A duplicate capture (D4) is refundable whatever the order's own state.
@@ -130,7 +274,18 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
       }
       const redemptions = await tx.select().from(s.accountCreditTransaction).where(and(
         eq(s.accountCreditTransaction.storeId, input.storeId), eq(s.accountCreditTransaction.orderId, order.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED')));
-      const creditEvidence = redemptions.length ? await readCurrentCreditEvidence(tx, { storeId: input.storeId, orderId: order.id }) : null;
+      let loadedCreditEvidence = redemptions.length ? await readCurrentCreditEvidence(tx, { storeId: input.storeId, orderId: order.id }) : null;
+      const linkedPendingEdit = input.source === 'order_edit' && input.editId && loadedCreditEvidence?.pricingSources.some(row =>
+        row.id === input.editId && isPendingEditStage(row.settlement));
+      if (loadedCreditEvidence && !linkedPendingEdit) {
+        // Freeze the first imported financial origin before any new refund,
+        // including ordinary money-only refunds, can enter its baseline. A linked
+        // pending edit keeps its validated durable before origin until activation.
+        const anchored = await anchorImportedCreditOrigin(tx, { storeId: input.storeId, orderId: order.id });
+        order = anchored.order;
+        loadedCreditEvidence = anchored.evidence;
+      }
+      const creditEvidence = loadedCreditEvidence;
       let creditUnitReturns: CreditUnitReturns | null = null;
       let availableCreditUnits: Map<string, number[]> | null = null;
       let units: Map<string, number | readonly number[] | null>;
@@ -209,7 +364,9 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
       await tx.insert(s.refund).values({ id: refundId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
         attemptId, amount, itemsAmount, shippingAmount,
         adjustmentAmount: amount - itemsAmount - shippingAmount, state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
-        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false, ...(creditUnitReturns ? { creditUnitReturns } : {}), ...(creditAuthority ? { authority: 'credit_merchandise', redemptionId: creditAuthority.redemptionId } : {}), ...(input.source ? { source: input.source } : {}) } });
+        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false,
+          ...(snapshots.length ? { stockEffects: { state: 'pending', requestDigest: creditUnitReturns?.requestDigest ?? fingerprint } } : {}),
+          ...(creditUnitReturns ? { creditUnitReturns } : {}), ...(creditAuthority ? { authority: 'credit_merchandise', redemptionId: creditAuthority.redemptionId } : {}), ...(input.source ? { source: input.source } : {}) } });
       if (input.editId) {
         const { bindPreparedEditRefund } = await import('../orders/order-edit-service.js');
         await bindPreparedEditRefund(tx, { storeId: input.storeId, orderId: order.id, editId: input.editId, refundId });
@@ -290,11 +447,12 @@ export async function enqueueRefundSettledEmail(
 /** CALLER CONTRACT (STOREKIT §5.3): `tx` must be the transaction of a withLockedSet over this
  *  refund's order (requestRefund, the Sezzle reconcile loop, the gateway refund reconcile). The
  *  order/licence lock set is then already held; the row locks below are re-takes on rows the set holds. */
-/** Transactional and monotonic: money, stock, RMA, audit and outbox commit together.
+/** Transactional and monotonic: observed money remains settled while failed
+ * stock or credit effects retain durable reconciliation state.
  *  THE shared finalizer (SR-04): the synchronous request path and the inbound
  *  webhook reconcile path both converge here, so stock/RMA/gift-card/order-state/
  *  audit/event/email effects run exactly once per refund attempt — whichever
- *  caller settles it first wins; later calls are observed no-ops. */
+ *  caller settles it first wins; later calls retry only deferred effects. */
 export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string, result: RefundResult) {
   const [ref] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attemptId));
   if (!ref || ref.operation !== 'refund') throw new RefundError(404, 'Refund attempt not found');
@@ -310,7 +468,17 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
       await tx.update(s.paymentAttempt).set({ providerRef: result.providerRef, updatedAt: new Date() })
         .where(eq(s.paymentAttempt.id, attempt.id));
     }
-    await restoreSettledRefundCredit(tx, storeId, refund);
+    let replayRefund = refund;
+    if ((refund.metadata as { stockEffects?: { state?: string } } | null)?.stockEffects?.state === 'pending') {
+      const lines = await tx.select().from(s.refundLine).where(eq(s.refundLine.refundId, refund.id));
+      const stockEffects = await applyRefundStockEffects(tx, storeId, order, refund, lines, attempt.fingerprint);
+      replayRefund = { ...refund, metadata: { ...(refund.metadata as Record<string, unknown> | null), stockEffects } };
+    }
+    await restoreSettledRefundCredit(tx, storeId, replayRefund);
+    if (attempt.method === 'credit_merchandise') {
+      const [restoredRefund] = await tx.select().from(s.refund).where(eq(s.refund.id, refund.id));
+      await retryCreditMerchandiseCompletion(tx, storeId, order, restoredRefund!);
+    }
     if (isEditRefund(refund.metadata)) {
       const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');
       await activatePreparedOrderEdit(tx, { storeId, orderId: order.id, refundId: refund.id });
@@ -328,7 +496,7 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   await tx.update(s.paymentAttempt).set({ status: result.state === 'Settled' ? 'settled' : result.state === 'Failed' ? 'failed' : providerRef ? 'pending' : 'unknown',
     providerRef, result: { state: result.state }, updatedAt: new Date() }).where(eq(s.paymentAttempt.id, attempt.id));
   if (result.state !== 'Settled') return refundView(tx, { ...refund, state: result.state, providerRef });
-  const details = refund.metadata as { actor?: string; returnId?: string | null; authority?: string } | null;
+  let details = refund.metadata as { actor?: string; returnId?: string | null; authority?: string; stockEffects?: RefundStockEffects; merchandiseCompletion?: unknown } | null;
   const creditMerchandise = attempt.method === 'credit_merchandise' && details?.authority === 'credit_merchandise' && refund.amount === 0;
   const lines = await tx.select().from(s.refundLine).where(eq(s.refundLine.refundId, refund.id));
   if (isEditRefund(refund.metadata)) {
@@ -344,21 +512,8 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     const [current] = await tx.select().from(s.refund).where(eq(s.refund.id, refund.id));
     return refundView(tx, current!);
   }
-  for (const line of lines) {
-    const [row] = await tx.select().from(s.orderLine).where(eq(s.orderLine.id, line.orderLineId)).for('update');
-    if (!row || row.orderId !== order.id) throw new RefundError(409, 'Refund line is missing');
-    const unfulfilled = Math.min(line.quantity, Math.max(0, row.quantity - row.fulfilledQty - row.cancelledQty));
-    const returned = line.quantity - unfulfilled;
-    await tx.update(s.orderLine).set({ refundedQty: sql`${s.orderLine.refundedQty} + ${line.quantity}`,
-      cancelledQty: sql`${s.orderLine.cancelledQty} + ${unfulfilled}` }).where(eq(s.orderLine.id, row.id));
-    if (row.variantId) {
-      if (unfulfilled) await tx.update(s.stock).set({ allocated: sql`greatest(0, ${s.stock.allocated} - ${unfulfilled})` }).where(eq(s.stock.variantId, row.variantId));
-      if (line.restock && returned) {
-        await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${returned}` }).where(eq(s.stock.variantId, row.variantId));
-        await tx.insert(s.stockMovement).values({ storeId, variantId: row.variantId, delta: returned, reason: 'refund_restock', refOrderId: order.id, actor: details?.actor ?? null });
-      }
-    }
-  }
+  const stockEffects = await applyRefundStockEffects(tx, storeId, order, refund, lines, attempt.fingerprint);
+  details = { ...details, stockEffects };
   if (attempt.method === 'gift_card') await creditGiftCardRefund(tx, storeId, order.id, refund.amount);
   const [refundedPayment] = await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId));
   if (refundedPayment && isDuplicatePayment(refundedPayment)) {
@@ -379,22 +534,12 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   // adjustment (order_edit_earn) and redeemed points stay as stored.
   if (!isEditRefund(refund.metadata)) await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
     actor: details?.actor ?? 'gateway:reconciliation' });
-  const purchasedLines = creditMerchandise ? await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)) : [];
-  const fullMerchandise = creditMerchandise && purchasedLines.length > 0 && purchasedLines.every(line => line.refundedQty >= refundQuantity(line));
-  const fullReversal = creditMerchandise ? fullMerchandise && refunded >= captured : captured > 0 && refunded >= captured;
-  if (fullReversal) {
-    const now = new Date();
-    const licenses = await tx.update(s.license).set({ status: 'revoked', updatedAt: now })
-      .where(and(eq(s.license.storeId, storeId), eq(s.license.orderId, order.id)))
-      .returning({ id: s.license.id });
-    // Keep device tombstones and invalidate pre-refund leases without bumping
-    // generations again on an already-revoked/removed activation.
-    if (licenses.length) await tx.update(s.licenseActivation).set({
-      state: 'revoked', revokedAt: now, updatedAt: now,
-      generation: sql`${s.licenseActivation.generation} + 1`,
-    }).where(and(eq(s.licenseActivation.storeId, storeId),
-      inArray(s.licenseActivation.licenseId, licenses.map(l => l.id)), eq(s.licenseActivation.state, 'active')));
-  }
+  const merchandiseProof = creditMerchandise ? await fullCreditMerchandiseProof(tx, storeId, order) : null;
+  const fullReversal = creditMerchandise ? merchandiseProof!.full && refunded >= captured : captured > 0 && refunded >= captured;
+  if (creditMerchandise) details = { ...details, merchandiseCompletion: merchandiseProof!.pending
+    ? { state: 'pending', reason: 'merchandise_completion_reconciliation_required' }
+    : { state: fullReversal ? 'applied' : 'incomplete' } };
+  if (fullReversal) await revokeRefundLicenses(tx, storeId, order.id);
   // Order editing (G13): a refund that only hands back the difference of a
   // LOWERED edit total is not an item/return refund — the order keeps its state.
   // `null` = keep the current state (never writes a state value that could be 'Paid').

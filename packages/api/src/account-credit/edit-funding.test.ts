@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_CREDIT_CENTS } from './math.js';
 import { planEditCreditFunding, planCreditUnitReturn, readCreditFundingState, type EditFundingInput, type EditFundingPosting,
-  readCreditUnitReturns, readCreditRefundEvidence, creditReturnSnapshotDigest, originalCreditUnitId,
+  readCreditUnitReturns, readCreditRefundEvidence, creditReturnSnapshotDigest, originalCreditUnitId, importedCreditUnitId,
   type EditFundingHistoryRow, type EditFundingRedemption, type EditFundingTargetLine } from './edit-funding.js';
 
 const ORDER = '00000000-0000-0000-0000-000000000001';
@@ -53,6 +53,33 @@ describe('immutable order-edit credit funding', () => {
     expect(() => readCreditRefundEvidence({ ...refund, lines: [{ orderLineId: LINE, quantity: 2, amount: 167 }] })).toThrow(/closure/);
     const foreign = { ...base, lines: [{ ...base.lines[0]!, unitIds: [originalCreditUnitId(REDEEM, OTHER, 0), base.lines[0]!.unitIds[1]!] }] };
     expect(() => readCreditUnitReturns({ creditUnitReturns: { ...foreign, requestDigest: creditReturnSnapshotDigest(foreign) } })).toThrow(/identity/);
+  });
+
+  it('decodes retained unfunded source slots without fabricating original credit indexes', () => {
+    const base = { version: 2 as const, redemptionId: REDEEM, snapshotHash: 'a'.repeat(64), snapshotDigest: 'b'.repeat(64),
+      lines: [{ orderLineId: LINE, positions: [3], originalIndexes: [null], creditCents: [0],
+        unitIds: [importedCreditUnitId('c'.repeat(64), LINE, 3)], presentUnitIds: [], unitEconomics: [{ net: 0, gross: 0, cashRefundGross: 0 }] }] };
+    const frozen = { ...base, requestDigest: creditReturnSnapshotDigest(base) };
+    expect(readCreditRefundEvidence({ id: OTHER, state: 'Settled', metadata: { creditUnitReturns: frozen },
+      lines: [{ orderLineId: LINE, quantity: 1, amount: 0 }] })).toEqual(frozen);
+    const forged = { ...base, lines: [{ ...base.lines[0]!, originalIndexes: [0] }] };
+    expect(() => readCreditUnitReturns({ creditUnitReturns: { ...forged, requestDigest: creditReturnSnapshotDigest(forged) } })).toThrow(/identity/);
+    for (const presentUnitIds of [[originalCreditUnitId(REDEEM, LINE, 0)], [base.lines[0]!.unitIds[0]!, base.lines[0]!.unitIds[0]!]]) {
+      const invalid = { ...base, lines: [{ ...base.lines[0]!, presentUnitIds }] };
+      expect(() => readCreditUnitReturns({ creditUnitReturns: { ...invalid, requestDigest: creditReturnSnapshotDigest(invalid) } })).toThrow(/physical/);
+    }
+    expect(() => readCreditUnitReturns({ creditUnitReturns: { ...frozen, lines: [{ ...frozen.lines[0]!, presentUnitIds: frozen.lines[0]!.unitIds }] } })).toThrow(/digest/);
+  });
+
+  it('retains explicit detached source funding while repricing only current units', () => {
+    const unchanged = candidate(input([target([100, 100, 33])]));
+    expect(unchanged.postings).toEqual([]);
+    const repriced = candidate(input([target([20, 20, 33])]));
+    expect(repriced.allocation[LINE]).toEqual([20, 20, 33]);
+    expect(repriced.postings).toHaveLength(1);
+    expect(repriced.postings[0]).toMatchObject({ quantity: 0, amount: 28 });
+    expect(repriced.state).toMatchObject({ retained: 73, restored: 28, redeemed: 101 });
+    expect(JSON.parse(repriced.postings[0]!.allocation).units.map((unit: { index: number }) => unit.index)).toEqual([0, 1]);
   });
   it('preserves uneven original vectors & never funds new merchandise', () => {
     const i = input([target([100, 100, 100, 100], [0, 1, 2, null]), target([90], [null], OTHER)]);

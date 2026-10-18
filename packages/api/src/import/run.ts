@@ -35,7 +35,7 @@ export const migrationConfig = z.object({
 type Config = z.input<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
-  'customer', 'address', 'customer_address_draft', 'financial_payment_archive', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line', 'imported_order_modification', 'account_credit', 'account_credit_transaction',
+  'customer', 'address', 'customer_address_draft', 'financial_payment_archive', 'order', 'order_line', 'order_adjustment', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line', 'imported_order_modification', 'account_credit', 'account_credit_transaction',
   'promotion_usage', 'shipping_method', 'tax_zone', 'blog_post', 'affiliate', 'affiliate_settle', 'subscriber',
   // Existing points remain part of untouched-tenant restore reconciliation.
   'loyalty_ledger',

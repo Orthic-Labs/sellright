@@ -35,11 +35,13 @@ import { loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { resolvePromotionStack } from '../money/promotion-resolver.js';
+import { migrationId } from '../import/context.js';
 import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
 import { buildOrderPricingSnapshot, type OrderPricingSnapshotV1 } from '../money/pricing-snapshot.js';
-import { orderEditAcceptanceHash, orderEditStoredFingerprint, priceOrderEditStack, projectEditStackLines, OrderEditStackError, type OrderEditStackCandidate } from './order-edit-stack.js';
+import { orderEditAcceptanceHash, orderEditStoredFingerprint, priceEditShippingCarriers, priceOrderEditStack, projectEditStackLines, readImportedOrderEditBasis, readImportedOrderEditComponents, OrderEditStackError, type OrderEditStackCandidate } from './order-edit-stack.js';
 import { allocateEditStageIds, assertEditStageActivation, assertNoPendingOrderEdit, buildEditStageProposal, buildEditSettlementAmendment, effectiveEditSettlementRequirement, isPendingEditStage, readEditStageProposal, retainedEditUnitPositions, type EditStageProposal, type EditStageSettlement } from './edit-stage.js';
-import { buildCurrentCreditPricingSnapshot, creditPricingSnapshotDigest, currentCreditFundingTargets, readCurrentOrderPricingSnapshot, type CreditPricingEvidence, type CurrentOrderPricing, type OrdinaryUnitFacts, type OrderPricingSnapshotV2, type OriginalUnitIndexes } from '../money/current-credit-pricing.js';
+import { buildCurrentCreditPricingSnapshot, creditPricingSnapshotDigest, currentCreditFundingTargets, currentShippingSourceFacts, readCurrentOrderPricingSnapshot, type CreditPricingEvidence, type CurrentOrderPricing, type OrdinaryUnitFacts, type OrderPricingSnapshotV2, type OriginalUnitIndexes } from '../money/current-credit-pricing.js';
+import { decodeCreditPricingOrigin, isImportedCreditOrigin, type CreditPricingOrigin } from '../money/imported-credit-origin.js';
 import { planEditCreditFunding, type EditFundingPosting } from '../account-credit/edit-funding.js';
 import { prepareEditCreditFunding, postEditCreditFunding, readCurrentCreditEvidence } from '../account-credit/service.js';
 import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
@@ -90,7 +92,17 @@ export interface BalanceInfo {
   amountDue: number;
 }
 export interface RefundablePayment { id: string; method: string; amount: number; available: number }
+export interface EditPricingOptions { recalculateShipping?: boolean; recalculateShippingPromotions?: boolean }
+interface ImportedPricingBasis {
+  kind: 'vendure-order-edit-basis-v1'; storeId: string; orderId: string; currency: string;
+  sourceKey: string; sourceOrderId: string; editBasisV1: unknown;
+}
+function editPricingOptions(options: EditPricingOptions): Required<EditPricingOptions> {
+  const recalculateShipping = options.recalculateShipping !== false;
+  return { recalculateShipping, recalculateShippingPromotions: options.recalculateShippingPromotions ?? recalculateShipping };
+}
 export interface EditPlan {
+  pricingOptions: Required<EditPricingOptions>;
   order: OrderRow;
   working: WorkingOrder;
   before: OrderSnapshot;
@@ -114,9 +126,12 @@ export interface EditPlan {
   taxRate: number;
   taxInclusive: boolean;
   stack: OrderEditStackCandidate;
+  storedLines: Array<typeof s.orderLine.$inferSelect>;
   storedFingerprint: string;
+  importedPricingBasis?: ImportedPricingBasis;
+  legacyPricingSnapshot?: OrderPricingSnapshotV1;
   previewAcceptanceHash: string;
-  credit: { current: CurrentOrderPricing; evidence: CreditPricingEvidence; origin: OrderPricingSnapshotV1;
+  credit: { current: CurrentOrderPricing; evidence: CreditPricingEvidence; origin: CreditPricingOrigin;
     indexes: OriginalUnitIndexes; ordinary: OrderPricingSnapshotV1; ordinaryUnitFacts: OrdinaryUnitFacts;
     pricing: OrderPricingSnapshotV2; ledgerPrefixDigest: string; creditCode: string } | null;
 }
@@ -155,7 +170,7 @@ function ordinaryProducerFacts(stack: OrderEditStackCandidate, ids: ReadonlyMap<
   }));
 }
 function creditMaterial(input: { stack: OrderEditStackCandidate; working: WorkingOrder; current: CurrentOrderPricing;
-  evidence: CreditPricingEvidence; origin: OrderPricingSnapshotV1; creditCode: string; editId: string; lineIds: ReadonlyMap<string, string> }) {
+  evidence: CreditPricingEvidence; pricingSources: Awaited<ReturnType<typeof loadPricingLineage>>['pricingSources']; origin: CreditPricingOrigin; creditCode: string; editId: string; lineIds: ReadonlyMap<string, string> }) {
   const ordinary = buildOrderPricingSnapshot(input.stack.input, input.stack.result, input.lineIds);
   const unitIds: Record<string, string[]> = {}, consumedPositions: Record<string, number[]> = {};
   const indexes: OriginalUnitIndexes = Object.fromEntries(input.working.lines.map(line => {
@@ -171,15 +186,16 @@ function creditMaterial(input: { stack: OrderEditStackCandidate; working: Workin
     return [id, [...selected, ...Array(newCount).fill(null)]];
   }));
   const ordinaryUnitFacts = ordinaryProducerFacts(input.stack, input.lineIds);
-  const targets = currentCreditFundingTargets(ordinary, indexes, input.origin.pricesIncludeTax ? 'gross' : 'net', ordinaryUnitFacts, { consumedPositions });
+  const targets = currentCreditFundingTargets(ordinary, indexes, decodeCreditPricingOrigin(input.origin).pricesIncludeTax ? 'gross' : 'net', ordinaryUnitFacts,
+    { consumedPositions, sourceCustody: input.current.sourceCustody, liveDetachedAllocation: input.current.liveDetachedAllocation, consumedUnitIds: input.current.consumedSourceUnitIds });
   // Removing retained bearer membership restores every remaining funded cent.
   const retained = input.working.couponCodes.some(member => member.toLowerCase() === input.creditCode.toLowerCase());
   if (!retained) for (const line of targets) for (const unit of line.units) unit.maximumCredit = 0;
   const plan = planEditCreditFunding({ ...input.evidence, editId: input.editId, lines: targets });
   if (!plan.ok || plan.replay) throw new OrderEditError(409, 'CREDIT_ALLOCATION_INVALID', plan.ok ? 'Edit preparation unexpectedly replayed.' : plan.message);
   const pricing = buildCurrentCreditPricingSnapshot({ origin: input.origin, ordinary, couponCodes: input.working.couponCodes,
-    evidence: plannedFundingEvidence(input.evidence, plan.postings), originalUnitIndexes: indexes, ordinaryUnitFacts, unitIds, predecessor: input.current,
-    lineage: { editId: input.editId, predecessorSnapshotDigest: creditPricingSnapshotDigest(input.current.snapshot), consumedUnitIds: Object.entries(consumedPositions).flatMap(([id, positions]) => positions.map(position => unitIds[id]![position]!)) } });
+    evidence: plannedFundingEvidence(input.evidence, plan.postings), pricingSources: input.pricingSources, originalUnitIndexes: indexes, ordinaryUnitFacts, unitIds, predecessor: input.current, sourceCustody: input.current.sourceCustody,
+    lineage: { editId: input.editId, predecessorSnapshotDigest: creditPricingSnapshotDigest(input.current.snapshot), consumedUnitIds: input.current.consumedSourceUnitIds } });
   return { ordinary, indexes, ordinaryUnitFacts, targets, plan, pricing, unitIds, consumedPositions };
 }
 
@@ -211,26 +227,33 @@ async function lockableOrderId(storeId: string, code: string): Promise<string> {
 
 /** Legacy editing cannot reproduce immutable stacked/unit-vector pricing. */
 async function pricingEditProtected(tx: Tx, storeId: string, order: typeof s.order.$inferSelect, proposedCodes: readonly string[] = []): Promise<boolean> {
-  // Imported baselines require independently validated retained source getters;
-  // native V1 snapshots carry their own complete immutable economic basis.
-  if (order.pricingSnapshot == null && order.metadata != null && typeof order.metadata === 'object' && Object.hasOwn(order.metadata, 'vendure')) return true;
+  const vendure = (order.metadata as { vendure?: { editBasisV1?: unknown } } | null)?.vendure;
+  // This is capability admission only. Planning validates every retained raw
+  // record, financial projection & immutable credit origin before pricing.
+  const importedBasis = vendure?.editBasisV1 != null;
+  if (order.pricingSnapshot == null && vendure && !importedBasis) return true;
   if (order.pricingSnapshot != null && ![1, 2].includes(Number((order.pricingSnapshot as { version?: unknown }).version))) return true;
   const [ledger] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
     .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id))).limit(1);
-  if (ledger && order.pricingSnapshot == null) return true;
+  if (ledger && order.pricingSnapshot == null && !importedBasis) return true;
   const codes = new Set([...order.couponCodes, ...proposedCodes].map(code => code.toLowerCase()));
   const usages = await tx.select({ promotionId: s.promotionUsage.promotionId }).from(s.promotionUsage)
     .where(and(eq(s.promotionUsage.storeId, storeId), eq(s.promotionUsage.orderId, order.id)));
   const applied = new Set([order.promotionId, ...usages.map(usage => usage.promotionId)]);
   const promotions = await tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, scope: s.promotion.discountScope }).from(s.promotion).where(eq(s.promotion.storeId, storeId));
-  const snapshot = order.pricingSnapshot as OrderPricingSnapshotV1 | OrderPricingSnapshotV2 | null;
-  const retainedId = snapshot?.version === 2 ? snapshot.credit.promotionId : snapshot?.selectedCredit?.promotionId;
+  const snapshot = order.pricingSnapshot as CreditPricingOrigin | OrderPricingSnapshotV2 | null;
+  const redemptions = importedBasis && order.pricingSnapshot == null ? await tx.select({ accountCreditId: s.accountCreditTransaction.accountCreditId }).from(s.accountCreditTransaction)
+    .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED'))) : [];
+  const [retainedAccount] = redemptions.length === 1 ? await tx.select({ promotionId: s.accountCredit.promotionId }).from(s.accountCredit)
+    .where(and(eq(s.accountCredit.storeId, storeId), eq(s.accountCredit.id, redemptions[0]!.accountCreditId))).limit(1) : [];
+  const retainedId = snapshot?.version === 2 ? snapshot.credit.promotionId : isImportedCreditOrigin(snapshot) ? snapshot.accountSource.promotionId : snapshot?.selectedCredit?.promotionId ?? retainedAccount?.promotionId;
   if (ledger && !retainedId) return true;
   return promotions.some(promotion => (applied.has(promotion.id) || (promotion.code != null && codes.has(promotion.code.toLowerCase()))) &&
     promotion.type === 'account_credit' && promotion.id !== retainedId);
 }
 
-export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: EditOpT[], opts: { lock: boolean }): Promise<EditPlan> {
+export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: EditOpT[], opts: { lock: boolean } & EditPricingOptions): Promise<EditPlan> {
+  const pricingOptions = editPricingOptions(opts);
   const [order] = opts.lock
     ? await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update')
     : await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -330,15 +353,34 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   // Admit current stored economics before replacing the singleton calculator.
   // A native legacy row must reproduce its complete stored amounts; imported
   // rows without a proven raw basis remain protected above.
-  const rawPricing = order.pricingSnapshot as OrderPricingSnapshotV1 | OrderPricingSnapshotV2 | null;
+  const rawPricing = order.pricingSnapshot as CreditPricingOrigin | OrderPricingSnapshotV2 | null;
   const storedMoney = { subtotal: order.subtotal, discountTotal: order.discountTotal, shippingTotal: order.shippingTotal,
-    taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount: rawPricing != null
+    taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount: isImportedCreditOrigin(rawPricing) ? rawPricing.capture.totals.pointsDiscount : rawPricing != null
       ? rawPricing.totals.pointsDiscount : Math.max(0, Math.floor(meta.loyalty?.pointsDiscount ?? 0)) };
   const nativeLines = dbLines.map(line => ({ key: line.id, id: line.id, quantity: line.quantity }));
+  // Pending imported credit refunds have no source unit authority until actual
+  // settlement. Classify that actionable interlock before decoding an origin.
+  const [committedCredit] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
+    .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED'))).limit(1);
+  if (committedCredit) {
+    const refunds = await tx.select({ state: s.refund.state, metadata: s.refund.metadata }).from(s.refund)
+      .where(and(eq(s.refund.storeId, storeId), eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
+    if (refunds.some(refund => { const metadata = refund.metadata as { creditRestoration?: { status?: string; state?: string }; stockEffects?: { state?: string }; merchandiseCompletion?: { state?: string } } | null;
+      const restoration = metadata?.creditRestoration;
+      return refund.state !== 'Settled' || restoration?.status === 'reconciliation_required' || restoration?.state === 'reconciliation_required' || metadata?.stockEffects?.state === 'pending' || metadata?.merchandiseCompletion?.state === 'pending'; })) {
+      throw new OrderEditError(409, 'REFUND_UNRESOLVED', 'Resolve pending merchandise refunds before editing credited pricing.');
+    }
+  }
   const creditEvidence = await readCurrentCreditEvidence(tx, { storeId, orderId: order.id });
   const pricingLineage = await loadPricingLineage(tx, storeId, order.id);
+  const importedBasis = (order.pricingSnapshot == null || isImportedCreditOrigin(rawPricing)) && (order.metadata as { vendure?: unknown } | null)?.vendure
+    ? readImportedOrderEditBasis(order.metadata, { storeId, orderId: order.id, currency: order.currency, orderLines: dbLines, couponCodes: initial.couponCodes }) : null;
+  const initialCreditPricing = importedBasis && creditEvidence && order.pricingSnapshot == null ? (() => {
+    if (!creditEvidence.importedOrigin) throw new OrderEditError(409, 'CREDIT_ALLOCATION_INVALID', 'Retained imported account/redemption source proof is absent.');
+    return creditEvidence.importedOrigin;
+  })() : null;
   let snapshot: CurrentOrderPricing | null;
-  try { snapshot = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: nativeLines, totals: storedMoney, mode: 'settlement', creditEvidence: creditEvidence ?? undefined, ...pricingLineage }); }
+  try { snapshot = readCurrentOrderPricingSnapshot(initialCreditPricing ?? order.pricingSnapshot, { currency: order.currency, orderLines: nativeLines, totals: storedMoney, mode: 'settlement', creditEvidence: creditEvidence ?? undefined, ...pricingLineage }); }
   catch { throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Saved pricing evidence does not match this order.'); }
   if (snapshot?.selectedCredit && !creditEvidence) throw new OrderEditError(409, 'CREDIT_ALLOCATION_INVALID', 'Immutable credit redemption proof is absent.');
   if (snapshot?.selectedCredit) {
@@ -349,14 +391,6 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const [retainedCreditPromotion] = snapshot?.selectedCredit ? await tx.select({ code: s.promotion.code }).from(s.promotion)
     .where(and(eq(s.promotion.storeId, storeId), eq(s.promotion.id, snapshot.selectedCredit.promotionId))).limit(1) : [];
   if (snapshot?.selectedCredit && !retainedCreditPromotion?.code) throw new OrderEditError(409, 'CREDIT_ALLOCATION_INVALID', 'Retained credit bearer identity is absent.');
-  if (snapshot?.selectedCredit) {
-    const refunds = await tx.select({ state: s.refund.state, metadata: s.refund.metadata }).from(s.refund)
-      .where(and(eq(s.refund.storeId, storeId), eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
-    if (refunds.some(refund => { const restoration = (refund.metadata as { creditRestoration?: { status?: string; state?: string } } | null)?.creditRestoration;
-      return refund.state !== 'Settled' || restoration?.status === 'reconciliation_required' || restoration?.state === 'reconciliation_required'; })) {
-      throw new OrderEditError(409, 'REFUND_UNRESOLVED', 'Resolve pending merchandise refunds before editing credited pricing.');
-    }
-  }
   if (snapshot) {
     if (JSON.stringify(snapshot.couponCodes) !== JSON.stringify(initial.couponCodes)) {
       throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Saved pricing differs from complete stored coupon membership.');
@@ -377,7 +411,25 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     for (const line of nativeLines) line.key = byId.get(line.id)!.key;
     for (const line of working.lines) if (line.id) line.key = byId.get(line.id)!.key;
   }
-  const originalByKey = new Map((snapshot?.lines ?? []).map(line => [line.key, line]));
+  const originalByKey = new Map((snapshot?.lines ?? importedBasis?.lines ?? []).map(line => [line.key, line]));
+  const sourceKey = (order.metadata as { vendure?: { sourceKey?: unknown } } | null)?.vendure?.sourceKey;
+  const priorOrdinary = snapshot ? snapshot.snapshot.version === 2 ? snapshot.snapshot.ordinary : isImportedCreditOrigin(snapshot.snapshot) ? null : snapshot.snapshot : null;
+  const retainedComponents = importedBasis ?? ((order.metadata as { vendure?: { editBasisV1?: unknown } } | null)?.vendure?.editBasisV1
+    ? readImportedOrderEditComponents(order.metadata, order.currency) : null);
+  const sourceSurcharges = new Map<string, NonNullable<NonNullable<StackInput['adjustments']>[number]['sourceSurcharge']>>();
+  if (importedBasis) {
+    if (typeof sourceKey !== 'string') throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Imported surcharge source identity is absent.');
+    for (const charge of importedBasis.surcharges) {
+      const id = migrationId(storeId, sourceKey, 'order-adjustment', charge.sourceId), row = dbAdjustments.find(item => item.id === id);
+      if (!row || row.amount !== charge.net || row.label !== charge.description) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Stored surcharge differs from retained source getter.');
+      sourceSurcharges.set(id, { sourceId: charge.sourceId, sourceDigest: importedBasis.sourceDigest, net: charge.net, gross: charge.gross });
+    }
+  } else for (const adjustment of priorOrdinary?.adjustments ?? []) if (adjustment.sourceSurcharge) {
+    if (typeof sourceKey !== 'string') throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Imported surcharge source identity is absent.');
+    const source = adjustment.sourceSurcharge, id = migrationId(storeId, sourceKey, 'order-adjustment', source.sourceId), row = dbAdjustments.find(item => item.id === id);
+    if (!row || row.amount !== source.net || row.amount !== adjustment.amount) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Stored surcharge differs from current pricing.');
+    sourceSurcharges.set(id, source);
+  }
   // Every line, including zero rows, needs exact authoritative product facts.
   const facts = await loadCouponMatchContext(tx, [...new Set(variantRows.map(variant => variant.productId))]);
   const items = working.lines.map(line => {
@@ -385,17 +437,23 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     if (!productId || !product) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Promotion line identity cannot be established.', { lineId: line.id });
     return { lineKey: line.key, quantity: line.quantity, productId, tags: product.tags, collectionIds: product.collectionIds };
   });
-  if (working.shipping.kind === 'keep' && !shippingOverride) {
+  let retainedShipping: StackInput['retainedShipping'];
+  // Native scalar defaults keep their historical snapshot shape. Source vectors,
+  // explicit preservation options & retained promotion recalculation use carriers.
+  const carrierPricing = !!retainedComponents || !!priorOrdinary?.retainedShipping ||
+    (working.shipping.kind === 'keep' || working.shipping.kind === 'method') && (!pricingOptions.recalculateShipping || !pricingOptions.recalculateShippingPromotions);
+  if (!carrierPricing && working.shipping.kind === 'keep' && !shippingOverride) {
     const recorded = storedMethodCode ? methodsByCode.get(storedMethodCode) : undefined;
     if (!recorded && storedBase !== 0) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Shipping requires a mapped current calculator or an explicit amount.');
     calc = recorded?.calculator as ShippingCalculator | undefined;
     methodCode = recorded?.code ?? null;
     baseShipping = calc ? shippingRate(calc) : 0;
   }
-  const pricingBase = { currency: order.currency, phase: 'PaymentSettled' as const, pricesIncludeTax: snapshot?.pricesIncludeTax ?? taxInclusive,
-    shipping: baseShipping, shippingTaxRateBps: calc?.taxRate ?? (storeRow.shippingTaxable ? taxRate : 0),
-    shippingIncludesTax: calc?.taxInclusive ?? taxInclusive, couponContext: { activeVerifications: [], items },
-    pointsDiscount: storedMoney.pointsDiscount, adjustments: working.adjustments.map(({ label, amount }) => ({ label, amount })),
+  const pricingBase: Omit<StackInput, 'lines' | 'promotions' | 'couponContext'> & { couponContext: { activeVerifications: string[]; items: typeof items } } = { currency: order.currency, phase: 'PaymentSettled' as const, pricesIncludeTax: snapshot?.pricesIncludeTax ?? importedBasis?.pricesIncludeTax ?? taxInclusive,
+    ...(retainedShipping ? { retainedShipping } : {}),
+    shipping: baseShipping, shippingTaxRateBps: retainedShipping ? 0 : calc?.taxRate ?? (storeRow.shippingTaxable ? taxRate : 0),
+    shippingIncludesTax: retainedShipping ? false : calc?.taxInclusive ?? taxInclusive, couponContext: { activeVerifications: [], items },
+    pointsDiscount: storedMoney.pointsDiscount, adjustments: working.adjustments.map(({ id, label, amount }) => ({ label, amount, ...(id && sourceSurcharges.has(id) ? { sourceSurcharge: sourceSurcharges.get(id)! } : {}) })),
     couponCodes: working.couponCodes.filter(code => !retainedCreditPromotion?.code || code.toLowerCase() !== retainedCreditPromotion.code.toLowerCase()) };
   const workingBases = working.lines.map(line => {
     const original = originalByKey.get(line.key);
@@ -411,7 +469,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   // financial line & header proves it. Never apply this to imported net rows.
   let legacyInput: StackInput | undefined;
   let legacyResult: ReturnType<typeof calculatePromotionStack> | undefined;
-  if (!snapshot) {
+  if (!snapshot && !importedBasis) {
     const beforeItems = dbLines.map(line => {
       const productId = line.variantId ? variantsById.get(line.variantId)?.productId : undefined;
       const product = productId ? facts.get(productId) : undefined;
@@ -432,18 +490,53 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
       return !nativeProjection && !checkoutProjection;
     })) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Stored native pricing cannot be reproduced from complete list-price evidence.');
   }
-  const existingBasis = snapshot?.lines ?? legacyInput!.lines;
+  const legacyPricingSnapshot = legacyInput && legacyResult ? buildOrderPricingSnapshot(legacyInput, legacyResult,
+    new Map(dbLines.map(line => [line.id, line.id]))) : undefined;
+  const existingBasis = snapshot?.lines ?? importedBasis?.lines ?? legacyInput!.lines;
   const afterLines = workingBases.map(line => line.change === 'untouched'
     ? { ...existingBasis.find(original => original.key === line.key)!, priorAdjustments: [] }
     : { ...line.basis, key: line.key, quantity: line.quantity });
-  const resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, mode: opts.lock ? 'payment' : 'quote' });
+  let resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, mode: opts.lock ? 'payment' : 'quote' });
   const listSubtotal = afterLines.reduce((total, line) => {
     const factor = 1 + line.taxRateBps / 10000;
     const unit = pricingBase.pricesIncludeTax ? (line.priceIncludesTax ? line.unitListPrice : line.unitListPrice * factor)
       : (line.priceIncludesTax ? line.unitListPrice / factor : line.unitListPrice);
     return total + Math.round(unit * line.quantity);
   }, 0);
-  if (calc && !isMethodEligible(calc, { subtotal: listSubtotal, country,
+  if (carrierPricing) {
+    const source = snapshot ? currentShippingSourceFacts(snapshot, creditEvidence ?? undefined, pricingLineage.pricingSources,
+      { orderId: order.id, shippingMethodCode: storedMethodCode }) : retainedComponents ? {
+      basis: retainedComponents.shippingLines.map(line => ({ sourceId: line.sourceId, amount: line.listPrice, includesTax: line.listPriceIncludesTax, taxRateBps: line.taxRateBps })),
+      adjustments: Object.fromEntries(retainedComponents.shippingLines.map(line => [line.sourceId, line.adjustments.reduce((sum, amount) => sum + amount, 0)])),
+      carriers: retainedComponents.shippingLines.map(line => ({ sourceId: line.sourceId, methodCode: line.methodCode,
+        lineKeys: line.orderLineIds.map(id => { const native = working.lines.find(line => line.id === id);
+          if (!native) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Retained shipping member identity is absent.'); return native.key; }) })),
+    } : {
+      // This branch follows complete native legacy financial reproduction above.
+      basis: [{ sourceId: 'current-shipping', amount: legacyInput!.shipping, includesTax: legacyInput!.shippingIncludesTax, taxRateBps: legacyInput!.shippingTaxRateBps }],
+      adjustments: { 'current-shipping': legacyResult!.shippingTotal - legacyInput!.shipping },
+      carriers: [{ sourceId: 'current-shipping', methodCode: storedMethodCode, lineKeys: legacyInput!.lines.map(line => line.key) }],
+    };
+    const final = priorOrdinary?.retainedShippingFinal ?? (priorOrdinary ? (() => {
+      const basis = priorOrdinary.shippingBasis, amount = priorOrdinary.totals.shippingTotal, factor = 1 + basis.taxRateBps / 10000;
+      return [{ sourceId: 'current-shipping', net: Math.round(basis.includesTax ? amount / factor : amount), gross: Math.round(basis.includesTax ? amount : amount * factor) }];
+    })() : retainedComponents?.shippingLines.map(line => ({ sourceId: line.sourceId, net: line.net, gross: line.gross })) ??
+      [{ sourceId: 'current-shipping', net: Math.round(legacyInput!.shippingIncludesTax ? legacyResult!.shippingTotal / (1 + legacyInput!.shippingTaxRateBps / 10000) : legacyResult!.shippingTotal),
+        gross: Math.round(legacyInput!.shippingIncludesTax ? legacyResult!.shippingTotal : legacyResult!.shippingTotal * (1 + legacyInput!.shippingTaxRateBps / 10000)) }]);
+    retainedShipping = priceEditShippingCarriers({ ...source, final, sourceDigest: snapshot ? creditPricingSnapshotDigest(snapshot.snapshot) : retainedComponents?.sourceDigest ?? creditPricingSnapshotDigest(legacyPricingSnapshot!),
+      lines: working.lines, methods, ...(working.shipping.kind === 'method' ? { selectedMethodCode: working.shipping.method.code } : {}),
+      ...(working.shipping.kind === 'custom' ? { replacement: { kind: 'custom' as const, amount: working.shipping.amount } }
+        : working.shipping.kind === 'none' ? { replacement: { kind: 'none' as const } }
+        : working.shipping.kind === 'keep' && shippingOverride && pricingOptions.recalculateShipping && source.carriers.length > 0 ? { replacement: { kind: 'custom' as const, amount: source.basis[0]!.amount } } : {}), ...pricingOptions,
+      context: { subtotal: listSubtotal, country, discountedSubtotalWithTax: resolved.lineSnapshots.reduce((total, line) => total + line.lineGross, 0) },
+      defaultTaxRateBps: storeRow.shippingTaxable ? taxRate : 0, defaultIncludesTax: taxInclusive });
+    baseShipping = retainedShipping.lines.reduce((sum, line) => sum + line.net, 0);
+    methodCode = retainedShipping.carriers?.[0]?.methodCode ?? null;
+    pricingBase.retainedShipping = retainedShipping; pricingBase.shipping = baseShipping;
+    pricingBase.shippingTaxRateBps = 0; pricingBase.shippingIncludesTax = false;
+    resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, mode: opts.lock ? 'payment' : 'quote' });
+  }
+  if (!carrierPricing && calc && !isMethodEligible(calc, { subtotal: listSubtotal, country,
     discountedSubtotalWithTax: resolved.lineSnapshots.reduce((total, line) => total + line.lineGross, 0) })) {
     throw new OrderEditError(409, 'SHIPPING_UNAVAILABLE', 'Shipping method is not available for this order.', { code: methodCode });
   }
@@ -454,9 +547,10 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   let stack: OrderEditStackCandidate;
   try { stack = priceOrderEditStack({ before: { basis: snapshot?.selectedCredit
-    ? { kind: 'current-proof', lines: snapshot.lines, pricesIncludeTax: snapshot.pricesIncludeTax, economicHash: snapshot.quoteHash }
-    : snapshot ? { kind: 'snapshot', snapshot: snapshot.snapshot } : { kind: 'legacy', input: legacyInput!, result: legacyResult! },
-    currency: order.currency, orderLines: nativeLines, totals: storedMoney, economicHash: snapshot?.quoteHash ?? legacyResult!.quoteHash },
+    ? { kind: 'current-proof', lines: snapshot.lines, pricesIncludeTax: snapshot.pricesIncludeTax, economicHash: snapshot.quoteHash,
+      ...(isImportedCreditOrigin(snapshot.snapshot.version === 2 ? snapshot.snapshot.origin : snapshot.snapshot) ? { signedHeader: true as const } : {}) }
+    : snapshot ? { kind: 'snapshot', snapshot: snapshot.snapshot } : importedBasis ?? { kind: 'legacy', input: legacyInput!, result: legacyResult! },
+    currency: order.currency, orderLines: nativeLines, totals: storedMoney, economicHash: snapshot?.quoteHash ?? importedBasis?.sourceFingerprint ?? legacyResult!.quoteHash },
     creditLedgerEvidence: [], lines: workingBases, pricing: { ...pricingBase, promotions: resolved.resolvedPromotions ?? [] } }); }
   catch (error) { if (error instanceof OrderEditStackError) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', error.message); throw error; }
   stack.result.coupons = resolved.coupons;
@@ -465,7 +559,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   if (snapshot?.selectedCredit && creditEvidence) {
     const origin = snapshot.snapshot.version === 2 ? snapshot.snapshot.origin : snapshot.snapshot;
     const ids = new Map(working.lines.map(line => [line.key, line.id ?? logicalUuid(`edit-preview:${order.id}:${line.key}`)]));
-    const material = creditMaterial({ stack, working, current: snapshot, evidence: creditEvidence, origin,
+    const material = creditMaterial({ stack, working, current: snapshot, evidence: creditEvidence, pricingSources: pricingLineage.pricingSources, origin,
       creditCode: retainedCreditPromotion!.code!, editId: logicalUuid(`edit-preview:${order.id}`), lineIds: ids });
     credit = { current: snapshot, evidence: creditEvidence, origin, ...material, creditCode: retainedCreditPromotion!.code!, ledgerPrefixDigest: fundingPrefixDigest(creditEvidence) };
     projections = projections.map(line => { const final = material.pricing.lines.find(item => item.orderLineId === ids.get(line.key))!;
@@ -480,15 +574,20 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     if (row && row.type !== 'account_credit') promotionRow = { ...row, type: row.type };
   }
   const storedUsage = await tx.select().from(s.promotionUsage).where(and(eq(s.promotionUsage.storeId, storeId), eq(s.promotionUsage.orderId, order.id)));
-  const storedFingerprint = orderEditStoredFingerprint({ order, lines: [...dbLines].sort((a, b) => a.id.localeCompare(b.id)),
+  const rawSource = (order.metadata as { vendure?: { sourceKey?: unknown; id?: unknown; editBasisV1?: unknown } } | null)?.vendure;
+  const importedPricingBasis: ImportedPricingBasis | undefined = importedBasis && !snapshot?.selectedCredit && order.pricingSnapshot == null && typeof rawSource?.sourceKey === 'string'
+    ? { kind: 'vendure-order-edit-basis-v1', storeId, orderId: order.id, currency: order.currency, sourceKey: rawSource.sourceKey,
+      sourceOrderId: String(rawSource.id), editBasisV1: rawSource.editBasisV1 } : undefined;
+  const storedFingerprint = orderEditStoredFingerprint({ order, ...(importedPricingBasis ? { importedPricingBasis } : {}), lines: [...dbLines].sort((a, b) => a.id.localeCompare(b.id)),
     adjustments: dbAdjustments, couponCodes: initial.couponCodes, usage: storedUsage.sort((a, b) => a.id.localeCompare(b.id)), variants: [...variantRows].sort((a, b) => a.id.localeCompare(b.id)),
     ...(credit ? { refundPrefixDigest: refundPrefixDigest(credit.evidence) } : {}) });
   const afterHash = credit ? orderEditStoredFingerprint({ ordinaryHash: stack.afterEconomicHash, totals: credit.pricing.totals,
+    sourceCustody: credit.pricing.sourceCustody, sourceCustodyAllocation: credit.pricing.credit.sourceCustodyAllocation,
     funding: working.lines.map(line => ({ key: line.key, indexes: credit!.indexes[credit!.ordinary.lines.find(item => item.key === line.key)!.orderLineId],
       allocation: credit!.pricing.credit.allocation[credit!.ordinary.lines.find(item => item.key === line.key)!.orderLineId],
       unitEconomics: credit!.pricing.unitEconomics[credit!.ordinary.lines.find(item => item.key === line.key)!.orderLineId],
       consumedPositions: credit!.current.consumedPositions[line.id ?? ''] ?? [] })) }) : stack.afterEconomicHash;
-  const previewAcceptanceHash = orderEditAcceptanceHash(storedFingerprint, afterHash, ops);
+  const previewAcceptanceHash = orderEditAcceptanceHash(storedFingerprint, orderEditStoredFingerprint({ economics: afterHash, pricingOptions }), ops);
   const t = priced.totals;
 
   // A pure address edit is exempt from the payment holds ONLY while it is
@@ -583,7 +682,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   };
 
   return {
-    order, working, before, after, lineDiffs: diffLines(snapLines, working.lines, priced), priced, stock, stockDeltas, balance, refundable, warnings,
+    order, working, before, after, pricingOptions, ...(importedPricingBasis ? { importedPricingBasis } : {}), ...(legacyPricingSnapshot ? { legacyPricingSnapshot } : {}), lineDiffs: diffLines(snapLines, working.lines, priced), priced, stock, stockDeltas, balance, refundable, warnings, storedLines: dbLines,
     promotionRow, shipping: { amount: t.shippingTotal, base: baseShipping, override: shippingOverride, methodCode, methodName: methodCode ? methodsByCode.get(methodCode)?.name ?? null : null },
     address: { shipping: { changed: !sameAddress(beforeShip, afterShip), countryChanged: countryChanged(beforeShip, afterShip) }, billing: { changed: !sameAddress(beforeBill, afterBill) } },
     variantsById, isPreOrder: isPreOrderAfter, storeCtx, recipient, customerId: order.customerId, taxRate, taxInclusive, stack, storedFingerprint, previewAcceptanceHash, credit,
@@ -607,6 +706,7 @@ export function refundFeasibility(plan: Pick<EditPlan, 'refundable' | 'order'>, 
 }
 
 export interface PreviewResult {
+  pricingOptions: Required<EditPricingOptions>;
   code: string; state: string; currency: string; reason?: undefined;
   before: OrderSnapshot['totals']; after: OrderSnapshot['totals'];
   lines: LineDiff[]; adjustments: Array<{ id: string | null; label: string; amount: number }>;
@@ -621,7 +721,7 @@ export function previewFromPlan(plan: EditPlan): PreviewResult {
   const amountDue = plan.balance.amountDue;
   const refund = amountDue < 0 ? { ...refundFeasibility(plan, -amountDue), payments: plan.refundable } : null;
   return {
-    code: plan.order.code, state: plan.order.state, currency: plan.order.currency,
+    code: plan.order.code, state: plan.order.state, currency: plan.order.currency, pricingOptions: plan.pricingOptions,
     before: plan.before.totals, after: plan.after.totals, lines: plan.lineDiffs,
     adjustments: plan.working.adjustments, shipping: plan.shipping,
     promotion: plan.promotionRow ? { code: plan.promotionRow.code, type: plan.promotionRow.type, value: plan.promotionRow.value } : null,
@@ -631,12 +731,12 @@ export function previewFromPlan(plan: EditPlan): PreviewResult {
   };
 }
 
-export async function previewOrderEdit(storeId: string, code: string, ops: EditOpT[]): Promise<PreviewResult> {
-  return withStore(storeId, async (tx) => previewFromPlan(await planOrderEdit(tx, storeId, code, ops, { lock: false })));
+export async function previewOrderEdit(storeId: string, code: string, ops: EditOpT[], options: EditPricingOptions = {}): Promise<PreviewResult> {
+  return withStore(storeId, async (tx) => previewFromPlan(await planOrderEdit(tx, storeId, code, ops, { ...options, lock: false })));
 }
 
 // ── commit ───────────────────────────────────────────────────────────────────
-export interface CommitInput {
+export interface CommitInput extends EditPricingOptions {
   storeId: string; storeSlug: string; code: string; actor: string;
   /** Who is acting. Required (no default) so a caller cannot forget it: an agent may not commit entitlement-changing ops. */
   principalKind: 'human' | 'agent';
@@ -650,8 +750,9 @@ export interface SettlementOutcome {
 }
 
 interface CreditActivation {
+  pricingOptions: Required<EditPricingOptions>;
   beforeOrder: OrderRow; variants: VariantRow[]; working: WorkingOrder; perLine: EditPlan['priced']['perLine'];
-  origin: OrderPricingSnapshotV1; ordinary: OrderPricingSnapshotV1; indexes: OriginalUnitIndexes; ordinaryUnitFacts: OrdinaryUnitFacts;
+  origin: CreditPricingOrigin; ordinary: OrderPricingSnapshotV1; indexes: OriginalUnitIndexes; ordinaryUnitFacts: OrdinaryUnitFacts;
   predecessor: CurrentOrderPricing; unitIds: Record<string, string[]>; lineage: OrderPricingSnapshotV2['lineage'];
   targets: ReturnType<typeof currentCreditFundingTargets>; stockDeltas: Array<[string, number]>;
   shipping: EditPlan['shipping']; isPreOrder: boolean; taxRate: number; taxInclusive: boolean;
@@ -710,7 +811,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
   fingerprint: string, refundPlan?: { amount: number; paymentId: string }) {
   const credit = plan.credit!;
   const { editId, lineIds } = allocateEditStageIds(plan.working.lines);
-  const material = creditMaterial({ stack: plan.stack, working: plan.working, current: credit.current, evidence: credit.evidence,
+  const material = creditMaterial({ stack: plan.stack, working: plan.working, current: credit.current, evidence: credit.evidence, pricingSources: (await loadPricingLineage(tx, input.storeId, plan.order.id)).pricingSources,
     origin: credit.origin, creditCode: credit.creditCode, editId, lineIds: new Map(Object.entries(lineIds)) });
   const prepared = await prepareEditCreditFunding(tx, { storeId: input.storeId, orderId: plan.order.id, editId, lines: material.targets });
   if (!prepared || prepared.plan.requestDigest !== material.plan.requestDigest || fundingPrefixDigest(prepared.evidence) !== credit.ledgerPrefixDigest) throw new OrderEditError(409, 'PREVIEW_STALE', 'Credit funding changed since preview.');
@@ -727,7 +828,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
     try { await reserveStockOrThrow(tx, input.storeId, positiveDeltas.map(({ variantId, quantity }) => ({ sku: plan.variantsById.get(variantId)!.sku, quantity })), reserveMap); }
     catch (error) { if (error instanceof StockReservationError) throw new OrderEditError(409, 'OUT_OF_STOCK', 'Insufficient stock for added quantity.', { skus: error.skus }); throw error; }
   }
-  const activation: CreditActivation = { beforeOrder: plan.order, variants: [...plan.variantsById.values()], working: plan.working, perLine: plan.priced.perLine,
+  const activation: CreditActivation = { pricingOptions: plan.pricingOptions, beforeOrder: plan.order, variants: [...plan.variantsById.values()], working: plan.working, perLine: plan.priced.perLine,
     origin: credit.origin, ordinary: material.ordinary, indexes: material.indexes, ordinaryUnitFacts: material.ordinaryUnitFacts, targets: material.targets,
     predecessor: credit.current, unitIds: material.unitIds, lineage: material.pricing.lineage,
     stockDeltas: [...plan.stockDeltas], shipping: plan.shipping, isPreOrder: plan.isPreOrder, taxRate: plan.taxRate, taxInclusive: plan.taxInclusive,
@@ -736,7 +837,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
   const proposal = buildEditStageProposal({ editId, orderId: plan.order.id, requestFingerprint: fingerprint, previewAcceptanceHash: plan.previewAcceptanceHash,
     beforeFingerprint: plan.storedFingerprint, beforeLedgerPrefixDigest: credit.ledgerPrefixDigest, pricingSnapshot: material.pricing,
     lineIds, lines: plan.working.lines, couponCodes: plan.working.couponCodes,
-    appliedPromotionIds: [...new Set([...plan.stack.result.applied.map(item => item.promotionId), ...(plan.working.couponCodes.some(code => code.toLowerCase() === credit.creditCode.toLowerCase()) ? [credit.origin.selectedCredit!.promotionId] : [])])],
+    appliedPromotionIds: [...new Set([...plan.stack.result.applied.map(item => item.promotionId), ...(plan.working.couponCodes.some(code => code.toLowerCase() === credit.creditCode.toLowerCase()) ? [decodeCreditPricingOrigin(credit.origin).selectedCredit.promotionId] : [])])],
     fundingPlan: material.plan, requestDigest: material.plan.requestDigest, postingKeys: material.plan.postings.map(posting => posting.idempotencyKey),
     settlementRequirement: { type: settlement?.type ?? 'none', currency: plan.order.currency, requiredTender, requiredRefund },
     stockReservationReceipt: { key: `order-edit:${editId}:stock`, positiveDeltas }, activation });
@@ -744,7 +845,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
     status: requiredRefund ? 'pending' : settlement?.type === 'leave_due' ? 'due' : settlement?.type === 'send_pay_link' ? 'sent' : settlement?.type === 'leave_credit' ? 'credit' : 'none',
     ...(refundPlan ? { amount: refundPlan.amount, paymentId: refundPlan.paymentId } : {}) };
   await tx.insert(s.orderEdit).values({ id: editId, storeId: input.storeId, orderId: plan.order.id, idempotencyKey: input.idempotencyKey, fingerprint,
-    before: { ...plan.before, currentPricing: plan.order.pricingSnapshot, storedFingerprint: plan.storedFingerprint }, after: { ...plan.after, proposal }, balance: plan.balance.amountDue,
+    before: { ...plan.before, currentPricing: credit.current.snapshot, storedOrder: plan.order, financialLines: plan.storedLines, storedFingerprint: plan.storedFingerprint }, after: { ...plan.after, proposal }, balance: plan.balance.amountDue,
     settlement: outcome, actor: input.actor, reason: input.reason ?? null });
   if (positiveDeltas.length) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(input.storeSlug)); });
   let emailQueued = false;
@@ -833,8 +934,8 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
     if (!afterEvidence) throw new Error('Activated funding evidence is absent');
     const actualRows = afterEvidence.history.filter(row => !evidence.history.some(prior => prior.id === row.id));
     if (actualRows.length !== posted.plan.postings.length || actualRows.some(row => !posted.plan.postings.some(posting => Object.entries(posting).every(([key, value]) => orderEditStoredFingerprint(value) === orderEditStoredFingerprint(row[key as keyof typeof row]))))) throw new Error('Posted funding rows differ');
-    const pricing = buildCurrentCreditPricingSnapshot({ origin: a.origin, ordinary: a.ordinary, couponCodes: stage.proposal.couponCodes, evidence: afterEvidence, originalUnitIndexes: a.indexes, ordinaryUnitFacts: a.ordinaryUnitFacts,
-      predecessor: a.predecessor, unitIds: a.unitIds, lineage: a.lineage });
+    const pricing = buildCurrentCreditPricingSnapshot({ origin: a.origin, ordinary: a.ordinary, couponCodes: stage.proposal.couponCodes, evidence: afterEvidence, pricingSources: (await loadPricingLineage(tx, input.storeId, input.orderId)).pricingSources, originalUnitIndexes: a.indexes, ordinaryUnitFacts: a.ordinaryUnitFacts,
+      predecessor: a.predecessor, unitIds: a.unitIds, lineage: a.lineage, sourceCustody: a.predecessor.sourceCustody });
     if (orderEditStoredFingerprint(creditEconomics(pricing)) !== orderEditStoredFingerprint(creditEconomics(stage.proposal.pricingSnapshot as OrderPricingSnapshotV2))) throw new Error('Activated pricing differs from accepted proposal');
     for (const [variantId, delta] of a.stockDeltas) if (delta < 0) await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${-delta}, 0)` }).where(and(eq(s.stock.storeId, input.storeId), eq(s.stock.variantId, variantId)));
     for (const line of a.working.lines) {
@@ -860,7 +961,7 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
     }
     const meta = (order.metadata ?? {}) as OrderMeta & Record<string, unknown>;
     await tx.update(s.order).set({ subtotal: pricing.totals.subtotal, discountTotal: pricing.totals.discountTotal, shippingTotal: pricing.totals.shippingTotal, taxTotal: pricing.totals.taxTotal, grandTotal: pricing.totals.grandTotal, couponCodes: stage.proposal.couponCodes, pricingSnapshot: pricing, isPreOrder: a.isPreOrder, promotionId: a.newPromoId,
-      shippingOverride: a.shipping.override, ...(a.working.shipping.kind !== 'keep' ? { shippingMethodCode: a.shipping.methodCode, shippingMethodName: a.shipping.methodName } : {}),
+      shippingOverride: a.shipping.override, ...(a.working.shipping.kind !== 'keep' || a.shipping.methodCode !== order.shippingMethodCode ? { shippingMethodCode: a.shipping.methodCode, shippingMethodName: a.shipping.methodName } : {}),
       shippingAddress: a.working.shippingAddress ? addressRow(a.working.shippingAddress) : order.shippingAddress, billingAddress: a.working.billingAddress ? addressRow(a.working.billingAddress) : order.billingAddress,
       metadata: a.working.shipping.kind !== 'keep' || meta.shipping ? { ...meta, shipping: { methodCode: a.shipping.methodCode, base: a.shipping.base, override: a.shipping.override } } : order.metadata, updatedAt: new Date() }).where(eq(s.order.id, input.orderId));
     if (a.working.saveToAddressBook) { await saveToAddressBook(tx, input.storeId, order.customerId, a.working.shippingAddress); await saveToAddressBook(tx, input.storeId, order.customerId, a.working.billingAddress); }
@@ -935,6 +1036,7 @@ const fingerprintOf = (i: CommitInput) => createHash('sha256').update(JSON.strin
   code: i.code, ops: i.ops, settlement: i.settlement ?? null, expectedGrandTotal: i.expectedGrandTotal,
   expectedBalance: i.expectedBalance ?? null, notify: i.notifyCustomer, reason: i.reason ?? null,
   previewAcceptanceHash: i.previewAcceptanceHash ?? null,
+  pricingOptions: editPricingOptions(i),
 })).digest('hex');
 
 const fmt = (cents: number, cur: string) => `${(Math.abs(cents) / 100).toFixed(2)} ${cur}`;
@@ -1001,7 +1103,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
     const [prior] = await tx.select({ id: s.orderEdit.id }).from(s.orderEdit)
       .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.idempotencyKey, input.idempotencyKey))).limit(1);
     if (prior) return false;
-    const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { lock: false });
+    const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { ...editPricingOptions(input), lock: false });
     assertPrincipalMayCommit(input.principalKind, plan); // before any Stripe I/O or write
     if (plan.previewAcceptanceHash !== input.previewAcceptanceHash || plan.after.totals.grandTotal !== input.expectedGrandTotal ||
       (input.expectedBalance != null && plan.balance.amountDue !== input.expectedBalance)) {
@@ -1042,7 +1144,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         return { result, plan: null };
       }
 
-      const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { lock: true });
+      const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { ...editPricingOptions(input), lock: true });
       assertPrincipalMayCommit(input.principalKind, plan); // re-checked on the locked plan: the order may have changed since the unlocked one
       const o = plan.order;
       if (plan.previewAcceptanceHash !== input.previewAcceptanceHash || plan.after.totals.grandTotal !== input.expectedGrandTotal || (input.expectedBalance != null && plan.balance.amountDue !== input.expectedBalance)) {
@@ -1128,14 +1230,15 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       // ── the order row ─────────────────────────────────────────────────────
       const meta = (o.metadata ?? {}) as OrderMeta & Record<string, unknown>;
       const t = plan.priced.totals;
+      const currentPricing = buildOrderPricingSnapshot(plan.stack.input, plan.stack.result, lineIds);
       let receiptToken = o.receiptToken;
       if (settlement?.type === 'send_pay_link' && !receiptToken) receiptToken = randomBytes(32).toString('base64url');
       await tx.update(s.order).set({
         subtotal: t.subtotal, discountTotal: t.discountTotal, shippingTotal: t.shippingTotal, taxTotal: t.taxTotal, grandTotal: t.grandTotal,
-        couponCodes: [...plan.working.couponCodes], pricingSnapshot: buildOrderPricingSnapshot(plan.stack.input, plan.stack.result, lineIds),
+        couponCodes: [...plan.working.couponCodes], pricingSnapshot: currentPricing,
         isPreOrder: plan.isPreOrder, promotionId: newPromoId, shippingOverride: plan.shipping.override, receiptToken,
         // Persisted method (0086): set/cleared only when this edit changed the shipping line.
-        ...(plan.working.shipping.kind !== 'keep' ? { shippingMethodCode: plan.shipping.methodCode, shippingMethodName: plan.shipping.methodName } : {}),
+        ...(plan.working.shipping.kind !== 'keep' || plan.shipping.methodCode !== o.shippingMethodCode ? { shippingMethodCode: plan.shipping.methodCode, shippingMethodName: plan.shipping.methodName } : {}),
         shippingAddress: plan.working.shippingAddress ? addressRow(plan.working.shippingAddress) : o.shippingAddress,
         billingAddress: plan.working.billingAddress ? addressRow(plan.working.billingAddress) : o.billingAddress,
         // Record the shipping basis only when this edit set it (or one already
@@ -1153,7 +1256,10 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       const outcome: SettlementOutcome = { type: settlement?.type ?? 'none', status: 'none' };
       const [edit] = await tx.insert(s.orderEdit).values({
         storeId, orderId: o.id, idempotencyKey: input.idempotencyKey, fingerprint: fp,
-        before: plan.before as object, after: plan.after as object, balance, settlement: outcome as object,
+        before: { ...plan.before, currentPricing: plan.order.pricingSnapshot ?? plan.legacyPricingSnapshot, financialLines: plan.storedLines,
+          ...(plan.importedPricingBasis ? { importedPricingBasis: plan.importedPricingBasis, storedOrder: plan.order } : {}) },
+        after: { ...plan.after, lines: plan.after.lines.map((line, index) => ({ ...line, id: lineIds.get(plan.working.lines[index]!.key)! })),
+          pricingOptions: plan.pricingOptions, currentPricing, currentPricingDigest: creditPricingSnapshotDigest(currentPricing) }, balance, settlement: outcome as object,
         reason: input.reason ?? null, actor: input.actor,
       }).returning({ id: s.orderEdit.id });
       const editId = edit!.id;
@@ -1437,7 +1543,7 @@ export async function loadEditContext(storeId: string, code: string) {
     const items = EDITABLE_STATES.has(o.state) && !protectedPricing && !sourceAdmission.planRefusal && !pending;
     const address = o.state !== 'Cancelled' && !sourceAdmission.addressRefusal && !pending;
     return {
-      code: o.code, state: o.state, currency: o.currency, couponCodes,
+      code: o.code, state: o.state, currency: o.currency, couponCodes, pricingOptions: editPricingOptions({}),
       editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: pending ? 'Resolve the prepared order edit before changing its economics.' : sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
       pendingEdit: pending ? { id: pending.id, settlement: pending.settlement, proposal: (pending.after as { proposal?: unknown } | null)?.proposal ?? null, proposed: pending.after } : null,
       lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),

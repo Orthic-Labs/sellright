@@ -95,11 +95,17 @@ const serialize = (value: unknown) => JSON.stringify(stable(value));
 export const creditReturnSnapshotDigest = (value: unknown): string => createHash('sha256').update(serialize(value)).digest('hex');
 export const originalCreditUnitId = (redemptionId: string, orderLineId: string, index: number): string =>
   `original:${redemptionId}:${orderLineId}:${index}`;
+export const importedCreditUnitId = (sourceBasisDigest: string, orderLineId: string, sourceSlot: number): string =>
+  `vendure:${sourceBasisDigest}:${orderLineId}:${sourceSlot}`;
 export interface CreditUnitEconomics { net: number; gross: number; cashRefundGross: number }
 export interface CreditUnitReturnLine {
   orderLineId: string; positions: number[]; originalIndexes: Array<number | null>; creditCents: number[];
 }
-export interface CreditUnitReturnLineV2 extends CreditUnitReturnLine { unitIds: string[]; unitEconomics: CreditUnitEconomics[] }
+export interface CreditUnitReturnLineV2 extends CreditUnitReturnLine {
+  unitIds: string[]; unitEconomics: CreditUnitEconomics[];
+  /** Frozen prepare-source physical membership, independent of cash quantity. */
+  presentUnitIds?: string[];
+}
 export interface CreditUnitReturnsV1 {
   version: 1; redemptionId: string; snapshotDigest: string; requestDigest: string; lines: CreditUnitReturnLine[];
 }
@@ -108,8 +114,8 @@ export interface CreditUnitReturnsV2 {
 }
 export type CreditUnitReturns = CreditUnitReturnsV1 | CreditUnitReturnsV2;
 export interface CreditRefundEvidence {
-  id: string; state: string; metadata: unknown;
-  lines: readonly { orderLineId: string; quantity: number; amount: number }[];
+  id: string; state: string; metadata: unknown; amount?: number;
+  lines: readonly { id?: string; orderLineId: string; quantity: number; amount: number }[];
 }
 /** Structural decoder; source snapshot validation belongs to current pricing. */
 export function readCreditUnitReturns(metadata: unknown): CreditUnitReturns | null {
@@ -132,11 +138,18 @@ export function readCreditUnitReturns(metadata: unknown): CreditUnitReturns | nu
       !creditCents.every(money) || originalIndexes.some((i, p) => i === null && creditCents[p] !== 0)) throw new Error('Invalid frozen refund unit vectors');
     if (raw.version === 2) {
       if (!Array.isArray(line.unitIds) || !Array.isArray(line.unitEconomics) || line.unitIds.length !== positions.length || line.unitEconomics.length !== positions.length) throw new Error('Frozen refund lacks stable unit custody');
+      const unitIds = line.unitIds;
+      if (line.presentUnitIds !== undefined && (!Array.isArray(line.presentUnitIds) || new Set(line.presentUnitIds).size !== line.presentUnitIds.length ||
+        !line.presentUnitIds.every(id => typeof id === 'string' && unitIds.includes(id)))) throw new Error('Invalid frozen physical unit membership');
       for (let p = 0; p < positions.length; p++) {
         const id = line.unitIds[p], economics = line.unitEconomics[p], index = originalIndexes[p];
         const born = typeof id === 'string' ? id.split(':') : [];
+        const sourceUnit = born.length === 4 && born[0] === 'vendure' && /^[a-f0-9]{64}$/.test(born[1]!) &&
+          born[2] === line.orderLineId && /^(0|[1-9]\d*)$/.test(born[3]!) && Number.isSafeInteger(Number(born[3]));
+        const editUnit = born.length === 4 && born[0] === 'edit' && UUID.test(born[1]!) && born[2] === line.orderLineId &&
+          /^(0|[1-9]\d*)$/.test(born[3]!) && Number.isSafeInteger(Number(born[3]));
         if (typeof id !== 'string' || units.has(id) || (index !== null ? id !== originalCreditUnitId(raw.redemptionId, line.orderLineId, index) :
-          born.length !== 4 || born[0] !== 'edit' || !UUID.test(born[1]!) || born[2] !== line.orderLineId || !/^(0|[1-9]\d*)$/.test(born[3]!) || !Number.isSafeInteger(Number(born[3]))) ||
+          !sourceUnit && !editUnit) ||
           !object(economics) || !money(economics.net) || !money(economics.gross) || !money(economics.cashRefundGross)) throw new Error('Invalid frozen stable unit identity or economics');
         units.add(id);
       }

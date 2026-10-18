@@ -6,7 +6,15 @@ import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-d
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
-import { adjust, currentDiscount, disable, issue, previewAvailable, redeem, redeemAfterSettlement, release, reserve, restoreManual, restoreRefund, restoreRefundAfterSettlement, prepareEditCreditFunding, postEditCreditFunding } from './service.js';
+import { adjust, anchorImportedCreditOrigin, currentDiscount, disable, issue, previewAvailable, readCurrentCreditEvidence, redeem, redeemAfterSettlement, release, reserve, restoreManual, restoreRefund, restoreRefundAfterSettlement, prepareEditCreditFunding, postEditCreditFunding } from './service.js';
+import { migrationId } from '../import/context.js';
+import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
+import { buildEditStageProposal } from '../orders/edit-stage.js';
+import { buildCurrentCreditPricingSnapshot, creditPricingSnapshotDigest, currentCreditFundingTargets, readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
+import { buildOrderPricingSnapshot } from '../money/pricing-snapshot.js';
+import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
+import { planEditCreditFunding } from './edit-funding.js';
+import { availableCreditRefundUnits, prepareCreditUnitReturns } from '../payments/refund-credit.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'account-credit/service.db.test.ts');
 const STORE = 'cccccccc-accc-4000-8000-000000000001';
@@ -59,7 +67,185 @@ async function refund(orderId: string, paymentId: string, lineId: string, quanti
 }
 const op = { operationKey: 'operator-1', actor: 'synthetic-operator', reason: 'Synthetic correction' };
 
+async function retainedOrder() {
+  return withStore(STORE, async tx => {
+    const sourceKey = 'retained-synthetic', mapped = (kind: string, source: number) => migrationId(STORE, sourceKey, kind, source);
+    const orderId = mapped('order', 9), lineId = mapped('order-line', 7), creditId = mapped('account-credit', 4), promoId = mapped('promotion', 5);
+    const rawLine = { id: 7, orderId: 9, quantity: 2, orderPlacedQuantity: 3, listPrice: 100, listPriceIncludesTax: true,
+      adjustments: [{ amount: -101, type: 'PROMOTION', adjustmentSource: 'PROMOTION:5' }], taxLines: [], shippingLineId: null };
+    const basis = { version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey, sourceOrderId: '9',
+      sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', subTotal: 133, subTotalWithTax: 133, shipping: 0, shippingWithTax: 0, couponCodes: ['IMPORTED'] }),
+      channel: { sourceId: '1', projection: 'pricing-v1', sourceRecord: JSON.stringify({ id: 1, defaultCurrencyCode: 'USD', pricesIncludeTax: true, defaultTaxZoneId: null }),
+        orderChannelRecord: JSON.stringify({ orderId: 9, channelId: 1 }) }, shippingMethods: [],
+      header: { subTotal: '133', subTotalWithTax: '133', shipping: '0', shippingWithTax: '0' },
+      lines: [{ sourceId: '7', orderLineId: lineId, sourceRecord: JSON.stringify(rawLine) }], shippingLines: [], surcharges: [] };
+    const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currency: 'USD' });
+    const sourcePromotionRecord = JSON.stringify({ id: 5, actions: [{ code: 'account_credit_discount' }], conditions: [{ code: 'account_credit_eligible' }] });
+    await tx.insert(s.promotion).values({ id: promoId, storeId: STORE, code: 'IMPORTED', type: 'account_credit', value: 0 });
+    await tx.insert(s.accountCredit).values({ id: creditId, storeId: STORE, promotionId: promoId, currency: 'USD', emailNormalized: 'retained@example.invalid',
+      issuanceKey: 'retained', initialAmount: 1000, balance: 899, sourceKey, sourceId: '4', sourceRecord, sourcePromotionRecord,
+      sourceDigest: orderEditStoredFingerprint({ format: 'retained-pg-jsonb-text-v1', account: sourceRecord, promotion: sourcePromotionRecord }) });
+    await tx.insert(s.order).values({ id: orderId, storeId: STORE, code: 'RETAINED', state: 'Paid', currency: 'USD', promotionId: promoId,
+      subtotal: 200, discountTotal: 67, grandTotal: 133, couponCodes: ['IMPORTED'], metadata: { vendure: { id: 9, sourceKey,
+        editBasisV1: { ...basis, sourceDigest: orderEditStoredFingerprint(basis) } } } });
+    await tx.insert(s.orderLine).values({ id: lineId, storeId: STORE, orderId, variantSku: 'RETAINED', variantName: 'Retained', quantity: 2,
+      unitPrice: 100, lineSubtotal: 200, lineDiscount: 67, lineTotal: 133, metadata: { vendure: { id: 7 } } });
+    const transactionRecord = JSON.stringify({ id: 6, accountCreditId: 4, orderId: 9, kind: 'REDEEM', status: 'POSTED', amount: 101, delta: -101, allocation: { '7': [34, 34, 33] } });
+    await tx.insert(s.accountCreditTransaction).values({ id: mapped('account-credit-transaction', 6), storeId: STORE, accountCreditId: creditId, orderId,
+      kind: 'REDEEM', status: 'POSTED', amount: 101, delta: -101, balanceAfter: 899, idempotencyKey: 'retained-redeem',
+      operationalAllocation: { [lineId]: [34, 34, 33] }, allocation: JSON.stringify({ '7': [34, 34, 33] }),
+      sourceKey, sourceId: '6', sourceOrderId: '9', sourceRecord: transactionRecord,
+      sourceDigest: orderEditStoredFingerprint({ format: 'retained-pg-jsonb-text-v1', transaction: transactionRecord }) });
+    return { orderId, lineId, creditId };
+  });
+}
+
+async function pendingRetainedStage() {
+  const fixture = await retainedOrder();
+  return withStore(STORE, async tx => {
+    const [storedOrder] = await tx.select().from(s.order).where(eq(s.order.id, fixture.orderId));
+    const financialLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, fixture.orderId));
+    const evidence = (await readCurrentCreditEvidence(tx, { storeId: STORE, orderId: fixture.orderId }))!, origin = evidence.importedOrigin!;
+    const predecessor = readCurrentOrderPricingSnapshot(origin, { currency: 'USD', orderLines: financialLines, mode: 'settlement', creditEvidence: evidence })!;
+    const editId = randomUUID();
+    const pricingInput: StackInput = { currency: 'USD', pricesIncludeTax: true, couponCodes: [], phase: 'PaymentSettled',
+      lines: [{ key: fixture.lineId, quantity: 2, placedQuantity: 3, unitListPrice: 20, priceIncludesTax: true, taxRateBps: 0 }],
+      promotions: [], shipping: 0, shippingTaxRateBps: 0, shippingIncludesTax: true, couponContext: { activeVerifications: [] } };
+    const priced = calculatePromotionStack(pricingInput), ordinary = buildOrderPricingSnapshot(pricingInput, priced, new Map([[fixture.lineId, fixture.lineId]]));
+    const ordinaryUnitFacts = { [fixture.lineId]: { sourceAdjustmentTotal: priced.lineSnapshots[0]!.sourceAdjustmentTotal!,
+      sourceAdjustmentDivisor: priced.lineSnapshots[0]!.sourceAdjustmentDivisor! } };
+    const targets = currentCreditFundingTargets(ordinary, predecessor.originalUnitIndexes, 'gross', ordinaryUnitFacts,
+      { consumedPositions: predecessor.consumedPositions, sourceCustody: predecessor.sourceCustody,
+        liveDetachedAllocation: predecessor.liveDetachedAllocation, consumedUnitIds: predecessor.consumedSourceUnitIds });
+    const fundingPlan = planEditCreditFunding({ ...evidence, editId, lines: targets });
+    if (!fundingPlan.ok || fundingPlan.replay || fundingPlan.postings.length !== 1) throw new Error('Expected staged repricing restoration');
+    const restoreRows = fundingPlan.postings.map(posting => ({ ...posting, id: randomUUID(), refundId: null }));
+    const pricingSnapshot = buildCurrentCreditPricingSnapshot({ origin, ordinary, ordinaryUnitFacts, couponCodes: ['IMPORTED'],
+      evidence: { ...evidence, history: [...evidence.history, ...restoreRows] }, predecessor,
+      originalUnitIndexes: predecessor.originalUnitIndexes, unitIds: predecessor.unitIds,
+      lineage: { editId, predecessorSnapshotDigest: creditPricingSnapshotDigest(origin), consumedUnitIds: predecessor.consumedSourceUnitIds } });
+    const fingerprint = orderEditStoredFingerprint({ editId, fixture }), storedFingerprint = orderEditStoredFingerprint({ order: storedOrder, lines: financialLines });
+    const before = { currentPricing: origin, storedOrder: storedOrder!, financialLines, storedFingerprint };
+    const activation = { beforeOrder: storedOrder!, predecessor, origin, ordinary, ordinaryUnitFacts,
+      indexes: predecessor.originalUnitIndexes, unitIds: predecessor.unitIds, lineage: pricingSnapshot.lineage, targets };
+    const proposal = buildEditStageProposal({ editId, orderId: fixture.orderId, requestFingerprint: fingerprint,
+      previewAcceptanceHash: orderEditStoredFingerprint(pricingSnapshot), beforeFingerprint: storedFingerprint,
+      beforeLedgerPrefixDigest: orderEditStoredFingerprint({ redemption: evidence.redemption,
+        history: [...evidence.history].sort((left, right) => left.id.localeCompare(right.id)) }),
+      pricingSnapshot, fundingPlan, requestDigest: fundingPlan.requestDigest, postingKeys: fundingPlan.postings.map(posting => posting.idempotencyKey),
+      lineIds: { [fixture.lineId]: fixture.lineId }, lines: financialLines, couponCodes: ['IMPORTED'], appliedPromotionIds: [origin.accountSource.promotionId],
+      settlementRequirement: { type: 'refund_now', currency: 'USD', requiredTender: 0, requiredRefund: 133 },
+      stockReservationReceipt: { key: `order-edit:${editId}:stock`, positiveDeltas: [] }, activation });
+    const [payment] = await tx.insert(s.payment).values({ storeId: STORE, orderId: fixture.orderId, amount: 133, currency: 'USD', method: 'synthetic', state: 'Settled' }).returning();
+    const [refund] = await tx.insert(s.refund).values({ storeId: STORE, orderId: fixture.orderId, paymentId: payment!.id,
+      amount: 133, state: 'Pending', metadata: { purpose: 'order_edit', editId } }).returning();
+    const settlement = { phase: 'awaiting_refund', type: 'refund_now', status: 'pending', refundId: refund!.id };
+    await tx.insert(s.orderEdit).values({ id: editId, storeId: STORE, orderId: fixture.orderId, idempotencyKey: `pending:${editId}`, fingerprint,
+      before, after: { proposal }, balance: -133, settlement, actor: 'synthetic-operator' });
+    return { ...fixture, editId, origin, before, activation, proposal, restoreRows, refundId: refund!.id, settlement };
+  });
+}
+
 describe('monetary account credit', () => {
+  it('reuses pending first-import origin after linked settlement & staged RESTORE without adopting new capture', async () => {
+    const stage = await pendingRetainedStage(), input = { storeId: STORE, orderId: stage.orderId };
+    const prepared = await withStore(STORE, tx => readCurrentCreditEvidence(tx, input));
+    expect(prepared?.importedOrigin).toEqual(stage.origin);
+    await withStore(STORE, async tx => {
+      await tx.update(s.refund).set({ state: 'Settled' }).where(eq(s.refund.id, stage.refundId));
+      await tx.update(s.orderEdit).set({ settlement: { ...stage.settlement, phase: 'ready', status: 'settled' } }).where(eq(s.orderEdit.id, stage.editId));
+      for (const row of stage.restoreRows) await tx.insert(s.accountCreditTransaction).values({ ...row, storeId: STORE, balanceAfter: 927,
+        reason: 'Committed order edit', actor: null });
+      await tx.update(s.accountCredit).set({ balance: 927 }).where(eq(s.accountCredit.id, stage.creditId));
+    });
+    for (let replay = 0; replay < 2; replay++) await withStore(STORE, async tx => {
+      const evidence = await readCurrentCreditEvidence(tx, input);
+      expect(evidence?.importedOrigin).toEqual(stage.origin);
+      expect(evidence?.importedOrigin?.capture.restoreIds).toEqual([]);
+      expect(evidence?.importedOrigin?.capture.legacyRefunds).toEqual([]);
+      expect(evidence?.history).toHaveLength(1);
+      const activated = buildCurrentCreditPricingSnapshot({ origin: evidence!.importedOrigin!,
+        ordinary: stage.activation.ordinary, ordinaryUnitFacts: stage.activation.ordinaryUnitFacts,
+        couponCodes: ['IMPORTED'], evidence: evidence!, pricingSources: evidence!.pricingSources,
+        predecessor: stage.activation.predecessor, originalUnitIndexes: stage.activation.indexes,
+        unitIds: stage.activation.unitIds, lineage: stage.activation.lineage });
+      expect(activated).toEqual(stage.proposal.pricingSnapshot);
+      expect((await tx.select().from(s.order).where(eq(s.order.id, stage.orderId)))[0]?.pricingSnapshot).toBeNull();
+      expect((await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, stage.creditId)))[0]?.balance).toBe(927);
+    });
+  });
+  it('refuses independent manual restoration before a pending imported edit can anchor origin', async () => {
+    const stage = await pendingRetainedStage();
+    await expect(withStore(STORE, tx => restoreManual(tx, { storeId: STORE, accountId: stage.creditId,
+      orderId: stage.orderId, orderLineId: stage.lineId, quantity: 1, expectedCents: 34,
+      operationKey: 'pending-manual', actor: 'synthetic-operator', reason: 'Independent return' })))
+      .rejects.toThrow('Resolve pending order edit before manual credit restoration');
+    await withStore(STORE, async tx => {
+      expect((await tx.select().from(s.order).where(eq(s.order.id, stage.orderId)))[0]?.pricingSnapshot).toBeNull();
+      expect((await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, stage.creditId)))[0]?.balance).toBe(899);
+      expect((await tx.select().from(s.accountCreditTransaction).where(eq(s.accountCreditTransaction.orderId, stage.orderId)))
+        .filter(row => row.kind === 'RESTORE')).toEqual([]);
+    });
+  });
+  it.each(['order', 'fingerprint', 'financial capture', 'source origin', 'normalized predecessor'] as const)(
+    'refuses forged pending imported %s proof', async tamper => {
+      const stage = await pendingRetainedStage(), before = structuredClone(stage.before), activation = structuredClone(stage.activation);
+      if (tamper === 'financial capture') before.financialLines[0]!.lineTotal++;
+      if (tamper === 'source origin') {
+        before.currentPricing.capture.totals.grandTotal++;
+        before.currentPricing.captureDigest = creditPricingSnapshotDigest({ ...before.currentPricing, captureDigest: undefined });
+        activation.origin = before.currentPricing;
+        activation.predecessor.snapshot = before.currentPricing;
+      }
+      if (tamper === 'normalized predecessor') activation.predecessor.unitEconomics[stage.lineId]![0]!.gross++;
+      const { version: _version, proposalDigest: _digest, ...payload } = stage.proposal;
+      const proposal = buildEditStageProposal({ ...payload, activation, ...(tamper === 'order' ? { orderId: OTHER } : {}) });
+      await withStore(STORE, tx => tx.update(s.orderEdit).set({ before, after: { proposal },
+        ...(tamper === 'fingerprint' ? { fingerprint: 'f'.repeat(64) } : {}) }).where(eq(s.orderEdit.id, stage.editId)));
+      await expect(withStore(STORE, tx => readCurrentCreditEvidence(tx, { storeId: STORE, orderId: stage.orderId }))).rejects.toThrow('Pending imported origin proof differs');
+      await withStore(STORE, async tx => {
+        expect((await tx.select().from(s.order).where(eq(s.order.id, stage.orderId)))[0]?.pricingSnapshot).toBeNull();
+        expect((await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, stage.creditId)))[0]?.balance).toBe(899);
+        expect((await tx.select().from(s.accountCreditTransaction).where(eq(s.accountCreditTransaction.orderId, stage.orderId))).filter(row => row.kind === 'RESTORE')).toEqual([]);
+      });
+    });
+  it('anchors first retained refund once & replays restoration against original captured prefix', async () => {
+    const fixture = await retainedOrder(), input = { storeId: STORE, orderId: fixture.orderId };
+    const first = await withStore(STORE, async tx => {
+      const { order, evidence } = await anchorImportedCreditOrigin(tx, input);
+      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, fixture.orderId));
+      const frozen = prepareCreditUnitReturns(order, lines, evidence!, [{ orderLineId: fixture.lineId, quantity: 1 }], []);
+      const [payment] = await tx.insert(s.payment).values({ ...input, amount: 133, currency: 'USD', method: 'synthetic', state: 'Settled' }).returning();
+      const [refund] = await tx.insert(s.refund).values({ ...input, paymentId: payment!.id, state: 'Settled', amount: 66, metadata: { creditUnitReturns: frozen } }).returning();
+      await tx.insert(s.refundLine).values({ storeId: STORE, refundId: refund!.id, orderLineId: fixture.lineId, quantity: 1, amount: 66 });
+      return { snapshot: order.pricingSnapshot, refundId: refund!.id };
+    });
+    const restored = await withStore(STORE, tx => restoreRefund(tx, { ...input, refundId: first.refundId }));
+    expect(restored[0]?.amount).toBe(34);
+    expect((await withStore(STORE, tx => restoreRefund(tx, { ...input, refundId: first.refundId })))[0]?.id).toBe(restored[0]!.id);
+    await withStore(STORE, async tx => {
+      const anchored = await anchorImportedCreditOrigin(tx, input);
+      expect(anchored.order.pricingSnapshot).toEqual(first.snapshot);
+      expect(anchored.evidence?.importedOrigin?.capture.restoreIds).toEqual([]);
+      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, fixture.orderId));
+      expect(availableCreditRefundUnits(anchored.order, lines, anchored.evidence!, []).get(fixture.lineId)).toEqual([1, 2]);
+      expect((await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, fixture.creditId)))[0]?.balance).toBe(933);
+      expect((await tx.select().from(s.accountCreditTransaction).where(eq(s.accountCreditTransaction.orderId, fixture.orderId))).filter(row => row.kind === 'RESTORE')).toHaveLength(1);
+    });
+  });
+  it('anchors retained manual return before posting & leaves captured prefix stable on replay', async () => {
+    const fixture = await retainedOrder();
+    const input = { storeId: STORE, orderId: fixture.orderId, orderLineId: fixture.lineId, accountId: fixture.creditId, quantity: 1, expectedCents: 34, ...op };
+    const restored = await withStore(STORE, tx => restoreManual(tx, input));
+    expect((await withStore(STORE, tx => restoreManual(tx, input))).id).toBe(restored.id);
+    await withStore(STORE, async tx => {
+      const evidence = await readCurrentCreditEvidence(tx, input);
+      expect(evidence?.importedOrigin?.capture.restoreIds).toEqual([]);
+      expect(evidence?.history).toHaveLength(1);
+      expect((await tx.select().from(s.orderLine).where(eq(s.orderLine.id, fixture.lineId)))[0]?.quantity).toBe(2);
+      expect((await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, fixture.creditId)))[0]?.balance).toBe(933);
+    });
+  });
   it('accepts exact inclusive promotion end instant & rejects following millisecond', async () => {
     const endsAt = new Date('2030-01-01T00:00:00.000Z');
     await withStore(STORE, tx => tx.update(s.promotion).set({ endsAt }).where(eq(s.promotion.id, promotionId)));

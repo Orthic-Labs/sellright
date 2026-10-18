@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { calculatePromotionStack, type StackInput, type StackLine, type ResolvedPromotion } from '../money/promotion-stack.js';
 import { buildOrderPricingSnapshot, readOrderPricingSnapshot } from '../money/pricing-snapshot.js';
-import { orderEditAcceptanceHash, orderEditStoredFingerprint, priceOrderEditStack, projectEditStackLines, readImportedOrderEditBasis, type OrderEditStackInput, type EditStackWorkingLine } from './order-edit-stack.js';
+import { migrationId } from '../import/context.js';
+import { orderEditAcceptanceHash, orderEditStoredFingerprint, priceEditShippingCarriers, priceOrderEditStack, projectEditStackLines, readImportedOrderEditBasis, readImportedOrderEditComponents, type OrderEditStackInput, type EditStackWorkingLine } from './order-edit-stack.js';
 
 const A = 'cccccccc-0000-4000-8000-000000000001';
 const B = 'cccccccc-0000-4000-8000-000000000002';
@@ -44,7 +45,9 @@ describe('pure ordinary-promotion order edit candidate', () => {
     expect(result.result).toMatchObject({ subtotal: 202, discountTotal: 102, shippingTotal: 10, grandTotal: 110, selectedCredit: null });
     expect(result.result.applied.map(entry => entry.promotionId)).toEqual(['half', 'one']);
     expect(result.result.applied[0]!.lineAllocations.map(part => part.units)).toEqual([[-50], [-51]]);
-    expect([...result.perLine.values()].map(item => [item.unitPrice, item.lineTotal])).toEqual([[101, 51], [101, 49]]);
+    // Half allocates -50/-51; the final cent goes to first line's remainder.
+    expect(result.result.applied[1]!.lineAllocations.map(part => part.units)).toEqual([[-1], [0]]);
+    expect([...result.perLine.values()].map(item => [item.unitPrice, item.lineTotal])).toEqual([[101, 50], [101, 50]]);
     expect(result.beforeEconomicHash).toBe(result.afterEconomicHash);
     expect(result.balance).toBe(0);
     expect(input).toEqual(saved);
@@ -235,22 +238,141 @@ describe('pure ordinary-promotion order edit candidate', () => {
   });
 
   it('admits imported raw LIST only through complete digest/ownership/getter parity', () => {
+    const orderId = migrationId(C, 'source', 'order', 9), lineId = migrationId(C, 'source', 'order-line', 7);
     const sourceLine = { id: 7, orderId: 9, quantity: 2, orderPlacedQuantity: 3, listPrice: 120, listPriceIncludesTax: true,
       adjustments: [{ amount: -60, type: 'PROMOTION' }], taxLines: [{ taxRate: 20 }], shippingLineId: null };
     const payload = { version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'source', sourceOrderId: '9',
-      sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', pricesIncludeTax: true, subTotal: 167, subTotalWithTax: 200, shipping: 0, shippingWithTax: 0, couponCodes: ['EXPIRED'] }),
+      sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', subTotal: 167, subTotalWithTax: 200, shipping: 0, shippingWithTax: 0, couponCodes: ['EXPIRED'] }),
+      channel: { sourceId: '3', projection: 'pricing-v1', sourceRecord: JSON.stringify({ id: 3, defaultCurrencyCode: 'USD', pricesIncludeTax: true, defaultTaxZoneId: 1 }), orderChannelRecord: JSON.stringify({ orderId: 9, channelId: 3 }) },
       header: { subTotal: '167', subTotalWithTax: '200', shipping: '0', shippingWithTax: '0' },
-      lines: [{ sourceId: '7', orderLineId: A, sourceRecord: JSON.stringify(sourceLine) }], shippingLines: [], surcharges: [] };
+      lines: [{ sourceId: '7', orderLineId: lineId, sourceRecord: JSON.stringify(sourceLine) }], shippingLines: [], shippingMethods: [], surcharges: [] };
     const metadata = { vendure: { id: 9, sourceKey: 'source', editBasisV1: { ...payload, sourceDigest: orderEditStoredFingerprint(payload) } } };
-    const native = { id: A, orderId: B, storeId: C, quantity: 2, unitPrice: 100, lineSubtotal: 200, lineDiscount: 33, lineTax: 33, lineTotal: 200, metadata: { vendure: { id: 7 } } };
-    const context = { storeId: C, orderId: B, currency: 'USD', orderLines: [native], couponCodes: ['EXPIRED'] };
+    const native = { id: lineId, orderId, storeId: C, quantity: 2, unitPrice: 100, lineSubtotal: 200, lineDiscount: 33, lineTax: 33, lineTotal: 200, metadata: { vendure: { id: 7 } } };
+    const context = { storeId: C, orderId, currency: 'USD', orderLines: [native], couponCodes: ['EXPIRED'] };
     const basis = readImportedOrderEditBasis(metadata, context);
-    expect(basis.lines).toEqual([{ key: A, quantity: 2, placedQuantity: 3, unitListPrice: 120, priceIncludesTax: true, taxRateBps: 2000, priorAdjustments: [] }]);
+    expect(basis.lines).toEqual([{ key: lineId, quantity: 2, placedQuantity: 3, unitListPrice: 120, priceIncludesTax: true, taxRateBps: 2000, priorAdjustments: [] }]);
+    expect(() => readImportedOrderEditBasis(metadata, { ...context, orderId: B })).toThrow(/order identity/);
     expect(() => readImportedOrderEditBasis(metadata, { ...context, orderLines: [{ ...native, unitPrice: 101 }] })).toThrow();
     expect(() => readImportedOrderEditBasis(metadata, { ...context, couponCodes: ['OTHER'] })).toThrow();
     const changed = structuredClone(metadata); changed.vendure.editBasisV1.lines[0]!.sourceRecord += ' ';
     expect(() => readImportedOrderEditBasis(changed, context)).toThrow();
     expect(() => readImportedOrderEditBasis({ vendure: { id: 9, sourceKey: 'source' } }, context)).toThrow();
+    // Header anomalies stay raw; equal rounded JS Numbers do not prove parity.
+    const anomalous = { ...payload, sourceOrderRecord: payload.sourceOrderRecord.replace('"subTotal":167', '"subTotal":9007199254740993'),
+      header: { ...payload.header, subTotal: '9007199254740993' } };
+    const captured = { vendure: { id: 9, sourceKey: 'source', editBasisV1: { ...anomalous, sourceDigest: orderEditStoredFingerprint(anomalous) } } };
+    expect(readImportedOrderEditBasis(captured, context).lines).toEqual(basis.lines);
+    const roundedCollision = { ...anomalous, header: { ...anomalous.header, subTotal: '9007199254740992' } };
+    expect(() => readImportedOrderEditBasis({ vendure: { id: 9, sourceKey: 'source', editBasisV1: {
+      ...roundedCollision, sourceDigest: orderEditStoredFingerprint(roundedCollision) } } }, context)).toThrow(/header differs/);
+  });
+
+  it('retains independent mixed shipping getters & signed surcharge facts after merchandise changes', () => {
+    const payload = { version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'source', sourceOrderId: '9',
+      sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', subTotal: -100, subTotalWithTax: -120, shipping: 15, shippingWithTax: 18 }),
+      channel: { sourceId: '3', projection: 'pricing-v1', sourceRecord: JSON.stringify({ id: 3, defaultCurrencyCode: 'USD', pricesIncludeTax: false, defaultTaxZoneId: 1 }), orderChannelRecord: JSON.stringify({ orderId: 9, channelId: 3 }) },
+      header: { subTotal: '-100', subTotalWithTax: '-120', shipping: '15', shippingWithTax: '18' },
+      lines: [{ sourceId: '7', orderLineId: A, sourceRecord: JSON.stringify({ id: 7, orderId: 9, shippingLineId: 11 }) }],
+      shippingLines: [
+        { sourceId: '11', sourceRecord: JSON.stringify({ id: 11, orderId: 9, shippingMethodId: 4, listPrice: 12, listPriceIncludesTax: true, adjustments: [{ amount: -6 }], taxLines: [{ taxRate: 20 }] }) },
+        { sourceId: '12', sourceRecord: JSON.stringify({ id: 12, orderId: 9, shippingMethodId: null, listPrice: 10, listPriceIncludesTax: false, adjustments: [], taxLines: [{ taxRate: 20 }] }) },
+      ], shippingMethods: [{ sourceId: '4', sourceRecord: JSON.stringify({ id: 4, code: 'POST' }) }],
+      surcharges: [{ sourceId: '13', sourceRecord: JSON.stringify({ id: 13, orderId: 9, description: 'Historic credit', listPrice: -120, listPriceIncludesTax: true, taxLines: [{ taxRate: 20 }] }) }] };
+    const metadata = { vendure: { id: 9, sourceKey: 'source', editBasisV1: { ...payload, sourceDigest: orderEditStoredFingerprint(payload) } } };
+    const components = readImportedOrderEditComponents(metadata, 'USD');
+    expect(components.pricesIncludeTax).toBe(false);
+    expect(components.shippingLines.map(line => line.orderLineIds)).toEqual([[A], []]);
+    expect(components.shippingLines.map(({ net, gross, tax, methodCode }) => ({ net, gross, tax, methodCode }))).toEqual([
+      { net: 5, gross: 6, tax: 1, methodCode: 'POST' }, { net: 10, gross: 12, tax: 2, methodCode: null },
+    ]);
+    expect(components.surcharges[0]).toMatchObject({ net: -100, gross: -120, tax: -20 });
+    const foreignChannel = { ...payload, channel: { ...payload.channel, orderChannelRecord: JSON.stringify({ orderId: 8, channelId: 3 }) } };
+    expect(() => readImportedOrderEditComponents({ vendure: { ...metadata.vendure, editBasisV1: { ...foreignChannel, sourceDigest: orderEditStoredFingerprint(foreignChannel) } } }, 'USD')).toThrow(/channel/);
+    const missingMethod = { ...payload, shippingMethods: [] };
+    expect(() => readImportedOrderEditComponents({ vendure: { ...metadata.vendure, editBasisV1: { ...missingMethod, sourceDigest: orderEditStoredFingerprint(missingMethod) } } }, 'USD')).toThrow(/method closure/);
+  });
+
+  it('keeps net-zero gross-positive shipping until an accepted shipping action removes exact pairs', () => {
+    const retainedShipping = { sourceDigest: 'a'.repeat(64), mode: 'keep' as const, lines: [{ sourceId: '11', net: 0, gross: 1 }] };
+    const base = fixture({ lines: [line('a', { unitListPrice: 100 })], shipping: 0, retainedShipping,
+      promotions: [promo({ kind: 'free_shipping', value: 0 })], couponCodes: ['HALF'] });
+    const kept = priceOrderEditStack(request(base));
+    expect(kept.result).toMatchObject({ shippingTotal: 0, taxTotal: 1, grandTotal: 101, retainedShippingFinal: retainedShipping.lines });
+    const input = request(base); input.pricing.retainedShipping!.mode = 'revalidate-promotions';
+    const revalidated = priceOrderEditStack(input);
+    expect(revalidated.result).toMatchObject({ shippingTotal: 0, taxTotal: 0, grandTotal: 100, retainedShippingFinal: [{ sourceId: '11', net: 0, gross: 0 }] });
+    expect(revalidated.afterEconomicHash).not.toBe(kept.afterEconomicHash);
+    expect(revalidated.result.applied[0]!.shippingAdjustment).toEqual({ net: 0, gross: -1 });
+  });
+
+  it('preserves negative source payable arithmetic through ordinary snapshots', () => {
+    const base = fixture({ lines: [line('a', { unitListPrice: 100 })], shipping: 0, promotions: [], couponCodes: [],
+      adjustments: [{ label: 'Historic signed surcharge', amount: -200, sourceSurcharge: { sourceId: '13', sourceDigest: 'b'.repeat(64), net: -200, gross: -240 } }] });
+    const candidate = priceOrderEditStack(request(base, true));
+    expect(candidate.result).toMatchObject({ taxTotal: -40, grandTotal: -140 });
+    expect(candidate.balance).toBe(0);
+    const bad = request(base); bad.pricing.adjustments![0]!.sourceSurcharge!.net++;
+    refusal(bad);
+  });
+
+  it.each([
+    [false, false, 80, 80, false], [false, true, 0, 0, true],
+    [true, false, 30, 33, false], [true, true, 0, 0, true],
+  ])('prices carrier flags recalculate=%s promotions=%s from exact prior adjustments', (recalculateShipping, recalculateShippingPromotions, net, gross, applied) => {
+    const retainedShipping = priceEditShippingCarriers({ sourceDigest: 'd'.repeat(64),
+      basis: [{ sourceId: '11', amount: 100, includesTax: false, taxRateBps: 0 }], adjustments: { '11': -20 },
+      carriers: [{ sourceId: '11', methodCode: 'POST', lineKeys: ['a'] }], final: [{ sourceId: '11', net: 80, gross: 80 }],
+      lines: [{ key: 'a', quantity: 1 }], methods: [{ id: A, code: 'POST', calculator: { flat: 50, taxRate: 1000, taxInclusive: false } }],
+      recalculateShipping: Boolean(recalculateShipping), recalculateShippingPromotions: Boolean(recalculateShippingPromotions),
+      context: { subtotal: 100 }, defaultTaxRateBps: 0, defaultIncludesTax: false });
+    const base = fixture({ lines: [line('a', { unitListPrice: 100 })], shipping: retainedShipping.lines.reduce((sum, line) => sum + line.net, 0), retainedShipping,
+      promotions: [promo({ kind: 'free_shipping', value: 0 })], couponCodes: ['HALF'] });
+    const candidate = priceOrderEditStack(request(base, true));
+    expect(candidate.result).toMatchObject({ shippingTotal: net, grandTotal: 100 + Number(gross), taxTotal: Number(gross) - Number(net) });
+    expect(candidate.result.applied.length > 0).toBe(applied);
+    expect(candidate.input.retainedShipping!.carriers).toEqual([{ sourceId: '11', methodCode: 'POST', lineKeys: ['a'] }]);
+  });
+
+  it('retains per-carrier membership & signed adjustments through fallback, replacement & removal', () => {
+    const input: Parameters<typeof priceEditShippingCarriers>[0] = { sourceDigest: 'e'.repeat(64),
+      basis: [{ sourceId: '11', amount: 100, includesTax: false, taxRateBps: 0 }, { sourceId: '12', amount: 40, includesTax: false, taxRateBps: 0 }],
+      adjustments: { '11': -20, '12': -5 }, carriers: [{ sourceId: '11', methodCode: 'OLD', lineKeys: ['a'] }, { sourceId: '12', methodCode: 'SECOND', lineKeys: ['b'] }],
+      final: [{ sourceId: '11', net: 80, gross: 80 }, { sourceId: '12', net: 35, gross: 35 }],
+      lines: [{ key: 'a', quantity: 1 }, { key: 'b', quantity: 1 }, { key: 'new', quantity: 1 }],
+      methods: [{ id: A, code: 'OLD', calculator: { flat: 100, min: 1000 } }, { id: B, code: 'POST', calculator: { flat: 50, taxRate: 1000 } },
+        { id: C, code: 'SECOND', calculator: { flat: 40, taxRate: 2000 } }],
+      recalculateShipping: true, recalculateShippingPromotions: false, context: { subtotal: 100 }, defaultTaxRateBps: 0, defaultIncludesTax: false };
+    const fallback = priceEditShippingCarriers(input);
+    expect(fallback.carriers).toEqual([{ sourceId: '11', methodCode: 'SECOND', lineKeys: ['a'] }, { sourceId: '12', methodCode: 'SECOND', lineKeys: ['b'] }]);
+    expect(fallback.lines).toEqual([{ sourceId: '11', net: 20, gross: 24 }, { sourceId: '12', net: 35, gross: 42 }]);
+    const replacement = priceEditShippingCarriers({ ...input, selectedMethodCode: 'POST' });
+    expect(replacement.carriers).toEqual([{ sourceId: '11', methodCode: 'POST', lineKeys: ['a', 'b', 'new'] }]);
+    expect(replacement.lines).toEqual([{ sourceId: '11', net: 30, gross: 33 }]);
+    const custom = priceEditShippingCarriers({ ...input, replacement: { kind: 'custom', amount: 70 }, defaultTaxRateBps: 1000 });
+    expect(custom.lines).toEqual([{ sourceId: '11', net: 50, gross: 55 }]);
+    expect(custom.carriers).toEqual([{ sourceId: '11', methodCode: null, lineKeys: ['a', 'b', 'new'] }]);
+    const removed = priceEditShippingCarriers({ ...input, replacement: { kind: 'none' } });
+    expect(removed).toMatchObject({ lines: [], carriers: [], repricedBasis: [] });
+    expect(priceEditShippingCarriers({ ...input, basis: [], adjustments: {}, carriers: [], final: [], recalculateShipping: false }).lines).toEqual([]);
+    expect(priceEditShippingCarriers({ ...input, basis: [], adjustments: {}, carriers: [], final: [] }).carriers).toEqual([]);
+    expect(priceEditShippingCarriers({ ...input, lines: [{ key: 'a', quantity: 0 }, { key: 'b', quantity: 1 }] }).carriers).toEqual([{ sourceId: '12', methodCode: 'SECOND', lineKeys: ['b'] }]);
+  });
+
+  it('keeps signed historic shipping adjustments on a newly priced carrier & skips current shipping actions', () => {
+    // New net list 10 plus retained source adjustment -20 gives net -10;
+    // its own current 10% tax gives gross -11, independently of item tax.
+    const retainedShipping = { sourceDigest: 'c'.repeat(64), mode: 'recalculate-keep-promotions' as const,
+      lines: [{ sourceId: '11', net: -10, gross: -11 }],
+      repricedBasis: [{ sourceId: '11', amount: 10, includesTax: false, taxRateBps: 1000 }] };
+    const base = fixture({ lines: [line('a', { unitListPrice: 100 })], shipping: -10, retainedShipping,
+      promotions: [promo({ kind: 'free_shipping', value: 0 })], couponCodes: ['HALF'] });
+    const candidate = priceOrderEditStack(request(base, true));
+    expect(candidate.result).toMatchObject({ shippingTotal: -10, taxTotal: -1, grandTotal: 89, retainedShippingFinal: retainedShipping.lines });
+    expect(candidate.result.applied).toEqual([]);
+    const changed = request(base); changed.pricing.retainedShipping!.repricedBasis![0]!.amount++;
+    expect(priceOrderEditStack(changed).afterEconomicHash).not.toBe(candidate.afterEconomicHash);
+    const missing = request(base); delete missing.pricing.retainedShipping!.repricedBasis;
+    refusal(missing);
   });
 
   it('refuses every credit admission surface without inferring balances or eligibility', () => {

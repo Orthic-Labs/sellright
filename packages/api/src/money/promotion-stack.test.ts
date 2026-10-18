@@ -13,6 +13,44 @@ const input = (patch: Partial<StackInput> = {}): StackInput => ({ lines: [line()
 const minimum = (amount: number, taxInclusive = false) => [{ code: 'minimum_order_amount', args: [{ name: 'amount', value: String(amount) }, { name: 'taxInclusive', value: String(taxInclusive) }] }];
 
 describe('captured-default promotion stack', () => {
+  it('keeps signed carrier adjustments on repricing & reapplies shipping actions only during revalidation', () => {
+    const carriers=[{sourceId:'carrier',methodCode:'courier',lineKeys:['SKU']}];
+    const repricedBasis=[{sourceId:'carrier',amount:50,includesTax:false,taxRateBps:1000}];
+    const retainedShipping={sourceDigest:'a'.repeat(64),mode:'recalculate-keep-promotions' as const,
+      lines:[{sourceId:'carrier',net:30,gross:33}],repricedBasis,carriers};
+    const free=promotion({kind:'free_shipping',value:0,freeShipping:true});
+    const kept=calculatePromotionStack(input({promotions:[free],shipping:30,retainedShipping}));
+    expect(kept.shippingTotal).toBe(30);expect(kept.retainedShippingFinal).toEqual([{sourceId:'carrier',net:30,gross:33}]);
+    expect(kept.applied).toEqual([]);
+    const revalidated={...retainedShipping,mode:'revalidate-promotions' as const,lines:[{sourceId:'carrier',net:50,gross:55}]};
+    expect(calculatePromotionStack(input({promotions:[],shipping:50,retainedShipping:revalidated})).shippingTotal).toBe(50);
+    const waived=calculatePromotionStack(input({promotions:[free],shipping:50,retainedShipping:revalidated}));
+    expect(waived.retainedShippingFinal).toEqual([{sourceId:'carrier',net:0,gross:0}]);
+    expect(waived.applied[0]?.shippingAdjustment).toEqual({net:-50,gross:-55});
+    for (const lineKeys of [['unknown'],['SKU','SKU']]) expect(()=>calculatePromotionStack(input({shipping:30,
+      retainedShipping:{...retainedShipping,carriers:[{...carriers[0]!,lineKeys}]}}))).toThrow('membership');
+  });
+  it('preserves exact shipping tax pairs, including zero net with nonzero gross', () => {
+    const retainedShipping = { sourceDigest: 'a'.repeat(64), mode: 'keep' as const,
+      lines: [{ sourceId: 'shipping', net: 0, gross: 1 }] };
+    const kept = calculatePromotionStack(input({ promotions: [promotion({ kind: 'free_shipping' })], shipping: 0, retainedShipping }));
+    expect(kept.retainedShippingFinal).toEqual(retainedShipping.lines);
+    expect(kept.taxTotal).toBe(1); expect(kept.grandTotal).toBe(1001);
+    const waived = calculatePromotionStack(input({ promotions: [promotion({ kind: 'free_shipping' })], shipping: 0,
+      retainedShipping: { ...retainedShipping, mode: 'revalidate-promotions' } }));
+    expect(waived.retainedShippingFinal).toEqual([{ sourceId: 'shipping', net: 0, gross: 0 }]);
+    expect(waived.applied[0]!.shippingAdjustment).toEqual({ net: 0, gross: -1 });
+    expect(waived.grandTotal).toBe(1000);
+  });
+
+  it('adds independent source surcharge tax & preserves signed source totals', () => {
+    const result = calculatePromotionStack(input({ lines: [line({ unitListPrice: 1 })], promotions: [], shipping: 0,
+      pricesIncludeTax: true, adjustments: [{ amount: -5, sourceSurcharge: { sourceId: 'charge', sourceDigest: 'b'.repeat(64), net: -5, gross: -7 } }] }));
+    expect(result.taxTotal).toBe(-2); expect(result.grandTotal).toBe(-6);
+    const scalar = calculatePromotionStack(input({ lines: [line({ unitListPrice: 1 })], promotions: [], shipping: 0,
+      adjustments: [{ amount: -5 }] }));
+    expect(scalar.grandTotal).toBe(0);
+  });
   it('rounds negative order action before negation; legacy singleton keeps positive rounding', () => {
     expect(calculatePromotionStack(input({ lines: [line({ unitListPrice: 101 })], promotions: [promotion({ value: 50 })] })).discountTotal).toBe(50);
     expect(calculateOrderTotals({ lines: [{ unitPrice: 101, quantity: 1 }], shipping: 0, taxRate: 0, promotion: { type: 'percentage', value: 50 } }).discountTotal).toBe(51);

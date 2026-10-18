@@ -18,6 +18,35 @@ function saved() { const input = fixture(); const result = calculatePromotionSta
 const context = { currency: 'USD', orderLines: [{ id: LINE, quantity: 3 }], mode: 'settlement' as const };
 
 describe('immutable accepted pricing snapshots', () => {
+  it('round-trips repriced carrier facts in both modes & hashes method/membership facts', () => {
+    const input=fixture();input.promotions=[];input.couponCodes=[];input.shipping=30;
+    input.retainedShipping={sourceDigest:'a'.repeat(64),mode:'recalculate-keep-promotions',lines:[{sourceId:'carrier',net:30,gross:33}],
+      repricedBasis:[{sourceId:'carrier',amount:50,includesTax:false,taxRateBps:1000}],
+      carriers:[{sourceId:'carrier',methodCode:'courier',lineKeys:['synthetic-sku']}]};
+    const result=calculatePromotionStack(input),snapshot=buildOrderPricingSnapshot(input,result,new Map([['synthetic-sku',LINE]]));
+    expect(readOrderPricingSnapshot(snapshot,context)).toEqual(snapshot);
+    const changed=structuredClone(input);changed.retainedShipping!.carriers![0]!.methodCode='replacement';
+    expect(calculatePromotionStack(changed).quoteHash).not.toBe(result.quoteHash);
+    const forged=structuredClone(snapshot);forged.retainedShipping!.carriers![0]!.lineKeys=['unknown'];
+    expect(()=>readOrderPricingSnapshot(forged,context)).toThrow('carrier membership');
+    const revalidate=structuredClone(input);revalidate.shipping=50;
+    revalidate.retainedShipping={...input.retainedShipping,mode:'revalidate-promotions',lines:[{sourceId:'carrier',net:50,gross:55}]};
+    const next=calculatePromotionStack(revalidate),saved=buildOrderPricingSnapshot(revalidate,next,new Map([['synthetic-sku',LINE]]));
+    expect(readOrderPricingSnapshot(saved,context)?.totals.shippingTotal).toBe(50);
+  });
+  it('binds explicit source shipping output & signed surcharge arithmetic', () => {
+    const input = fixture(); input.promotions = []; input.couponCodes = []; input.shipping = 0;
+    input.lines[0]!.taxRateBps = 0; input.lines[0]!.unitListPrice = 1;
+    input.retainedShipping = { sourceDigest: 'a'.repeat(64), mode: 'keep', lines: [{ sourceId: 'shipping', net: 0, gross: 1 }] };
+    input.adjustments = [{ amount: -5, sourceSurcharge: { sourceId: 'charge', sourceDigest: 'b'.repeat(64), net: -5, gross: -7 } }];
+    const result = calculatePromotionStack(input), snapshot = buildOrderPricingSnapshot(input, result, new Map([['synthetic-sku', LINE]]));
+    expect(snapshot.totals.grandTotal).toBe(-3);
+    expect(readOrderPricingSnapshot(snapshot, context)?.retainedShippingFinal).toEqual(input.retainedShipping.lines);
+    const forged = structuredClone(snapshot); forged.retainedShippingFinal![0]!.gross = 0;
+    expect(() => readOrderPricingSnapshot(forged, context)).toThrow();
+    const changed = structuredClone(input); changed.adjustments![0]!.sourceSurcharge!.gross = -6;
+    expect(calculatePromotionStack(changed).quoteHash).not.toBe(result.quoteHash);
+  });
   it('preserves uneven signed vectors & maps only proven native line UUIDs', () => {
     const snapshot = saved();
     expect(snapshot.selectedCredit?.allocation[LINE]?.reduce((a, b) => a + b, 0)).toBe(101);

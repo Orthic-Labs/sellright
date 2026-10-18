@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, readCreditUnitReturns } from './refund-credit.js';
-import { buildCurrentCreditPricingSnapshot, readCurrentOrderPricingSnapshot } from '../money/current-credit-pricing.js';
-import { planCreditUnitReturn, originalCreditUnitId, creditReturnSnapshotDigest } from '../account-credit/edit-funding.js';
+import { availableCreditRefundUnits, refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, readCreditUnitReturns } from './refund-credit.js';
+import { buildImportedCreditOrigin } from '../money/imported-credit-origin.js';
+import { migrationId } from '../import/context.js';
+import { vendureLineMoney } from '../import/vendure-money.js';
+import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
+import { buildEditStageProposal } from '../orders/edit-stage.js';
+import { buildCurrentCreditPricingSnapshot, currentCreditFundingTargets, readCurrentOrderPricingSnapshot, type CreditPricingEvidence } from '../money/current-credit-pricing.js';
+import { planCreditUnitReturn, planEditCreditFunding, originalCreditUnitId, creditReturnSnapshotDigest } from '../account-credit/edit-funding.js';
 import { buildOrderPricingSnapshot } from '../money/pricing-snapshot.js';
 import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
 
@@ -20,7 +25,99 @@ const currentSnapshot = (lines: Array<{ id: string; unitListPrice: number; quant
   return buildOrderPricingSnapshot(input, calculatePromotionStack(input), new Map(lines.map(line => [line.id, line.id])));
 };
 
+/** Actual retained rows, including importer mappings & raw byte digests. */
+const importedCredit = (allocation = [34, 34, 33], returned = false, historical = false) => {
+  const storeId = secondId, sourceKey = 'source', mapped = (kind: string, source: number) => migrationId(storeId, sourceKey, kind, source);
+  const orderId = mapped('order', 9), lineId = mapped('order-line', 7), accountId = mapped('account-credit', 4), promotionId = mapped('promotion', 5);
+  const amount = allocation.reduce((sum, cents) => sum + cents, 0);
+  const rawLine = { id: 7, orderId: 9, quantity: 2, orderPlacedQuantity: 3, listPrice: 100, listPriceIncludesTax: true,
+    adjustments: [{ amount: -amount, type: 'PROMOTION', adjustmentSource: 'PROMOTION:5' }], taxLines: [], shippingLineId: null };
+  const money = vendureLineMoney(rawLine), totals = { subtotal: money.lineSubtotal, discountTotal: money.lineDiscount,
+    taxTotal: money.lineTax, shippingTotal: 0, grandTotal: money.lineTotal, pointsDiscount: 0 };
+  const basis = { version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey, sourceOrderId: '9',
+    sourceOrderRecord: JSON.stringify({ id: 9, currencyCode: 'USD', subTotal: money.lineTotal,
+      subTotalWithTax: money.lineTotal, shipping: 0, shippingWithTax: 0, couponCodes: ['CREDIT'] }),
+    channel: { sourceId: '1', projection: 'pricing-v1', sourceRecord: JSON.stringify({ id: 1, defaultCurrencyCode: 'USD', pricesIncludeTax: true, defaultTaxZoneId: null }),
+      orderChannelRecord: JSON.stringify({ orderId: 9, channelId: 1 }) }, shippingMethods: [],
+    header: { subTotal: String(money.lineTotal), subTotalWithTax: String(money.lineTotal), shipping: '0', shippingWithTax: '0' },
+    lines: [{ sourceId: '7', orderLineId: lineId, sourceRecord: JSON.stringify(rawLine) }], shippingLines: [], surcharges: [] };
+  const metadata = { vendure: { id: 9, sourceKey, editBasisV1: { ...basis, sourceDigest: orderEditStoredFingerprint(basis) } } };
+  const lines = [{ id: lineId, orderId, storeId, quantity: 2, ...money, metadata: { vendure: { id: 7 } } }];
+  const sourceRecord = JSON.stringify({ id: 4, promotionId: 5, currency: 'USD' });
+  const sourcePromotionRecord = JSON.stringify({ id: 5, actions: [{ code: 'account_credit_discount' }], conditions: [{ code: 'account_credit_eligible' }] });
+  const accountSource = { id: accountId, storeId, promotionId, currency: 'USD', sourceKey, sourceId: '4', sourceRecord, sourcePromotionRecord,
+    sourceDigest: orderEditStoredFingerprint({ format: 'retained-pg-jsonb-text-v1', account: sourceRecord, promotion: sourcePromotionRecord }),
+    promotion: { id: promotionId, storeId, type: 'account_credit' } };
+  const transactionRecord = JSON.stringify({ id: 6, accountCreditId: 4, orderId: 9, kind: 'REDEEM', status: 'POSTED', amount, delta: -amount, allocation: { '7': allocation } });
+  const redemptionSource = { id: mapped('account-credit-transaction', 6), storeId, orderId, accountCreditId: accountId, kind: 'REDEEM', status: 'POSTED', amount,
+    delta: -amount, operationalAllocation: { [lineId]: allocation }, sourceKey, sourceId: '6', sourceRecord: transactionRecord,
+    sourceDigest: orderEditStoredFingerprint({ format: 'retained-pg-jsonb-text-v1', transaction: transactionRecord }), allocation: JSON.stringify({ '7': allocation }), sourceOrderId: '9' };
+  const refundId = mapped('refund', 8), originalIndex = historical ? 0 : allocation.length - 1;
+  const plan = planCreditUnitReturn({ redemption: redemptionSource, history: [], historyComplete: true, orderLineId: lineId, originalIndexes: [originalIndex],
+    operation: historical ? { kind: 'refund', id: refundId } : { kind: 'manual_return', id: 'source-return' } });
+  if (!plan.ok || !plan.posting) throw new Error('Expected retained original posting');
+  const history = returned ? [{ ...plan.posting, id: mapped('account-credit-transaction', 10), refundId: historical ? refundId : null }] : [];
+  const refunds = historical ? [{ id: refundId, state: 'Settled', amount: 17, metadata: { vendureId: 8, allocation: 'derived-largest-remainder-by-placed-line-value' },
+    lines: [{ id: mapped('refund-line', 11), orderLineId: lineId, quantity: 2, amount: 17 }] }] : [];
+  const evidence = { redemption: redemptionSource, history, historyComplete: true as const, refunds, refundsComplete: true as const,
+    importedSource: { accountSource, redemptionSource } };
+  const origin = buildImportedCreditOrigin({ storeId, orderId, currency: 'USD', metadata, couponCodes: ['CREDIT'], totals, lines, evidence, accountSource, redemptionSource });
+  return { order: { currency: 'USD', pricingSnapshot: origin }, lines, lineId, origin, evidence: { ...evidence, importedOrigin: origin } };
+};
+
 describe('refund cash unit & independent credit unit authority', () => {
+  it('keeps still-live detached original source funding & refunds combined source units', () => {
+    const fixture = importedCredit(), { order, lines, evidence, lineId } = fixture;
+    const view = readCurrentOrderPricingSnapshot(order.pricingSnapshot, { currency: 'USD', orderLines: lines, mode: 'refund', creditEvidence: evidence })!;
+    expect(view.liveAllocation[lineId]).toEqual([34, 34]);
+    expect(view.liveDetachedAllocation[lineId]).toEqual([33]);
+    expect(view.sourceRefundUnits[lineId]?.map(unit => unit.present)).toEqual([true, true, false]);
+    expect(availableCreditRefundUnits(order, lines, evidence, []).get(lineId)).toEqual([0, 1, 2]);
+    const frozen = prepareCreditUnitReturns(order, lines, evidence, [{ orderLineId: lineId, quantity: 3 }], []);
+    expect(frozen).toMatchObject({ version: 2, lines: [{ positions: [0, 1, 2], originalIndexes: [0, 1, 2], creditCents: [34, 34, 33] }] });
+    if (frozen.version !== 2) throw new Error('Expected source unit receipt');
+    expect(frozen.lines[0]?.presentUnitIds).toEqual(frozen.lines[0]!.unitIds.slice(0, 2));
+    const { requestDigest: _digest, ...physicalBase } = { ...frozen, lines: [{ ...frozen.lines[0]!, presentUnitIds: frozen.lines[0]!.unitIds }] };
+    const forgedPhysical = { ...physicalBase, requestDigest: creditReturnSnapshotDigest(physicalBase) };
+    expect(() => availableCreditRefundUnits(order, lines, { ...evidence, refunds: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      state: 'Pending', amount: 198, metadata: { creditUnitReturns: forgedPhysical }, lines: [{ orderLineId: lineId, quantity: 3, amount: 198 }] }] }, [])).toThrow(/physical|present/);
+    expect(refundUnitBases(order, lines, evidence).get(lineId)).toEqual([66, 66, 66]);
+    expect(readCreditUnitReturns({ creditUnitReturns: frozen })).toEqual(frozen);
+    expect(() => availableCreditRefundUnits(order, lines, { ...evidence, importedSource: { ...evidence.importedSource,
+      accountSource: { ...evidence.importedSource.accountSource, currency: 'EUR' } } }, [])).toThrow(/source rows differ/);
+    expect(() => availableCreditRefundUnits(order, lines, { ...evidence, importedSource: { ...evidence.importedSource,
+      redemptionSource: { ...evidence.importedSource.redemptionSource, sourceRecord: `${evidence.importedSource.redemptionSource.sourceRecord} ` } } }, [])).toThrow(/source rows differ/);
+    const returned = importedCredit([34, 34, 33], true);
+    expect(availableCreditRefundUnits(returned.order, returned.lines, returned.evidence, []).get(returned.lineId)).toEqual([0, 1]);
+  });
+  it('reserves unfunded detached cash by stable ID until definitive Failed', () => {
+    const { order, lines, evidence, lineId } = importedCredit([1, 0]);
+    const first = prepareCreditUnitReturns(order, lines, evidence, [{ orderLineId: lineId, quantity: 2 }], []);
+    const pending = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', state: 'Pending', amount: 200,
+      metadata: { creditUnitReturns: first }, lines: [{ orderLineId: lineId, quantity: 2, amount: 200 }] };
+    const withPending = { ...evidence, refunds: [pending] };
+    const cashOnly = prepareCreditUnitReturns(order, lines, withPending, [{ orderLineId: lineId, quantity: 1 }], []);
+    expect(cashOnly).toMatchObject({ version: 2, lines: [{ positions: [2], originalIndexes: [null], creditCents: [0], unitEconomics: [{ net: 0, gross: 0, cashRefundGross: 100 }] }] });
+    expect(cashOnly).toMatchObject({ lines: [{ presentUnitIds: [] }] });
+    const second = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', state: 'Pending', amount: 100,
+      metadata: { creditUnitReturns: cashOnly }, lines: [{ orderLineId: lineId, quantity: 1, amount: 100 }] };
+    expect(availableCreditRefundUnits(order, lines, { ...withPending, refunds: [pending, second] }, []).get(lineId)).toEqual([]);
+    expect(availableCreditRefundUnits(order, lines, { ...withPending, refunds: [pending, { ...second, state: 'Settled' }] }, []).get(lineId)).toEqual([]);
+    expect(availableCreditRefundUnits(order, lines, { ...withPending, refunds: [pending, { ...second, state: 'Failed' }] }, []).get(lineId)).toEqual([2]);
+  });
+  it('admits captured historical derived amounts without fabricating a unit envelope', () => {
+    const { order, lines, evidence, lineId, origin } = importedCredit([1], true, true);
+    expect(evidence.refunds[0]!.lines[0]!.amount).toBe(17);
+    expect(readCreditUnitReturns(evidence.refunds[0]!.metadata)).toBeNull();
+    expect(origin.capture.legacyRefunds[0]?.id).toBe(evidence.refunds[0]!.id);
+    const available = availableCreditRefundUnits(order, lines, evidence, []).get(lineId)!;
+    expect(available).toHaveLength(1);
+    const fresh = prepareCreditUnitReturns(order, lines, evidence, [{ orderLineId: lineId, quantity: 1 }], []);
+    expect(fresh.lines[0]?.creditCents).toEqual([0]);
+    expect(refundUnitBases(order, lines, evidence).get(lineId)).toEqual([100, 100, 100]);
+    expect(() => availableCreditRefundUnits(order, lines, { ...evidence, history: [] }, [])).toThrow(/prefix/);
+    expect(() => availableCreditRefundUnits(order, lines, { ...evidence, refunds: [{ ...evidence.refunds[0]!, amount: 18 }] }, [])).toThrow(/refund prefix/);
+  });
   it('rounds imported gross UNIT before multiplying selected quantity', () => {
     const line = imported(); const unit = refundUnitBases({ currency: 'USD', pricingSnapshot: null }, [line]).get(id)!;
     expect(unit).toBe(100);
@@ -128,16 +225,29 @@ describe('refund cash unit & independent credit unit authority', () => {
     const editId = '88888888-8888-4888-8888-888888888888';
     const originView = readCurrentOrderPricingSnapshot(origin, { currency: 'USD', orderLines: origin.lines.map(line => ({ id: line.orderLineId, quantity: line.quantity })),
       mode: 'settlement', creditEvidence: evidence })!;
-    const sourceRow = (saved: ReturnType<typeof buildCurrentCreditPricingSnapshot>, predecessor: NonNullable<ReturnType<typeof readCurrentOrderPricingSnapshot>>) => {
-      const requestDigest = '0'.repeat(64), postingKeys: string[] = [];
-      const payload = { editId: saved.lineage.editId, orderId: redemption.orderId, pricingSnapshot: saved, requestDigest, postingKeys,
+    const sourceRow = (saved: ReturnType<typeof buildCurrentCreditPricingSnapshot>, predecessor: NonNullable<ReturnType<typeof readCurrentOrderPricingSnapshot>>,
+      activationEvidence: CreditPricingEvidence) => {
+      const fundingPlan = planEditCreditFunding({ ...activationEvidence, editId: saved.lineage.editId,
+        lines: currentCreditFundingTargets(saved.ordinary, saved.originalUnitIndexes, saved.credit.basis, saved.ordinaryUnitFacts,
+          { consumedPositions: predecessor.consumedPositions }) });
+      if (!fundingPlan.ok || fundingPlan.replay || fundingPlan.postings.length) throw new Error('Expected no-posting activated fixture');
+      const { requestDigest } = fundingPlan, postingKeys = fundingPlan.postings.map(posting => posting.idempotencyKey);
+      const proposal = buildEditStageProposal({ editId: saved.lineage.editId, orderId: redemption.orderId,
+        requestFingerprint: orderEditStoredFingerprint({ editId: saved.lineage.editId }),
+        previewAcceptanceHash: orderEditStoredFingerprint(saved), beforeFingerprint: orderEditStoredFingerprint(predecessor),
+        beforeLedgerPrefixDigest: orderEditStoredFingerprint({ redemption: activationEvidence.redemption,
+          history: [...activationEvidence.history].sort((a, b) => a.id.localeCompare(b.id)) }), pricingSnapshot: saved, fundingPlan, requestDigest, postingKeys,
+        lines: saved.lines, couponCodes: saved.couponCodes,
+        appliedPromotionIds: [...new Set([...saved.ordinary.applied.map(applied => applied.promotionId), saved.credit.promotionId])],
+        settlementRequirement: { type: 'leave_credit', currency: saved.currency, requiredTender: 0, requiredRefund: 0 },
+        stockReservationReceipt: { key: `order-edit:${saved.lineage.editId}:stock`, positiveDeltas: [] },
         lineIds: Object.fromEntries(saved.lines.map(line => [line.key, line.orderLineId])), activation: {
           unitIds: saved.unitIds, indexes: saved.originalUnitIndexes, predecessor, lineage: saved.lineage,
-          origin: saved.origin, ordinary: saved.ordinary, ordinaryUnitFacts: saved.ordinaryUnitFacts } };
-      const proposalDigest = creditReturnSnapshotDigest(payload);
+          origin: saved.origin, ordinary: saved.ordinary, ordinaryUnitFacts: saved.ordinaryUnitFacts } });
       return { id: saved.lineage.editId, orderId: redemption.orderId, before: { currentPricing: predecessor.snapshot },
-        after: { activatedPricingSnapshot: saved, proposal: { ...payload, proposalDigest } },
-        settlement: { phase: 'activated', activationReceipt: { proposalDigest, requestDigest, postingKeys,
+        after: { activatedPricingSnapshot: saved, proposal },
+        settlement: { phase: 'activated', type: 'leave_credit', status: 'settled', activationReceipt: { proposalDigest: proposal.proposalDigest, requestDigest, postingKeys,
+          activatedAt: '2026-01-01T00:00:00.000Z',
           activatedSnapshotHash: creditReturnSnapshotDigest(saved) } } };
     };
     const snapshot = buildCurrentCreditPricingSnapshot({ origin, ordinary, couponCodes: ['CREDIT'], evidence,
@@ -145,11 +255,14 @@ describe('refund cash unit & independent credit unit authority', () => {
         sourceAdjustmentDivisor: result.lineSnapshots[0]!.sourceAdjustmentDivisor! } }, originalUnitIndexes: { [id]: [2, null, 0, 1] },
       unitIds: { [id]: [originalCreditUnitId(redemption.id, id, 2), `edit:${editId}:${id}:0`, originalCreditUnitId(redemption.id, id, 0), originalCreditUnitId(redemption.id, id, 1)] },
       lineage: { editId, predecessorSnapshotDigest: creditReturnSnapshotDigest(origin), consumedUnitIds: [] } });
-    const pricingSources = [sourceRow(snapshot, originView)];
+    const pricingSources = [sourceRow(snapshot, originView, evidence)];
     const lines = [{ id, quantity: 4, unitPrice: 100, lineTotal: snapshot.lines[0]!.lineGross }];
     const order = { currency: 'USD', pricingSnapshot: snapshot };
     const first = prepareCreditUnitReturns(order, lines, evidence, selection(), [], pricingSources);
     expect(first.lines[0]).toMatchObject({ positions: [0], originalIndexes: [2], creditCents: [33] });
+    const brokenReceipt = structuredClone(pricingSources);
+    brokenReceipt[0]!.settlement.activationReceipt.requestDigest = 'f'.repeat(64);
+    expect(() => prepareCreditUnitReturns(order, lines, evidence, selection(), [], brokenReceipt)).toThrow(/activation operation receipt/);
     const basis = refundUnitBases(order, lines, evidence, pricingSources).get(id)!;
     expect(basis).toEqual([67, 100, 66, 66]);
     expect(refundLineCashAmount(lines[0]!, 1, [67], true)).toBe(67);
@@ -175,7 +288,7 @@ describe('refund cash unit & independent credit unit authority', () => {
       ordinaryUnitFacts: snapshot.ordinaryUnitFacts, originalUnitIndexes: snapshot.originalUnitIndexes, unitIds: snapshot.unitIds,
       lineage: { editId: laterEditId, predecessorSnapshotDigest: creditReturnSnapshotDigest(snapshot),
         consumedUnitIds: [snapshot.unitIds[id]![0]!, snapshot.unitIds[id]![1]!] } });
-    const laterSources = [...pricingSources, sourceRow(later, predecessor)];
+    const laterSources = [...pricingSources, sourceRow(later, predecessor, settled)];
     expect(prepareCreditUnitReturns({ ...order, pricingSnapshot: later }, lines, settled, selection(), [], laterSources).lines[0]?.positions).toEqual([2]);
     expect(refundUnitBases(order, lines, live, pricingSources).get(id)).toEqual(basis);
   });

@@ -22,6 +22,19 @@ describe('durable edit preparation protocol', () => {
     expect(() => readEditStageProposal(corrupt)).toThrow('proposal digest'); expect(frozen).toEqual(saved);
   });
 
+  it('binds complete imported custody & shipping choices into immutable proposal', () => {
+    const original = proposal();
+    const { version: _version, proposalDigest: _digest, ...input } = original;
+    const sourceCustody = { version: 1, originDigest: hash('f'), detached: { [A]: [{ unitId: `original:${B}:${A}:2`, sourceSlot: 2, originalIndex: 2, cashRefundGross: 66 }] } };
+    const frozen = buildEditStageProposal({ ...input, pricingSnapshot: { version: 2, sourceCustody, credit: { sourceCustodyAllocation: { [A]: [33] } } },
+      activation: { pricingOptions: { recalculateShipping: false, recalculateShippingPromotions: false }, sourceCustody } });
+    for (const corrupt of [
+      { ...frozen, pricingSnapshot: { version: 2, sourceCustody, credit: { sourceCustodyAllocation: { [A]: [32] } } } },
+      { ...frozen, activation: { pricingOptions: { recalculateShipping: true, recalculateShippingPromotions: false }, sourceCustody } },
+    ]) expect(() => readEditStageProposal(corrupt)).toThrow('proposal digest');
+    expect(readEditStageProposal(frozen)).toEqual(frozen);
+  });
+
   it('keeps refund preparation inactive until exact linked refund settles', () => {
     const p = proposal('refund_now', 0, 100); const input = { proposal: p, settlement: { type: 'refund_now', status: 'pending', phase: 'awaiting_refund' as const, refundId: A },
       beforeFingerprint: p.beforeFingerprint, beforeLedgerPrefixDigest: p.beforeLedgerPrefixDigest };

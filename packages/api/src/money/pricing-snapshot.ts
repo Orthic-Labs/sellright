@@ -9,6 +9,8 @@ type SnapshotAppliedPromotion = Omit<AppliedPromotion, 'lineAllocations'> & {
 export interface OrderPricingSnapshotV1 {
   version: 1; currency: string; pricesIncludeTax: boolean; couponCodes: string[]; quoteHash: string;
   pricingProfile: 'captured-default-v1';
+  retainedShipping?: StackInput['retainedShipping'];
+  retainedShippingFinal?: PromotionStackTotals['retainedShippingFinal'];
   shippingBasis: { amount: number; taxRateBps: number; includesTax: boolean; taxable: boolean };
   pointsDiscount: number; adjustments: NonNullable<StackInput['adjustments']>;
   totals: MoneyTotals;
@@ -45,6 +47,7 @@ export function promotionQuoteHash(input: StackInput, result: Omit<PromotionStac
       (({ lineKey: _key, sourceAdjustmentTotal: _sum, sourceAdjustmentDivisor: _divisor, ...snapshot }) => snapshot)(result.lineSnapshots.find(item => item.lineKey === key)!) })),
     shippingBasis: { amount: input.shipping, taxRateBps: input.shippingTaxRateBps, includesTax: input.shippingIncludesTax, taxable: input.shippingTaxRateBps !== 0 },
     pointsDiscount: input.pointsDiscount ?? 0, adjustments: input.adjustments ?? [], totals: economicTotals(result),
+    ...(input.retainedShipping ? { retainedShipping: input.retainedShipping, retainedShippingFinal: result.retainedShippingFinal } : {}),
     applied: result.applied.map(entry => ({ ...entry,
       scope: input.promotions.find(p => p.id === entry.promotionId)?.scope,
       priority: input.promotions.find(p => p.id === entry.promotionId)?.priority,
@@ -65,6 +68,7 @@ export function buildOrderPricingSnapshot(input: StackInput, result: PromotionSt
     couponCodes: [...input.couponCodes], quoteHash: result.quoteHash, totals: economicTotals(result),
     shippingBasis: { amount: input.shipping, taxRateBps: input.shippingTaxRateBps, includesTax: input.shippingIncludesTax, taxable: input.shippingTaxRateBps !== 0 },
     pointsDiscount: input.pointsDiscount ?? 0, adjustments: structuredClone(input.adjustments ?? []),
+    ...(input.retainedShipping ? { retainedShipping: structuredClone(input.retainedShipping), retainedShippingFinal: structuredClone(result.retainedShippingFinal) } : {}),
     lines: input.lines.map(line => { const facts = result.lineSnapshots.find(item => item.lineKey === line.key);
       requireValue(facts, 'missing line facts'); const { lineKey: _key, sourceAdjustmentTotal: _sum, sourceAdjustmentDivisor: _divisor, ...rest } = facts;
       return { ...structuredClone(line), ...rest, orderLineId: mapped(line.key) }; }),
@@ -87,10 +91,38 @@ export function readOrderPricingSnapshot(raw: unknown, context: { currency: stri
   requireValue(new Set(snap.couponCodes.map(code => code.toLowerCase())).size === snap.couponCodes.length, 'duplicate code');
   requireValue(snap.totals && snap.shippingBasis && Array.isArray(snap.lines) && Array.isArray(snap.applied) && Array.isArray(snap.adjustments), 'economic facts');
   // Negative taxable surcharges can outweigh positive merchandise tax.
-  for (const [key, amount] of Object.entries(economicTotals(snap.totals))) cents(amount, key === 'taxTotal');
-  cents(snap.shippingBasis.amount); cents(snap.shippingBasis.taxRateBps); cents(snap.pointsDiscount);
+  for (const [key, amount] of Object.entries(economicTotals(snap.totals))) cents(amount, key === 'taxTotal' || (key === 'shippingTotal' && !!snap.retainedShipping) || (key === 'grandTotal' && (!!snap.retainedShipping || snap.adjustments.some(a=>a.sourceSurcharge))));
+  cents(snap.shippingBasis.amount, !!snap.retainedShipping); cents(snap.shippingBasis.taxRateBps); cents(snap.pointsDiscount);
   requireValue(typeof snap.shippingBasis.includesTax === 'boolean' && typeof snap.shippingBasis.taxable === 'boolean', 'shipping tax basis');
   for (const a of snap.adjustments) { requireValue(a && typeof a === 'object', 'adjustment'); cents(a.amount, true); }
+  if (snap.retainedShipping) {
+    const shipping = snap.retainedShipping, final = snap.retainedShippingFinal;
+    requireValue(/^[a-f0-9]{64}$/.test(shipping.sourceDigest) && ['keep', 'revalidate-promotions', 'recalculate-keep-promotions'].includes(shipping.mode) && Array.isArray(shipping.lines) && Array.isArray(final) && final.length === shipping.lines.length, 'retained shipping vector');
+    const ids = new Set<string>();
+    shipping.lines.forEach((l, i) => { requireValue(typeof l.sourceId === 'string' && l.sourceId && !ids.has(l.sourceId) && final[i]?.sourceId === l.sourceId, 'retained shipping identity'); ids.add(l.sourceId); cents(l.net, true); cents(l.gross, true); cents(final[i]!.net, true); cents(final[i]!.gross, true); });
+    requireValue(shipping.lines.reduce((n,l)=>n+l.net,0) === snap.shippingBasis.amount && final.reduce((n,l)=>n+l.net,0) === snap.totals.shippingTotal, 'retained shipping sums');
+    const actions = snap.applied.filter(e => e.shippingAdjustment !== undefined);
+    for (const e of actions) { cents(e.shippingAdjustment!.net, true); cents(e.shippingAdjustment!.gross, true); requireValue(e.shippingAdjustment!.net === e.amount - e.lineAllocations.reduce((n,l)=>n+l.amount,0), 'shipping action net'); }
+    const waived = actions.length > 0;
+    requireValue(shipping.mode === 'revalidate-promotions' || !waived, 'kept shipping action');
+    if (shipping.repricedBasis !== undefined || shipping.mode === 'recalculate-keep-promotions') {
+      requireValue(shipping.mode !== 'keep', 'unexpected shipping repricing basis');
+      requireValue(Array.isArray(shipping.repricedBasis) && shipping.repricedBasis.length === shipping.lines.length, 'shipping repricing basis');
+      shipping.repricedBasis.forEach((b,i)=>{ requireValue(b.sourceId === shipping.lines[i]!.sourceId && typeof b.includesTax === 'boolean', 'shipping repricing identity'); cents(b.amount,true); cents(b.taxRateBps); });
+    }
+    if (shipping.carriers !== undefined) {
+      requireValue(Array.isArray(shipping.carriers) && shipping.carriers.length === shipping.lines.length, 'shipping carrier closure');
+      const members = new Set<string>(), keys = new Set(snap.lines.map(line=>line.key));
+      shipping.carriers.forEach((carrier,index)=>{
+        requireValue(carrier.sourceId === shipping.lines[index]!.sourceId && (carrier.methodCode === null || typeof carrier.methodCode === 'string' && carrier.methodCode.length > 0) && Array.isArray(carrier.lineKeys), 'shipping carrier identity');
+        for (const key of carrier.lineKeys) { requireValue(typeof key === 'string' && keys.has(key) && !members.has(key), 'shipping carrier membership'); members.add(key); }
+      });
+    }
+    requireValue(final.every((l,i) => l.net === (waived ? 0 : shipping.lines[i]!.net) && l.gross === (waived ? 0 : shipping.lines[i]!.gross)), 'shipping final action');
+    requireValue(actions.reduce((n,e)=>n+e.shippingAdjustment!.net,0) === final.reduce((n,l)=>n+l.net,0)-shipping.lines.reduce((n,l)=>n+l.net,0) && actions.reduce((n,e)=>n+e.shippingAdjustment!.gross,0) === final.reduce((n,l)=>n+l.gross,0)-shipping.lines.reduce((n,l)=>n+l.gross,0), 'shipping action vector');
+  } else requireValue(snap.retainedShippingFinal === undefined && !snap.applied.some(e=>e.shippingAdjustment !== undefined), 'unbound source shipping');
+  const chargeIds = new Set<string>();
+  for (const a of snap.adjustments) if (a.sourceSurcharge) { const charge = a.sourceSurcharge; requireValue(charge.sourceId && !chargeIds.has(charge.sourceId) && /^[a-f0-9]{64}$/.test(charge.sourceDigest), 'source surcharge identity'); chargeIds.add(charge.sourceId); cents(charge.net, true); cents(charge.gross, true); requireValue(a.amount === charge.net, 'source surcharge amount'); }
   const native = new Map(context.orderLines.map(line => [line.id, line.quantity]));
   requireValue(native.size === context.orderLines.length && native.size === snap.lines.length, 'same-order line closure');
   const lines = new Map<string, typeof snap.lines[number]>(); const ids = new Set<string>();
@@ -105,8 +137,8 @@ export function readOrderPricingSnapshot(raw: unknown, context: { currency: stri
   for (const entry of snap.applied) {
     requireValue(typeof entry.promotionId === 'string' && !promotionIds.has(entry.promotionId) && ['percentage', 'fixed', 'free_shipping', 'account_credit'].includes(entry.kind) && ['net', 'gross'].includes(entry.basis) && ['order', 'line'].includes(entry.scope), 'applied promotion');
     cents(entry.amount, true); cents(entry.amountWithTax, true); cents(entry.priority, true); cents(entry.sequence);
-    if (entry.requestedAmount !== undefined) { cents(entry.requestedAmount, true); requireValue(entry.requestedAmount <= 0, 'signed requested discount'); }
-    requireValue(entry.amount <= 0 && entry.amountWithTax <= 0 && Array.isArray(entry.lineAllocations), 'signed discounts');
+    if (entry.requestedAmount !== undefined) { cents(entry.requestedAmount, true); requireValue(entry.requestedAmount <= 0 || (snap.retainedShipping && entry.shippingAdjustment), 'signed requested discount'); }
+    requireValue(((snap.retainedShipping && entry.shippingAdjustment) || (entry.amount <= 0 && entry.amountWithTax <= 0)) && Array.isArray(entry.lineAllocations), 'signed discounts');
     const seen = new Set<string>(); let amount = 0;
     for (const a of entry.lineAllocations) { const line = lines.get(a.lineKey);
       requireValue(line && a.orderLineId === line.orderLineId && !seen.has(a.lineKey) && Array.isArray(a.units) && a.units.length === line.quantity, 'allocation line');
@@ -121,7 +153,7 @@ export function readOrderPricingSnapshot(raw: unknown, context: { currency: stri
       }
       requireValue(a.units.reduce((n, v) => n + v, 0) === a.amount, 'allocation sum'); amount += a.amount; seen.add(a.lineKey);
     }
-    requireValue(amount >= entry.amount, 'promotion allocation sum');
+    requireValue((snap.retainedShipping && entry.shippingAdjustment) || amount >= entry.amount, 'promotion allocation sum');
     shippingDiscount += entry.amount - amount; promotionIds.add(entry.promotionId);
   }
   requireValue(shippingDiscount === snap.totals.shippingTotal - snap.shippingBasis.amount, 'shipping discount sum');
@@ -137,13 +169,25 @@ export function readOrderPricingSnapshot(raw: unknown, context: { currency: stri
       requireValue(original?.sourceAdjustmentAmount ? Array.isArray(original.sourceUnits) && original.sourceUnits.length === units.length && original.sourceUnits.every((n, i) => -n === units[i]) : units.every(n => n === 0), 'credit vector provenance'); }
     requireValue(sum === credit.appliedAmount, 'credit total');
   } else requireValue(!snap.applied.some(entry => entry.kind === 'account_credit' && entry.amount < 0), 'missing selected credit');
+  if (snap.retainedShipping || snap.adjustments.some(a=>a.sourceSurcharge)) {
+    const factor = 1 + snap.shippingBasis.taxRateBps / 10000;
+    const shippingNet = snap.retainedShippingFinal ? snap.retainedShippingFinal.reduce((n,l)=>n+l.net,0) : snap.shippingBasis.includesTax ? Math.round(snap.totals.shippingTotal/factor) : snap.totals.shippingTotal;
+    const shippingGross = snap.retainedShippingFinal ? snap.retainedShippingFinal.reduce((n,l)=>n+l.gross,0) : snap.shippingBasis.includesTax ? snap.totals.shippingTotal : Math.round(snap.totals.shippingTotal*factor);
+    const taxable = snap.adjustments.filter(a=>a.taxable && !a.sourceSurcharge).reduce((n,a)=>n+a.amount,0), rate = snap.lines[0]?.taxRateBps ?? 0;
+    const scalarTax = snap.pricesIncludeTax ? taxable-Math.round(taxable/(1+rate/10000)) : Math.round(taxable*rate/10000);
+    const exactTax = snap.adjustments.reduce((n,a)=>n+(a.sourceSurcharge ? a.sourceSurcharge.gross-a.sourceSurcharge.net : 0),0);
+    const lineNet = snap.lines.reduce((n,l)=>n+l.lineNet,0), lineGross = snap.lines.reduce((n,l)=>n+l.lineGross,0);
+    requireValue(snap.totals.taxTotal === lineGross-lineNet+shippingGross-shippingNet+scalarTax+exactTax &&
+      snap.totals.grandTotal === lineGross+shippingGross+snap.adjustments.reduce((n,a)=>n+a.amount,0)+exactTax+(snap.pricesIncludeTax ? 0 : scalarTax), 'exact source component arithmetic');
+  }
   if (context.totals) requireValue(JSON.stringify(economicTotals(context.totals)) === JSON.stringify(economicTotals(snap.totals)), 'stored order totals');
   const input: StackInput = { lines: snap.lines.map(({ orderLineId: _id, proratedUnitPriceWithTax: _unit, lineNet: _net, lineGross: _gross, ...line }) => line),
     promotions: snap.applied.map(entry => ({ id: entry.promotionId, kind: entry.kind, priority: entry.priority, sequence: entry.sequence, code: null, scope: entry.scope, value: 0, freeShipping: false, conditions: null })),
     couponCodes: snap.couponCodes, phase: 'PaymentSettled', currency: snap.currency, pricesIncludeTax: snap.pricesIncludeTax,
     shipping: snap.shippingBasis.amount, shippingTaxRateBps: snap.shippingBasis.taxRateBps, shippingIncludesTax: snap.shippingBasis.includesTax,
+    ...(snap.retainedShipping ? { retainedShipping: snap.retainedShipping } : {}),
     couponContext: { activeVerifications: [] }, pointsDiscount: snap.pointsDiscount, adjustments: snap.adjustments };
-  const result = { ...snap.totals, lines: [], pricingProfile: snap.pricingProfile, coupons: [], applied: snap.applied.map(({ priority: _p, sequence: _s, scope: _scope, lineAllocations, ...entry }) => ({ ...entry, lineAllocations: lineAllocations.map(({ orderLineId: _id, ...a }) => a) })),
+  const result = { ...snap.totals, ...(snap.retainedShippingFinal ? { retainedShippingFinal: snap.retainedShippingFinal } : {}), lines: [], pricingProfile: snap.pricingProfile, coupons: [], applied: snap.applied.map(({ priority: _p, sequence: _s, scope: _scope, lineAllocations, ...entry }) => ({ ...entry, lineAllocations: lineAllocations.map(({ orderLineId: _id, ...a }) => a) })),
     lineSnapshots: snap.lines.map(line => ({ lineKey: line.key, quantity: line.quantity, proratedUnitPriceWithTax: line.proratedUnitPriceWithTax, lineNet: line.lineNet, lineGross: line.lineGross })),
     selectedCredit: snap.selectedCredit ? { ...snap.selectedCredit, allocation: Object.fromEntries(snap.lines.filter(line => snap.selectedCredit!.allocation[line.orderLineId]).map(line => [line.key, snap.selectedCredit!.allocation[line.orderLineId]!])) } : null };
   requireValue(typeof snap.quoteHash === 'string' && snap.quoteHash === promotionQuoteHash(input, result), 'economic hash');

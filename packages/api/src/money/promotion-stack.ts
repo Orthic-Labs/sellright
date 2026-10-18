@@ -14,11 +14,17 @@ export interface ResolvedPromotion {
   freeShipping: boolean; conditions: unknown;
   credit?: { accountId: string; availableCents: number };
 }
+export interface SourceCharge { sourceId: string; sourceDigest: string; net: number; gross: number }
+export interface ShippingPricingBasis { sourceId: string; amount: number; includesTax: boolean; taxRateBps: number }
+export interface ShippingCarrier { sourceId: string; methodCode: string | null; lineKeys: string[] }
+export interface RetainedShipping { sourceDigest: string; mode: 'keep' | 'revalidate-promotions' | 'recalculate-keep-promotions';
+  lines: Array<{sourceId: string; net: number; gross: number}>; repricedBasis?: ShippingPricingBasis[]; carriers?: ShippingCarrier[] }
 export interface StackInput {
   lines: StackLine[]; promotions: ResolvedPromotion[]; couponCodes: string[]; phase: PricingPhase; currency: string;
   pricesIncludeTax: boolean; shipping: number; shippingTaxRateBps: number; shippingIncludesTax: boolean;
   couponContext: Pick<CouponContext, 'activeVerifications' | 'items'>;
-  pointsDiscount?: number; adjustments?: TotalsInput['adjustments'];
+  pointsDiscount?: number; adjustments?: Array<NonNullable<TotalsInput['adjustments']>[number] & { sourceSurcharge?: SourceCharge }>;
+  retainedShipping?: RetainedShipping;
 }
 export interface StackCouponStatus {
   code: string; promotionId: string | null; kind?: ResolvedPromotion['kind']; applied: boolean; reason?: string;
@@ -28,6 +34,7 @@ export interface AppliedPromotion {
   promotionId: string; kind: ResolvedPromotion['kind']; basis: 'net' | 'gross'; amount: number; amountWithTax: number;
   /** Requested action before source line caps & placed-quantity division. */
   requestedAmount?: number;
+  shippingAdjustment?: {net: number; gross: number};
   /** amount/units are effective rounded channel-basis deltas; source fields
    * preserve stored clamped adjustment & original pre-clamp unit provenance. */
   lineAllocations: { lineKey: string; amount: number; units: number[]; sourceAdjustmentAmount?: number; sourceUnits?: number[];
@@ -40,6 +47,7 @@ export interface PromotionStackTotals extends OrderTotals {
     /** Exact final producer facts, including actual points adjustments; internal only. */
     sourceAdjustmentTotal?: number; sourceAdjustmentDivisor?: number }[];
   selectedCredit: { accountId: string; promotionId: string; appliedAmount: number; allocation: Record<string, number[]> } | null;
+  retainedShippingFinal?: RetainedShipping['lines'];
   quoteHash: string;
   /** Internal resolver evidence for snapshot construction; route projections
    * expose only cart-safe coupon statuses & monetary facts. */
@@ -110,7 +118,26 @@ const totals = (lines: readonly WorkingLine[]) => ({ net: sum(lines.map(line => 
  * integration before claiming a merchant's custom strategy matches this one. */
 export function calculatePromotionStack(input: StackInput): PromotionStackTotals {
   if (!['AddingItems', 'ArrangingPayment', 'PaymentSettled'].includes(input.phase) || !/^[A-Z]{3}$/.test(input.currency)) throw new Error('Invalid pricing context');
-  integer(input.shipping, 'Shipping'); integer(input.shippingTaxRateBps, 'Shipping tax rate');
+  integer(input.shipping, 'Shipping', input.retainedShipping ? -MAX_CENTS : 0); integer(input.shippingTaxRateBps, 'Shipping tax rate');
+  if (input.retainedShipping) {
+    const s = input.retainedShipping;
+    if (!/^[a-f0-9]{64}$/.test(s.sourceDigest) || !['keep', 'revalidate-promotions', 'recalculate-keep-promotions'].includes(s.mode) || !Array.isArray(s.lines) || new Set(s.lines.map(l => l.sourceId)).size !== s.lines.length) throw new Error('Invalid retained shipping');
+    s.lines.forEach(l => { if (!l.sourceId) throw new Error('Invalid source shipping identity'); integer(l.net, 'Source shipping net', -MAX_CENTS); integer(l.gross, 'Source shipping gross', -MAX_CENTS); });
+    if (sum(s.lines.map(l => l.net)) !== input.shipping) throw new Error('Source shipping total differs');
+    if (s.repricedBasis !== undefined || s.mode === 'recalculate-keep-promotions') {
+      if (s.mode === 'keep') throw new Error('Unexpected source shipping repricing basis');
+      if (!Array.isArray(s.repricedBasis) || s.repricedBasis.length !== s.lines.length) throw new Error('Source shipping repricing basis absent');
+      s.repricedBasis.forEach((b,i)=>{ if (b.sourceId !== s.lines[i]!.sourceId || typeof b.includesTax !== 'boolean') throw new Error('Source shipping repricing identity'); integer(b.amount, 'Repriced shipping', -MAX_CENTS); integer(b.taxRateBps, 'Repriced shipping tax'); });
+    }
+    if (s.carriers !== undefined) {
+      const members = new Set<string>(), keys = new Set(input.lines.map(line=>line.key));
+      if (!Array.isArray(s.carriers) || s.carriers.length !== s.lines.length) throw new Error('Source shipping carrier closure');
+      s.carriers.forEach((carrier,index)=>{
+        if (carrier.sourceId !== s.lines[index]!.sourceId || !(carrier.methodCode === null || typeof carrier.methodCode === 'string' && carrier.methodCode.length > 0) || !Array.isArray(carrier.lineKeys)) throw new Error('Source shipping carrier identity');
+        for (const key of carrier.lineKeys) { if (typeof key !== 'string' || !keys.has(key) || members.has(key)) throw new Error('Source shipping carrier membership'); members.add(key); }
+      });
+    }
+  }
   const codes = canonicalCouponCodes(input.couponCodes);
   const keys = new Set<string>();
   const lines: WorkingLine[] = input.lines.map(line => {
@@ -228,21 +255,38 @@ export function calculatePromotionStack(input: StackInput): PromotionStackTotals
   // Shipping is quoted by caller from discounted merchandise, then its actions
   // re-test current conditions. A combined action may lose its shipping benefit.
   let shippingTotal = input.shipping;
+  let retainedShippingFinal = input.retainedShipping ? structuredClone(input.retainedShipping.lines) : undefined;
   for (const promotion of promotions) {
-    if ((promotion.kind !== 'free_shipping' && !promotion.freeShipping) || !eligible(promotion)) continue;
-    const old = shippingTotal; shippingTotal = 0;
+    if ((input.retainedShipping && input.retainedShipping.mode !== 'revalidate-promotions') || (promotion.kind !== 'free_shipping' && !promotion.freeShipping) || !eligible(promotion)) continue;
+    const old = shippingTotal;
+    const oldGross = retainedShippingFinal ? sum(retainedShippingFinal.map(l => l.gross))
+      : input.shippingIncludesTax ? old : rounded(old * (1 + input.shippingTaxRateBps / 10000));
+    shippingTotal = 0;
+    if (retainedShippingFinal) retainedShippingFinal = retainedShippingFinal.map(l => ({ ...l, net: 0, gross: 0 }));
     record(promotion, -old, final.gross, []);
     const entry = applied.find(item => item.promotionId === promotion.id)!;
-    entry.amountWithTax = sum([entry.amountWithTax, -(input.shippingIncludesTax ? old : rounded(old * (1 + input.shippingTaxRateBps / 10000)))]);
+    entry.amountWithTax = sum([entry.amountWithTax, -oldGross]);
+    if (retainedShippingFinal) entry.shippingAdjustment = { net: sum([entry.shippingAdjustment?.net ?? 0, -old]), gross: sum([entry.shippingAdjustment?.gross ?? 0, -oldGross]) };
   }
-  const shippingNet = input.shippingIncludesTax ? rounded(shippingTotal / (1 + input.shippingTaxRateBps / 10000)) : shippingTotal;
-  const shippingGross = input.shippingIncludesTax ? shippingTotal : rounded(shippingTotal * (1 + input.shippingTaxRateBps / 10000));
+  const shippingNet = retainedShippingFinal ? sum(retainedShippingFinal.map(l => l.net))
+    : input.shippingIncludesTax ? rounded(shippingTotal / (1 + input.shippingTaxRateBps / 10000)) : shippingTotal;
+  const shippingGross = retainedShippingFinal ? sum(retainedShippingFinal.map(l => l.gross))
+    : input.shippingIncludesTax ? shippingTotal : rounded(shippingTotal * (1 + input.shippingTaxRateBps / 10000));
   const adjustmentTotal = sum((input.adjustments ?? []).map(adjustment => integer(adjustment.amount, 'Order adjustment', -MAX_CENTS)));
-  const taxableAdjustment = sum((input.adjustments ?? []).filter(adjustment => adjustment.taxable).map(adjustment => adjustment.amount));
+  const taxableAdjustment = sum((input.adjustments ?? []).filter(adjustment => adjustment.taxable && !adjustment.sourceSurcharge).map(adjustment => adjustment.amount));
   const adjustmentRate = lines[0]?.input.taxRateBps ?? 0;
-  const adjustmentTax = input.pricesIncludeTax
+  const scalarAdjustmentTax = input.pricesIncludeTax
     ? taxableAdjustment - rounded(taxableAdjustment / (1 + adjustmentRate / 10000))
     : rounded(taxableAdjustment * adjustmentRate / 10000);
+  const sourceCharges = (input.adjustments ?? []).flatMap(a => {
+    if (!a.sourceSurcharge) return [];
+    const s = a.sourceSurcharge;
+    if (!s.sourceId || !/^[a-f0-9]{64}$/.test(s.sourceDigest) || integer(s.net, 'Source surcharge net', -MAX_CENTS) !== a.amount) throw new Error('Invalid source surcharge');
+    integer(s.gross, 'Source surcharge gross', -MAX_CENTS); return [s];
+  });
+  if (new Set(sourceCharges.map(s => s.sourceId)).size !== sourceCharges.length) throw new Error('Duplicate source surcharge');
+  const sourceAdjustmentTax = sum(sourceCharges.map(s => s.gross - s.net));
+  const adjustmentTax = sum([scalarAdjustmentTax, sourceAdjustmentTax]);
   const coupons = codes.map((code): StackCouponStatus => {
     const matches = promotions.filter(promotion => promotion.code?.toLowerCase() === code.toLowerCase());
     const promotion = matches.length === 1 ? matches[0] : undefined;
@@ -278,12 +322,13 @@ export function calculatePromotionStack(input: StackInput): PromotionStackTotals
         lineDiscount: original - (line.input.priceIncludesTax ? current.lineGross : current.lineNet),
         lineTotal: line.input.priceIncludesTax ? current.lineGross : current.lineNet }; }),
     subtotal, discountTotal, shippingTotal, taxTotal: sum([final.gross - final.net, shippingGross - shippingNet, adjustmentTax]),
-    grandTotal: Math.max(0, sum([final.gross, shippingGross, adjustmentTotal, input.pricesIncludeTax ? 0 : adjustmentTax])), pointsDiscount,
+    grandTotal: input.retainedShipping || sourceCharges.length ? sum([final.gross, shippingGross, adjustmentTotal, input.pricesIncludeTax ? sourceAdjustmentTax : adjustmentTax]) : Math.max(0, sum([final.gross, shippingGross, adjustmentTotal, input.pricesIncludeTax ? 0 : adjustmentTax])), pointsDiscount,
     ...(input.adjustments ? { adjustmentTotal } : {}), coupons, applied,
     lineSnapshots: lines.map(line => { const current = facts(line); return { lineKey: line.input.key, quantity: line.input.quantity,
       proratedUnitPriceWithTax: current.unitGross, lineNet: current.lineNet, lineGross: current.lineGross,
       sourceAdjustmentTotal: sum(line.adjustments), sourceAdjustmentDivisor: Math.max(line.input.placedQuantity, line.input.quantity) }; }),
     selectedCredit, quoteHash: '', resolvedPromotions: promotions,
+    ...(retainedShippingFinal ? { retainedShippingFinal } : {}),
   };
   result.quoteHash = promotionQuoteHash({ ...input, couponCodes: codes }, result);
   return result;
