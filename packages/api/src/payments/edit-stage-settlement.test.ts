@@ -53,7 +53,7 @@ beforeEach(() => {
 describe('staged edit settlement consumers', () => {
   it('recovers only the stage-bound durable tender without money writes', async () => {
     const bound = { ...attempt, operation: 'intent', amount: 250, currency: 'USD', providerRef: 'pi_bound' };
-    const { tx, reads, patches } = fixture([[{ id: 'edit', settlement: { phase: 'awaiting_tender', paymentAttemptId: bound.id } }],
+    const { tx, reads, patches } = fixture([[order], [{ id: 'edit', settlement: { phase: 'awaiting_tender', paymentAttemptId: bound.id } }],
       [bound], [{ ...payment, method: 'stripe', providerRef: 'pi_bound' }], [{ state: 'Paid' }]]);
     await expect(retryPreparedEditSettlement(tx, 'store', order.id, { paymentAttemptId: bound.id })).resolves.toMatchObject({ paymentId: payment.id, orderState: 'Paid' });
     expect(mocks.activate).toHaveBeenCalledWith(tx, { storeId: 'store', orderId: order.id, paymentAttemptId: bound.id, paymentId: payment.id });
@@ -63,7 +63,7 @@ describe('staged edit settlement consumers', () => {
   });
 
   it('does not recover another stage from an unrelated historical attempt', async () => {
-    const { tx, reads } = fixture([[{ id: 'edit', settlement: { phase: 'awaiting_tender', paymentAttemptId: 'bound' } }]]);
+    const { tx, reads } = fixture([[order], [{ id: 'edit', settlement: { phase: 'awaiting_tender', paymentAttemptId: 'bound' } }]]);
     await expect(retryPreparedEditSettlement(tx, 'store', order.id, { paymentAttemptId: 'old-attempt' })).resolves.toBeNull();
     expect(mocks.activate).not.toHaveBeenCalled();
     expect(reads).toHaveLength(0);
