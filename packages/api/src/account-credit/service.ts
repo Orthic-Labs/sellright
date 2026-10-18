@@ -349,7 +349,7 @@ export async function readCurrentCreditEvidence(tx: Tx, input: { storeId: string
     shippingTotal: order.shippingTotal, taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount };
   const pending = pricingSources.filter(row => isPendingEditStage(row.settlement));
   if (pending.length) {
-    const invalid = (): never => { throw new AccountCreditError('allocation', 'Pending imported origin proof differs'); };
+    function invalid(): never { throw new AccountCreditError('allocation', 'Pending imported origin proof differs'); }
     if (pending.length !== 1) invalid();
     const row = pending[0]!;
     const before = row.before, after = row.after;
