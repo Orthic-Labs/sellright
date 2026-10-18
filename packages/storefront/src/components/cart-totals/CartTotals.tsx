@@ -75,24 +75,8 @@ export default component$<{
 	});
 
 	const isDarkRows = promoPlacement === 'rows';
-	const isPromoExpanded = promoExpandedSignal ? promoExpandedSignal.value : promoExpanded.value;
+	const isPromoExpanded = useComputed$(() => promoExpandedSignal ? promoExpandedSignal.value : promoExpanded.value);
 	const currencyCode = cart.value.currency || 'USD';
-	const couponRows = coupons.value.map(coupon => (
-		<div key={coupon.code} class={isDarkRows ? 'text-[12px] text-[rgba(253,250,246,0.6)] space-y-1' : 'text-sm space-y-1'}>
-			<div class="flex items-center justify-between gap-2">
-				<dt class="inline-flex items-center gap-2 break-all">
-					<span>{coupon.code}</span>
-					{!readonly && <button type="button" onClick$={() => removeCoupon$(coupon.code)} title={`Remove ${coupon.code}`} class="p-1 shrink-0"><TrashIcon forcedClass="h-3.5 w-3.5" /></button>}
-				</dt>
-				<dd class="whitespace-nowrap">{coupon.applied ? '-' + formatPrice(coupon.appliedAmount, currencyCode) : 'Not applied'}</dd>
-			</div>
-			{coupon.reason && !coupon.applied && <div role="status">{coupon.reason}</div>}
-			{coupon.kind === 'account_credit' && <div class="space-y-1">
-				{typeof coupon.availableAmount === 'number' && <div>Available credit: {formatPrice(coupon.availableAmount, currencyCode)}</div>}
-				{typeof coupon.remainingAmount === 'number' && <div>Remaining after purchase: {formatPrice(coupon.remainingAmount, currencyCode)}</div>}
-			</div>}
-		</div>
-	));
 
 
 	// ── Dark sidebar row layout (checkout left panel) ──
@@ -104,7 +88,22 @@ export default component$<{
 					<dd class="font-medium text-[rgba(253,250,246,0.6)]">{formatPrice(subtotal.value, currencyCode)}</dd>
 				</div>
 
-				{couponRows}
+				{coupons.value.map(coupon => (
+					<div key={coupon.code} class="text-[12px] text-[rgba(253,250,246,0.6)] space-y-1">
+						<div class="flex items-center justify-between gap-2">
+							<dt class="inline-flex items-center gap-2 break-all">
+								<span>{coupon.code}</span>
+								{!readonly && <button type="button" onClick$={() => removeCoupon$(coupon.code)} title={`Remove ${coupon.code}`} class="p-1 shrink-0"><TrashIcon forcedClass="h-3.5 w-3.5" /></button>}
+							</dt>
+							<dd class="whitespace-nowrap">{coupon.applied ? '-' + formatPrice(coupon.appliedAmount, currencyCode) : 'Not applied'}</dd>
+						</div>
+						{coupon.reason && !coupon.applied && <div role="status">{coupon.reason}</div>}
+						{coupon.kind === 'account_credit' && <div class="space-y-1">
+							{typeof coupon.availableAmount === 'number' && <div>Available credit: {formatPrice(coupon.availableAmount, currencyCode)}</div>}
+							{typeof coupon.remainingAmount === 'number' && <div>Remaining after purchase: {formatPrice(coupon.remainingAmount, currencyCode)}</div>}
+						</div>}
+					</div>
+				))}
 
 				{displayDiscount.value > 0 && (
 					<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
@@ -117,7 +116,7 @@ export default component$<{
 					</div>
 				)}
 
-				{!readonly && isPromoExpanded && (
+				{!readonly && isPromoExpanded.value && (
 					<div id="checkout-promo-code-input" class="pt-1 space-y-1">
 						<div class="flex items-center justify-between w-full gap-2">
 							<div class="flex items-center gap-2">
@@ -195,9 +194,24 @@ export default component$<{
         </dd>
       </div>
 
-      {couponRows}
+				{coupons.value.map(coupon => (
+					<div key={coupon.code} class="text-sm space-y-1">
+						<div class="flex items-center justify-between gap-2">
+							<dt class="inline-flex items-center gap-2 break-all">
+								<span>{coupon.code}</span>
+								{!readonly && <button type="button" onClick$={() => removeCoupon$(coupon.code)} title={`Remove ${coupon.code}`} class="p-1 shrink-0"><TrashIcon forcedClass="h-3.5 w-3.5" /></button>}
+							</dt>
+							<dd class="whitespace-nowrap">{coupon.applied ? '-' + formatPrice(coupon.appliedAmount, currencyCode) : 'Not applied'}</dd>
+						</div>
+						{coupon.reason && !coupon.applied && <div role="status">{coupon.reason}</div>}
+						{coupon.kind === 'account_credit' && <div class="space-y-1">
+							{typeof coupon.availableAmount === 'number' && <div>Available credit: {formatPrice(coupon.availableAmount, currencyCode)}</div>}
+							{typeof coupon.remainingAmount === 'number' && <div>Remaining after purchase: {formatPrice(coupon.remainingAmount, currencyCode)}</div>}
+						</div>}
+					</div>
+				))}
 
-      {!readonly && (
+	      {!readonly && (
         <div class="space-y-1">
           <div class="flex items-center justify-between">
               <div class="flex items-center justify-between w-full">

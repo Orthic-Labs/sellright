@@ -19,7 +19,7 @@ async function editedUp(api: import('./support/api').AdminApi, email: string, se
 	const ops = [{ op: 'set_quantity', lineId: line.id, quantity: 2 }];
 	const preview = await api.post(`/orders/${placed.code}/edit/preview`, { ops });
 	const committed = await api.post(`/orders/${placed.code}/edit/commit`, {
-		ops, expectedGrandTotal: preview.after.grandTotal, expectedBalance: preview.balance.amountDue, idempotencyKey: uniq('edit'), settlement, notifyCustomer, reason: 'Added a second shirt at your request',
+		ops, expectedGrandTotal: preview.after.grandTotal, expectedBalance: preview.balance.amountDue, previewAcceptanceHash: preview.previewAcceptanceHash, idempotencyKey: uniq('edit'), settlement, notifyCustomer, reason: 'Added a second shirt at your request',
 	});
 	return { placed, committed, line };
 }
