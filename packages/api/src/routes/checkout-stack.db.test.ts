@@ -92,10 +92,17 @@ describe('accepted ordered credit checkout', () => {
       expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(101);
       const paymentId = randomUUID();
       const operation = { storeId: STORE, kind: 'payment_settled' as const, operationId: paymentId, orderId: order!.id,
-        mutations: [{ type: 'payment_insert' as const, rows: [{ id: paymentId, storeId: STORE, orderId: order!.id, amount: placed.grandTotal, method: 'synthetic', state: 'Settled' as const }] },
-          { type: 'order_paid' as const, orderId: order!.id, placedAt: new Date() }], effects: [] };
+        mutations: [{ type: 'payment_insert' as const, rows: [{ id: paymentId, storeId: STORE, orderId: order!.id, amount: placed.grandTotal, method: 'synthetic', state: 'Settled' as const }] }], effects: [] };
       expect((await recordSettlementOperation(tx, operation)).creditReconciliation).toBeUndefined();
+      expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(101);
+      // Capture & first-paid transition have separate business identities, as in settle().
+      const paid = { storeId: STORE, kind: 'order_paid_transition' as const, operationId: order!.id, orderId: order!.id,
+        mutations: [{ type: 'order_paid' as const, orderId: order!.id, placedAt: new Date() }], effects: [] };
+      expect((await recordSettlementOperation(tx, paid)).creditReconciliation).toBeUndefined();
       expect((await recordSettlementOperation(tx, operation)).replayed).toBe(true);
+      expect((await recordSettlementOperation(tx, paid)).replayed).toBe(true);
+      expect((await tx.select().from(s.order).where(eq(s.order.id, order!.id)))[0]?.state).toBe('Paid');
+      expect(await tx.select().from(s.payment)).toHaveLength(1);
       expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(0);
       const redeems = (await tx.select().from(s.accountCreditTransaction)).filter(row => row.kind === 'REDEEM');
       expect(redeems).toHaveLength(1);
@@ -109,10 +116,12 @@ describe('accepted ordered credit checkout', () => {
       const [order] = await tx.select().from(s.order).where(eq(s.order.code, placed.code));
       await tx.update(s.order).set({ pricingSnapshot: { version: 999 } }).where(eq(s.order.id, order!.id));
       const id = randomUUID();
-      const result = await recordSettlementOperation(tx, { storeId: STORE, kind: 'payment_settled', operationId: id, orderId: order!.id,
-        mutations: [{ type: 'payment_insert', rows: [{ id, storeId: STORE, orderId: order!.id, amount: placed.grandTotal, method: 'synthetic', state: 'Settled' }] },
-          { type: 'order_paid', orderId: order!.id, placedAt: new Date() }], effects: [] });
+      await recordSettlementOperation(tx, { storeId: STORE, kind: 'payment_settled', operationId: id, orderId: order!.id,
+        mutations: [{ type: 'payment_insert', rows: [{ id, storeId: STORE, orderId: order!.id, amount: placed.grandTotal, method: 'synthetic', state: 'Settled' }] }], effects: [] });
+      const result = await recordSettlementOperation(tx, { storeId: STORE, kind: 'order_paid_transition', operationId: order!.id, orderId: order!.id,
+        mutations: [{ type: 'order_paid', orderId: order!.id, placedAt: new Date() }], effects: [] });
       expect(result.creditReconciliation?.errorCode).toBe('accepted_snapshot_invalid');
+      expect((await tx.select().from(s.order).where(eq(s.order.id, order!.id)))[0]?.state).toBe('Paid');
       expect((await tx.select().from(s.payment))[0]?.state).toBe('Settled');
       expect((await tx.select().from(s.accountCredit))[0]?.balance).toBe(101);
       expect((await tx.select().from(s.accountCreditTransaction)).find(row => row.kind === 'RESERVE')?.status).toBe('PENDING');

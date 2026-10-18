@@ -112,6 +112,10 @@ function buildSource(variant: Variant): string[] {
     TABLE('promotion', ['id int PRIMARY KEY', '"couponCode" text', 'conditions text', 'actions text',
       '"startsAt" timestamp', '"endsAt" timestamp', '"usageLimit" int', '"perCustomerUsageLimit" int',
       '"priorityScore" int', 'enabled boolean', '"deletedAt" timestamp']),
+    TABLE('promotion_channels_channel', ['"promotionId" int REFERENCES promotion(id)', '"channelId" int REFERENCES channel(id)',
+      'PRIMARY KEY ("promotionId", "channelId")']),
+    TABLE('promotion_translation', ['id int PRIMARY KEY', '"baseId" int REFERENCES promotion(id)',
+      '"languageCode" varchar(5)', 'name text', 'description text']),
     TABLE('collection', ['id int PRIMARY KEY', '"parentId" int', 'position int', '"isPrivate" boolean', '"isRoot" boolean', '"featuredAssetId" int']),
     TABLE('collection_translation', ['"baseId" int', '"languageCode" varchar(5)', 'name text', 'slug text', 'description text']),
     TABLE('collection_product_variants_product_variant', ['"collectionId" int', '"productVariantId" int']),
@@ -239,6 +243,14 @@ const RH_SEED = [
      (2, '2024-03-02 00:00:00', 2, 'cod', 'Settled', 1000, NULL, NULL, NULL)`,
 ];
 
+/** Explicit selected-channel membership & hydrated translation facts for seeded promotions. */
+async function seedPromotionScope(client: PoolClient, ids: number[]) {
+  await client.query(`INSERT INTO promotion_channels_channel ("promotionId", "channelId")
+    SELECT id, 1 FROM promotion WHERE id = ANY($1::int[])`, [ids]);
+  await client.query(`INSERT INTO promotion_translation (id, "baseId", "languageCode", name, description)
+    SELECT id, id, 'en', 'Synthetic ' || "couponCode", '' FROM promotion WHERE id = ANY($1::int[])`, [ids]);
+}
+
 async function resetSource(variant: Variant, tag: string) {
   const client = await sourcePool.connect();
   try {
@@ -249,6 +261,7 @@ async function resetSource(variant: Variant, tag: string) {
       // $TAG -> a quoted per-run suffix (globally-unique columns only).
       await client.query(statement.replaceAll('$TAG', `'${tag}'`));
     }
+    if (variant !== 'rh') await seedPromotionScope(client, [10, 77]);
     if (variant === 'broken') await client.query('ALTER TABLE customer DROP COLUMN "emailAddress"');
   } finally {
     client.release();
@@ -574,7 +587,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(await targetRows(storeId, 'legacy_session_grant')).toHaveLength(1);
   });
 
-  it('retains every active-cart source coupon & blocks parity when target cannot apply all codes', async () => {
+  it('retains every active-cart source coupon & blocks parity for unresolved target codes', async () => {
     await resetSource('rh', 'c' + randomUUID().slice(0, 8));
     await sourcePool.query(`INSERT INTO "order" (id,code,state,"currencyCode","customerId",active,"couponCodes") VALUES (100,'ACTIVE-C','AddingItems','USD',1,true,'SAVE,VIP');
       INSERT INTO order_channels_channel VALUES (100,1);
@@ -586,7 +599,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       { type: 'unmapped-source-field', table: 'authentication_method', blocking: true,
         detail: 'Auth rollback unavailable; immutable baseline contains explicit identity blockers', count: 2 },
       { type: 'unmapped-source-field', table: 'order', blocking: true,
-        detail: 'active order 100 has multiple coupon codes; target cart supports one revalidated coupon', sourceValues: ['SAVE', 'VIP'] },
+        detail: 'Active-cart coupon has no unambiguous target promotion; full intent retained for reconciliation',
+        count: 2, sourceValues: [JSON.stringify('SAVE,VIP')] },
     ];
     expect(result.parityBlocked).toBe(true);
     expect(result.parityBlockers).toEqual(expectedParityBlockers);
@@ -596,6 +610,11 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(manifest.rollbackAuthBaseline.blockers.map((blocker: { code: string }) => blocker.code)).toEqual([
       'source_channel_membership_unavailable', 'source_customer_channel_mismatch',
     ]);
+    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: result.sourceDigest });
+    expect(applied.parityBlockers).toEqual(expectedParityBlockers);
+    expect(await targetOne(f.config.storeId, 'cart')).toMatchObject({ coupon_codes: ['SAVE', 'VIP'] });
+    expect(await targetOne(f.config.storeId, 'legacy_session_grant')).toMatchObject({ coupon_code: 'SAVE' });
   });
 
   it('rehearses dry-run/apply/restore for the Rotten Hand schema (no SheerID columns)', async () => {
@@ -1097,6 +1116,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
         (23, 'CREDIT-2', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (24, 'CREDIT-3', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (25, 'CREDIT-4', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, '2024-01-01')`);
+      await seedPromotionScope(client, [20, 21, 22, 23, 24, 25]);
       await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled) VALUES
         (1,20,'buyer@example.com','issue-1','USD',5000,2550,false),
         (2,23,'stranger@example.com','issue-2','USD',1000,1000,false),
@@ -1150,6 +1170,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     try {
       await createCreditSource(client);
       await client.query(`INSERT INTO promotion VALUES (20,'HOLD-CREDIT','[]','[{"code":"account_credit_discount","args":[]}]',NULL,NULL,NULL,NULL,0,true,NULL)`);
+      await seedPromotionScope(client, [20]);
       await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled)
         VALUES (1,20,'over@example.com','over-issuance','USD',300,300,false)`);
       await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey") VALUES
@@ -1171,6 +1192,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     try {
       await createCreditSource(client);
       await client.query(`INSERT INTO promotion VALUES (20,'MONETARY-CREDIT','[]','[{"code":"account_credit_discount","args":[]}]',NULL,NULL,NULL,NULL,0,true,NULL)`);
+      await seedPromotionScope(client, [20]);
       await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled)
         VALUES (1,20,'buyer@example.com','monetary-issuance','USD',1300,1200,false)`);
       await client.query(`INSERT INTO order_channels_channel VALUES (1,1)`);

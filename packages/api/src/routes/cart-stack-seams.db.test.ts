@@ -90,7 +90,7 @@ describe('cart stack protocol seams', () => {
     await withStore(STORE, async tx => {
       await tx.insert(s.cart).values({ id: cartId, storeId: STORE, token: 'synthetic-source-cart', couponCodes: ['ONE', 'TWO'], expiresAt: new Date(Date.now() + 60_000) });
       await tx.insert(s.cartLine).values({ storeId: STORE, cartId, variantId: VARIANT, sku: 'SYNTHETIC', quantity: 1 });
-      await tx.insert(s.legacySessionGrant).values({ storeId: STORE, sourceKey: 'synthetic', sourceSessionId: '1',
+      await tx.insert(s.legacySessionGrant).values({ id: randomUUID(), storeId: STORE, sourceKey: 'synthetic', sourceSessionId: '1',
         tokenHash: createHash('sha256').update(sourceToken).digest('hex'), authenticated: false, cartId,
         couponCode: 'ONE', expiresAt: new Date(Date.now() + 60_000) });
     });
