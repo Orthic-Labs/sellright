@@ -77,7 +77,7 @@ export function canonicalCouponCodes(codes: readonly string[]): string[] {
   });
 }
 
-/** Captured Vendure default prorate: floor SIGNED shares, then +1 to greatest
+/** Captured source default prorate: floor SIGNED shares, then +1 to greatest
  * fractional error, with original sequence breaking ties. Never negate first. */
 export function prorateSigned(weights: readonly number[], amount: number): number[] {
   integer(amount, 'Proration amount', -MAX_CENTS);

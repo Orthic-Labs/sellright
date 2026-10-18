@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { availableCreditRefundUnits, refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, readCreditUnitReturns } from './refund-credit.js';
+import { availableCreditRefundUnits, refundLineCashAmount, refundUnitBases, proveCreditMerchandiseReturn, refundCreditProjection, prepareCreditUnitReturns, readCreditUnitReturns } from '../payments/refund-credit.js';
 import { buildImportedCreditOrigin } from '../money/imported-credit-origin.js';
-import { migrationId } from '../import/context.js';
-import { vendureLineMoney } from '../import/vendure-money.js';
+import { migrationId } from './context.js';
+import { vendureLineMoney } from './vendure-money.js';
 import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
 import { buildEditStageProposal } from '../orders/edit-stage.js';
 import { buildCurrentCreditPricingSnapshot, currentCreditFundingTargets, readCurrentOrderPricingSnapshot, type CreditPricingEvidence } from '../money/current-credit-pricing.js';

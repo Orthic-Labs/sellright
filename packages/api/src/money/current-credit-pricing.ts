@@ -1,3 +1,4 @@
+import { importedOrderEditMetadata, isImportedPricingBasis } from '../import/source-compatibility.js';
 /** Current edited prices are independent from immutable placement/redemption proof. */
 import { createHash } from 'node:crypto';
 import { readCreditFundingState, type CreditFundingState, type EditFundingHistoryRow,
@@ -478,7 +479,7 @@ function directMoneyClosure(saved: unknown, snapshot: OrderPricingSnapshotV1, be
 }
 function directImportedShipping(before: Record<string,unknown>, orderId: string): {facts:CurrentShippingSourceFacts;digest:string;final:Array<{sourceId:string;net:number;gross:number}>} {
   const descriptor = before.importedPricingBasis;
-  requireFact(object(descriptor) && descriptor.kind === 'vendure-order-edit-basis-v1' && descriptor.orderId === orderId &&
+  requireFact(isImportedPricingBasis(descriptor) && descriptor.orderId === orderId &&
     typeof descriptor.storeId === 'string' && typeof descriptor.currency === 'string' && typeof descriptor.sourceKey === 'string' &&
     typeof descriptor.sourceOrderId === 'string' && object(before.storedOrder) && Array.isArray(before.financialLines), 'direct imported shipping anchor absent');
   const order = before.storedOrder;
@@ -498,7 +499,7 @@ function directImportedShipping(before: Record<string,unknown>, orderId: string)
     const actual = lines.find(l=>l.id === line.id);
     requireFact(actual && actual.quantity === line.quantity && actual.lineTotal === line.lineTotal, 'direct imported captured line differs');
   }
-  const raw = readImportedOrderEditBasis({vendure:{id:descriptor.sourceOrderId,sourceKey:descriptor.sourceKey,editBasisV1:descriptor.editBasisV1}},
+  const raw = readImportedOrderEditBasis(importedOrderEditMetadata({ sourceOrderId: descriptor.sourceOrderId, sourceKey: descriptor.sourceKey, editBasisV1: descriptor.editBasisV1 }),
     {storeId:descriptor.storeId,orderId,currency:descriptor.currency,orderLines:lines});
   return {digest:raw.sourceDigest,final:raw.shippingLines.map(l=>({sourceId:l.sourceId,net:l.net,gross:l.gross})),
     facts:{basis:raw.shippingLines.map(l=>({sourceId:l.sourceId,amount:l.listPrice,includesTax:l.listPriceIncludesTax,taxRateBps:l.taxRateBps})),
@@ -510,7 +511,7 @@ function shippingSourceFacts(predecessor: CurrentOrderPricing, evidence: CreditP
   requireFact(!seen.has(hash), 'shipping predecessor cycle'); seen.add(hash);
   if (isImportedCreditOrigin(predecessor.snapshot)) {
     const origin = predecessor.snapshot;
-    const raw = readImportedOrderEditBasis({ vendure: { id: origin.sourceOrderId, sourceKey: origin.sourceKey, editBasisV1: origin.editBasisV1 } },
+    const raw = readImportedOrderEditBasis(importedOrderEditMetadata(origin),
       { storeId: origin.storeId, orderId: origin.orderId, currency: origin.capture.currency, orderLines: origin.capture.lines, couponCodes: origin.capture.couponCodes });
     return { basis: raw.shippingLines.map(l=>({sourceId:l.sourceId,amount:l.listPrice,includesTax:l.listPriceIncludesTax,taxRateBps:l.taxRateBps})),
       adjustments: Object.fromEntries(raw.shippingLines.map(l=>[l.sourceId,sum(l.adjustments)])),
@@ -593,7 +594,7 @@ const shippingPairs = (basis: readonly ShippingPricingBasis[], adjustments: Reco
   return {sourceId:b.sourceId,net:Math.round(b.includesTax ? amount/factor : amount),gross:Math.round(b.includesTax ? amount : amount*factor)};
 });
 function validateSourceComponents(ordinary: OrderPricingSnapshotV1, origin: CreditPricingOrigin, predecessor: CurrentOrderPricing, evidence: CreditPricingEvidence, sources?: readonly CreditPricingSource[], resolve?: PricingResolver) {
-  const imported = isImportedCreditOrigin(origin) ? readImportedOrderEditBasis({ vendure: { id: origin.sourceOrderId, sourceKey: origin.sourceKey, editBasisV1: origin.editBasisV1 } },
+  const imported = isImportedCreditOrigin(origin) ? readImportedOrderEditBasis(importedOrderEditMetadata(origin),
     { storeId: origin.storeId, orderId: origin.orderId, currency: origin.capture.currency, orderLines: origin.capture.lines, couponCodes: origin.capture.couponCodes }) : null;
   const previous = predecessor.snapshot.version === 2 ? predecessor.snapshot.ordinary : isImportedCreditOrigin(predecessor.snapshot) ? null : predecessor.snapshot;
   const source = ordinary.retainedShipping;

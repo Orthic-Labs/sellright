@@ -8,7 +8,7 @@ import { env } from '../env.js';
 import { requireDisposablePostgresUrl } from '../db/test-database-url.js';
 import * as s from '../db/schema.js';
 import { invalidateStoreCache } from '../store-context.js';
-import { createSession } from '../auth/session.js';
+import { seedImportedCartSeams } from '../import/cart-stack.testkit.js';
 import { issue } from '../account-credit/service.js';
 import { cart } from './cart.js';
 import { shopExtra } from './shop-extra.js';
@@ -24,18 +24,7 @@ const items = [{ sku: 'SYNTHETIC', quantity: 1 }];
 let sessionToken: string;
 beforeEach(async () => {
   await pool.query('TRUNCATE store CASCADE');
-  await withStore(STORE, async tx => {
-    await tx.insert(s.store).values({ id: STORE, slug: 'synthetic-cart-seams', name: 'Synthetic seams', currency: 'USD',
-      config: { loyalty: { enabled: true, pointsPerDollarOff: 10 } } });
-    await tx.insert(s.product).values({ id: PRODUCT, storeId: STORE, slug: 'synthetic', name: 'Synthetic', status: 'active' });
-    await tx.insert(s.productVariant).values({ id: VARIANT, storeId: STORE, productId: PRODUCT, sku: 'SYNTHETIC',
-      name: 'Synthetic', price: 1000, fulfillmentType: 'digital_download', metafields: { vendureId: 17 } });
-    await tx.insert(s.customer).values({ id: CUSTOMER, storeId: STORE, email: 'synthetic@example.invalid', emailVerified: true });
-    sessionToken = await createSession(tx, STORE, CUSTOMER);
-    await tx.insert(s.loyaltyLedger).values({ storeId: STORE, customerId: CUSTOMER, kind: 'adjust', points: 100, sourceRef: 'synthetic-opening' });
-    await tx.insert(s.shippingMethod).values({ storeId: STORE, code: 'threshold', name: 'Threshold',
-      calculator: { flat: 100, min: 750, subtotalBasis: 'discounted_with_tax' } });
-  });
+  sessionToken = await seedImportedCartSeams(STORE, PRODUCT, VARIANT, CUSTOMER);
   invalidateStoreCache();
 });
 const post = (path: string, body: unknown, auth = false) => app.request(path, { method: 'POST',

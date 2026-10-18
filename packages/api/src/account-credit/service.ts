@@ -1,3 +1,4 @@
+import { importedSourceMetadata } from '../import/source-compatibility.js';
 /**
  * Transaction-only monetary coupon lifecycle. Every caller supplies a withStore
  * transaction; importing this module opens no database connection. Order mutators
@@ -369,7 +370,7 @@ export async function readCurrentCreditEvidence(tx: Tx, input: { storeId: string
       if (!record(value)) return invalid();
       const meta = record(value.metadata) ? value.metadata : {}, loyalty = record(meta.loyalty) ? meta.loyalty : {};
       return { ...Object.fromEntries(['id', 'storeId', 'currency', 'couponCodes', 'subtotal', 'discountTotal', 'shippingTotal', 'taxTotal', 'grandTotal'].map(key => [key, value[key]])),
-        pointsDiscount: loyalty.pointsDiscount ?? 0, sourceMetadata: meta.vendure };
+        pointsDiscount: loyalty.pointsDiscount ?? 0, sourceMetadata: importedSourceMetadata(meta) };
     };
     const lineFields = ['id', 'storeId', 'orderId', 'quantity', 'unitPrice', 'lineSubtotal', 'lineDiscount', 'lineTax', 'lineTotal', 'metadata'];
     const financialLines = beforeLines.map((value: unknown) => {

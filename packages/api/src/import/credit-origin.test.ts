@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { migrationId } from '../import/context.js';
-import { vendureLineMoney } from '../import/vendure-money.js';
+import { migrationId } from './context.js';
+import { vendureLineMoney } from './vendure-money.js';
 import { orderEditStoredFingerprint } from '../orders/order-edit-stack.js';
 import { planCreditUnitReturn, creditReturnSnapshotDigest } from '../account-credit/edit-funding.js';
 import { buildImportedCreditOrigin, decodeCreditPricingOrigin, importedLegacyRefundMatches, importedLegacyRefundProjection,
-  importedCreditOriginOrdinaryUnitFacts, type BuildImportedCreditOriginInput } from './imported-credit-origin.js';
+  importedCreditOriginOrdinaryUnitFacts, type BuildImportedCreditOriginInput } from '../money/imported-credit-origin.js';
 import { readCurrentOrderPricingSnapshot, currentCreditFundingTargets, buildCurrentCreditPricingSnapshot,
-  type CreditPricingEvidence } from './current-credit-pricing.js';
-import { buildOrderPricingSnapshot } from './pricing-snapshot.js';
-import { calculatePromotionStack, type StackInput } from './promotion-stack.js';
+  type CreditPricingEvidence } from '../money/current-credit-pricing.js';
+import { buildOrderPricingSnapshot } from '../money/pricing-snapshot.js';
+import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
 
 const STORE = 'dddddddd-0000-4000-8000-000000000001', SOURCE = 'vendure:credit-origin';
 const mapped = (entity: string, source: string) => migrationId(STORE, SOURCE, entity, source);

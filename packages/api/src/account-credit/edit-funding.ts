@@ -1,6 +1,8 @@
 /** Pure immutable-redemption accounting. Posting & locking belong to callers. */
 import { createHash } from 'node:crypto';
 import { MAX_CREDIT_CENTS } from './math.js';
+import { isImportedCreditUnitId } from '../import/source-compatibility.js';
+export { importedCreditUnitId } from '../import/source-compatibility.js';
 
 export interface EditFundingRedemption {
   id: string; orderId: string | null; accountCreditId: string;
@@ -95,8 +97,6 @@ const serialize = (value: unknown) => JSON.stringify(stable(value));
 export const creditReturnSnapshotDigest = (value: unknown): string => createHash('sha256').update(serialize(value)).digest('hex');
 export const originalCreditUnitId = (redemptionId: string, orderLineId: string, index: number): string =>
   `original:${redemptionId}:${orderLineId}:${index}`;
-export const importedCreditUnitId = (sourceBasisDigest: string, orderLineId: string, sourceSlot: number): string =>
-  `vendure:${sourceBasisDigest}:${orderLineId}:${sourceSlot}`;
 export interface CreditUnitEconomics { net: number; gross: number; cashRefundGross: number }
 export interface CreditUnitReturnLine {
   orderLineId: string; positions: number[]; originalIndexes: Array<number | null>; creditCents: number[];
@@ -144,8 +144,7 @@ export function readCreditUnitReturns(metadata: unknown): CreditUnitReturns | nu
       for (let p = 0; p < positions.length; p++) {
         const id = line.unitIds[p], economics = line.unitEconomics[p], index = originalIndexes[p];
         const born = typeof id === 'string' ? id.split(':') : [];
-        const sourceUnit = born.length === 4 && born[0] === 'vendure' && /^[a-f0-9]{64}$/.test(born[1]!) &&
-          born[2] === line.orderLineId && /^(0|[1-9]\d*)$/.test(born[3]!) && Number.isSafeInteger(Number(born[3]));
+        const sourceUnit = isImportedCreditUnitId(id, line.orderLineId);
         const editUnit = born.length === 4 && born[0] === 'edit' && UUID.test(born[1]!) && born[2] === line.orderLineId &&
           /^(0|[1-9]\d*)$/.test(born[3]!) && Number.isSafeInteger(Number(born[3]));
         if (typeof id !== 'string' || units.has(id) || (index !== null ? id !== originalCreditUnitId(raw.redemptionId, line.orderLineId, index) :

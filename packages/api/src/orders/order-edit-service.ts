@@ -51,6 +51,7 @@ import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveSt
 import { normalizeEmail } from '../auth/email.js';
 import { loadImportedOrderHistory } from './imported-order-history.js';
 import { assertImportedEditAllowed, classifyImportedEditAdmission } from './imported-edit-admission.js';
+import { importedEditSource, importedSourceMetadata, importedPricingBasis as buildImportedPricingBasis, type ImportedPricingBasis } from '../import/source-compatibility.js';
 import {
   OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
   referencedKeys, sameAddress, validateSettlement, allowedSettlements,
@@ -65,12 +66,7 @@ type VariantRow = typeof s.productVariant.$inferSelect;
 
 const EDITABLE_STATES = new Set(['PendingPayment', 'Paid', 'PartiallyRefunded']);
 
-/** Keep importer-specific metadata access at this compatibility boundary. */
-function importedEditAdmission(metadata: unknown) {
-  return classifyImportedEditAdmission(metadata != null && typeof metadata === 'object' && Object.hasOwn(metadata, 'vendure')
-    ? { present: true, value: (metadata as { vendure: unknown }).vendure }
-    : { present: false });
-}
+const importedEditAdmission = (metadata: unknown) => classifyImportedEditAdmission(importedEditSource(metadata));
 
 /** Throws unless this order may take these ops. Cancelled: nothing. Refunded:
  *  address changes only (G5 — "address edit allowed until Cancelled"). */
@@ -93,10 +89,6 @@ export interface BalanceInfo {
 }
 export interface RefundablePayment { id: string; method: string; amount: number; available: number }
 export interface EditPricingOptions { recalculateShipping?: boolean; recalculateShippingPromotions?: boolean }
-interface ImportedPricingBasis {
-  kind: 'vendure-order-edit-basis-v1'; storeId: string; orderId: string; currency: string;
-  sourceKey: string; sourceOrderId: string; editBasisV1: unknown;
-}
 function editPricingOptions(options: EditPricingOptions): Required<EditPricingOptions> {
   const recalculateShipping = options.recalculateShipping !== false;
   return { recalculateShipping, recalculateShippingPromotions: options.recalculateShippingPromotions ?? recalculateShipping };
@@ -227,11 +219,11 @@ async function lockableOrderId(storeId: string, code: string): Promise<string> {
 
 /** Legacy editing cannot reproduce immutable stacked/unit-vector pricing. */
 async function pricingEditProtected(tx: Tx, storeId: string, order: typeof s.order.$inferSelect, proposedCodes: readonly string[] = []): Promise<boolean> {
-  const vendure = (order.metadata as { vendure?: { editBasisV1?: unknown } } | null)?.vendure;
+  const source = importedSourceMetadata(order.metadata);
   // This is capability admission only. Planning validates every retained raw
   // record, financial projection & immutable credit origin before pricing.
-  const importedBasis = vendure?.editBasisV1 != null;
-  if (order.pricingSnapshot == null && vendure && !importedBasis) return true;
+  const importedBasis = source?.editBasisV1 != null;
+  if (order.pricingSnapshot == null && source && !importedBasis) return true;
   if (order.pricingSnapshot != null && ![1, 2].includes(Number((order.pricingSnapshot as { version?: unknown }).version))) return true;
   const [ledger] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
     .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id))).limit(1);
@@ -373,7 +365,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   const creditEvidence = await readCurrentCreditEvidence(tx, { storeId, orderId: order.id });
   const pricingLineage = await loadPricingLineage(tx, storeId, order.id);
-  const importedBasis = (order.pricingSnapshot == null || isImportedCreditOrigin(rawPricing)) && (order.metadata as { vendure?: unknown } | null)?.vendure
+  const importedBasis = (order.pricingSnapshot == null || isImportedCreditOrigin(rawPricing)) && importedSourceMetadata(order.metadata)
     ? readImportedOrderEditBasis(order.metadata, { storeId, orderId: order.id, currency: order.currency, orderLines: dbLines, couponCodes: initial.couponCodes }) : null;
   const initialCreditPricing = importedBasis && creditEvidence && order.pricingSnapshot == null ? (() => {
     if (!creditEvidence.importedOrigin) throw new OrderEditError(409, 'CREDIT_ALLOCATION_INVALID', 'Retained imported account/redemption source proof is absent.');
@@ -412,9 +404,9 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     for (const line of working.lines) if (line.id) line.key = byId.get(line.id)!.key;
   }
   const originalByKey = new Map((snapshot?.lines ?? importedBasis?.lines ?? []).map(line => [line.key, line]));
-  const sourceKey = (order.metadata as { vendure?: { sourceKey?: unknown } } | null)?.vendure?.sourceKey;
+  const sourceKey = importedSourceMetadata(order.metadata)?.sourceKey;
   const priorOrdinary = snapshot ? snapshot.snapshot.version === 2 ? snapshot.snapshot.ordinary : isImportedCreditOrigin(snapshot.snapshot) ? null : snapshot.snapshot : null;
-  const retainedComponents = importedBasis ?? ((order.metadata as { vendure?: { editBasisV1?: unknown } } | null)?.vendure?.editBasisV1
+  const retainedComponents = importedBasis ?? (importedSourceMetadata(order.metadata)?.editBasisV1
     ? readImportedOrderEditComponents(order.metadata, order.currency) : null);
   const sourceSurcharges = new Map<string, NonNullable<NonNullable<StackInput['adjustments']>[number]['sourceSurcharge']>>();
   if (importedBasis) {
@@ -574,10 +566,10 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     if (row && row.type !== 'account_credit') promotionRow = { ...row, type: row.type };
   }
   const storedUsage = await tx.select().from(s.promotionUsage).where(and(eq(s.promotionUsage.storeId, storeId), eq(s.promotionUsage.orderId, order.id)));
-  const rawSource = (order.metadata as { vendure?: { sourceKey?: unknown; id?: unknown; editBasisV1?: unknown } } | null)?.vendure;
+  const rawSource = importedSourceMetadata(order.metadata);
   const importedPricingBasis: ImportedPricingBasis | undefined = importedBasis && !snapshot?.selectedCredit && order.pricingSnapshot == null && typeof rawSource?.sourceKey === 'string'
-    ? { kind: 'vendure-order-edit-basis-v1', storeId, orderId: order.id, currency: order.currency, sourceKey: rawSource.sourceKey,
-      sourceOrderId: String(rawSource.id), editBasisV1: rawSource.editBasisV1 } : undefined;
+    ? buildImportedPricingBasis({ storeId, orderId: order.id, currency: order.currency, sourceKey: rawSource.sourceKey,
+      sourceOrderId: String(rawSource.id), editBasisV1: rawSource.editBasisV1 }) : undefined;
   const storedFingerprint = orderEditStoredFingerprint({ order, ...(importedPricingBasis ? { importedPricingBasis } : {}), lines: [...dbLines].sort((a, b) => a.id.localeCompare(b.id)),
     adjustments: dbAdjustments, couponCodes: initial.couponCodes, usage: storedUsage.sort((a, b) => a.id.localeCompare(b.id)), variants: [...variantRows].sort((a, b) => a.id.localeCompare(b.id)),
     ...(credit ? { refundPrefixDigest: refundPrefixDigest(credit.evidence) } : {}) });

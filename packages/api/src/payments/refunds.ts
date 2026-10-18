@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { importedSourceMetadata } from '../import/source-compatibility.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx, type HeldAdvisoryLocks } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
@@ -44,7 +45,7 @@ export interface RefundRequest {
   editId?: string;
 }
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
-  const placed = (line.metadata as { vendure?: { placedQuantity?: number } } | null)?.vendure?.placedQuantity;
+  const placed = importedSourceMetadata(line.metadata)?.placedQuantity;
   return Math.max(line.quantity, Number.isSafeInteger(placed) ? placed! : 0);
 }
 function requestFingerprint(input: RefundRequest) {

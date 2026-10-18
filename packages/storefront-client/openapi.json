@@ -54,6 +54,7 @@
           "NOT_AUTHENTICATED",
           "NOT_RETURNABLE",
           "ORDER_ALREADY_PAID",
+          "ORDER_EDIT_PENDING",
           "ORDER_NOT_FOUND",
           "ORDER_NOT_PAYABLE",
           "OUT_OF_STOCK",
@@ -17509,7 +17510,7 @@
                             "code": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 100
+                              "maxLength": 255
                             }
                           },
                           "required": [
@@ -17525,6 +17526,11 @@
                               "enum": [
                                 "remove_coupon"
                               ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
                             }
                           },
                           "required": [
@@ -17705,6 +17711,12 @@
                       ]
                     },
                     "maxItems": 100
+                  },
+                  "recalculateShipping": {
+                    "type": "boolean"
+                  },
+                  "recalculateShippingPromotions": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -17720,7 +17732,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "nullable": true
+                  "type": "object",
+                  "properties": {
+                    "previewAcceptanceHash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "pricingOptions": {
+                      "type": "object",
+                      "properties": {
+                        "recalculateShipping": {
+                          "type": "boolean"
+                        },
+                        "recalculateShippingPromotions": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "recalculateShipping",
+                        "recalculateShippingPromotions"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pricingOptions"
+                  ],
+                  "additionalProperties": {
+                    "nullable": true
+                  }
                 }
               }
             }
@@ -17904,7 +17943,7 @@
                             "code": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 100
+                              "maxLength": 255
                             }
                           },
                           "required": [
@@ -17920,6 +17959,11 @@
                               "enum": [
                                 "remove_coupon"
                               ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
                             }
                           },
                           "required": [
@@ -18102,12 +18146,21 @@
                     "minItems": 1,
                     "maxItems": 100
                   },
+                  "recalculateShipping": {
+                    "type": "boolean"
+                  },
+                  "recalculateShippingPromotions": {
+                    "type": "boolean"
+                  },
                   "expectedGrandTotal": {
-                    "type": "integer",
-                    "minimum": 0
+                    "type": "integer"
                   },
                   "expectedBalance": {
                     "type": "integer"
+                  },
+                  "previewAcceptanceHash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "idempotencyKey": {
                     "type": "string",
@@ -19353,6 +19406,12 @@
                           },
                           "error": {
                             "type": "string"
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "enum": [
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                            ]
                           }
                         },
                         "required": [
@@ -19437,6 +19496,12 @@
                           },
                           "error": {
                             "type": "string"
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "enum": [
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                            ]
                           }
                         },
                         "required": [
@@ -19521,6 +19586,12 @@
                           },
                           "error": {
                             "type": "string"
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "enum": [
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                            ]
                           }
                         },
                         "required": [
@@ -19613,6 +19684,12 @@
                           },
                           "error": {
                             "type": "string"
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "enum": [
+                              "ACCOUNT_CREDIT_HOLD_UNRESOLVED"
+                            ]
                           }
                         },
                         "required": [
@@ -22644,6 +22721,16 @@
           },
           "401": {
             "description": "Unauthorized / wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "2FA required by policy",
             "content": {
               "application/json": {
                 "schema": {
@@ -27659,13 +27746,15 @@
       "post": {
         "summary": "Upload an image asset",
         "requestBody": {
+          "required": true,
           "content": {
             "multipart/form-data": {
               "schema": {
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "format": "binary"
                   },
                   "alt": {
                     "type": "string"
@@ -27742,6 +27831,16 @@
           },
           "415": {
             "description": "Unsupported format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Image processing busy; retry shortly",
             "content": {
               "application/json": {
                 "schema": {

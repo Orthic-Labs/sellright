@@ -13,8 +13,8 @@ vi.mock('../orders/edit-stage.js', async importOriginal => ({ ...await importOri
 vi.mock('../orders/order-edit-service.js', () => ({ bindPreparedEditRefund: mocks.bind }));
 vi.mock('../account-credit/service.js', () => ({ readCurrentCreditEvidence: mocks.evidence,
   anchorImportedCreditOrigin: mocks.anchor, restoreRefundAfterSettlement: vi.fn() }));
-vi.mock('./provider.js', () => ({ getProvider: () => ({ refundPayment: mocks.refund }) }));
-import { requestRefund } from './refunds.js';
+vi.mock('../payments/provider.js', () => ({ getProvider: () => ({ refundPayment: mocks.refund }) }));
+import { requestRefund } from '../payments/refunds.js';
 
 beforeEach(() => vi.clearAllMocks());
 

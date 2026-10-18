@@ -1,13 +1,12 @@
 import { readCurrentOrderPricingSnapshot, type CreditPricingEvidence } from '../money/current-credit-pricing.js';
 import { readCreditFundingState, planCreditUnitReturn, readCreditUnitReturns, creditReturnSnapshotDigest, originalCreditUnitId, type CreditUnitReturnLineV2, type CreditUnitReturns, type EditFundingRedemption, type EditFundingHistoryRow } from '../account-credit/edit-funding.js';
 export { readCreditUnitReturns, creditReturnSnapshotDigest, type CreditUnitReturns } from '../account-credit/edit-funding.js';
-import { vendureProratedUnitPriceWithTax } from '../import/vendure-money.js';
+import { importedRefundUnitBasis } from '../import/source-compatibility.js';
 import { MAX_CREDIT_CENTS } from '../account-credit/math.js';
 
 export type RefundMoneyLine = { id: string; quantity: number; unitPrice: number; lineTotal: number; metadata?: unknown };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const cents = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= MAX_CREDIT_CENTS;
-const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
 /** A validated current snapshot governs every line, including imported lines.
  * Only legacy orders without snapshots use retained source unit authority.
@@ -18,22 +17,7 @@ export function refundUnitBases(order: { currency: string; pricingSnapshot: unkn
     return new Map(Object.entries(snapshot.sourceRefundUnits).map(([line, units]) => [line, units.map(unit => unit.cashRefundGross)]));
   }
   if (snapshot) return new Map(snapshot.lines.map(line => [line.orderLineId, line.proratedUnitPriceWithTax]));
-  return new Map(lines.map(line => {
-    const raw = object(line.metadata) ? line.metadata.vendure : undefined;
-    if (raw !== undefined) {
-      if (!object(raw) || !cents(raw.quantity) || !cents(raw.placedQuantity) || !cents(raw.listPrice) ||
-          typeof raw.listPriceIncludesTax !== 'boolean' || !Array.isArray(raw.adjustments) || !Array.isArray(raw.taxLines) ||
-          !raw.adjustments.every(a => object(a) && finite(a.amount)) || !raw.taxLines.every(t => object(t) && finite(t.taxRate) && t.taxRate >= 0)) {
-        throw new Error('Imported refund unit requires complete source money facts');
-      }
-      const unit = raw.placedQuantity > 0 ? vendureProratedUnitPriceWithTax({ quantity: raw.quantity,
-        orderPlacedQuantity: raw.placedQuantity, listPrice: raw.listPrice, listPriceIncludesTax: raw.listPriceIncludesTax,
-        adjustments: raw.adjustments, taxLines: raw.taxLines }) : 0;
-      if (!cents(unit)) throw new Error('Imported refund unit is outside integer cents');
-      return [line.id, unit] as const;
-    }
-    return [line.id, null] as const;
-  }));
+  return new Map(lines.map(line => [line.id, importedRefundUnitBasis(line.metadata)] as const));
 }
 
 export function refundLineCashAmount(line: RefundMoneyLine, quantity: number, unit: number | readonly number[] | null, creditBearing: boolean): number {

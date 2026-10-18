@@ -6,10 +6,10 @@ import { creditReturnSnapshotDigest, originalCreditUnitId } from '../account-cre
 const mocks = vi.hoisted(() => ({ restore: vi.fn(), provider: vi.fn() }));
 vi.mock('../account-credit/service.js', () => ({ restoreRefundAfterSettlement: mocks.restore,
   readCurrentCreditEvidence: vi.fn(), anchorImportedCreditOrigin: vi.fn() }));
-vi.mock('./provider.js', () => ({ getProvider: mocks.provider }));
+vi.mock('../payments/provider.js', () => ({ getProvider: mocks.provider }));
 vi.mock('../loyalty/ledger.js', () => ({ reconcileRefundLoyalty: vi.fn() }));
 vi.mock('../webhooks/emit.js', () => ({ emitEvent: vi.fn() }));
-import { finalizeRefund } from './refunds.js';
+import { finalizeRefund } from '../payments/refunds.js';
 
 const lineId = '11111111-1111-4111-8111-111111111111';
 const redemptionId = '22222222-2222-4222-8222-222222222222';
