@@ -49,7 +49,7 @@ async function cartQuote() {
 }
 function place(token: string, revision: number, acceptedQuoteHash?: string) {
   return app.request('/v1/shop/checkout', { method: 'POST', headers, body: JSON.stringify({ items: [{ sku: SKU, quantity: 3 }],
-    cartToken: token, expectedRevision: revision, couponCodes: codes, acceptedQuoteHash, shippingMethodCode: 'standard', shippingAddress: { country: 'US' } }) });
+    cartToken: token, expectedRevision: revision, couponCodes: codes, acceptedQuoteHash, email: 'checkout-recipient@example.invalid', shippingMethodCode: 'standard', shippingAddress: { country: 'US' } }) });
 }
 
 describe('accepted ordered credit checkout', () => {
