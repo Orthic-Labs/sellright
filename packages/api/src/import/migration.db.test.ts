@@ -1164,17 +1164,17 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(optionRows).toEqual([{ value: 'Value A', position: 0 }, { value: 'Value B', position: 1 }]);
   });
 
-  // Patterns observed in the real damned_vendure clone: headers stale vs their
-  // lines (settled payment corroborates lines), unresolvable drift kept at
-  // header, Vendure's dummy `standard-payment` handler, 'imported' sentinel
+  // Patterns observed in the real damned_vendure clone: contradictory headers
+  // stay authoritative for historical display even when settlement corroborates
+  // reconstructed charges. Also covers Vendure's dummy `standard-payment` handler, 'imported' sentinel
   // transaction ids, 'Modifying' orders, 'Created' fulfillments, total-only
   // refunds, and fulfillment/refund refs beyond ordered quantity.
-  it('adjudicates real-source money drift by captured payment and keeps documents verbatim', async () => {
+  it('preserves contradictory source headers & quarantines money while retaining exact documents', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
     const extra = [
-      // ORD-DRIFT-LINES: header stale (5000), lines 4000+6000,
-      // independent ShippingLine 800, settled full getter grand 10800.
+      // ORD-DRIFT-LINES: header subtotal 5000, lines 4000+6000,
+      // independent ShippingLine 800, settled reconstructed grand 10800.
       `INSERT INTO "order" VALUES (10, 'DRIFT-LINES', 'Delivered', 'USD', '2024-03-04', 5000, 5000, 800, 800, NULL, NULL, NULL, 1, '2024-03-04', '2024-03-04', false)`,
       `INSERT INTO order_channels_channel VALUES (10, 1)`,
       `INSERT INTO shipping_line VALUES (10,10,1,800,false,'[]','[]')`,
@@ -1202,6 +1202,17 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     ];
     const client = await sourcePool.connect();
     try { for (const stmt of extra) await client.query(stmt); } finally { client.release(); }
+    const sourceHistory = (await sourcePool.query(`SELECT o.id::text AS id, to_jsonb(o)::text AS header,
+      (SELECT jsonb_build_object('id',c.id,'defaultCurrencyCode',c."defaultCurrencyCode",
+        'pricesIncludeTax',c."pricesIncludeTax",'defaultTaxZoneId',c."defaultTaxZoneId")::text FROM channel c WHERE id=1) AS channel,
+      (SELECT to_jsonb(c)::text FROM order_channels_channel c WHERE "orderId"=o.id AND "channelId"=1) AS membership,
+      (SELECT to_jsonb(m)::text FROM shipping_method m WHERE id=1) AS method,
+      (SELECT jsonb_agg(jsonb_build_object('sourceId',l.id::text,'sourceRecord',to_jsonb(l)::text) ORDER BY l.id)
+        FROM shipping_line l WHERE l."orderId"=o.id) AS shipping,
+      (SELECT jsonb_agg(jsonb_build_object('sourceId',l.id::text,'sourceRecord',to_jsonb(l)::text) ORDER BY l.id)
+        FROM order_line l WHERE l."orderId"=o.id) AS lines,
+      (SELECT to_jsonb(p)::text FROM payment p WHERE p."orderId"=o.id) AS payment
+      FROM "order" o WHERE o.id IN (10,11) ORDER BY o.id`)).rows;
 
     const storeId = randomUUID();
     const f = await fixtureConfig(storeId, {
@@ -1213,20 +1224,38 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
 
-    // Payment corroborates complete merchandise + independent shipping getters.
+    // Settlement corroborates charges diagnostically; displayed source totals remain unchanged.
     const drift = await targetOne(storeId, 'order', `AND code = 'DRIFT-LINES'`);
-    expect(drift.grand_total).toBe(10800);
-    expect(drift.subtotal).toBe(10000);
+    expect(drift).toMatchObject({ grand_total: 5800, subtotal: 5000, discount_total: 0, shipping_total: 800, tax_total: 0 });
     expect(drift.metadata.vendure.chargeProjectionV1).toMatchObject({ status: 'settled-corroborated',
       expected: { subTotal: 10000, subTotalWithTax: 10000, shipping: 800, shippingWithTax: 800 },
       sourceHeader: { subTotal: '5000', subTotalWithTax: '5000', shipping: '800', shippingWithTax: '800' },
-      settlementProof: { netSettled: '10800', payments: [{ sourceId: '10', sourceRecord: expect.any(String) }], refunds: [] } });
-    // Unresolved drift keeps the source header — no invented totals.
+      settlementProof: { netSettled: '10800', payments: [{ sourceId: '10', sourceRecord: sourceHistory[0]!.payment }], refunds: [] } });
+    // Unresolved charges receive identical historical-header protection.
     const unres = await targetOne(storeId, 'order', `AND code = 'DRIFT-UNRES'`);
-    expect(unres.grand_total).toBe(5800);
-    expect(unres.subtotal).toBe(5000);
+    expect(unres).toMatchObject({ grand_total: 5800, subtotal: 5000, discount_total: 0, shipping_total: 800, tax_total: 0 });
     expect(unres.metadata.vendure.chargeProjectionV1).toMatchObject({ status: 'unresolved',
-      expected: { subTotal: 9000, subTotalWithTax: 9000, shipping: 800, shippingWithTax: 800 } });
+      expected: { subTotal: 9000, subTotalWithTax: 9000, shipping: 800, shippingWithTax: 800 },
+      sourceHeader: { subTotal: '5000', subTotalWithTax: '5000', shipping: '800', shippingWithTax: '800' } });
+    for (const [index, order] of [drift, unres].entries()) {
+      const raw = sourceHistory[index]!;
+      const retained = order.metadata.vendure.retainedHistoryV1;
+      expect(retained).toEqual({ version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'vendure:test',
+        sourceOrderId: raw.id, sourceOrderRecord: raw.header,
+        header: { subTotal: '5000', subTotalWithTax: '5000', shipping: '800', shippingWithTax: '800' },
+        channel: { sourceId: '1', projection: 'pricing-v1', sourceRecord: raw.channel, orderChannelRecord: raw.membership },
+        shippingMethods: [{ sourceId: '1', sourceRecord: raw.method }], shippingLines: raw.shipping, surcharges: [],
+        lines: raw.lines.map((line: { sourceId: string; sourceRecord: string }) => ({ ...line,
+          orderLineId: migrationId(storeId, 'vendure:test', 'order-line', line.sourceId) })),
+        reason: 'HEADER_CHARGE_CONTRADICTION', referencedDetachedShippingLines: [],
+        sourceDigest: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      const { sourceDigest, ...payload } = retained;
+      expect(sourceDigest).toBe(digest(payload));
+      expect(order.metadata.vendure.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+        reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest });
+      expect(order.metadata.vendure).not.toHaveProperty('editBasisV1');
+      expect(await targetRows(storeId, 'order_adjustment', `AND order_id = '${order.id}'`)).toEqual([]);
+    }
     // 'Modifying' imports as Paid (settled admin-edit order).
     const mod = await targetOne(storeId, 'order', `AND code = 'MOD-1'`);
     expect(mod.state).toBe('Paid');
@@ -1257,7 +1286,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
     const details = manifest.exclusions.map((e: { detail?: string }) => e.detail ?? '').join('\n');
     expect(details).toContain('DRIFT-LINES');
-    expect(details).toContain('stale source header');
+    expect(details).toContain('known_historical_financial_quarantine HEADER_CHARGE_CONTRADICTION');
+    expect(details).toContain('source header retained; reconstructed charges & net settlement are diagnostic only');
     expect(details).toContain('DRIFT-UNRES');
     expect(details).toContain('reconciliation required');
     expect(details).toContain('total-only source record');
