@@ -225,6 +225,10 @@ async function pricingEditProtected(tx: Tx, storeId: string, order: typeof s.ord
   const importedBasis = source?.editBasisV1 != null;
   if (order.pricingSnapshot == null && source && !importedBasis) return true;
   if (order.pricingSnapshot != null && ![1, 2].includes(Number((order.pricingSnapshot as { version?: unknown }).version))) return true;
+  const [pendingReserve] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
+    .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id),
+      eq(s.accountCreditTransaction.kind, 'RESERVE'), eq(s.accountCreditTransaction.status, 'PENDING'))).limit(1);
+  if (pendingReserve) return true;
   const [ledger] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
     .where(and(eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, order.id))).limit(1);
   if (ledger && order.pricingSnapshot == null && !importedBasis) return true;

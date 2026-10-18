@@ -713,6 +713,10 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const exactFacts = String.raw`{"unsafe":9007199254740993,"fraction":0.123456789012345678901,"nullable":null}`;
     await sourcePool.query('UPDATE order_line SET "customFieldsRetained"=$1::jsonb WHERE id=1', [exactFacts]);
     await sourcePool.query('UPDATE shipping_method SET "deletedAt"=$1, "customFieldsRetained"=$2::jsonb WHERE id=1', ['2020-01-01', exactFacts]);
+    // Keep a live checkout method alongside the deleted historical method.
+    await sourcePool.query(`INSERT INTO shipping_method (id,code,checker,calculator,"deletedAt")
+      SELECT 2,'current-standard',checker,calculator,NULL FROM shipping_method WHERE id=1`);
+    await sourcePool.query(`INSERT INTO shipping_method_translation VALUES (2,'en','Current standard')`);
     const original = (await sourcePool.query(`SELECT
       (SELECT to_jsonb(o)::text FROM "order" o WHERE id=1) AS header,
       (SELECT to_jsonb(l)::text FROM order_line l WHERE id=1) AS line,
@@ -748,6 +752,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(sourceDigest).toBe(digest(payload));
     expect(order).toMatchObject({ subtotal: 1000, discount_total: 0, shipping_total: 0, tax_total: 0, grand_total: 1000,
       shipping_method_code: 'standard' });
+    expect((await targetRows(storeId, 'shipping_method')).map(method => method.code)).toEqual(['current-standard']);
     const line = await targetOne(storeId, 'order_line', `AND order_id = '${orderId}'`);
     expect(line).toMatchObject({ unit_price: 1000, line_subtotal: 1000, line_discount: 0, line_tax: 0, line_total: 1000 });
     expect((await targetRows(storeId, 'payment', `AND order_id = '${orderId}'`)).map(payment => payment.amount)).toEqual([1000]);
@@ -992,6 +997,9 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       stripe: { accountId: 'acct_dd', mode: 'live' },
     });
     const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    const repeatedDry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.manifestPath + '.repeat' });
+    expect(repeatedDry.sourceDigest).toBe(dry.sourceDigest);
     await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
     const orderId = migrationId(storeId, 'vendure:test', 'order', 4);
@@ -1220,7 +1228,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       await client.query(`INSERT INTO promotion VALUES
         (20, 'CREDIT-1', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (21, 'BUNDLE', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"15"}]},{"code":"free_shipping","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
-        (22, 'PLAIN5', '[]', '[{"code":"order_fixed_discount","args":[{"name":"amount","value":"500"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (22, 'PLAIN5', '[]', '[{"code":"order_fixed_discount","args":[{"name":"discount","value":"500"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (23, 'CREDIT-2', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (24, 'CREDIT-3', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
         (25, 'CREDIT-4', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, '2024-01-01')`);

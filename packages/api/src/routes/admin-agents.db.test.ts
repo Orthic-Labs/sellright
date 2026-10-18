@@ -29,6 +29,13 @@ let ownerToken = '', managerToken = '', staffToken = '';
 const H = (token: string, slug = 'store-a', extra: Record<string, string> = {}) => ({ authorization: `Bearer ${token}`, 'x-store-slug': slug, ...extra });
 const req = (method: string, path: string, token: string, body?: unknown, slug = 'store-a') =>
   app.request(path, { method, headers: H(token, slug, body === undefined ? {} : { 'content-type': 'application/json' }), body: body === undefined ? undefined : JSON.stringify(body) });
+async function acceptedEditBody(token: string, code: string, body: unknown) {
+  const payload = body as Record<string, unknown>;
+  const response = await req('POST', `/v1/admin/orders/${code}/edit/preview`, token, { ops: payload.ops });
+  expect(response.status).toBe(200);
+  const preview = await response.json() as { previewAcceptanceHash: string };
+  return { ...payload, previewAcceptanceHash: preview.previewAcceptanceHash };
+}
 
 async function wipe() { await ownerPool.query('TRUNCATE store CASCADE'); await ownerPool.query('DELETE FROM "session"'); await ownerPool.query('DELETE FROM admin_api_token'); await ownerPool.query('DELETE FROM admin_user'); }
 async function seed() {
@@ -125,7 +132,8 @@ describe('agent seats', () => {
   it('a staff-role agent operates the store: every ALLOWED request is 2xx and persists', async () => {
     const a = await createAgent();
     for (const x of ALLOWED) {
-      const r = await req(x.method, x.path, a.token, x.body);
+      const body = x.path === `/v1/admin/orders/${ORDER_EDIT}/edit/commit` ? await acceptedEditBody(a.token, ORDER_EDIT, x.body) : x.body;
+      const r = await req(x.method, x.path, a.token, body);
       expect([x.label, ok2xx(r) ? 'ok' : `${r.status} ${await r.text()}`]).toEqual([x.label, 'ok']);
     }
     const v = await withStore(A, async (tx) => (await tx.execute(sql`SELECT price FROM product_variant WHERE id = ${VA}`)).rows[0] as { price: number });
@@ -350,7 +358,7 @@ describe('agent order edits cannot issue or change entitlements', () => {
 
   it('control: a human adding the licensed SKU at price 0 on the paid order gets the licence (behaviour unchanged)', async () => {
     const before = await licences();
-    const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, ownerToken, addLicensed(0, 'human-add-licensed'));
+    const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, ownerToken, await acceptedEditBody(ownerToken, ORDER_LIC, addLicensed(0, 'human-add-licensed')));
     expect([r.status, r.status === 200 ? 'ok' : await r.text()]).toEqual([200, 'ok']);
     expect(await licences()).toBe(before + 1);
   });
@@ -371,8 +379,11 @@ describe('agent order edits cannot issue or change entitlements', () => {
 
   it('an agent may edit physical lines but not entitlement-bearing ones (add, swap to, change quantity of, or remove a licensed line); address edits stay allowed', async () => {
     const a = await createAgent();
-    const commit = (token: string, op: Record<string, unknown>, key: string, expectedGrandTotal = 2000) =>
-      req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, token, { ops: [op], expectedGrandTotal, idempotencyKey: key, notifyCustomer: false, settlement: { type: 'leave_due' } });
+    const commit = async (token: string, op: Record<string, unknown>, key: string, expectedGrandTotal = 2000) => {
+      const body = { ops: [op], expectedGrandTotal, idempotencyKey: key, notifyCustomer: false, settlement: { type: 'leave_due' } };
+      const accepted = token === ownerToken || op.op === 'set_address' ? await acceptedEditBody(token, ORDER_LIC, body) : body;
+      return req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, token, accepted);
+    };
     const physical = (await lineIds())[0]!;
     // Physical-only edits are not an entitlement change: never the agent refusal (the totals here are deliberately stale, so 409 is fine).
     for (const op of [{ op: 'set_quantity', lineId: physical, quantity: 3 }, { op: 'add_item', sku: 'SKU-A', quantity: 1 }]) {

@@ -175,11 +175,12 @@ async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonl
     throw new Error('Edit basis requires source read-only repeatable-read snapshot');
   }
   const targetOrders = await ctx.tx.select().from(s.order).where(eq(s.order.storeId, ctx.storeId));
+  // Source-read digests bind parameter order, independent of target scan order.
   const ids = targetOrders.map(order => {
     const vendure = (order.metadata as { vendure?: { id?: unknown; sourceKey?: unknown } } | null)?.vendure;
     if (vendure?.sourceKey !== ctx.sourceKey || vendure.id == null) throw new Error('Edit basis target source identity missing');
     return String(vendure.id);
-  });
+  }).sort();
   const channels = await ctx.q(`SELECT c.id::text AS id, jsonb_build_object('id',c.id,
     'defaultCurrencyCode',c."defaultCurrencyCode",'pricesIncludeTax',c."pricesIncludeTax",
     'defaultTaxZoneId',c."defaultTaxZoneId")::text AS "sourceRecord"

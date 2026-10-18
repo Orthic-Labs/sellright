@@ -23,6 +23,7 @@
  *   5. verify with a well-formed but unknown attempt id -> 404 (readGatewayAttempt's
  *      GatewayPaymentError, same envelope shape)
  *   6. every error response also carries `requestId` (lib/api-error.ts)
+ *   7. missing receipt proof on start -> 404 ORDER_NOT_FOUND before config checks
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -103,13 +104,24 @@ describe('POST /v1/shop/orders/{code}/gateway-payment', () => {
 
   it('409s with PAYMENT_METHOD_DISABLED when no gateway is configured (fail closed)', async () => {
     const res = await post(`/v1/shop/orders/${ORDER_CODE}/gateway-payment`, {
-      headers: { 'idempotency-key': 'idem-2' },
+      headers: { 'idempotency-key': 'idem-2', 'x-receipt-token': RECEIPT_TOKEN },
       body: { method: 'nmi', token: 'tok_test' },
     });
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('PAYMENT_METHOD_DISABLED');
     expect(body.error.message).toBe('Payment method disabled');
+  });
+
+  it('404s before revealing gateway configuration when receipt proof is missing', async () => {
+    const res = await post(`/v1/shop/orders/${ORDER_CODE}/gateway-payment`, {
+      headers: { 'idempotency-key': 'idem-no-receipt' },
+      body: { method: 'nmi', token: 'tok_test' },
+    });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('ORDER_NOT_FOUND');
+    expect(body.error.message).toBe('Order not found');
   });
 });
 

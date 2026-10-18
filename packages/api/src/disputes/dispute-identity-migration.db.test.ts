@@ -13,11 +13,25 @@ afterAll(() => pool.end());
 describe('NMI dispute identity migration', () => {
   it('backfills only linked proof across FORCE-RLS tenants & preserves old insert shapes', async () => {
     const client = await pool.connect();
-    const schema = `dispute_identity_${randomUUID().replaceAll('-', '')}`;
+    const suffix = randomUUID().replaceAll('-', '');
+    const schema = `dispute_identity_${suffix}`;
+    const owner = `dispute_identity_owner_${suffix}`;
     const stores = [randomUUID(), randomUUID()];
     try {
       await client.query('BEGIN');
-      await client.query(`CREATE SCHEMA ${schema}; SET LOCAL search_path TO ${schema}, public`);
+      const caller = await client.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+      // CI's postgres bypasses FORCE RLS; ordinary dev roles need no CREATEROLE.
+      if (caller.rows[0].rolsuper || caller.rows[0].rolbypassrls) {
+        await client.query(`CREATE ROLE ${owner} NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`);
+        await client.query(`GRANT ${owner} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
+        await client.query(`CREATE SCHEMA ${schema} AUTHORIZATION ${owner}`);
+        await client.query(`SET LOCAL ROLE ${owner}`);
+      } else {
+        await client.query(`CREATE SCHEMA ${schema}`);
+      }
+      await client.query(`SET LOCAL search_path TO ${schema}, public`);
+      const role = await client.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+      expect(role.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
       await client.query(`
         CREATE TABLE store (id uuid PRIMARY KEY);
         CREATE TABLE payment (id uuid PRIMARY KEY, store_id uuid, order_id uuid,
@@ -60,6 +74,7 @@ describe('NMI dispute identity migration', () => {
         const rows = (await client.query('SELECT * FROM dispute ORDER BY provider_ref')).rows;
         expect(rows).toHaveLength(12);
         for (const row of rows) {
+          expect(row.store_id).toBe(storeId);
           const prior = unchanged.find(old => old.id === row.id)!;
           const { gateway_account, gateway_mode, ...rest } = row;
           expect(rest).toEqual(prior);

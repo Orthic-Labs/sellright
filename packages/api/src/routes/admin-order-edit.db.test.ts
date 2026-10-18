@@ -60,6 +60,12 @@ const call = (token: string | null, method: string, path: string, body?: unknown
   method, headers: { 'content-type': 'application/json', 'x-store-slug': SLUG, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body),
 });
 const lineId = async () => (await withStore(STORE, (tx) => tx.execute(sql`SELECT id FROM order_line LIMIT 1`))).rows[0] as { id: string };
+async function acceptance(token: string, ops: unknown) {
+  const response = await call(token, 'POST', `/v1/admin/orders/${CODE}/edit/preview`, { ops });
+  expect(response.status).toBe(200);
+  const preview = await response.json() as { previewAcceptanceHash: string };
+  return { previewAcceptanceHash: preview.previewAcceptanceHash };
+}
 
 describe('order edit HTTP contract', () => {
   it.each(['snapshot', 'stack', 'credit-promotion', 'credit-code', 'credit-usage', 'credit-ledger', 'order-scope'] as const)(
@@ -130,19 +136,22 @@ describe('order edit HTTP contract', () => {
     expect((await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/preview`, { ops: [{ op: 'bogus' }] })).status).toBe(400);
     expect((await call(owner, 'POST', `/v1/admin/orders/NOPE/edit/preview`, { ops: [{ op: 'remove_shipping' }] })).status).toBe(404);
     const { id } = await lineId();
-    const stale = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops: [{ op: 'set_quantity', lineId: id, quantity: 1 }], expectedGrandTotal: 999, idempotencyKey: 'stale', settlement: { type: 'leave_credit' } });
+    const ops = [{ op: 'set_quantity', lineId: id, quantity: 1 }];
+    const accepted = await acceptance(owner, ops);
+    const stale = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, ...accepted, expectedGrandTotal: 999, idempotencyKey: 'stale', settlement: { type: 'leave_credit' } });
     expect(stale.status).toBe(409);
     const body = await stale.json() as { error: { code: string }; grandTotal: number };
     expect(body.error.code).toBe('PREVIEW_STALE');
     expect(body.grandTotal).toBe(1000);
-    const noSettle = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops: [{ op: 'set_quantity', lineId: id, quantity: 1 }], expectedGrandTotal: 1000, idempotencyKey: 'ns' });
+    const noSettle = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, ...accepted, expectedGrandTotal: 1000, idempotencyKey: 'ns' });
     expect(noSettle.status).toBe(400);
     expect(((await noSettle.json()) as { error: { code: string } }).error.code).toBe('SETTLEMENT_REQUIRED');
   });
 
   it('commit applies, replays idempotently, and shows on the order detail (balance + timeline)', async () => {
     const { id } = await lineId();
-    const payload = { ops: [{ op: 'add_item', sku: 'SKU1', quantity: 1 }], expectedGrandTotal: 3000, idempotencyKey: 'route-1', settlement: { type: 'leave_due' }, notifyCustomer: false, reason: 'phone order' };
+    const ops = [{ op: 'add_item', sku: 'SKU1', quantity: 1 }];
+    const payload = { ops, ...await acceptance(owner, ops), expectedGrandTotal: 3000, idempotencyKey: 'route-1', settlement: { type: 'leave_due' }, notifyCustomer: false, reason: 'phone order' };
     const r1 = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, payload);
     expect(r1.status).toBe(200);
     expect(await r1.json()).toMatchObject({ grandTotal: 3000, balance: 1000, amountDue: 1000, replay: false });
@@ -160,9 +169,10 @@ describe('order edit HTTP contract', () => {
   it('staff without the refunds permission cannot refund_now (403) but can edit with other settlements', async () => {
     const { id } = await lineId();
     const ops = [{ op: 'set_quantity', lineId: id, quantity: 1 }];
-    const denied = await call(staff, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, expectedGrandTotal: 1000, idempotencyKey: 's1', settlement: { type: 'refund_now' } });
+    const accepted = await acceptance(staff, ops);
+    const denied = await call(staff, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, ...accepted, expectedGrandTotal: 1000, idempotencyKey: 's1', settlement: { type: 'refund_now' } });
     expect(denied.status).toBe(403);
-    const ok = await call(staff, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, expectedGrandTotal: 1000, idempotencyKey: 's2', settlement: { type: 'leave_credit' } });
+    const ok = await call(staff, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, ...accepted, expectedGrandTotal: 1000, idempotencyKey: 's2', settlement: { type: 'leave_credit' } });
     expect(ok.status).toBe(200);
   });
 
@@ -186,7 +196,7 @@ describe('order edit HTTP contract', () => {
   it('the invoice omits zero-quantity (edited-out) lines and lists adjustments so it adds up', async () => {
     const { id } = await lineId();
     const ops = [{ op: 'set_quantity', lineId: id, quantity: 0 }, { op: 'add_item', sku: 'SKU1', quantity: 1 }, { op: 'add_adjustment', label: 'Goodwill credit', amount: -150 }];
-    const c = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, expectedGrandTotal: 850, idempotencyKey: 'inv', settlement: { type: 'leave_credit' }, notifyCustomer: false });
+    const c = await call(owner, 'POST', `/v1/admin/orders/${CODE}/edit/commit`, { ops, ...await acceptance(owner, ops), expectedGrandTotal: 850, idempotencyKey: 'inv', settlement: { type: 'leave_credit' }, notifyCustomer: false });
     expect(c.status).toBe(200);
     const inv = await (await call(owner, 'GET', `/v1/admin/orders/${CODE}/invoice`)).json() as { lines: Array<{ name: string; quantity: number; lineTotal: string }>; totals: { grand: string } };
     expect(inv.lines.map((l) => [l.name, l.quantity])).toEqual([['Widget One', 1], ['Goodwill credit', 1]]);

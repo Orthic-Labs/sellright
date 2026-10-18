@@ -108,6 +108,8 @@ describe('accepted ordered credit checkout', () => {
       expect(redeems).toHaveLength(1);
       expect(Object.values(redeems[0]!.operationalAllocation ?? {}).flat().reduce((a, b) => a + b, 0)).toBe(101);
     });
+    expect((await loadEditContext(STORE, placed.code)).editable).toMatchObject({ items: true, addressOnly: false, address: true });
+    expect((await previewOrderEdit(STORE, placed.code, [])).after.grandTotal).toBe(placed.grandTotal);
   });
   it('keeps financially settled payment successful on invalid snapshot & cancellation releases a hold without policy reservations', async () => {
     const { saved, quote } = await cartQuote();
@@ -135,7 +137,19 @@ describe('accepted ordered credit checkout', () => {
   it('blocks legacy economic editing before effects while exposing direct address availability', async () => {
     const { saved, quote } = await cartQuote();
     const placed = await (await place(saved.token, saved.revision, quote.quoteHash)).json() as { code: string };
+    const facts = () => withStore(STORE, async tx => ({
+      orders: await tx.select().from(s.order), lines: await tx.select().from(s.orderLine), stock: await tx.select().from(s.stock),
+      credits: await tx.select().from(s.accountCredit), funding: await tx.select().from(s.accountCreditTransaction),
+      usages: await tx.select().from(s.promotionUsage), edits: await tx.select().from(s.orderEdit),
+      payments: await tx.select().from(s.payment), effects: await tx.select().from(s.orderPendingEffect),
+    }));
+    const before = await facts();
+    const holds = before.funding.filter(row => row.kind === 'RESERVE');
+    expect(holds).toHaveLength(1);
+    expect(holds[0]).toMatchObject({ status: 'PENDING', amount: 101, delta: 0 });
+    expect(before.edits).toHaveLength(0); expect(before.effects).toHaveLength(0);
     await expect(previewOrderEdit(STORE, placed.code, [])).rejects.toMatchObject({ code: 'ORDER_PRICING_EDIT_UNSUPPORTED' });
     expect((await loadEditContext(STORE, placed.code)).editable).toMatchObject({ items: false, addressOnly: true, address: true });
+    expect(await facts()).toEqual(before);
   });
 });

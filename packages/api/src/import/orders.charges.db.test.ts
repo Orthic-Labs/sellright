@@ -110,7 +110,8 @@ describe('persisted imported signed charges', () => {
           refunds: [{ sourceId: '61', sourceRecord: expect.any(String) }] } });
       expect((order!.metadata as { vendure: { sourceOrderRecord: string } }).vendure.sourceOrderRecord).toBe(data.order.source_record);
       expect(await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.storeId, ctx.storeId))).toHaveLength(3);
-      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', sourceValues: [JSON.stringify(projection)] })]);
+      expect(ctx.exclusions).toEqual([expect.objectContaining({ table: 'order', sourceValues: [expect.any(String)] })]);
+      expect(JSON.parse(ctx.exclusions[0]!.sourceValues![0]!)).toEqual(projection);
     });
   });
 
