@@ -673,6 +673,13 @@
       "when": 1790000014100,
       "tag": "0104_coupon_stack",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1790000014200,
+      "tag": "0105_credit_merchandise_attempt",
+      "breakpoints": true
     }
   ]
 }

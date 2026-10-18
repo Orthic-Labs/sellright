@@ -78,6 +78,7 @@ const HAND_WRITTEN = [
   '0102_imported_order_history.sql',
   '0103_account_credit.sql',
   '0104_coupon_stack.sql',
+  '0105_credit_merchandise_attempt.sql',
   '0089_installation_setting.sql',
   '0087_harden_outbox_rls_nullif.sql',
   '0088_defork_instrumentation.sql',

@@ -45,7 +45,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 export const adminOrderOps = new OpenAPIHono();
 
 const BulkResult = z.object({
-  results: z.array(z.object({ code: z.string(), ok: z.boolean(), error: z.string().optional() })),
+  results: z.array(z.object({ code: z.string(), ok: z.boolean(), error: z.string().optional(), errorCode: z.literal('ACCOUNT_CREDIT_HOLD_UNRESOLVED').optional() })),
   succeeded: z.number().int(),
   skipped: z.number().int(),
 });
@@ -627,24 +627,42 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { codes, force, reason } = c.req.valid('json');
-    const results: { code: string; ok: boolean; error?: string }[] = [];
+    const results: { code: string; ok: boolean; error?: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }[] = [];
     // PAYMENT-TIMING §3.5: the Stripe discovery flag is evaluated before any transaction (no I/O inside one).
     const [purgeStore] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const stripeDiscover = await stripeDiscoverable(st.storeId, purgeStore?.config ?? {});
     for (const code of [...new Set(codes)] as string[]) {
       const preId = await orderIdByCode(st.storeId, code);
-      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const r: { ok: true } | { ok: false; error: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' } = !preId
+        ? { ok: false, error: 'order not found' }
+        : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string; errorCode?: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before purging' };
         if (await purgeBlockedByReservations(tx, st.storeId, o.id, { stripeDiscoverable: stripeDiscover })) return { ok: false, error: 'Resolve the pending payment before purging' };
+        // Credit reserve/redeem/release also lock this order first. Inspect the
+        // live hold here, before any write, so each bulk item stays atomic & a
+        // force purge cannot orphan credit reserved against a deleted order.
+        const [creditHold] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
+          eq(s.accountCreditTransaction.storeId, st.storeId), eq(s.accountCreditTransaction.orderId, o.id),
+          eq(s.accountCreditTransaction.kind, 'RESERVE'), eq(s.accountCreditTransaction.status, 'PENDING'))).limit(1);
+        if (creditHold) return { ok: false, errorCode: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED',
+          error: 'Resolve the pending account credit hold through cancellation or reconciliation before purging' };
         const isPaid = o.state === 'Paid' || o.state === 'PartiallyRefunded' || o.state === 'Refunded';
         if (isPaid && !force) return { ok: false, error: `paid order — purge requires force + reason (state ${o.state})` };
         if (isPaid && force && !reason) return { ok: false, error: 'force-purging a paid order requires a reason' };
 
         // Audit BEFORE the cascade so the record survives the row deletion.
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'purge', data: { code, state: o.state, force, reason: reason ?? null } });
+
+        // Source history & monetary credit entries survive purge. Detach only
+        // operational back-references; their source records, allocations & money
+        // remain intact. Refund/payment/line links also use ON DELETE SET NULL.
+        await tx.update(s.importedOrderModification).set({ orderId: null })
+          .where(and(eq(s.importedOrderModification.storeId, st.storeId), eq(s.importedOrderModification.orderId, o.id)));
+        await tx.update(s.accountCreditTransaction).set({ orderId: null })
+          .where(and(eq(s.accountCreditTransaction.storeId, st.storeId), eq(s.accountCreditTransaction.orderId, o.id)));
 
         const refunds = await tx.select({ id: s.refund.id }).from(s.refund).where(eq(s.refund.orderId, o.id));
         if (refunds.length) await tx.delete(s.refundLine).where(inArray(s.refundLine.refundId, refunds.map((x) => x.id)));
@@ -700,7 +718,7 @@ adminOrderOps.openapi(
         });
         return { ok: true };
       });
-      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error, ...(r.errorCode ? { errorCode: r.errorCode } : {}) });
     }
     const succeeded = results.filter((r) => r.ok).length;
     return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);

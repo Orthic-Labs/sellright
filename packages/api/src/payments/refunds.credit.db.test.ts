@@ -68,6 +68,7 @@ async function snapshot(f: Awaited<ReturnType<typeof seed>>) {
     account: (await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, f.accountId)))[0]!,
     stock: (await tx.select().from(s.stock).where(eq(s.stock.variantId, f.variantId)))[0]!,
     restores: await tx.select().from(s.accountCreditTransaction).where(and(eq(s.accountCreditTransaction.orderId, f.order.id), eq(s.accountCreditTransaction.kind, 'RESTORE'))),
+    redemption: (await tx.select().from(s.accountCreditTransaction).where(eq(s.accountCreditTransaction.id, f.redemptionId)))[0],
     refunds: await tx.select().from(s.refund).where(eq(s.refund.orderId, f.order.id)),
     attempts: await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, f.order.id)),
     reversals: await tx.select().from(s.settlementOperation).where(and(eq(s.settlementOperation.orderId, f.order.id), eq(s.settlementOperation.operationKind, 'order_refunded'))),
@@ -84,6 +85,7 @@ describe.skipIf(!disposable)('settled refund credit restoration & explicit zero-
 
   it('returns zero-valued units after cash is exhausted, keeps original payment, & replays without repeating effects', async () => {
     const f = await seed({ state: 'Refunded' }); // original NMI account/mode deliberately absent
+    const redemption = (await snapshot(f)).redemption;
     const input = request(f, 'zero-first');
     const first = await requestRefund(input);
     expect(first).toMatchObject({ refundState: 'Settled', refunded: 0, state: 'Refunded', creditRestoration: { state: 'posted', amount: 0 } });
@@ -98,6 +100,7 @@ describe.skipIf(!disposable)('settled refund credit restoration & explicit zero-
     expect(second).toMatchObject({ creditRestoration: { state: 'posted', amount: 100 } });
     state = await snapshot(f);
     expect(state.account.balance).toBe(1000); expect(state.line.refundedQty).toBe(2); expect(state.stock.onHand).toBe(12);
+    expect(state.redemption).toEqual(redemption);
     expect(state.reversals).toHaveLength(1); expect(providerMethods).toEqual([]); expect(providerCalls).toBe(0);
     await expect(requestRefund(request(f, 'zero-excess'))).rejects.toThrow('quantity');
     await expect(requestRefund({ ...input, creditMerchandiseReturn: false })).rejects.toThrow('Idempotency');
@@ -118,6 +121,28 @@ describe.skipIf(!disposable)('settled refund credit restoration & explicit zero-
     await withStore(STORE, tx => tx.update(s.payment).set({ state: 'Failed' }).where(eq(s.payment.id, f.payment.id)));
     await expect(requestRefund(request(f, 'no-payment'))).rejects.toThrow('No settled payment');
     expect((await snapshot(f)).attempts).toHaveLength(0);
+  });
+  it('database rejects zero gateway attempts & incomplete/internal authority while retaining positive gateway amounts', async () => {
+    const f = await seed();
+    const valid = { storeId: STORE, orderId: f.order.id, paymentId: f.payment.id, operation: 'refund',
+      method: 'credit_merchandise', accountId: f.accountId, mode: 'internal', amount: 0, currency: 'USD',
+      fingerprint: 'synthetic', context: { authority: 'credit_merchandise', redemptionId: f.redemptionId } };
+    const invalid: Array<Partial<typeof s.paymentAttempt.$inferInsert>> = [
+      { method: 'stripe', mode: 'live' }, { method: 'nmi', mode: 'test' }, { method: 'sezzle', mode: 'live' },
+      { context: null }, { context: { authority: 'credit_merchandise' } },
+      { context: { authority: 'cash_refund', redemptionId: f.redemptionId } },
+      { context: { authority: 'credit_merchandise', redemptionId: '' } },
+      { mode: 'live' }, { operation: 'charge' }, { amount: -1 }, { amount: 1 },
+      { paymentId: null }, { providerRef: 'not-a-cash-refund' },
+    ];
+    for (const [index, override] of invalid.entries()) {
+      await expect(withStore(STORE, tx => tx.insert(s.paymentAttempt).values({ ...valid, ...override,
+        idempotencyKey: `invalid-zero-${index}` }))).rejects.toMatchObject({ cause: { code: '23514' } });
+    }
+    await withStore(STORE, tx => tx.insert(s.paymentAttempt).values({ ...valid, method: 'stripe', mode: 'test',
+      amount: 1, idempotencyKey: 'positive-gateway' }));
+    expect((await snapshot(f)).attempts).toMatchObject([{ method: 'stripe', mode: 'test', amount: 1 }]);
+    expect(providerMethods).toEqual([]); expect(providerCalls).toBe(0);
   });
   it('restores only after Settled; failed posting preserves cash settlement & exact retry never repeats qty/stock/email', async () => {
     const f = await seed({ cashUnit: 100, allocation: [50, 51], method: 'manual' });

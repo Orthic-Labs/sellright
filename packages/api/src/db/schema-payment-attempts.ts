@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, integer, jsonb, timestamp, unique } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { pgTable, uuid, text, integer, jsonb, timestamp, unique, check } from 'drizzle-orm/pg-core';
 import { store, ts } from './schema-core.js';
 import { order, payment } from './schema-orders.js';
 
@@ -27,7 +28,19 @@ export const paymentAttempt = pgTable('payment_attempt', {
   providerObservedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: ts(),
-}, (t) => [unique('payment_attempt_store_key').on(t.storeId, t.idempotencyKey)]);
+}, (t) => [
+  unique('payment_attempt_store_key').on(t.storeId, t.idempotencyKey),
+  // Gateway attempts always move positive cash. Only the server-proven credit
+  // merchandise return may reserve zero cash against its original payment.
+  check('payment_attempt_amount_check', sql`${t.amount} > 0 OR (
+    ${t.amount} = 0 AND ${t.operation} = 'refund' AND ${t.method} = 'credit_merchandise' AND ${t.mode} = 'internal'
+    AND ${t.paymentId} IS NOT NULL AND ${t.providerRef} IS NULL
+    AND COALESCE(${t.context}->>'authority' = 'credit_merchandise', false)
+    AND COALESCE(${t.context}->>'redemptionId' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', false)
+  )`),
+  check('payment_attempt_mode_check', sql`(${t.mode} IN ('test','live') AND ${t.method} <> 'credit_merchandise') OR
+    (${t.mode} = 'internal' AND ${t.method} = 'credit_merchandise' AND ${t.operation} = 'refund' AND ${t.amount} = 0)`),
+]);
 
 /** Authenticated inbound events survive retries, reordering and API restarts. */
 export const gatewayEvent = pgTable('gateway_event', {
