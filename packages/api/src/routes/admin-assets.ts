@@ -7,66 +7,84 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import sharp from 'sharp';
-import type { Metadata } from 'sharp';
+import type { MiddlewareHandler } from 'hono';
 import { sql, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { afterCommit } from '../db/after-commit.js';
 import { env } from '../env.js';
+import { AssetImageError, reencodeAssetImage, withAssetImageSlot } from '../lib/asset-image.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import * as s from '../db/schema.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 /** App-wide body cap for this one route (app.ts): the file limit plus multipart framing / the alt field. */
 export const ASSET_UPLOAD_LIMIT_BYTES = MAX_BYTES + 256 * 1024;
-const ALLOWED = new Set(['jpeg', 'png', 'webp', 'avif', 'gif']);
 
 export const adminAssets = new OpenAPIHono();
+
+/** Mounted by app.ts before bodyLimit & OpenAPI's multipart validator can read the body. */
+export const assetUploadAdmission: MiddlewareHandler = async (c, next) => guard(c, async () => {
+  const { admin } = await requireAdmin(c);
+  requireWrite(requireStore(admin, c));
+  const declaredLen = Number(c.req.header('content-length') ?? '0');
+  if (declaredLen > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
+  try {
+    await withAssetImageSlot(next);
+  } catch (error) {
+    if (error instanceof AssetImageError) {
+      if (error.status === 503) c.header('Retry-After', '1');
+      throw new HttpError(error.status, error.message);
+    }
+    throw error;
+  }
+});
 
 // POST /v1/admin/assets — multipart upload (field "file"; optional "alt")
 adminAssets.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/assets', summary: 'Upload an image asset',
-    request: { body: { content: { 'multipart/form-data': { schema: z.object({ file: z.string(), alt: z.string().optional() }) } } } },
+    request: { body: { required: true, content: { 'multipart/form-data': { schema: z.object({ file: z.instanceof(File).openapi({ type: 'string', format: 'binary' }), alt: z.string().optional() }) } } } },
     responses: {
       201: { description: 'Created', content: J(z.object({ id: z.string(), path: z.string(), url: z.string(), width: z.number().int().nullable(), height: z.number().int().nullable(), alt: z.string().nullable() })) },
       400: { description: 'Bad request', ...errBody },
       413: { description: 'Too large', ...errBody },
       415: { description: 'Unsupported format', ...errBody },
+      503: { description: 'Image processing busy; retry shortly', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
-    // Reject by declared Content-Length BEFORE parseBody buffers the whole body
-    // into memory (the file.size check below only fires post-buffer). A client
-    // can still under-declare CL, so a server-level hard body limit (WP6/nginx
-    // client_max_body_size) remains the complete fix; this is admin-only anyway.
-    const declaredLen = Number(c.req.header('content-length') ?? '0');
-    if (declaredLen > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
-    const body = await c.req.parseBody();
-    const file = body['file'];
-    if (!(file instanceof File)) throw new HttpError(400, 'file required (multipart field "file")');
-    if (file.size > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
-    const buf = Buffer.from(await file.arrayBuffer());
-    let meta: Metadata;
-    try { meta = await sharp(buf).metadata(); } catch { throw new HttpError(415, 'unsupported format — could not parse image'); }
-    const fmt = (meta.format ?? '').toLowerCase();
-    if (!ALLOWED.has(fmt)) throw new HttpError(415, `unsupported format: ${fmt || 'unknown'}`);
+    try {
+      const body = c.req.valid('form');
+      const file = body['file'];
+      if (!(file instanceof File)) throw new HttpError(400, 'file required (multipart field "file")');
+      if (file.size > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
+      const buf = Buffer.from(await file.arrayBuffer());
+      const image = await reencodeAssetImage(buf);
 
-    const yyyymm = new Date().toISOString().slice(0, 7);
-    const key = `${st.slug}/${yyyymm}/${randomUUID()}.webp`;
-    const absDir = path.join(env.ASSET_DIR, st.slug, yyyymm);
-    await fs.mkdir(absDir, { recursive: true });
-    const absPath = path.join(env.ASSET_DIR, key);
-    // Re-encode to webp (strips any payload hidden in the original, normalizes size).
-    await sharp(buf).webp({ quality: 85 }).toFile(absPath);
-
-    const alt = ((body['alt']?.toString() ?? '').trim().slice(0, 1000)) || null;
-    const id = randomUUID();
-    await withStore(st.storeId, (tx) =>
-      tx.insert(s.asset).values({ id, storeId: st.storeId, type: 'image', path: key, width: meta.width ?? null, height: meta.height ?? null, alt }).returning());
-    return c.json({ id, path: key, url: `/assets/${key}`, width: meta.width ?? null, height: meta.height ?? null, alt }, 201);
+      const yyyymm = new Date().toISOString().slice(0, 7);
+      const key = `${st.slug}/${yyyymm}/${randomUUID()}.webp`;
+      const absDir = path.join(env.ASSET_DIR, st.slug, yyyymm);
+      await fs.mkdir(absDir, { recursive: true });
+      const absPath = path.join(env.ASSET_DIR, key);
+      try {
+        await fs.writeFile(absPath, image.data);
+        const alt = ((body['alt']?.toString() ?? '').trim().slice(0, 1000)) || null;
+        const id = randomUUID();
+        await withStore(st.storeId, (tx) =>
+          tx.insert(s.asset).values({ id, storeId: st.storeId, type: 'image', path: key, width: image.width, height: image.height, alt }).returning());
+        return c.json({ id, path: key, url: `/assets/${key}`, width: image.width, height: image.height, alt }, 201);
+      } catch (error) {
+        await fs.rm(absPath, { force: true }).catch(() => { /* preserve the original failure */ });
+        throw error;
+      }
+    } catch (error) {
+      if (error instanceof AssetImageError) {
+        throw new HttpError(error.status, error.message);
+      }
+      throw error;
+    }
   }),
 );
 

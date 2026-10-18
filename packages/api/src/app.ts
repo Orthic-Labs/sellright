@@ -35,7 +35,7 @@ import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
-import { adminAssets } from './routes/admin-assets.js';
+import { adminAssets, assetUploadAdmission } from './routes/admin-assets.js';
 import { adminPush } from './routes/admin-push.js';
 import { adminLicenses } from './routes/admin-licenses.js';
 import { adminAgents } from './routes/admin-agents.js';
@@ -225,6 +225,13 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
     if (!preSession && !hasCredential) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     await next();
+  });
+
+  // Image admission must wrap bodyLimit & OpenAPI multipart validation: both can buffer before the handler.
+  app.use('/v1/admin/assets', async (c, next) => {
+    if (c.req.method !== 'POST') return next();
+    if (!csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
+    return assetUploadAdmission(c, next);
   });
 
   // P2: app-wide request body cap (API_BODY_LIMIT_BYTES, default 2 MiB). The admin asset upload keeps its own
