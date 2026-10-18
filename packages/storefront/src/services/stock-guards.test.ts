@@ -251,7 +251,12 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(read('components/checkout/resume-flow.ts')).toMatch(/export const cancelResumeFlow[\s\S]*?bumpView\(view\);\s*cancelResumes\(queue\)/);
 		// The leave-page bump lives in its own task that reads nothing reactive; a task that subscribes to page state
 		// (entry, late resume) re-runs when the cart converts at order creation and would bump through its cleanup.
-		const leaveTask = section(route, 'useVisibleTask$(({ cleanup })', 'useVisibleTask$(async () =>');
+		const leaveCleanup = route.indexOf('cleanup(() => { cancelResumeFlow(paymentInit, resumeQueue); });');
+		expect(leaveCleanup, 'leave-page cancellation cleanup is present').toBeGreaterThan(-1);
+		const leaveTaskStart = route.lastIndexOf('useVisibleTask$(', leaveCleanup);
+		expect(leaveTaskStart, 'cancellation cleanup belongs to a visible task').toBeGreaterThan(-1);
+		const leaveTask = section(route.slice(leaveTaskStart), 'useVisibleTask$(', 'useVisibleTask$(async () =>');
+		expect(leaveTask).toMatch(/^useVisibleTask\$\(\(\{ cleanup \}\)/);
 		expect(leaveTask).not.toMatch(/track\(|\.value|localCart|paymentInit\.gen/);
 		expect(section(route, 'useVisibleTask$(async () =>', 'useVisibleTask$(async ({ track })')).not.toMatch(/cleanup/);
 		expect(section(route, 'useVisibleTask$(async ({ track })', 'useTask$(async ({ track })')).not.toMatch(/cleanup|bumpView/);

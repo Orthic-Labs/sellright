@@ -55,7 +55,7 @@ describe('complete coupon intent', () => {
   it('merges legacy code after canonical membership & recomputes it once after conflict', async () => {
     localStorage.setItem('sr_cart_intent', JSON.stringify({ token: 'stack-cart', couponCode: 'SAVE' }));
     respond(cart({ couponCodes: ['CREDIT'] }));
-    respond({ code: 'stale', revision: 2, cart: cart({ revision: 2, couponCodes: ['CREDIT', 'OTHER', 'save'] }) }, 409);
+    respond({ error: { code: 'STALE', message: 'cart changed — refresh and retry' }, code: 'stale', revision: 2, cart: cart({ revision: 2, couponCodes: ['CREDIT', 'OTHER', 'save'] }) }, 409);
     respond(cart({ revision: 3, couponCodes: ['CREDIT', 'OTHER', 'save'] }));
     respond(cart({ revision: 3, couponCodes: ['CREDIT', 'OTHER', 'save'] }));
     await CartService.bootstrap();
@@ -99,9 +99,10 @@ describe('complete coupon intent', () => {
   });
   it('retains another tab’s ordinary code when stale coupon mutation retries', async () => {
     respond(cart());
-    respond({ code: 'stale', revision: 2, cart: cart({ revision: 2, couponCodes: ['SAVE', 'OTHER'] }) }, 409);
+    respond({ error: { code: 'STALE', message: 'cart changed — refresh and retry' }, code: 'stale', revision: 2, cart: cart({ revision: 2, couponCodes: ['SAVE', 'OTHER'] }) }, 409);
     respond(cart({ revision: 3, couponCodes: ['SAVE', 'OTHER', 'CREDIT'], coupons: [ordinary, credit] }));
     await CartService.applyCoupon('CREDIT');
+    expect(calls.filter(call => call.method === 'PATCH')).toHaveLength(2);
     expect(calls[2].body).toMatchObject({ expectedRevision: 2, couponCodes: ['SAVE', 'OTHER', 'CREDIT'] });
   });
 });
