@@ -507,14 +507,16 @@ async function extendLicence(tx: Tx, e: EffectRow, p: LicenseExtendPayload, lice
 /** Every execution rechecks linked orders under their lock sets, including previously queued effects. */
 function quarantineGuard(handler: LocalEffectHandler): LocalEffectHandler {
   return { async run(tx, e) {
+    const payload = e.payload !== null && typeof e.payload === 'object' ? e.payload : {};
     const orderIds = new Set<string>();
     const subjects: LockSubject[] = [];
-    if (typeof e.payload.orderId === 'string') orderIds.add(e.payload.orderId);
+    if ('orderId' in payload && typeof payload.orderId === 'string') orderIds.add(payload.orderId);
     const [operation] = await tx.select({ orderId: s.settlementOperation.orderId }).from(s.settlementOperation)
       .where(and(eq(s.settlementOperation.storeId, e.storeId), eq(s.settlementOperation.operationKind, e.operationKind), eq(s.settlementOperation.operationId, e.operationId))).limit(1);
     if (operation?.orderId) orderIds.add(operation.orderId);
-    if (typeof e.payload.stripeSubscriptionId === 'string') {
-      const [sub] = await tx.select().from(s.subscription).where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, e.payload.stripeSubscriptionId))).limit(1);
+    if ('stripeSubscriptionId' in payload && typeof payload.stripeSubscriptionId === 'string') {
+      const stripeSubscriptionId = payload.stripeSubscriptionId;
+      const [sub] = await tx.select().from(s.subscription).where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, stripeSubscriptionId))).limit(1);
       if (sub?.orderId) orderIds.add(sub.orderId);
       if (sub?.licenseId) {
         subjects.push({ kind: 'checkout', sourceLicenseId: sub.licenseId });

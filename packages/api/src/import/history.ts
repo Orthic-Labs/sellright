@@ -253,9 +253,9 @@ async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonl
     delete vendure.editBasisV1;
     delete vendure.retainedHistoryV1;
     delete vendure.financialReconciliationV1;
-    if (capture.retainedHistoryV1) vendure.retainedHistoryV1 = capture.retainedHistoryV1;
+    if ('retainedHistoryV1' in capture) vendure.retainedHistoryV1 = capture.retainedHistoryV1;
     else vendure.editBasisV1 = capture.editBasisV1;
-    if (capture.financialReconciliationV1) vendure.financialReconciliationV1 = capture.financialReconciliationV1;
+    if ('financialReconciliationV1' in capture && capture.financialReconciliationV1) vendure.financialReconciliationV1 = capture.financialReconciliationV1;
     await ctx.tx.update(s.order).set({ metadata: { ...metadata, vendure } })
       .where(and(eq(s.order.storeId, ctx.storeId), eq(s.order.id, order.id)));
   }
