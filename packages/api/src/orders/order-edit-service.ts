@@ -421,7 +421,12 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     do { line.key = `new:${++newLineSequence}`; } while (usedLineKeys.has(line.key));
     usedLineKeys.add(line.key);
   }
-  const originalByKey = new Map((snapshot?.lines ?? importedBasis?.lines ?? []).map(line => [line.key, line]));
+  // Current pricing rows also carry native IDs, derived money & refund custody.
+  // Only authoritative StackLine basis belongs in a new ordinary quote's hash.
+  const snapshotBases = snapshot?.lines.map(line => ({ key: line.key, quantity: line.quantity, placedQuantity: line.placedQuantity,
+    unitListPrice: line.unitListPrice, priceIncludesTax: line.priceIncludesTax, taxRateBps: line.taxRateBps,
+    ...(line.priorAdjustments === undefined ? {} : { priorAdjustments: line.priorAdjustments }) }));
+  const originalByKey = new Map((snapshotBases ?? importedBasis?.lines ?? []).map(line => [line.key, line]));
   const sourceKey = importedSourceMetadata(order.metadata)?.sourceKey;
   const priorOrdinary = snapshot ? snapshot.snapshot.version === 2 ? snapshot.snapshot.ordinary : isImportedCreditOrigin(snapshot.snapshot) ? null : snapshot.snapshot : null;
   const retainedComponents = importedBasis ?? (importedSourceMetadata(order.metadata)?.editBasisV1
@@ -506,7 +511,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   const legacyPricingSnapshot = legacyInput && legacyResult ? buildOrderPricingSnapshot(legacyInput, legacyResult,
     new Map(dbLines.map(line => [line.id, line.id]))) : undefined;
-  const existingBasis = snapshot?.lines ?? importedBasis?.lines ?? legacyInput!.lines;
+  const existingBasis = snapshotBases ?? importedBasis?.lines ?? legacyInput!.lines;
   const afterLines = workingBases.map(line => line.change === 'untouched'
     ? { ...existingBasis.find(original => original.key === line.key)!, priorAdjustments: [] }
     : { ...line.basis, key: line.key, quantity: line.quantity });
@@ -561,7 +566,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   let stack: OrderEditStackCandidate;
   try { stack = priceOrderEditStack({ before: { basis: snapshot?.selectedCredit
-    ? { kind: 'current-proof', lines: snapshot.lines, pricesIncludeTax: snapshot.pricesIncludeTax, economicHash: snapshot.quoteHash,
+    ? { kind: 'current-proof', lines: snapshotBases!, pricesIncludeTax: snapshot.pricesIncludeTax, economicHash: snapshot.quoteHash,
       ...(isImportedCreditOrigin(snapshot.snapshot.version === 2 ? snapshot.snapshot.origin : snapshot.snapshot) ? { signedHeader: true as const } : {}) }
     : snapshot ? { kind: 'snapshot', snapshot: snapshot.snapshot } : importedBasis ?? { kind: 'legacy', input: legacyInput!, result: legacyResult! },
     currency: order.currency, orderLines: nativeLines, totals: storedMoney, economicHash: snapshot?.quoteHash ?? importedBasis?.sourceFingerprint ?? legacyResult!.quoteHash },

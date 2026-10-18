@@ -12,6 +12,8 @@ import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { recordSettlementOperation } from '../payments/settlement/record.js';
 import { settleOrderReleases } from '../payments/reservation.js';
 import { commitOrderEdit, loadEditContext, previewOrderEdit } from '../orders/order-edit-service.js';
+import { readOrderPricingSnapshot } from '../money/pricing-snapshot.js';
+import type { OrderPricingSnapshotV2 } from '../money/current-credit-pricing.js';
 import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
@@ -111,6 +113,8 @@ describe('accepted ordered credit checkout', () => {
     expect((await loadEditContext(STORE, placed.code)).editable).toMatchObject({ items: true, addressOnly: false, address: true });
     const preview = await previewOrderEdit(STORE, placed.code, []);
     expect(preview.after.grandTotal).toBe(placed.grandTotal);
+    expect(preview.balance.amountDue).toBe(0);
+    expect((await previewOrderEdit(STORE, placed.code, [])).previewAcceptanceHash).toBe(preview.previewAcceptanceHash);
     expect(preview.couponCodes).toEqual(['ORDINARY']); // reusable credit bearer stays out of preview wire data
     await withStore(STORE, async tx => {
       expect((await tx.select().from(s.order))[0]?.couponCodes).toEqual(codes);
@@ -124,12 +128,26 @@ describe('accepted ordered credit checkout', () => {
     const input = { storeId: STORE, storeSlug: SLUG, code: placed.code, actor: 'fixture', principalKind: 'human' as const,
       ops, expectedGrandTotal: addition.after.grandTotal, expectedBalance: addition.balance.amountDue,
       previewAcceptanceHash: addition.previewAcceptanceHash, idempotencyKey: `private-context-${settlementType}`,
-      settlement: settlementType === 'record_payment' ? { type: settlementType, method: 'cash' } : { type: settlementType }, notifyCustomer: false };
+      settlement: settlementType === 'record_payment' ? { type: settlementType, method: 'cash' as const } : { type: settlementType }, notifyCustomer: false };
     const prepared = await commitOrderEdit(input);
+    const storedEdit = () => withStore(STORE, async tx => (await tx.select().from(s.orderEdit).where(eq(s.orderEdit.id, prepared.editId)))[0]!);
+    const durable = await storedEdit();
+    const pricing = (durable.after as { proposal: { pricingSnapshot: OrderPricingSnapshotV2 } }).proposal.pricingSnapshot;
+    const ordinary = readOrderPricingSnapshot(pricing.ordinary, { currency: 'USD', mode: 'settlement',
+      orderLines: pricing.ordinary.lines.map(line => ({ id: line.orderLineId, quantity: line.quantity })) })!;
+    expect(ordinary).toMatchObject({ couponCodes: ['ORDINARY'], selectedCredit: null,
+      totals: { subtotal: 4000, discountTotal: 400, grandTotal: 3700 } });
+    expect(ordinary.lines.map(line => line.lineNet)).toEqual([2700, 900]);
+    expect(ordinary.lines.every(line => !Object.hasOwn(line, 'cashRefundGrossUnits'))).toBe(true);
+    expect(pricing).toMatchObject({ couponCodes: codes, totals: { grandTotal: addition.after.grandTotal } });
     if (settlementType === 'record_payment') {
       expect(prepared.settlement.phase).toBe('activated');
       expect((await commitOrderEdit(input)).replay).toBe(true);
       expect((await loadEditContext(STORE, placed.code)).pendingEdit).toBeNull();
+      const nextPreview = await previewOrderEdit(STORE, placed.code, []);
+      expect(nextPreview.after.grandTotal).toBe(addition.after.grandTotal);
+      expect(nextPreview.balance.amountDue).toBe(0);
+      expect(nextPreview.couponCodes).toEqual(['ORDINARY']);
       await withStore(STORE, async tx => {
         expect((await tx.select().from(s.order))[0]).toMatchObject({ grandTotal: addition.after.grandTotal, couponCodes: codes });
         expect((await tx.select().from(s.payment)).filter(row => row.method === 'manual')).toHaveLength(1);
@@ -140,8 +158,6 @@ describe('accepted ordered credit checkout', () => {
       return;
     }
     expect(prepared.settlement.phase).toBe('awaiting_tender');
-    const storedEdit = () => withStore(STORE, async tx => (await tx.select().from(s.orderEdit).where(eq(s.orderEdit.id, prepared.editId)))[0]!);
-    const durable = await storedEdit();
     const proposal = (durable.after as { proposal: { couponCodes: string[]; proposalDigest: string; activation: unknown; pricingSnapshot: unknown } }).proposal;
     expect(proposal.couponCodes).toEqual(codes);
     expect(proposal.activation).toBeDefined(); expect(proposal.pricingSnapshot).toBeDefined();
