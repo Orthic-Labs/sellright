@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import * as s from '../db/schema.js';
 import type { ImportContext } from './context.js';
-import { vendureLineMoney, type VendureLineSnapshotInput } from './vendure-money.js';
+import { vendureProratedUnitPriceWithTax, type VendureLineSnapshotInput } from './vendure-money.js';
 import { parseDate } from './store.js';
 import { digest } from './artifacts.js';
 
@@ -21,6 +21,12 @@ export function allocateRefundItems(total: number, weights: number[]): number[] 
   let remaining = total - amounts.reduce((a, b) => a + b, 0);
   for (const row of order) { if (!remaining) break; amounts[row.i]!++; remaining--; }
   return amounts;
+}
+
+/** Source cash-refund basis rounds each eligible unit before quantity multiplication. */
+export function refundLineWeight(snapshot: VendureLineSnapshotInput, quantity: number): number {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error('Invalid refund quantity');
+  return snapshot.orderPlacedQuantity > 0 ? vendureProratedUnitPriceWithTax(snapshot) * quantity : 0;
 }
 
 /** Source order states that assert the goods left the warehouse. */
@@ -199,8 +205,7 @@ export async function importHistory(ctx: ImportContext) {
         ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order_line',
           detail: `refund ref ${ref.id} (refund ${refund.id}) claims qty ${ref.quantity} > placed ${Math.max(snapshot.placedQuantity, line.quantity)} on order_line ${ref.orderLineId} — refundedQty clamps at line maximum` });
       }
-      const placed = vendureLineMoney({ ...snapshot, quantity: snapshot.placedQuantity, orderPlacedQuantity: snapshot.placedQuantity });
-      return placed.lineTotal * ref.quantity / snapshot.placedQuantity;
+      return refundLineWeight({ ...snapshot, quantity: line.quantity, orderPlacedQuantity: snapshot.placedQuantity }, ref.quantity);
     });
     const amounts = allocateRefundItems(items, weights);
     for (let i = 0; i < members.length; i++) {

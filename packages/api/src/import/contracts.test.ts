@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { migrationId } from './context.js';
-import { allocateRefundItems } from './history.js';
+import { allocateRefundItems, refundLineWeight } from './history.js';
 import { mapShipping } from './settings.js';
 import { isMethodEligible } from '../shipping/calculator.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -21,6 +21,23 @@ describe('Vendure migration contracts', () => {
     expect(allocateRefundItems(100, [1, 1, 1])).toEqual([34, 33, 33]);
     expect(allocateRefundItems(0, [0])).toEqual([0]);
     expect(() => allocateRefundItems(1, [])).toThrow();
+  });
+  it('rounds eligible refund units before allocating the unchanged source items total', () => {
+    const line = { quantity: 3, orderPlacedQuantity: 3, listPrice: 100, listPriceIncludesTax: true,
+      adjustments: [{ type: 'PROMOTION', amount: -1 }], taxLines: [] };
+    const weights = [refundLineWeight(line, 1), refundLineWeight({ ...line, adjustments: [] }, 1)];
+    expect(weights).toEqual([100, 100]);
+    expect(allocateRefundItems(1, weights)).toEqual([1, 0]);
+    expect(allocateRefundItems(37, weights).reduce((sum, value) => sum + value, 0)).toBe(37);
+    expect(refundLineWeight({ ...line, quantity: 1 }, 2)).toBe(200);
+  });
+  it('retains cancelled current quantity & explicit zero placement refund eligibility', () => {
+    const line = { quantity: 0, orderPlacedQuantity: 3, listPrice: 100, listPriceIncludesTax: false,
+      adjustments: [{ type: 'PROMOTION', amount: -150 }], taxLines: [{ taxRate: 10 }] };
+    expect(refundLineWeight(line, 2)).toBe(220);
+    expect(refundLineWeight({ ...line, quantity: 2, orderPlacedQuantity: 0 }, 2)).toBe(0);
+    expect(allocateRefundItems(0, [refundLineWeight({ ...line, orderPlacedQuantity: 0 }, 1)])).toEqual([0]);
+    expect(() => allocateRefundItems(1, [0])).toThrow();
   });
   it('preserves DD discounted-tax-inclusive shipping thresholds and empty country rules', () => {
     const calc = mapShipping(operation('custom-shipping-eligibility', { countries: 'US', minAmount: '100' }),
