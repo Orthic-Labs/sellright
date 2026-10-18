@@ -5,6 +5,8 @@ import {
 	placeOrder as srPlaceOrder,
 	createPaymentIntent as srCreatePI,
 	settleZeroDueOrder as srSettleZeroDue,
+	QuoteChangedError,
+	type CheckoutQuote,
 	type CheckoutForm,
 } from '~/providers/shop/checkout/checkout';
 import { CartService, ConvertedCartError } from '~/services/CartService';
@@ -70,6 +72,7 @@ export const useCheckout = () => {
 		shownTotal: 0,
 		/** The last PLACE ORDER was refused (pre-submit live read found a line unavailable, or 409 OUT_OF_STOCK) — the caller must re-read live stock for the cart. */
 		stockConflict: false,
+		quoteChange: null as { quote: CheckoutQuote; quoteHash: string } | null,
 		method: null as PaymentMethod | null,
 		error: null as string | null,
 		/** Resume of a converted cart's original order — its own view, never behind the shipping/customer form gates. */
@@ -84,7 +87,7 @@ export const useCheckout = () => {
 
 	/** Forget the previous order completely (code, receipt token, client secret, phase, method, totals, resume view): the cart behind it is gone or replaced. */
 	const resetOrder = $(() => {
-		Object.assign(state, { ...EMPTY_ORDER_STATE, resumeLines: [] });
+		Object.assign(state, { ...EMPTY_ORDER_STATE, resumeLines: [], quoteChange: null });
 	});
 
 	/**
@@ -99,11 +102,15 @@ export const useCheckout = () => {
 		state.phase = 'placing';
 		state.error = null;
 		state.stockConflict = false;
+		state.quoteChange = null;
 		state.shownTotal = shownTotalCents;
 		checkoutState.isLoading = true;
 		try {
 			// One cart lock for the live read AND the order POST (it is not re-entrant: both use the scope it hands out).
 			const created = await CartService.withLock(async (scope) => {
+				CartService.setQuoteContext({ pricingIntent: 'checkout', shippingMethodCode: form.shippingMethodCode,
+					shipCountry: typeof form.shippingAddress?.country === 'string' ? form.shippingAddress.country : undefined,
+					...(form.redeemPoints ? { redeemPoints: form.redeemPoints } : {}) });
 				// LOCKED: awaited live cart read before the order POST; a failure or an unavailable line stops here.
 				// The validated read IS the submission snapshot: the order POST uses its token/revision, no second read.
 				const snapshot = await refreshStockBeforeSubmit(scope);
@@ -133,6 +140,7 @@ export const useCheckout = () => {
 			state.phase = 'paying';
 			return 'paying';
 		} catch (error) {
+			if (error instanceof QuoteChangedError) state.quoteChange = { quote: error.quote, quoteHash: error.quoteHash };
 			if (error instanceof ConvertedCartError) {
 				// The cart already became an order: nothing was POSTed and the token is kept. The page resumes that order.
 				state.convertedCart = true;

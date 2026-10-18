@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EditOp, OrderEditError, Settlement, allowedSettlements, applyEditOps, countryChanged, diffLines, lockedQty, normalizeAddress,
+  EditOp, OrderEditError, PreviewAcceptanceHash, Settlement, allowedSettlements, applyEditOps, countryChanged, diffLines, lockedQty, normalizeAddress,
   openQty, planChangesEntitlements, priceWorkingOrder, readAddress, referencedKeys, validateSettlement,
   type EditLookups, type VariantFacts, type WLine, type WorkingOrder,
 } from './order-edit.js';
@@ -21,7 +21,7 @@ const line = (id: string, sku: string, quantity: number, extra: Partial<WLine> =
 });
 const L1 = '11111111-1111-4111-8111-111111111111';
 const L2 = '22222222-2222-4222-8222-222222222222';
-const base = (lines: WLine[]): WorkingOrder => ({ lines, adjustments: [], promotion: { kind: 'keep' }, shipping: { kind: 'keep' }, saveToAddressBook: false });
+const base = (lines: WLine[]): WorkingOrder => ({ lines, adjustments: [], couponCodes: [], promotion: { kind: 'keep' }, shipping: { kind: 'keep' }, saveToAddressBook: false });
 const code = (fn: () => unknown) => { try { fn(); } catch (e) { return (e as OrderEditError).code; } return null; };
 
 describe('applyEditOps', () => {
@@ -68,16 +68,70 @@ describe('applyEditOps', () => {
       { op: 'remove_adjustment', adjustmentId: adjId },
       { op: 'set_address', kind: 'shipping', address: { line1: '1 A St', city: 'X', country: 'CA' }, saveToAddressBook: true },
     ], lookups());
-    expect(out.promotion).toMatchObject({ kind: 'apply' });
+    expect(out.couponCodes).toEqual(['TEN']);
+    expect(out.promotion).toBe(w.promotion);
     expect(out.shipping).toMatchObject({ kind: 'method' });
     expect(out.adjustments).toEqual([{ id: null, label: 'Goodwill', amount: -100 }]);
     expect(out.shippingAddress?.country).toBe('CA');
     expect(out.saveToAddressBook).toBe(true);
     expect(applyEditOps(w, [{ op: 'set_shipping_amount', amount: 7 }], lookups()).shipping).toEqual({ kind: 'custom', amount: 7 });
     expect(applyEditOps(w, [{ op: 'remove_shipping' }], lookups()).shipping).toEqual({ kind: 'none' });
-    expect(applyEditOps(w, [{ op: 'remove_coupon' }], lookups()).promotion).toEqual({ kind: 'none' });
+    expect(applyEditOps(w, [{ op: 'remove_coupon' }], lookups()).couponCodes).toEqual([]);
     expect(code(() => applyEditOps(w, [{ op: 'apply_coupon', code: 'X' }], lookups()))).toBe('COUPON_NOT_FOUND');
     expect(code(() => applyEditOps(w, [{ op: 'remove_adjustment', adjustmentId: '55555555-5555-4555-8555-555555555555' }], lookups()))).toBe('ADJUSTMENT_NOT_FOUND');
+  });
+
+  it('appends multiple eligible coupons without replacing existing membership or compatibility facts', () => {
+    const facts = lookups();
+    facts.promosByCode.set('VIP', { id: 'promo2', code: 'VIP', type: 'fixed', value: 100, freeShipping: false, conditions: null });
+    const w = { ...base([]), couponCodes: ['OLD'] };
+    const out = applyEditOps(w, [{ op: 'apply_coupon', code: 'TEN' }, { op: 'apply_coupon', code: 'VIP' }], facts);
+    expect(out.couponCodes).toEqual(['OLD', 'TEN', 'VIP']);
+    expect(out.promotion).toBe(w.promotion);
+    expect(w.couponCodes).toEqual(['OLD']);
+  });
+
+  it('deduplicates coupon identities by case while preserving first spelling & whitespace', () => {
+    const facts = lookups();
+    facts.promosByCode.set(' TEN ', { id: 'spaced', code: ' TEN ', type: 'fixed', value: 1, freeShipping: false, conditions: null });
+    const w = { ...base([]), couponCodes: ['Ten'] };
+    const out = applyEditOps(w, [{ op: 'apply_coupon', code: 'tEn' }, EditOp.parse({ op: 'apply_coupon', code: ' TEN ' })], facts);
+    expect(out.couponCodes).toEqual(['Ten', ' TEN ']);
+    expect(EditOp.parse({ op: 'remove_coupon', code: ' TEN ' })).toEqual({ op: 'remove_coupon', code: ' TEN ' });
+    expect(code(() => applyEditOps(base([]), [{ op: 'apply_coupon', code: ' TEN ' }], lookups()))).toBe('COUPON_NOT_FOUND');
+  });
+
+  it('removes only a targeted identity, supports legacy clear-all & preserves ordered operations', () => {
+    const w = { ...base([]), couponCodes: ['Ten', 'VIP', ' TEN '] };
+    const out = applyEditOps(w, [{ op: 'remove_coupon', code: 'tEN' }], lookups());
+    expect(out.couponCodes).toEqual(['VIP', ' TEN ']);
+    expect(applyEditOps(out, [{ op: 'remove_coupon', code: 'missing' }], lookups()).couponCodes).toEqual(out.couponCodes);
+    expect(applyEditOps(out, [{ op: 'remove_coupon' }], lookups()).couponCodes).toEqual([]);
+    expect(applyEditOps(w, [{ op: 'remove_coupon' }, { op: 'apply_coupon', code: 'TEN' }], lookups()).couponCodes).toEqual(['TEN']);
+    expect(w.couponCodes).toEqual(['Ten', 'VIP', ' TEN ']);
+  });
+
+  it('refuses unknown or ambiguous eligible codes without mutating input membership', () => {
+    const w = { ...base([]), couponCodes: ['OLD'] };
+    expect(code(() => applyEditOps(w, [{ op: 'apply_coupon', code: 'TEN' }, { op: 'apply_coupon', code: 'UNKNOWN' }], lookups()))).toBe('COUPON_NOT_FOUND');
+    expect(w.couponCodes).toEqual(['OLD']);
+    const facts = lookups();
+    facts.promosByCode.set('ten', { id: 'duplicate', code: 'ten', type: 'fixed', value: 1, freeShipping: false, conditions: null });
+    expect(code(() => applyEditOps(w, [{ op: 'apply_coupon', code: 'TEN' }], facts))).toBe('COUPON_NOT_FOUND');
+  });
+
+  it('retains & removes canonical 255-character coupons while rejecting 256-character operations', () => {
+    const coupon = ` ${'X'.repeat(253)} `;
+    const w = { ...base([]), couponCodes: ['TEN', coupon] };
+    expect(applyEditOps(w, [], lookups()).couponCodes).toEqual(['TEN', coupon]);
+    const removal = EditOp.parse({ op: 'remove_coupon', code: coupon.toLowerCase() });
+    expect(applyEditOps(w, [removal], lookups()).couponCodes).toEqual(['TEN']);
+    const facts = lookups();
+    facts.promosByCode.set(coupon, { id: 'long', code: coupon });
+    const addition = EditOp.parse({ op: 'apply_coupon', code: coupon });
+    expect(applyEditOps(base([]), [addition], facts).couponCodes).toEqual([coupon]);
+    for (const op of ['apply_coupon', 'remove_coupon']) expect(EditOp.safeParse({ op, code: 'X'.repeat(256) }).success).toBe(false);
+    expect(w.couponCodes).toEqual(['TEN', coupon]);
   });
 
   it('schema validation: unknown op, zero adjustment, bad country', () => {
@@ -86,6 +140,10 @@ describe('applyEditOps', () => {
     expect(EditOp.safeParse({ op: 'set_address', kind: 'shipping', address: { line1: 'a', city: 'b', country: 'USA' } }).success).toBe(false);
     const ok = EditOp.parse({ op: 'set_address', kind: 'billing', address: { line1: ' a ', city: 'b', country: 'us' } });
     expect(ok.op === 'set_address' && ok.address.country).toBe('US');
+    expect(EditOp.safeParse({ op: 'apply_coupon', code: '' }).success).toBe(false);
+    expect(EditOp.safeParse({ op: 'remove_coupon', code: '' }).success).toBe(false);
+    expect(PreviewAcceptanceHash.parse('a1'.repeat(32))).toBe('a1'.repeat(32));
+    for (const hash of ['a'.repeat(63), 'g'.repeat(64), ` ${'a'.repeat(64)}`, 'A'.repeat(64)]) expect(PreviewAcceptanceHash.safeParse(hash).success).toBe(false);
   });
 
   it('referencedKeys lists skus / coupons / methods for pre-fetching', () => {

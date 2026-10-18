@@ -1,3 +1,4 @@
+import { release as releaseAccountCredit } from '../account-credit/service.js';
 // Order reservation lifecycle (de-fork plan 3.3; PAYMENT-TIMING.md §3.2–§3.4, §3.7).
 //
 // Every mutator takes the transaction under a lock set (`HeldLocks`, minted only by
@@ -296,6 +297,9 @@ async function settleReleaseCore(
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(TERMINAL_RELEASE_STATES as readonly string[]).includes(state)) return [];
+  if (state === 'Cancelled' && await providerQuiescent(tx, input.storeId, input.orderId, { stripeDiscoverable: input.stripeDiscoverable })) {
+    await releaseAccountCredit(tx, { storeId: input.storeId, orderId: input.orderId, cause: 'cancelled' });
+  }
   const pending = await tx
     .select({ id: s.orderReservation.id })
     .from(s.orderReservation)
@@ -352,7 +356,10 @@ export async function releaseOnProviderTerminal(tx: Tx, input: { storeId: string
   const [any] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
     eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
     eq(s.orderReservation.state, 'held'), sql`${s.orderReservation.releaseRequestedAt} is not null`)).limit(1);
-  if (!any) return [];
+  const [creditHold] = any ? [] : await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
+    eq(s.accountCreditTransaction.storeId, input.storeId), eq(s.accountCreditTransaction.orderId, input.orderId),
+    eq(s.accountCreditTransaction.kind, 'RESERVE'), eq(s.accountCreditTransaction.status, 'PENDING'))).limit(1);
+  if (!any && !creditHold) return [];
   await tx.select({ id: s.order.id }).from(s.order)
     .where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1).for('update');
   return settleReleaseCore(tx, { storeId: input.storeId, orderId: input.orderId, stripeDiscoverable: true });

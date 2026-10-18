@@ -38,7 +38,7 @@ export const REQUIRED_SOURCE_COLUMNS: Record<string, readonly string[]> = {
   order: ['id', 'active', 'code', 'state', 'currencyCode', 'orderPlacedAt', 'subTotal', 'subTotalWithTax', 'shipping', 'shippingWithTax', 'shippingAddress', 'billingAddress', 'couponCodes', 'customerId', 'createdAt', 'updatedAt'],
   // orderPlacedQuantity is optional: older Vendure snapshots lack it and the
   // importer falls back to quantity.
-  order_line: ['id', 'productVariantId', 'orderId', 'quantity', 'listPrice', 'listPriceIncludesTax', 'adjustments', 'taxLines'],
+  order_line: ['id', 'productVariantId', 'orderId', 'quantity', 'listPrice', 'listPriceIncludesTax', 'adjustments', 'taxLines', 'shippingLineId', 'taxCategoryId'],
   product: ['id', 'enabled', 'featuredAssetId', 'deletedAt'],
   product_translation: ['baseId', 'languageCode', 'name', 'slug', 'description'],
   product_variant: ['id', 'productId', 'sku', 'enabled', 'trackInventory', 'useGlobalOutOfStockThreshold', 'outOfStockThreshold', 'deletedAt', 'taxCategoryId'],
@@ -78,20 +78,25 @@ export const REQUIRED_SOURCE_COLUMNS: Record<string, readonly string[]> = {
   shipping_method_translation: ['baseId', 'languageCode', 'name'],
   // The order's chosen method (persisted on the imported order, migration 0086).
   shipping_line: ['id', 'orderId', 'shippingMethodId'],
+  // Edit basis retains all raw shipping/surcharge economics rather than
+  // deriving LIST, tax or shipping method from reconciled NET totals.
+  surcharge: ['id', 'orderId'],
   tax_rate: ['id', 'enabled', 'zoneId', 'categoryId', 'value', 'customerGroupId'],
 };
 
 /** Plugin tables that exist only where the source store enabled the plugin.
  * Absent => exclusion-list entry. Present => every listed column is required. */
 export const OPTIONAL_SOURCE_TABLES: Record<string, readonly string[]> = {
+  // Older source vintages may predate modification history. A present table
+  // must be complete; deltas cannot be reconstructed from current orders.
+  order_modification: ['id', 'createdAt', 'updatedAt', 'note', 'priceChange', 'shippingAddressChange', 'billingAddressChange', 'orderId', 'paymentId', 'refundId'],
   blog_post: ['id', 'title', 'slug', 'excerpt', 'body', 'bodyHtml', 'authorName', 'readingTime', 'featuredAssetId', 'tags', 'isPublished', 'publishDate', 'seoTitle', 'seoDescription'],
   affiliate: ['id', 'promotionId', 'email', 'accessToken', 'onboardedAt'],
   affiliate_settle: ['id', 'promotionId', 'amountCents', 'periodStartAt', 'periodEndAt', 'settledAt', 'txRef', 'notes'],
   waitlist_signup: ['id', 'productId', 'productSlug', 'productName', 'variantId', 'email', 'status', 'notifiedAt', 'createdAt', 'updatedAt'],
-  // Store-credit plugin: balances migrate into the loyalty points ledger
-  // (import/loyalty.ts), converted at the target's pointsPerDollarOff.
-  account_credit: ['id', 'emailNormalized', 'currencyCode', 'balance', 'disabled'],
-  account_credit_transaction: ['id', 'accountCreditId', 'kind', 'status'],
+  // Monetary credit retains its balance/history without loyalty conversion.
+  account_credit: ['id', 'createdAt', 'updatedAt', 'promotionId', 'channelId', 'emailNormalized', 'issuanceKey', 'currencyCode', 'initialAmount', 'balance', 'disabled'],
+  account_credit_transaction: ['id', 'createdAt', 'updatedAt', 'accountCreditId', 'orderId', 'orderCode', 'kind', 'status', 'amount', 'delta', 'balanceAfter', 'relatedTransactionId', 'idempotencyKey', 'reason', 'actor', 'refundId', 'orderLineId', 'quantity', 'allocation'],
 };
 
 /** Non-customFields source columns that are optional per source vintage. */
@@ -168,6 +173,12 @@ export function assertSourceSchema(cols: SourceColumns): void {
     for (const column of columns) {
       if (!have.has(column)) missing.push(`"${table}"."${column}" (extension table present but incomplete)`);
     }
+  }
+  if (cols.has('order_modification') && !cols.get('order_line_reference')?.has('modificationId')) {
+    missing.push('"order_line_reference"."modificationId" (order modification history present)');
+  }
+  if (cols.has('account_credit') !== cols.has('account_credit_transaction')) {
+    missing.push('account credit balance/history tables must both be present');
   }
   if (missing.length) {
     throw new Error('Source schema preflight failed — missing required source fields: ' + missing.join(', '));

@@ -42,6 +42,23 @@ describe('settlement chokepoint AST check — negative fixtures N01-N20 (exact r
 });
 
 describe('settlement chokepoint AST check — positive fixtures', () => {
+  it('omits exact testkit helpers while rejecting identical production settlement writes', () => {
+    const source = ts.sys.readFile(join(API, FX, 'fail/n01.ts'))!;
+    const names = ['production.ts', 'fixture.testkit.ts', 'fixture.testkit-helper.ts'];
+    const virtual = new Map(names.map(name => [join(API, FX, 'fail', name), source]));
+    const host = ts.createCompilerHost({ ...options, noEmit: true });
+    const readSource = host.getSourceFile.bind(host);
+    host.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) => virtual.has(file)
+      ? ts.createSourceFile(file, virtual.get(file)!, languageVersion, true)
+      : readSource(file, languageVersion, onError, shouldCreateNewSourceFile);
+    const program = ts.createProgram({ rootNames: [...virtual.keys()], options: { ...options, noEmit: true }, host });
+    const vs: V[] = checkSettlementChokepoint({ program, baseDir: API,
+      include: (file: string) => file.startsWith(FX + '/'), allowlist: [] });
+    expect(vs.map(({ file, rule }) => ({ file, rule }))).toEqual([
+      { file: `${FX}/fail/production.ts`, rule: 'S1' },
+      { file: `${FX}/fail/fixture.testkit-helper.ts`, rule: 'S1' },
+    ]);
+  });
   it('literal / narrowed / unrelated writes pass', () => {
     const vs = run(['pass/p01-literals.ts', 'pass/p02-narrowed.ts', 'pass/p03-raw.ts']);
     expect(formatViolations(vs)).toBe('');

@@ -6,7 +6,7 @@
  *     owned by the payments lane; integration note in the lane report).
  *   - NMI:    routes/disputes.ts chargeback webhook (this lane).
  *
- * The dispute table's (store_id, provider, provider_ref) unique index makes
+ * The dispute table's provider identity unique indexes make
  * provider retries a no-op: the operator email is enqueued exactly once, in
  * the same transaction as the record (transactional outbox — a rollback drops
  * the email too).
@@ -17,7 +17,7 @@
  * No recipients → the dispute row + audit trail still persist; the email is
  * just skipped (never blocks ingestion).
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
@@ -26,8 +26,7 @@ import { enqueueEmail } from '../email/outbox.js';
 import { disputeAlert } from '../email/templates-ops.js';
 import { env } from '../env.js';
 
-export interface DisputeInput {
-  provider: 'stripe' | 'nmi' | (string & {});
+interface DisputeFields {
   providerRef: string;
   paymentId?: string | null;
   orderId?: string | null;
@@ -39,6 +38,9 @@ export interface DisputeInput {
   details?: Record<string, unknown>;
   actor?: string;
 }
+export type DisputeInput<P extends string = 'stripe' | 'nmi'> = DisputeFields & { provider: P } &
+  (P extends 'nmi' ? { provider: 'nmi'; gatewayAccount: string; gatewayMode: 'test' | 'live' }
+    : { provider: Exclude<P, 'nmi'>; gatewayAccount?: null; gatewayMode?: null });
 
 export interface DisputeResult {
   created: boolean;
@@ -73,11 +75,23 @@ export async function operatorRecipients(tx: Tx, storeId: string): Promise<strin
  * Returns { created:false } for a provider retry — callers can rely on it for
  * idempotency instead of maintaining their own dedupe.
  */
-export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): Promise<DisputeResult> {
+export async function recordDispute<const P extends string>(tx: Tx, storeId: string, d: DisputeInput<P>): Promise<DisputeResult> {
+  let gatewayAccount: string | null = null;
+  let gatewayMode: 'test' | 'live' | null = null;
+  if (d.provider === 'nmi') {
+    if (typeof d.gatewayAccount !== 'string' || !d.gatewayAccount.trim() || (d.gatewayMode !== 'test' && d.gatewayMode !== 'live')) {
+      throw new Error('NMI dispute requires an authenticated gateway account and mode');
+    }
+    gatewayAccount = d.gatewayAccount;
+    gatewayMode = d.gatewayMode;
+  } else if (d.gatewayAccount != null || d.gatewayMode != null) {
+    throw new Error('Dispute gateway identity is only supported for NMI');
+  }
   const [inserted] = await tx.insert(dispute).values({
     storeId,
     provider: d.provider,
     providerRef: d.providerRef,
+    gatewayAccount, gatewayMode,
     paymentId: d.paymentId ?? null,
     orderId: d.orderId ?? null,
     amount: d.amountCents ?? null,
@@ -91,10 +105,14 @@ export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): P
   if (!inserted) {
     const [existing] = await tx.select({ id: dispute.id, orderId: dispute.orderId })
       .from(dispute)
-      .where(and(eq(dispute.provider, d.provider), eq(dispute.providerRef, d.providerRef)))
+      .where(and(eq(dispute.storeId, storeId), eq(dispute.provider, d.provider), eq(dispute.providerRef, d.providerRef),
+        ...(d.provider === 'nmi' ? [eq(dispute.gatewayAccount, gatewayAccount!), eq(dispute.gatewayMode, gatewayMode!)] :
+          [isNull(dispute.gatewayAccount), isNull(dispute.gatewayMode)])))
       .limit(1);
     return { created: false, disputeId: existing?.id, orderId: existing?.orderId ?? null, notified: 0 };
   }
+
+  const scope = d.provider === 'nmi' ? { gatewayAccount, gatewayMode, disputeRecordId: inserted.id } : {};
 
   await tx.insert(s.auditLog).values({
     storeId,
@@ -102,10 +120,10 @@ export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): P
     entity: 'order',
     entityId: d.orderId ?? d.providerRef,
     action: 'dispute_opened',
-    data: { provider: d.provider, providerRef: d.providerRef, amount: d.amountCents ?? null, reason: d.reason ?? null, orderCode: d.orderCode ?? null },
+    data: { provider: d.provider, providerRef: d.providerRef, ...scope, amount: d.amountCents ?? null, reason: d.reason ?? null, orderCode: d.orderCode ?? null },
   });
   await emitEvent(tx, storeId, 'order.dispute_opened', {
-    code: d.orderCode ?? null, provider: d.provider, disputeId: d.providerRef,
+    code: d.orderCode ?? null, provider: d.provider, disputeId: d.providerRef, ...scope,
     amount: d.amountCents ?? null, reason: d.reason ?? null,
   });
 
@@ -128,7 +146,7 @@ export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): P
       payload: { to: recipient, from: env.SMTP_FROM, subject: rendered.subject, html: rendered.html, text: rendered.text },
       // Second layer of dedupe (migration 0057): even if a caller re-runs
       // outside the dispute-table guard, the outbox can never double-send.
-      dedupeKey: `dispute_alert:${d.provider}:${d.providerRef}:${recipient}`,
+      dedupeKey: d.provider === 'nmi' ? `dispute_alert:nmi:v2:${inserted.id}:${recipient}` : `dispute_alert:${d.provider}:${d.providerRef}:${recipient}`,
     });
   }
   if (recipients.length) {

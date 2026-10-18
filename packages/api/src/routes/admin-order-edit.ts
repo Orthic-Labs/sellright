@@ -13,7 +13,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { HttpError, J, errBody, money, requireAdmin, requireHuman, requirePermission, requireStore, requireWrite, guard } from './admin-helpers.js';
 import {
-  AddressInput, EditOp, OrderEditError, Settlement, normalizeAddress,
+  AddressInput, EditOp, OrderEditError, PreviewAcceptanceHash, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
 import { commitOrderEdit, loadEditContext, retryOrderEditRefund, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
 
@@ -29,6 +29,7 @@ async function translate<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const Ops = z.array(EditOp).max(100);
+const PricingOptions = { recalculateShipping: z.boolean().optional(), recalculateShippingPromotions: z.boolean().optional() };
 const responses = {
   200: { description: 'OK', content: J(z.any()) },
   404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody },
@@ -64,14 +65,17 @@ adminOrderEdit.openapi(
 adminOrderEdit.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/orders/{code}/edit/preview', summary: 'Preview an order edit (stateless; nothing is written)',
-    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ ops: Ops })) } }, responses,
+    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ ops: Ops, ...PricingOptions })) } },
+    responses: { ...responses, 200: { description: 'OK', content: J(z.object({ previewAcceptanceHash: PreviewAcceptanceHash.optional(),
+      pricingOptions: z.object({ recalculateShipping: z.boolean(), recalculateShippingPromotions: z.boolean() }),
+    }).passthrough()) } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { code } = c.req.valid('param');
-    const { ops } = c.req.valid('json');
-    return c.json(await translate(() => previewOrderEdit(st.storeId, code, ops)), 200);
+    const { ops, ...options } = c.req.valid('json');
+    return c.json(await translate(() => previewOrderEdit(st.storeId, code, ops, options)), 200);
   }),
 );
 
@@ -82,8 +86,10 @@ adminOrderEdit.openapi(
       params: z.object({ code: z.string() }),
       body: { content: J(z.object({
         ops: Ops.min(1),
-        expectedGrandTotal: money.min(0),
+        ...PricingOptions,
+        expectedGrandTotal: money,
         expectedBalance: money.optional(),
+        previewAcceptanceHash: PreviewAcceptanceHash.optional(),
         idempotencyKey: z.string().min(1).max(200),
         settlement: Settlement.optional(),
         notifyCustomer: z.boolean().default(true),
@@ -107,6 +113,8 @@ adminOrderEdit.openapi(
     const result = await translate(() => commitOrderEdit({
       storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, principalKind: admin.kind, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,
+      previewAcceptanceHash: body.previewAcceptanceHash,
+      recalculateShipping: body.recalculateShipping, recalculateShippingPromotions: body.recalculateShippingPromotions,
       settlement: body.settlement, notifyCustomer: body.notifyCustomer, reason: body.reason,
     }));
     return c.json(result, 200);

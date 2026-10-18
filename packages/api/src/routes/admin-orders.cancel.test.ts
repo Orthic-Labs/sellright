@@ -15,10 +15,14 @@
  * withStore(). vitest runs files serially (fileParallelism: false).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
+import * as s from '../db/schema.js';
+import { issue, reserve } from '../account-credit/service.js';
 import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { admin as adminRoutes } from './admin.js';
@@ -116,6 +120,38 @@ async function cancelOrder(code: string): Promise<{ status: number; body: unknow
   return { status: res.status, body: await res.json() };
 }
 
+/** Credit is reserved, while this edit's proposed economics remain inactive. */
+async function seedStagedCreditOrder(code: string, phase: string): Promise<string> {
+  const orderId = await seedOrder(code, 'PendingPayment');
+  const issued = await withStore(STORE, tx => issue(tx, {
+    storeId: STORE, email: 'credit@cancel.test', amount: 2000, issuanceKey: code,
+  }));
+  await withLockedSet(STORE, { kind: 'order', orderId }, async tx => {
+    await tx.update(s.order).set({ promotionId: issued.account.promotionId, couponCodes: [issued.code] })
+      .where(eq(s.order.id, orderId));
+    await reserve(tx, { storeId: STORE, orderId, accountId: issued.account.id, appliedAmount: 500, phase: 'ArrangingPayment' });
+    await tx.insert(s.orderReservation).values({ storeId: STORE, orderId, kind: 'test-edit-resource', ownerKey: code, holder: { source: 'cancel-regression' } });
+    await tx.insert(s.orderEdit).values({ id: randomUUID(), storeId: STORE, orderId,
+      before: { grandTotal: 1000, couponCodes: [issued.code] }, after: { grandTotal: 1200, couponCodes: [issued.code] },
+      balance: 200, actor: 'owner@cancel.test', settlement: { phase, type: 'leave_due', status: 'due' } });
+  });
+  return orderId;
+}
+
+async function cancellationResources(orderId: string) {
+  return withStore(STORE, async tx => ({
+    order: await tx.select().from(s.order).where(eq(s.order.id, orderId)),
+    lines: await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)),
+    payments: await tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)),
+    edits: await tx.select().from(s.orderEdit).where(eq(s.orderEdit.orderId, orderId)),
+    reservations: await tx.select().from(s.orderReservation).where(eq(s.orderReservation.orderId, orderId)),
+    creditAccounts: await tx.select().from(s.accountCredit).orderBy(s.accountCredit.id),
+    creditLedger: await tx.select().from(s.accountCreditTransaction).orderBy(s.accountCreditTransaction.id),
+    loyalty: await tx.select().from(s.loyaltyLedger).where(eq(s.loyaltyLedger.orderId, orderId)),
+    audit: await tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, orderId)),
+  }));
+}
+
 let token = '';
 beforeEach(async () => {
   await wipe();
@@ -149,6 +185,81 @@ describe('POST /v1/admin/orders/{code}/cancel — HARDENING FIX 1', () => {
     expect(await orderState(orderId)).toBe('Cancelled');
     expect(await stockAllocated()).toBe(0); // released
   });
+});
+
+describe('prepared order edit cancellation fence', () => {
+  it.each(['prepared', 'awaiting_refund', 'awaiting_tender', 'ready', 'failed'])(
+    'single cancel refuses %s edit without releasing credit or stock', async phase => {
+      const code = `SR-CANCEL-EDIT-${phase}`;
+      const orderId = await seedStagedCreditOrder(code, phase);
+      const before = await cancellationResources(orderId);
+
+      const response = await cancelOrder(code);
+
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ error: { code: 'ORDER_EDIT_PENDING' } });
+      expect(await cancellationResources(orderId)).toEqual(before);
+      expect(await stockAllocated()).toBe(5);
+      expect(before.creditLedger).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'RESERVE', status: 'PENDING', amount: 500 }),
+      ]));
+    },
+  );
+
+  it('bulk cancel skips staged credited order & still cancels another eligible order', async () => {
+    const code = 'SR-BULK-EDIT-PENDING';
+    const orderId = await seedStagedCreditOrder(code, 'prepared');
+    const otherId = await seedOrder('SR-BULK-EDIT-OTHER', 'PendingPayment');
+    await withStore(STORE, tx => tx.execute(sql`UPDATE stock SET allocated = 10 WHERE variant_id = ${VARIANT}`));
+    const before = await cancellationResources(orderId);
+
+    const response = await bulkApp.request('/v1/admin/orders/bulk-cancel', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+      body: JSON.stringify({ codes: [code, 'SR-BULK-EDIT-OTHER'] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ succeeded: 1, skipped: 1, results: [
+      { code, ok: false, error: expect.stringMatching(/prepared order edit/i) },
+      { code: 'SR-BULK-EDIT-OTHER', ok: true },
+    ] });
+    expect(await cancellationResources(orderId)).toEqual(before);
+    expect(await orderState(otherId)).toBe('Cancelled');
+    expect(await stockAllocated()).toBe(5);
+  });
+
+  it('observes edit preparation committed by preceding order-lock holder', async () => {
+    const code = 'SR-CANCEL-EDIT-LOCK';
+    const orderId = await seedStagedCreditOrder(code, 'prepared');
+    const before = await cancellationResources(orderId);
+    const preparedEdit = before.edits[0]!;
+    await withStore(STORE, tx => tx.delete(s.orderEdit).where(eq(s.orderEdit.id, preparedEdit.id)));
+    let entered!: () => void;
+    let unlock!: () => void;
+    const lockEntered = new Promise<void>(resolve => { entered = resolve; });
+    const keepLocked = new Promise<void>(resolve => { unlock = resolve; });
+    const preparation = withLockedSet(STORE, { kind: 'order', orderId }, async tx => {
+      await tx.insert(s.orderEdit).values(preparedEdit);
+      entered();
+      await keepLocked;
+    });
+    await lockEntered;
+    let completed = false;
+    const cancellation = cancelOrder(code).then(response => { completed = true; return response; });
+    try {
+      await pause(150);
+      expect(completed).toBe(false);
+      expect(await orderState(orderId)).toBe('PendingPayment');
+    } finally {
+      unlock();
+      await preparation;
+      await cancellation;
+    }
+    expect((await cancellation).status).toBe(409);
+    expect(await cancellationResources(orderId)).toEqual(before);
+    expect(await stockAllocated()).toBe(5);
+  }, 20000);
 });
 
 // X-46: admin cancel (single and bulk) takes the L0 pay advisory for the order before its lock set,

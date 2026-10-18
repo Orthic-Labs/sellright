@@ -9,6 +9,7 @@ export * from './schema-settings.js';
 export * from './schema-reviews.js';
 export * from './schema-effects.js';
 export * from './schema-reservation.js';
+export * from './schema-account-credit.js';
 
 import { store, productVariant } from './schema-core.js';
 import { order } from './schema-orders.js';

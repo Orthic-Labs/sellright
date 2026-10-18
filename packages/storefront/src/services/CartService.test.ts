@@ -37,6 +37,9 @@ const serverCart = (over: Partial<ServerCart> = {}): ServerCart => ({
 	grandTotal: 2500,
 	unavailable: [],
 	coupon: null,
+	couponCodes: over.coupon ? [over.coupon.code] : [],
+	coupons: over.coupon ? [{ ...over.coupon, kind: 'fixed', appliedAmount: over.discountTotal ?? 0 }] : [],
+	quoteHash: '', pricingIntent: 'preview', shippingMethodCode: null, pointsDiscount: 0,
 	email: null,
 	customerId: null,
 	lines: [{ sku: 'SKU1', name: 'Widget', quantity: 1, unitPrice: 2500, lineSubtotal: 2500, lineDiscount: 0, lineTotal: 2500, available: true, availableQuantity: 999 }],
@@ -58,6 +61,7 @@ beforeEach(() => {
 	try { localStorage.clear(); } catch { /* ignore */ }
 	locks = installLocks();
 	resetService();
+	CartService.setQuoteContext({});
 	vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
 		let url: string;
 		let method: string | undefined;
@@ -111,7 +115,7 @@ describe('addLine — blind append', () => {
 		const patch = patchCalls()[0];
 		expect(patch.url.replace(/^https?:\/\/[^/]+/, '')).toBe('/v1/shop/cart/tok_srv/lines');
 		const body = JSON.parse(String(patch.init.body));
-		expect(body).toEqual({ lines: [{ sku: 'SKU1', quantity: 2 }] });
+		expect(body).toEqual({ lines: [{ sku: 'SKU1', quantity: 2 }], shipCountry: 'US' });
 		expect(body.expectedRevision).toBeUndefined();
 		expect(res.cart.lines[0].quantity).toBe(2);
 		expect(res.cart.subtotal).toBe(5000); // server-priced mirror wins
@@ -269,16 +273,16 @@ describe('legacy cart migration', () => {
 describe('coupon apply/remove — server-priced', () => {
 	it('applyCoupon validates against the real cart and stores the code', async () => {
 		setCookie('tok_srv');
-		enqueue(respond(200, serverCart({ coupon: { code: 'SAVE10', applied: true }, discountTotal: 500, subtotal: 2000 })));
+		enqueue(respond(200, serverCart()), respond(200, serverCart({ coupon: { code: 'SAVE10', applied: true }, discountTotal: 500, subtotal: 2000 })));
 		const res = await CartService.applyCoupon('SAVE10');
 		expect(res.valid).toBe(true);
-		expect(calls[calls.length - 1].url).toContain('couponCode=SAVE10');
+		expect(JSON.parse(calls[calls.length - 1].init.body!)).toMatchObject({ lines: [], couponCodes: ['SAVE10'], expectedRevision: 1 });
 		expect(CartService.getCart().coupon?.applied).toBe(true);
 	});
 
 	it('a rejected code surfaces the server reason', async () => {
 		setCookie('tok_srv');
-		enqueue(respond(200, serverCart({ coupon: { code: 'BAD', applied: false, reason: 'expired' } })));
+		enqueue(respond(200, serverCart()), respond(200, serverCart({ coupon: { code: 'BAD', applied: false, reason: 'expired' } })));
 		const res = await CartService.applyCoupon('BAD');
 		expect(res.valid).toBe(false);
 		expect(res.reason).toBe('expired');
@@ -287,12 +291,13 @@ describe('coupon apply/remove — server-priced', () => {
 	it('removeCoupon re-prices without the code', async () => {
 		setCookie('tok_srv');
 		enqueue(
+			respond(200, serverCart()),
 			respond(200, serverCart({ coupon: { code: 'SAVE10', applied: true }, discountTotal: 500 })),
 			respond(200, serverCart({ coupon: null })),
 		);
 		await CartService.applyCoupon('SAVE10');
 		await CartService.removeCoupon();
-		expect(calls[calls.length - 1].url).not.toContain('couponCode=');
+		expect(JSON.parse(calls[calls.length - 1].init.body!)).toMatchObject({ lines: [], couponCodes: [] });
 		expect(CartService.getCart().coupon).toBeNull();
 	});
 });
@@ -327,6 +332,7 @@ describe('serialised operations and the request-sequence guard', () => {
 
 	it('a removal queued behind an in-flight apply runs after it: the coupon ends removed and is not remembered', async () => {
 		setCookie('tok_srv');
+		enqueue(respond(200, serverCart())); await CartService.refresh(); calls.length = 0;
 		const applyRes = deferred();
 		enqueue(applyRes.promise, respond(200, serverCart({ revision: 2, coupon: null })), respond(200, serverCart({ coupon: null })));
 
@@ -568,6 +574,7 @@ describe('a response for T never changes U (I3)', () => {
 
 	it('a coupon validated for T after the cookie moved to U is reported superseded and its code is not remembered', async () => {
 		setCookie('tok_srv');
+		enqueue(respond(200, serverCart())); await CartService.refresh(); calls.length = 0;
 		const couponRes = deferred();
 		enqueue(couponRes.promise, respond(200, serverCart({ token: 'tok_u' })));
 

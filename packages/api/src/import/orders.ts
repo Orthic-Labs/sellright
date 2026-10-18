@@ -4,14 +4,11 @@ import * as s from '../db/schema.js';
 import { chunk, parseDate, parseJson } from './store.js';
 import { optionalColumn } from './source-schema.js';
 import { mapVendureOrderState, mapVendurePaymentState } from './vendure-order.js';
-import { vendureLineMoney } from './vendure-money.js';
+import { vendureExactLineMoney, vendureMoneySum, vendureOrderChargeProjection, vendureShippingMoney,
+  vendureSourceInteger, vendureSourceRecord, vendureSurchargeMoney, type VendureFinancialHeader } from './order-charges.js';
 import { digest } from './artifacts.js';
 
 const asJson = (v: unknown) => (typeof v === 'string' ? parseJson(v) : (v ?? null));
-const jsonArray = (v: unknown): Array<Record<string, unknown>> => {
-  const parsed = asJson(v);
-  return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
-};
 function address(value: unknown) {
   const raw = asJson(value) as Record<string, unknown> | null;
   if (!raw) return null;
@@ -21,6 +18,32 @@ function address(value: unknown) {
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
 import type { ImportContext } from './context.js';
+
+/** Source simple-array identity uses lowercase equality, without trimming. */
+export function importedCouponCodes(value: unknown, canonicalCodes: ReadonlyMap<string, string> = new Map()): {
+  codes: string[]; invalidCount: number; duplicateCount: number;
+} {
+  const members: unknown[] = value == null || value === '' ? []
+    : Array.isArray(value) ? value
+      : typeof value === 'string' ? value.split(',') : [value];
+  const codes: string[] = [];
+  const seen = new Set<string>();
+  let invalidCount = 0, duplicateCount = 0;
+  for (const member of members) {
+    if (typeof member !== 'string' || member.length === 0) {
+      invalidCount++;
+      continue;
+    }
+    const identity = member.toLowerCase();
+    if (seen.has(identity)) {
+      duplicateCount++;
+      continue;
+    }
+    seen.add(identity);
+    codes.push(canonicalCodes.get(identity) ?? member);
+  }
+  return { codes, invalidCount, duplicateCount };
+}
 
 /**
  * Transaction-level mode evidence: a gateway may record the mode a charge
@@ -68,7 +91,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     ? `ol."orderPlacedQuantity"`
     : 'ol.quantity';
 
-  type OrderRef = { id: string; vendureOid: number; sourceSubTotalWithTax: number };
+  type OrderRef = { id: string; vendureOid: number; header: VendureFinancialHeader };
   const orderMap = new Map<number, OrderRef>();
 
   {
@@ -85,40 +108,86 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     // affiliate's promotion). Backfilled affiliate promotions are already
     // present — the business phase runs first.
     const promotionByCode = new Map<string, string>();
+    const canonicalCodes = new Map<string, string>();
+    const ambiguousCodes = new Set<string>();
     for (const promo of await tx.select({ id: s.promotion.id, code: s.promotion.code }).from(s.promotion)
       .where(eq(s.promotion.storeId, ctx.storeId))) {
-      if (promo.code && !promotionByCode.has(promo.code)) promotionByCode.set(promo.code, promo.id);
+      if (!promo.code) continue;
+      const identity = promo.code.toLowerCase();
+      if (ambiguousCodes.has(identity)) continue;
+      if (promotionByCode.has(identity)) {
+        promotionByCode.delete(identity);
+        canonicalCodes.delete(identity);
+        ambiguousCodes.add(identity);
+        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion', blocking: true,
+          detail: 'Case-insensitive coupon identity matches multiple target promotions; order attribution requires reconciliation', count: 1 });
+        continue;
+      }
+      promotionByCode.set(identity, promo.id);
+      canonicalCodes.set(identity, promo.code);
     }
-    const couponsOf = (value: unknown): string[] =>
-      // Vendure couponCodes is a simple-array (comma-joined text); accept a
-      // real array too in case a source extension changed the column type.
-      Array.isArray(value) ? value.map(String).filter(Boolean)
-        : typeof value === 'string' ? value.split(',').map(code => code.trim()).filter(Boolean) : [];
     // SR-08: order.isPreOrder is a DD custom field; RH does not declare it.
     const ispreSql = optionalColumn(ctx.sourceColumns, 'order', 'customFieldsIspreorder', 'o', 'ispre');
     // --- orders: source header is the reconciliation authority ---
     const sourceOrders = await q(
       `SELECT o.id, o.code, o.state, o."currencyCode" AS cur, o."orderPlacedAt" AS placed,
-              o."subTotal" AS sub, o."subTotalWithTax" AS subt, o.shipping AS ship, o."shippingWithTax" AS shipt,
+              o."subTotal"::text AS sub, o."subTotalWithTax"::text AS subt, o.shipping::text AS ship, o."shippingWithTax"::text AS shipt,
+              to_jsonb(o)::text AS source_record,
               o."shippingAddress" AS shipaddr, o."billingAddress" AS billaddr,
               o."couponCodes" AS coupons, ${ispreSql}, o."customerId" AS cid, c."emailAddress" AS email, o."createdAt" AS created, o."updatedAt" AS updated
        FROM "order" o LEFT JOIN customer c ON c.id = o."customerId"
        WHERE o.state NOT IN ('AddingItems','ArrangingPayment')`,
     );
+    const selectedSourceOrders = new Set(sourceOrders.map(row => Number(row.id)));
 
     // Captured money is the strongest evidence when source aggregates disagree:
     // real DD data has orders whose header subTotalWithTax is stale relative to
     // their order_lines, while the settled payment matches the lines exactly.
     // Net captured = settled payments - settled refunds, per source order.
     const netPaidByOrder = new Map<number, number>();
+    const settlementByOrder = new Map<number, { payments: Array<{ sourceId: string; sourceRecord: string }>;
+      refunds: Array<{ sourceId: string; sourceRecord: string }> }>();
+    const settlement = (oid: number) => {
+      const proof = settlementByOrder.get(oid) ?? { payments: [], refunds: [] };
+      settlementByOrder.set(oid, proof);
+      return proof;
+    };
     for (const row of await q(
-      `SELECT p."orderId" AS oid, SUM(p.amount)::bigint AS settled FROM payment p WHERE p.state='Settled' GROUP BY 1`,
-    )) netPaidByOrder.set(Number(row.oid), Number(row.settled));
-    for (const row of await q(
-      `SELECT p."orderId" AS oid, SUM(r.total)::bigint AS refunded FROM refund r JOIN payment p ON p.id=r."paymentId" WHERE r.state='Settled' GROUP BY 1`,
+      `SELECT p.id::text AS id, p."orderId" AS oid, p.amount::text AS settled, to_jsonb(p)::text AS source_record
+       FROM payment p WHERE p.state='Settled' ORDER BY p.id`,
     )) {
       const oid = Number(row.oid);
-      netPaidByOrder.set(oid, (netPaidByOrder.get(oid) ?? 0) - Number(row.refunded));
+      if (!selectedSourceOrders.has(oid)) continue;
+      netPaidByOrder.set(oid, vendureMoneySum([netPaidByOrder.get(oid) ?? 0, vendureSourceInteger(row.settled, 'payment.amount')]));
+      settlement(oid).payments.push({ sourceId: row.id, sourceRecord: row.source_record });
+    }
+    for (const row of await q(
+      `SELECT r.id::text AS id, p."orderId" AS oid, r.total::text AS refunded, to_jsonb(r)::text AS source_record
+       FROM refund r JOIN payment p ON p.id=r."paymentId" WHERE r.state='Settled' ORDER BY r.id`,
+    )) {
+      const oid = Number(row.oid);
+      if (!selectedSourceOrders.has(oid)) continue;
+      netPaidByOrder.set(oid, vendureMoneySum([netPaidByOrder.get(oid) ?? 0, -vendureSourceInteger(row.refunded, 'refund.total')]));
+      settlement(oid).refunds.push({ sourceId: row.id, sourceRecord: row.source_record });
+    }
+
+    const surchargesByOrder = new Map<number, ReturnType<typeof vendureSurchargeMoney>[]>();
+    for (const row of await q(`SELECT c."orderId" AS oid, to_jsonb(c)::text AS source_record FROM surcharge c ORDER BY c.id`)) {
+      const oid = Number(row.oid);
+      if (!selectedSourceOrders.has(oid)) continue;
+      const raw = vendureSourceRecord(row.source_record);
+      const rows = surchargesByOrder.get(oid) ?? [];
+      rows.push(vendureSurchargeMoney(raw));
+      surchargesByOrder.set(oid, rows);
+    }
+    const shippingMoneyByOrder = new Map<number, ReturnType<typeof vendureShippingMoney>[]>();
+    for (const row of await q(`SELECT sl."orderId" AS oid, to_jsonb(sl)::text AS source_record FROM shipping_line sl ORDER BY sl.id`)) {
+      const oid = Number(row.oid);
+      if (!selectedSourceOrders.has(oid)) continue;
+      const raw = vendureSourceRecord(row.source_record);
+      const rows = shippingMoneyByOrder.get(oid) ?? [];
+      rows.push(vendureShippingMoney(raw));
+      shippingMoneyByOrder.set(oid, rows);
     }
 
     // The shipping method each source order was placed with (first shipping line
@@ -138,24 +207,33 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
         throw new Error('Unsupported source order state: ' + o.state);
       }
       const id = ctx.id('order', o.id);
-      const sourceSubTotalWithTax = n(o.subt);
-      orderMap.set(o.id, { id, vendureOid: o.id, sourceSubTotalWithTax });
-      const sub = n(o.sub), ship = n(o.ship), shipt = n(o.shipt);
-      const coupons = couponsOf(o.coupons);
+      const sourceSubTotalWithTax = vendureSourceInteger(o.subt, 'order.subTotalWithTax');
+      const sub = vendureSourceInteger(o.sub, 'order.subTotal'), ship = vendureSourceInteger(o.ship, 'order.shipping');
+      const shipt = vendureSourceInteger(o.shipt, 'order.shippingWithTax');
+      orderMap.set(o.id, { id, vendureOid: o.id, header: { subTotal: sub, subTotalWithTax: sourceSubTotalWithTax, shipping: ship, shippingWithTax: shipt } });
+      const coupons = importedCouponCodes(o.coupons, canonicalCodes);
+      if (coupons.invalidCount) ctx.exclusions.push({ type: 'unmapped-source-field', table: 'order', blocking: true,
+        detail: 'Invalid source couponCodes members retained in private order metadata; valid coupon membership imported', count: coupons.invalidCount });
+      if (coupons.duplicateCount) ctx.exclusions.push({ type: 'merged-duplicate', table: 'order',
+        detail: 'Historical case-insensitive coupon duplicates retained in private order metadata; runtime membership deduplicated', count: coupons.duplicateCount });
       return {
         id, storeId: ctx.storeId, code: o.code,
         customerId: o.cid && customerIds.has(ctx.id('customer', o.cid)) ? ctx.id('customer', o.cid) : null,
-        // Single-coupon v1: attribute the order to the first source coupon that
-        // maps to an imported promotion. Every source code stays in metadata.
-        promotionId: coupons.map(code => promotionByCode.get(code)).find(Boolean) ?? null,
+        // Compatibility attribution follows the first mapped source coupon;
+        // membership order does not imply promotion execution order.
+        promotionId: coupons.codes.map(code => promotionByCode.get(code.toLowerCase())).find(Boolean) ?? null,
+        couponCodes: coupons.codes,
         createdAt: parseDate(o.created) ?? undefined, updatedAt: parseDate(o.updated) ?? undefined,
-        metadata: { vendure: { id: o.id, state: o.state, sourceKey: ctx.sourceKey, customerId: o.cid, couponCodes: o.coupons }, contact: { email: o.email } },
+        metadata: { vendure: { id: o.id, state: o.state, sourceKey: ctx.sourceKey, customerId: o.cid, couponCodes: o.coupons,
+          sourceOrderRecord: o.source_record,
+          sourceHeader: { subTotal: String(o.sub), subTotalWithTax: String(o.subt), shipping: String(o.ship), shippingWithTax: String(o.shipt) },
+        } as Record<string, unknown>, contact: { email: o.email } },
         state: mapVendureOrderState(String(o.state)), currency: o.cur ?? 'USD',
         // Replaced below with line-derived pre-discount subtotal/discount/tax
         // after exact line reconciliation. Initialize from source header so the
         // object remains complete while building the line map.
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
-        taxTotal: sourceSubTotalWithTax - sub + (shipt - ship), grandTotal: sourceSubTotalWithTax + shipt,
+        taxTotal: vendureMoneySum([sourceSubTotalWithTax, -sub, shipt, -ship]), grandTotal: vendureMoneySum([sourceSubTotalWithTax, shipt]),
         isPreOrder: o.ispre ?? false,
         shippingMethodCode: shippingByOrder.get(Number(o.id))?.code ?? null,
         shippingMethodName: shippingByOrder.get(Number(o.id))?.name ?? null,
@@ -166,85 +244,68 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
 
     // --- order lines: reconstruct Vendure's prorated economic line values ---
     const sourceLines = await q(
-      `SELECT ol.id, ol."productVariantId" AS vid, ol."orderId" AS oid, ol.quantity AS qty, ${placedQtySql} AS placed_qty,
-              ol."listPrice" AS price, ol."listPriceIncludesTax" AS includes_tax,
-              ol.adjustments, ol."taxLines" AS tax_lines,
+      `SELECT ol.id, ol."productVariantId" AS vid, ol."orderId" AS oid, ol.quantity::text AS qty, ${placedQtySql}::text AS placed_qty,
+              ol."listPrice"::text AS price, ol."listPriceIncludesTax" AS includes_tax,
+              ol.adjustments::text AS adjustments, ol."taxLines"::text AS tax_lines,
               pv.sku, pt.name AS pname
        FROM order_line ol
        JOIN product_variant pv ON pv.id = ol."productVariantId"
        LEFT JOIN product_translation pt ON pt."baseId" = pv."productId" AND pt."languageCode" = 'en'`,
     );
 
-    type LineAgg = { subtotal: number; discount: number; tax: number; total: number };
-    const lineAggByOrder = new Map<string, LineAgg>();
+    const lineMoneyByOrder = new Map<string, ReturnType<typeof vendureExactLineMoney>['money'][]>();
     const lineRows = sourceLines
       .map((l) => {
         const orderRef = orderMap.get(l.oid);
         if (!orderRef) return null;
-        const quantity = n(l.qty);
-        const money = vendureLineMoney({
-          quantity,
-          orderPlacedQuantity: n(l.placed_qty) || quantity,
-          listPrice: n(l.price),
-          listPriceIncludesTax: Boolean(l.includes_tax),
-          adjustments: jsonArray(l.adjustments),
-          taxLines: jsonArray(l.tax_lines),
-        });
-        const agg = lineAggByOrder.get(orderRef.id) ?? { subtotal: 0, discount: 0, tax: 0, total: 0 };
-        agg.subtotal += money.lineSubtotal;
-        agg.discount += money.lineDiscount;
-        agg.tax += money.lineTax;
-        agg.total += money.lineTotal;
-        lineAggByOrder.set(orderRef.id, agg);
+        const exact = vendureExactLineMoney({ quantity: l.qty, orderPlacedQuantity: l.placed_qty, listPrice: l.price,
+          listPriceIncludesTax: l.includes_tax, adjustments: l.adjustments, taxLines: l.tax_lines });
+        const { quantity, placedQuantity, money } = exact;
+        const group = lineMoneyByOrder.get(orderRef.id) ?? [];
+        group.push(money);
+        lineMoneyByOrder.set(orderRef.id, group);
         return {
           id: ctx.id('order-line', l.id), storeId: ctx.storeId, orderId: orderRef.id,
           variantId: l.vid && variantIds.has(ctx.id('variant', l.vid)) ? ctx.id('variant', l.vid) : null,
           variantSku: l.sku ?? '(unknown)', variantName: l.pname ?? l.sku ?? '(unknown)',
           quantity, ...money,
           metadata: { vendure: { id: l.id, variantId: l.vid, quantity,
-            placedQuantity: n(l.placed_qty) || quantity, listPrice: n(l.price),
-            listPriceIncludesTax: Boolean(l.includes_tax), adjustments: jsonArray(l.adjustments), taxLines: jsonArray(l.tax_lines) } },
+            placedQuantity, listPrice: exact.listPrice,
+            listPriceIncludesTax: exact.listPriceIncludesTax, adjustments: exact.adjustments, taxLines: exact.taxLines } },
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    // Reconcile every order before writing a single order row. Vendure documents
-    // subTotalWithTax as the sum of prorated OrderLine economics; a mismatch
-    // means this source uses semantics we have not reconstructed exactly.
+    // DefaultOrderTaxCalculationStrategy sums merchandise & signed surcharges
+    // separately from discounted ShippingLine getters. No header residual is tax.
+    const adjustmentRows: Array<typeof s.orderAdjustment.$inferInsert> = [];
     const sourceByTarget = new Map<string, OrderRef>();
     for (const ref of orderMap.values()) sourceByTarget.set(ref.id, ref);
     for (const row of orderRows) {
       const source = sourceByTarget.get(row.id)!;
-      const agg = lineAggByOrder.get(row.id) ?? { subtotal: 0, discount: 0, tax: 0, total: 0 };
-      const header = source.sourceSubTotalWithTax;
-      const shippingTax = row.grandTotal - header - row.shippingTotal;
-      if (agg.total !== header) {
-        // Source drift: real DD data has orders whose header contradicts their
-        // lines (stale header) or whose captured payment matches neither (e.g.
-        // shipping-only captures). Captured money adjudicates: when the net
-        // settled payment equals reconstructed lines + shipping, the lines are
-        // proven and the header is stale. Otherwise the source header is kept
-        // (never invent totals) and the drift lands on the manifest for review.
-        const netPaid = netPaidByOrder.get(source.vendureOid);
-        if (netPaid !== undefined && netPaid === agg.total + row.shippingTotal + shippingTax) {
-          row.grandTotal = agg.total + row.shippingTotal + shippingTax;
-          row.subtotal = agg.subtotal;
-          row.discountTotal = agg.discount;
-          row.taxTotal = agg.tax + shippingTax;
-          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order',
-            detail: `order ${row.code}: header subTotalWithTax=${header} stale vs reconstructed lines=${agg.total}; settled payment corroborates lines — imported line-derived totals` });
-        } else {
-          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order',
-            detail: `order ${row.code}: header subTotalWithTax=${header} disagrees with reconstructed lines=${agg.total} and net settled payment=${netPaid ?? 'none'} — imported source header, review required` });
-          continue;
-        }
-      } else {
-        const shippingTaxFromHeader = shippingTax;
-        row.subtotal = agg.subtotal;
-        row.discountTotal = agg.discount;
-        row.taxTotal = agg.tax + shippingTaxFromHeader;
+      const surcharges = surchargesByOrder.get(source.vendureOid) ?? [];
+      const shipping = shippingMoneyByOrder.get(source.vendureOid) ?? [];
+      const projection = vendureOrderChargeProjection({ lines: lineMoneyByOrder.get(row.id) ?? [], surcharges, shipping,
+        header: source.header, netSettled: netPaidByOrder.get(source.vendureOid) });
+      row.metadata.vendure.chargeProjectionV1 = { version: 1, status: projection.status, expected: projection.expected,
+        sourceHeader: row.metadata.vendure.sourceHeader,
+        surcharges: surcharges.map(charge => ({ sourceId: charge.sourceId,
+          adjustmentId: ctx.id('order-adjustment', charge.sourceId), net: charge.net, gross: charge.gross })), shipping,
+        ...(projection.status === 'settled-corroborated' ? { settlementProof: { ...settlementByOrder.get(source.vendureOid)!,
+          netSettled: String(netPaidByOrder.get(source.vendureOid)) } } : {}) };
+      if (projection.status === 'unresolved') {
+        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order', blocking: true,
+          detail: `order ${row.code}: source header disagrees with reconstructed merchandise, signed surcharges or shipping; net settled payment=${netPaidByOrder.get(source.vendureOid) ?? 'none'} does not corroborate full expected grand=${projection.totals.grandTotal} — source header retained, reconciliation required`,
+          sourceValues: [JSON.stringify(row.metadata.vendure.chargeProjectionV1)] });
+        continue;
       }
-      const reconstructedGrand = row.subtotal - row.discountTotal + row.shippingTotal + row.taxTotal;
+      if (projection.status === 'settled-corroborated') ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order',
+        detail: `order ${row.code}: stale source header; settled payment corroborates full reconstructed merchandise, signed surcharges & shipping — imported getter-derived totals`,
+        sourceValues: [JSON.stringify(row.metadata.vendure.chargeProjectionV1)] });
+      Object.assign(row, projection.totals);
+      for (const charge of surcharges) adjustmentRows.push({ id: ctx.id('order-adjustment', charge.sourceId),
+        storeId: ctx.storeId, orderId: row.id, label: charge.label, amount: charge.net });
+      const reconstructedGrand = vendureMoneySum([row.subtotal, -row.discountTotal, row.shippingTotal, row.taxTotal, projection.adjustmentTotal]);
       if (reconstructedGrand !== row.grandTotal) {
         throw new Error(
           `SellRight order reconciliation failed for ${row.code}: reconstructed=${reconstructedGrand}, source=${row.grandTotal}`,
@@ -254,6 +315,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
 
     for (const part of chunk(orderRows, 500)) await tx.insert(s.order).values(part);
     for (const part of chunk(lineRows, 1000)) await tx.insert(s.orderLine).values(part);
+    for (const part of chunk(adjustmentRows, 1000)) await tx.insert(s.orderAdjustment).values(part);
 
     // --- payments ---
     // SR-03: provenance + historical mode identity for imported payments. The
@@ -380,7 +442,8 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     for (const part of chunk(payRows, 1000)) await tx.insert(s.payment).values(part);
 
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify({ store: ctx.storeId, orders: orderRows.length, lines: lineRows.length, payments: payRows.length, moneyReconciled: true }, null, 2));
+    console.log(JSON.stringify({ store: ctx.storeId, orders: orderRows.length, lines: lineRows.length, payments: payRows.length,
+      moneyReconciled: orderRows.every(row => (row.metadata.vendure.chargeProjectionV1 as { status: string }).status !== 'unresolved') }, null, 2));
   }
 
 }

@@ -14,8 +14,19 @@ export interface AddressForm {
 }
 export const EMPTY_ADDRESS: AddressForm = { fullName: '', line1: '', line2: '', city: '', province: '', postalCode: '', country: '', phone: '' };
 
+export interface ImportedOrderHistoryEntry {
+  kind: 'imported'; id: string; createdAt: string | null; updatedAt: string | null;
+  sourceCreatedAtText: string | null; sourceUpdatedAtText: string | null;
+  priceChange: number; note: string;
+  lineChanges: { lineId: string | null; label: string; quantityDelta: number }[];
+  addressChanges: { shipping: { fields: { label: string; value: string }[] } | null; billing: { fields: { label: string; value: string }[] } | null };
+  links: { refundId: string | null; paymentId: string | null };
+  actionable: false;
+}
+
 export interface EditContext {
   code: string; state: string; currency: string;
+  couponCodes: string[];
   editable: { items: boolean; addressOnly: boolean; address: boolean; blockedReason: string | null };
   lines: { id: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; refundedQty: number; minQuantity: number }[];
   adjustments: { id: string; label: string; amount: number; actor: string | null; createdAt: string }[];
@@ -26,12 +37,14 @@ export interface EditContext {
   billingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   hasCustomer: boolean;
   history: { id: string; actor: string | null; reason: string | null; balance: number; createdAt: string; grandTotalBefore: number | null; grandTotalAfter: number | null; settlement: { type?: string; status?: string; message?: string; paymentId?: string } | null }[];
+  importedHistory: ImportedOrderHistoryEntry[];
 }
 
 export interface Totals { subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; adjustmentTotal: number; grandTotal: number }
 export interface LineDiff { lineId: string | null; sku: string; name: string; change: string; beforeQty: number; afterQty: number; beforeTotal: number; afterTotal: number; fromSku?: string }
 export interface Preview {
   code: string; state: string; currency: string; before: Totals; after: Totals; lines: LineDiff[];
+  couponCodes: string[]; previewAcceptanceHash: string;
   adjustments: { id: string | null; label: string; amount: number }[];
   shipping: { amount: number; override: boolean; methodCode: string | null; methodName: string | null };
   promotion: { code: string | null; type: string; value: number } | null;
@@ -55,22 +68,24 @@ export type WireOp =
   | { op: 'set_quantity'; lineId: string; quantity: number }
   | { op: 'swap_variant'; lineId: string; sku: string; quantity?: number }
   | { op: 'add_item'; sku: string; quantity: number; unitPrice?: number }
-  | { op: 'apply_coupon'; code: string } | { op: 'remove_coupon' }
+  | CouponOp
   | { op: 'set_shipping_method'; code: string } | { op: 'set_shipping_amount'; amount: number } | { op: 'remove_shipping' }
   | { op: 'add_adjustment'; label: string; amount: number } | { op: 'remove_adjustment'; adjustmentId: string }
   | { op: 'set_address'; kind: 'shipping' | 'billing'; address: { fullName?: string; line1: string; line2?: string; city: string; province?: string; postalCode?: string; country: string; phone?: string }; saveToAddressBook?: boolean };
+
+export type CouponOp = { op: 'apply_coupon'; code: string } | { op: 'remove_coupon'; code?: string };
 
 export interface StagedEdit {
   qty: Record<string, number>;
   swaps: Record<string, { sku: string; name: string; quantity?: number }>;
   adds: { sku: string; name: string; quantity: number; unitPrice?: number }[];
-  coupon: { mode: 'keep' | 'remove' | 'apply'; code: string };
+  couponOps: CouponOp[];
   shipping: { mode: 'keep' | 'method' | 'custom' | 'none'; code: string; amountCents: number };
   adjAdd: { label: string; amountCents: number }[];
   adjRemove: string[];
   address: { shipping?: AddressForm; billing?: AddressForm; saveToAddressBook: boolean };
 }
 export const emptyStaged = (): StagedEdit => ({
-  qty: {}, swaps: {}, adds: [], coupon: { mode: 'keep', code: '' }, shipping: { mode: 'keep', code: '', amountCents: 0 },
+  qty: {}, swaps: {}, adds: [], couponOps: [], shipping: { mode: 'keep', code: '', amountCents: 0 },
   adjAdd: [], adjRemove: [], address: { saveToAddressBook: false },
 });

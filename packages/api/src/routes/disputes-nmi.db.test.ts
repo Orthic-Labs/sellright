@@ -15,12 +15,10 @@ vi.mock('../payments/gateway-account.js', async (orig) => ({
   ...await orig<typeof import('../payments/gateway-account.js')>(),
   resolveGatewayAccount: async (storeId: string, method: string, accountId: string, mode?: string) => {
     if (storeId !== STORE || method !== 'nmi') throw new Error('not configured');
-    if (accountId === 'db' && (mode === 'live' || mode === 'test')) {
+    if (['db', ACCT, 'nmi-acct-2'].includes(accountId) && (mode === 'live' || mode === 'test')) {
       return { storeId, method: 'nmi', accountId, mode, securityKey: 'synthetic',
         privateKey: mode === 'live' ? SIGNING_KEY : TEST_SIGNING_KEY };
     }
-    if (accountId === ACCT && !mode) return { storeId, method: 'nmi', accountId,
-      mode: 'live', securityKey: 'synthetic', privateKey: SIGNING_KEY };
     throw new Error('not configured');
   },
 }));
@@ -173,6 +171,55 @@ describe('POST /v1/webhooks/nmi/:store/:account', () => {
     expect(await associations()).toEqual([{ payment_id: exact.paymentId, order_id: exact.orderId, status: 'open' }]);
     expect(await emailCount()).toBe(1);
     await assertNoMoneyEffects(4);
+  });
+
+  it('isolates the same event & transaction across two named accounts & both modes', async () => {
+    await seed();
+    await withStore(STORE, tx => tx.execute(sql`INSERT INTO webhook_endpoint (store_id, url, secret, topics)
+      VALUES (${STORE}, 'https://example.test/disputes', 'synthetic', ARRAY['order.dispute_opened'])`));
+    for (const account of [ACCT, 'nmi-acct-2']) {
+      for (const mode of ['live', 'test']) {
+        const key = mode === 'live' ? SIGNING_KEY : TEST_SIGNING_KEY;
+        const body = JSON.stringify(EVENT);
+        expect((await app.request(signedRequest(body, key, account))).status).toBe(200);
+        expect((await app.request(signedRequest(body, key, account))).status).toBe(200);
+        expect((await app.request(signedRequest(JSON.stringify({ ...EVENT, event_id: 'new-envelope' }), key, account))).status).toBe(200);
+        expect((await app.request(signedRequest(JSON.stringify({ ...EVENT, event_id: undefined }), key, account))).status).toBe(200);
+        expect((await app.request(signedRequest(JSON.stringify({ ...EVENT, event_id: undefined }), key, account))).status).toBe(200);
+      }
+    }
+    expect((await disputeCount()).n).toBe(4);
+    expect(await emailCount()).toBe(4);
+    const evidence = await withStore(STORE, async tx => {
+      const rows = await tx.execute(sql`SELECT id, gateway_account, gateway_mode FROM dispute`);
+      const audits = await tx.execute(sql`SELECT data FROM audit_log WHERE action = 'dispute_opened'`);
+      const deliveries = await tx.execute(sql`SELECT payload FROM webhook_delivery WHERE topic = 'order.dispute_opened'`);
+      const emails = await tx.execute(sql`SELECT dedupe_key FROM email_outbox WHERE kind = 'dispute_alert'`);
+      return { rows: rows.rows, audits: audits.rows, deliveries: deliveries.rows, emails: emails.rows };
+    });
+    expect(evidence.audits).toHaveLength(4);
+    expect(evidence.deliveries).toHaveLength(4);
+    for (const row of evidence.rows) {
+      const scope = { gatewayAccount: row.gateway_account, gatewayMode: row.gateway_mode, disputeRecordId: row.id };
+      expect(evidence.audits).toContainEqual({ data: expect.objectContaining(scope) });
+      expect(evidence.deliveries).toContainEqual({ payload: expect.objectContaining(scope) });
+      expect(evidence.emails).toContainEqual({ dedupe_key: `dispute_alert:nmi:v2:${row.id}:ops@x.test` });
+    }
+    await assertNoMoneyEffects();
+  });
+
+  it('ignores legacy event claims & keeps unresolved legacy disputes separate', async () => {
+    await seed();
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`INSERT INTO processed_event (id, store_id, type) VALUES (${`nmi:${STORE}:${EVENT.event_id}`}, ${STORE}, ${EVENT.event_type})`);
+      // Old callers omit new columns & keep untargeted ON CONFLICT syntax.
+      await tx.execute(sql`INSERT INTO dispute (store_id, provider, provider_ref) VALUES (${STORE}, 'nmi', 'txn-cb-77') ON CONFLICT DO NOTHING`);
+      await tx.execute(sql`INSERT INTO dispute (store_id, provider, provider_ref) VALUES (${STORE}, 'nmi', 'txn-cb-77') ON CONFLICT DO NOTHING`);
+    });
+    expect((await app.request(signedRequest(JSON.stringify(EVENT)))).status).toBe(200);
+    expect((await app.request(signedRequest(JSON.stringify(EVENT)))).status).toBe(200);
+    expect((await disputeCount()).n).toBe(2);
+    expect(await emailCount()).toBe(1);
   });
 
   it('rejects a bad signature before touching the DB', async () => {

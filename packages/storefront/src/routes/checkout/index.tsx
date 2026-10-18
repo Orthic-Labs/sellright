@@ -59,12 +59,15 @@ const CheckoutContent = component$(() => {
   // Changed-total consent: the shopper's explicit OK of the server total when
   // it differs from the estimate they saw (reset on every PLACE ORDER).
   const totalConfirmed = useSignal(false);
+  const confirmedQuoteHash = useSignal('');
+  const quoteFormContext = useSignal('');
+  const quoteCartContext = useSignal('');
   const pageLoading = useSignal(true);
   const promoExpanded = useSignal(false);
   // Loyalty points to spend on this order (0 = none) — written only by useLoyaltyOffer (the shopper's toggle, or a reset
   // when the discountable amount changes), re-validated server-side at order creation.
   const redeemPoints = useSignal(0);
-  const discountableCents = useComputed$(() => Math.max(0, (localCart.cart.subtotal || 0) - (localCart.cart.discountTotal || 0)));
+  const discountableCents = useComputed$(() => Math.max(0, (localCart.cart.subtotal || 0) - (localCart.cart.discountTotal || 0) + (localCart.cart.pointsDiscount || 0)));
   const cartCurrency = useComputed$(() => localCart.cart.currency || 'USD');
   // Destructured on purpose, and the signal itself (not `.value`) goes down to CheckoutOrderSummary, which reads it in its own render.
   const { view: loyaltyView, onRedeemToggle$ } = useLoyaltyOffer(redeemPoints, discountableCents, cartCurrency);
@@ -133,7 +136,52 @@ const CheckoutContent = component$(() => {
     }
   });
 
+  useTask$(async ({ track, cleanup }) => {
+    const shipping = track(() => JSON.stringify(appState.shippingAddress));
+    const billing = track(() => JSON.stringify(appState.billingAddress));
+    const method = track(() => shippingMethod.value?.code);
+    const points = track(() => redeemPoints.value);
+    const context = JSON.stringify([shipping, billing, method, points]);
+    // Replacing an equal address/method object must not erase pending consent or start another quote read.
+    if (context === quoteFormContext.value) return;
+    quoteFormContext.value = context;
+    confirmedQuoteHash.value = '';
+    srState.quoteChange = null;
+    CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: appState.shippingAddress?.countryCode,
+      shippingMethodCode: method, ...(points > 0 ? { redeemPoints: points } : {}) });
+    let cancelled = false;
+    cleanup(() => { cancelled = true; });
+    if (!CartService.token()) return;
+    try {
+      await CartService.refresh();
+      if (cancelled) return;
+    } catch (error) {
+      if (!cancelled) state.error = error instanceof Error ? error.message : 'Updated quote could not be loaded.';
+    }
+  });
+
+  useVisibleTask$(({ cleanup }) => {
+    cleanup(() => { CartService.setQuoteContext({}); });
+  });
+
+  useTask$(({ track }) => {
+    const context = track(() => JSON.stringify([localCart.cart.token, localCart.cart.revision, localCart.cart.couponCodes]));
+    // Every live read replaces the mirror object, even if its revision/membership stayed unchanged.
+    if (context === quoteCartContext.value) return;
+    quoteCartContext.value = context;
+    confirmedQuoteHash.value = '';
+    // Adoption of the refused quote must retain the explicit-confirmation prompt.
+    if (srState.quoteChange?.quoteHash !== localCart.cart.quoteHash) srState.quoteChange = null;
+  });
+
+  useTask$(({ track }) => {
+    const hash = track(() => localCart.cart.quoteHash);
+    if (hash) shippingCents.value = localCart.cart.shippingTotal;
+  });
+
   const checkoutTotalCents = useComputed$(() => {
+    if (srState.quoteChange) return srState.quoteChange.quote.grandTotal;
+    if (localCart.cart.quoteHash) return localCart.cart.grandTotal;
     const subtotal = localCart.cart.subtotal || 0;
     const discount = localCart.cart.discountTotal || 0;
     const discountedSubtotal = Math.max(subtotal - discount, 0);
@@ -426,6 +474,14 @@ const CheckoutContent = component$(() => {
     if (srState.phase === 'paying') return;
     if (isOrderProcessing.value) return;
     if (state.loading || checkoutState.isLoading) return;
+    if (localCart.cart.pricingIntent !== 'checkout') {
+      state.error = 'Your checkout quote is loading. Please review updated amounts before placing your order.';
+      return;
+    }
+    if (srState.quoteChange && confirmedQuoteHash.value !== srState.quoteChange.quoteHash) {
+      state.error = 'Review updated amounts & confirm this quote before placing your order.';
+      return;
+    }
 
     if (!checkoutValidation.isAllValid) {
       await validationActions.touchAll();
@@ -501,7 +557,8 @@ const CheckoutContent = component$(() => {
         shippingAddress,
         shippingMethodCode: shippingMethod.value?.code,
         billingAddress,
-        couponCode: localCart.cart.coupon?.applied ? localCart.cart.coupon.code : undefined,
+        couponCodes: [...(localCart.cart.couponCodes ?? [])],
+        acceptedQuoteHash: srState.quoteChange?.quoteHash ?? localCart.cart.quoteHash,
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
       // From here to the payment view: place-order-flow.ts (it never bumps the view generation).
@@ -623,6 +680,22 @@ const CheckoutContent = component$(() => {
   });
 
   return (
+    <>
+    {srState.quoteChange && confirmedQuoteHash.value !== srState.quoteChange.quoteHash && (
+      <section role="alert" aria-label="Updated checkout quote" class="mx-auto max-w-3xl p-4 border rounded-sm space-y-3">
+        <p>Your total changed. Review updated amounts before placing your order.</p>
+        <dl class="space-y-1">
+          <div class="flex justify-between gap-4"><dt>Discount</dt><dd>{formatCents(srState.quoteChange.quote.discountTotal)}</dd></div>
+          <div class="flex justify-between gap-4"><dt>Shipping</dt><dd>{formatCents(srState.quoteChange.quote.shippingTotal)}</dd></div>
+          <div class="flex justify-between gap-4"><dt>Tax</dt><dd>{formatCents(srState.quoteChange.quote.taxTotal)}</dd></div>
+          <div class="flex justify-between gap-4"><dt>Updated total</dt><dd>{formatCents(srState.quoteChange.quote.grandTotal)}</dd></div>
+        </dl>
+        <button type="button" class="btn-primary px-4 py-2" onClick$={() => {
+          confirmedQuoteHash.value = srState.quoteChange?.quoteHash ?? '';
+          state.error = null;
+        }}>Confirm updated quote</button>
+      </section>
+    )}
     <CheckoutPageView
       checkoutState={checkoutState}
       checkoutValidation={checkoutValidation}
@@ -655,6 +728,7 @@ const CheckoutContent = component$(() => {
       stripeConfirmTrigger={stripeConfirmTrigger}
       stripePublishableKey={stripePublishableKey}
     />
+    </>
 
   );
 });

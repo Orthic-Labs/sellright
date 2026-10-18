@@ -1,9 +1,221 @@
 import { and, eq, sql } from 'drizzle-orm';
 import * as s from '../db/schema.js';
 import type { ImportContext } from './context.js';
-import { vendureLineMoney, type VendureLineSnapshotInput } from './vendure-money.js';
+import { vendureProratedUnitPriceWithTax, type VendureLineSnapshotInput } from './vendure-money.js';
 import { parseDate } from './store.js';
 import { digest } from './artifacts.js';
+
+export interface EditBasisSourceOrder {
+  id: string; selected: boolean; sourceRecord: string;
+  subTotal: string | null; subTotalWithTax: string | null; shipping: string | null; shippingWithTax: string | null;
+}
+export interface EditBasisSourceChild { id: string; orderId: string; sourceRecord: string }
+export interface EditBasisSourceLine extends EditBasisSourceChild { shippingLineId: string | null }
+export interface EditBasisSourceShippingLine extends EditBasisSourceChild { shippingMethodId: string | null }
+export interface EditBasisSourceRecord { id: string; sourceRecord: string }
+export interface EditBasisSourceOrderChannel { orderId: string; channelId: string; sourceRecord: string }
+interface EditBasisTargetOrder { id: string; storeId: string; metadata: unknown }
+interface EditBasisTargetLine extends EditBasisTargetOrder { orderId: string }
+
+/** Retained source facts only. LIST cannot be recovered from reconciled NET.
+ * Every monetary lexeme & full PostgreSQL JSON record stays text, never parsed
+ * through JavaScript numbers or reconstructed from operational line totals. */
+export function buildImportedEditBasis(input: {
+  storeId: string; sourceKey: string; id: ImportContext['id']; channelId: string; currency: string;
+  orders: readonly EditBasisSourceOrder[]; lines: readonly EditBasisSourceLine[];
+  shippingLines: readonly EditBasisSourceShippingLine[]; surcharges: readonly EditBasisSourceChild[];
+  channels: readonly EditBasisSourceRecord[]; orderChannels: readonly EditBasisSourceOrderChannel[];
+  shippingMethods: readonly EditBasisSourceRecord[];
+  targetOrders: readonly EditBasisTargetOrder[]; targetLines: readonly EditBasisTargetLine[];
+}) {
+  const sourceId = (value: unknown): string => {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+    if (typeof value === 'string' && /^[1-9][0-9]*$/.test(value)) return value;
+    throw new Error('Invalid edit basis source identity');
+  };
+  const indexed = <T extends { id: string }>(rows: readonly T[]) => {
+    const map = new Map<string, T>();
+    for (const row of rows) {
+      const id = sourceId(row.id);
+      if (map.has(id)) throw new Error('Duplicate edit basis source identity');
+      map.set(id, row);
+    }
+    return map;
+  };
+  const orders = indexed(input.orders), lines = indexed(input.lines);
+  const shippingLines = indexed(input.shippingLines), surcharges = indexed(input.surcharges);
+  // Parse identities/flags only, quoting every JSON numeric token first. Raw
+  // records remain unchanged; even bigint IDs & decimal custom fields never
+  // pass through a JavaScript Number during capture validation.
+  const record = (text: string): Record<string, unknown> => {
+    if (typeof text !== 'string' || !text) throw new Error('Edit basis source record missing');
+    const exact = text.replace(/"(?:[^"\\]|\\.)*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/g,
+      token => token.startsWith('"') ? token : JSON.stringify(token));
+    const value: unknown = JSON.parse(exact);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid edit basis source record');
+    return value as Record<string, unknown>;
+  };
+  const channelId = sourceId(input.channelId), channels = indexed(input.channels);
+  const channel = channels.get(channelId);
+  if (channels.size !== 1 || !channel) throw new Error('Edit basis selected channel missing/mismatched');
+  const channelRecord = record(channel.sourceRecord);
+  if (sourceId(channelRecord.id) !== channelId || typeof channelRecord.pricesIncludeTax !== 'boolean' ||
+      channelRecord.defaultCurrencyCode !== input.currency || !Object.hasOwn(channelRecord, 'defaultTaxZoneId') ||
+      Object.keys(channelRecord).sort().join(',') !== 'defaultCurrencyCode,defaultTaxZoneId,id,pricesIncludeTax') {
+    throw new Error('Edit basis selected channel pricing projection mismatch');
+  }
+  if (channelRecord.defaultTaxZoneId !== null) sourceId(channelRecord.defaultTaxZoneId);
+  const orderChannels = new Map<string, EditBasisSourceOrderChannel>();
+  for (const row of input.orderChannels) {
+    const orderId = sourceId(row.orderId), raw = record(row.sourceRecord);
+    if (!orders.has(orderId) || sourceId(row.channelId) !== channelId || sourceId(raw.orderId) !== orderId ||
+        sourceId(raw.channelId) !== channelId || orderChannels.has(orderId)) {
+      throw new Error('Edit basis selected order/channel relation mismatch/duplicate');
+    }
+    orderChannels.set(orderId, row);
+  }
+  const shippingMethods = indexed(input.shippingMethods), referencedMethods = new Set<string>();
+  for (const row of shippingMethods.values()) {
+    if (sourceId(record(row.sourceRecord).id) !== row.id) throw new Error('Edit basis shipping method identity mismatch');
+  }
+  const orderTargets = new Map<string, EditBasisTargetOrder>();
+  for (const row of input.targetOrders) {
+    const vendure = (row.metadata as { vendure?: { id?: unknown; sourceKey?: unknown } } | null)?.vendure;
+    const id = sourceId(vendure?.id);
+    if (row.storeId !== input.storeId || vendure?.sourceKey !== input.sourceKey || row.id !== input.id('order', id) || orderTargets.has(id)) {
+      throw new Error('Edit basis target source/tenant identity mismatch');
+    }
+    const source = orders.get(id);
+    if (!source || source.selected !== true) throw new Error('Edit basis source order ownership missing');
+    orderTargets.set(id, row);
+  }
+  if (orders.size !== orderTargets.size) throw new Error('Edit basis source order set differs from target');
+  if (orderChannels.size !== orders.size) throw new Error('Edit basis selected order/channel relation missing');
+  const lineTargets = new Map<string, EditBasisTargetLine>();
+  for (const row of input.targetLines) {
+    const vendure = (row.metadata as { vendure?: { id?: unknown } } | null)?.vendure;
+    const id = sourceId(vendure?.id), source = lines.get(id);
+    const parent = source && orderTargets.get(source.orderId);
+    if (row.storeId !== input.storeId || row.id !== input.id('order-line', id) || !parent || row.orderId !== parent.id || lineTargets.has(id)) {
+      throw new Error('Edit basis line source/tenant ownership mismatch');
+    }
+    lineTargets.set(id, row);
+  }
+  if (lines.size !== lineTargets.size) throw new Error('Edit basis source line set differs from target');
+  for (const row of [...lines.values(), ...shippingLines.values(), ...surcharges.values()]) {
+    if (!orderTargets.has(sourceId(row.orderId)) || typeof row.sourceRecord !== 'string' || !row.sourceRecord) {
+      throw new Error('Edit basis source child ownership/record missing');
+    }
+    const raw = record(row.sourceRecord);
+    if (sourceId(raw.id) !== row.id || sourceId(raw.orderId) !== row.orderId) {
+      throw new Error('Edit basis source child identity/ownership mismatch');
+    }
+  }
+  for (const line of lines.values()) {
+    const rawShippingLineId = record(line.sourceRecord).shippingLineId;
+    if (rawShippingLineId === null ? line.shippingLineId !== null : sourceId(rawShippingLineId) !== sourceId(line.shippingLineId)) {
+      throw new Error('Edit basis line shipping ownership mismatch');
+    }
+    if (line.shippingLineId == null) continue;
+    const shippingLine = shippingLines.get(sourceId(line.shippingLineId));
+    if (!shippingLine || shippingLine.orderId !== line.orderId) throw new Error('Edit basis line shipping ownership mismatch');
+  }
+  for (const row of shippingLines.values()) {
+    const raw = record(row.sourceRecord);
+    if (sourceId(raw.id) !== row.id || sourceId(raw.orderId) !== row.orderId ||
+        (raw.shippingMethodId === null ? row.shippingMethodId !== null : sourceId(raw.shippingMethodId) !== sourceId(row.shippingMethodId))) {
+      throw new Error('Edit basis shipping source relation mismatch');
+    }
+    if (row.shippingMethodId === null) continue;
+    const methodId = sourceId(row.shippingMethodId);
+    if (!shippingMethods.has(methodId)) throw new Error('Edit basis referenced shipping method missing');
+    referencedMethods.add(methodId);
+  }
+  if (referencedMethods.size !== shippingMethods.size) throw new Error('Edit basis unrelated shipping method');
+  const sorted = <T extends { id: string }>(rows: readonly T[]) => [...rows].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
+  const byOrder = <T extends EditBasisSourceChild>(rows: readonly T[]) => {
+    const map = new Map<string, T[]>();
+    for (const row of rows) { const group = map.get(row.orderId) ?? []; group.push(row); map.set(row.orderId, group); }
+    return map;
+  };
+  const shippingByOrder = byOrder(input.shippingLines), surchargesByOrder = byOrder(input.surcharges), linesByOrder = byOrder(input.lines);
+  const records = (rows: readonly EditBasisSourceChild[]) => sorted(rows)
+    .map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }));
+  return input.targetOrders.map(target => {
+    const sourceOrderId = sourceId((target.metadata as { vendure: { id: unknown } }).vendure.id);
+    const order = orders.get(sourceOrderId)!;
+    const header = { subTotal: order.subTotal, subTotalWithTax: order.subTotalWithTax,
+      shipping: order.shipping, shippingWithTax: order.shippingWithTax };
+    if (typeof order.sourceRecord !== 'string' || !order.sourceRecord || Object.values(header).some(value => value !== null && typeof value !== 'string')) {
+      throw new Error('Invalid edit basis source header transport');
+    }
+    if (sourceId(record(order.sourceRecord).id) !== sourceOrderId) throw new Error('Edit basis source order identity mismatch');
+    const payload = { version: 1 as const, format: 'retained-pg-jsonb-text-v1' as const,
+      sourceKey: input.sourceKey, sourceOrderId, sourceOrderRecord: order.sourceRecord, header,
+      channel: { sourceId: channelId, projection: 'pricing-v1' as const, sourceRecord: channel.sourceRecord,
+        orderChannelRecord: orderChannels.get(sourceOrderId)!.sourceRecord },
+      shippingMethods: sorted([...new Set((shippingByOrder.get(sourceOrderId) ?? [])
+        .flatMap(row => row.shippingMethodId === null ? [] : [row.shippingMethodId]))].map(id => shippingMethods.get(id)!))
+        .map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord })),
+      shippingLines: records(shippingByOrder.get(sourceOrderId) ?? []), surcharges: records(surchargesByOrder.get(sourceOrderId) ?? []),
+      lines: sorted(linesByOrder.get(sourceOrderId) ?? []).map(line => ({ sourceId: line.id,
+        orderLineId: lineTargets.get(line.id)!.id, sourceRecord: line.sourceRecord })) };
+    return { orderId: target.id, editBasisV1: { ...payload, sourceDigest: digest(payload) } };
+  });
+}
+
+export type ImportedEditBasisV1 = ReturnType<typeof buildImportedEditBasis>[number]['editBasisV1'];
+
+/** Uses the same ctx.q read-only repeatable-read transaction as all import
+ * phases. Queries participate in reviewed global source digest as well. */
+async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonly EditBasisTargetLine[]) {
+  const identity = await ctx.q(`SELECT current_setting('transaction_isolation') AS isolation,
+    current_setting('transaction_read_only') AS read_only`);
+  if (identity.length !== 1 || identity[0]!.isolation !== 'repeatable read' || identity[0]!.read_only !== 'on') {
+    throw new Error('Edit basis requires source read-only repeatable-read snapshot');
+  }
+  const targetOrders = await ctx.tx.select().from(s.order).where(eq(s.order.storeId, ctx.storeId));
+  // Source-read digests bind parameter order, independent of target scan order.
+  const ids = targetOrders.map(order => {
+    const vendure = (order.metadata as { vendure?: { id?: unknown; sourceKey?: unknown } } | null)?.vendure;
+    if (vendure?.sourceKey !== ctx.sourceKey || vendure.id == null) throw new Error('Edit basis target source identity missing');
+    return String(vendure.id);
+  }).sort();
+  const channels = await ctx.q(`SELECT c.id::text AS id, jsonb_build_object('id',c.id,
+    'defaultCurrencyCode',c."defaultCurrencyCode",'pricesIncludeTax',c."pricesIncludeTax",
+    'defaultTaxZoneId',c."defaultTaxZoneId")::text AS "sourceRecord"
+    FROM channel c WHERE c.id=$1 ORDER BY c.id`, [ctx.channelId]) as EditBasisSourceRecord[];
+  const orderChannels = await ctx.q(`SELECT c."orderId"::text AS "orderId", c."channelId"::text AS "channelId",
+    to_jsonb(c)::text AS "sourceRecord" FROM order_channels_channel c
+    WHERE c."orderId"::text=ANY($1::text[]) AND c."channelId"=$2 ORDER BY c."orderId", c."channelId"`, [ids, ctx.channelId]) as EditBasisSourceOrderChannel[];
+  const orders = await ctx.q(`SELECT o.id::text AS id, to_jsonb(o)::text AS "sourceRecord",
+    o."subTotal"::text AS "subTotal", o."subTotalWithTax"::text AS "subTotalWithTax",
+    o.shipping::text AS shipping, o."shippingWithTax"::text AS "shippingWithTax",
+    EXISTS(SELECT 1 FROM order_channels_channel c WHERE c."orderId"=o.id AND c."channelId"=$2) AS selected
+    FROM "order" o WHERE o.id::text=ANY($1::text[]) ORDER BY o.id`, [ids, ctx.channelId]) as EditBasisSourceOrder[];
+  const lines = await ctx.q(`SELECT l.id::text AS id, l."orderId"::text AS "orderId",
+    l."shippingLineId"::text AS "shippingLineId", to_jsonb(l)::text AS "sourceRecord"
+    FROM order_line l WHERE l."orderId"::text=ANY($1::text[]) ORDER BY l.id`, [ids]) as EditBasisSourceLine[];
+  const shippingLines = await ctx.q(`SELECT l.id::text AS id, l."orderId"::text AS "orderId",
+    l."shippingMethodId"::text AS "shippingMethodId", to_jsonb(l)::text AS "sourceRecord"
+    FROM shipping_line l WHERE l."orderId"::text=ANY($1::text[]) ORDER BY l.id`, [ids]) as EditBasisSourceShippingLine[];
+  // No deletedAt filter: historical lines can reference deleted methods.
+  const shippingMethods = await ctx.q(`SELECT m.id::text AS id, to_jsonb(m)::text AS "sourceRecord"
+    FROM shipping_method m WHERE m.id IN (SELECT l."shippingMethodId" FROM shipping_line l
+      WHERE l."orderId"::text=ANY($1::text[]) AND l."shippingMethodId" IS NOT NULL) ORDER BY m.id`, [ids]) as EditBasisSourceRecord[];
+  const surcharges = await ctx.q(`SELECT c.id::text AS id, c."orderId"::text AS "orderId", to_jsonb(c)::text AS "sourceRecord"
+    FROM surcharge c WHERE c."orderId"::text=ANY($1::text[]) ORDER BY c.id`, [ids]) as EditBasisSourceChild[];
+  const captures = buildImportedEditBasis({ storeId: ctx.storeId, sourceKey: ctx.sourceKey, id: ctx.id,
+    channelId: String(ctx.channelId), currency: ctx.currency, channels, orderChannels, shippingMethods,
+    orders, lines, shippingLines, surcharges, targetOrders, targetLines });
+  const targetsById = new Map(targetOrders.map(order => [order.id, order]));
+  for (const capture of captures) {
+    const order = targetsById.get(capture.orderId)!;
+    const metadata = order.metadata as Record<string, unknown> & { vendure: Record<string, unknown> };
+    await ctx.tx.update(s.order).set({ metadata: { ...metadata, vendure: { ...metadata.vendure, editBasisV1: capture.editBasisV1 } } })
+      .where(and(eq(s.order.storeId, ctx.storeId), eq(s.order.id, order.id)));
+  }
+}
 
 /** Source refund references have quantities, not amounts. Allocate the exact
  * source items total proportionally with deterministic largest remainders. */
@@ -21,6 +233,12 @@ export function allocateRefundItems(total: number, weights: number[]): number[] 
   let remaining = total - amounts.reduce((a, b) => a + b, 0);
   for (const row of order) { if (!remaining) break; amounts[row.i]!++; remaining--; }
   return amounts;
+}
+
+/** Source cash-refund basis rounds each eligible unit before quantity multiplication. */
+export function refundLineWeight(snapshot: VendureLineSnapshotInput, quantity: number): number {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error('Invalid refund quantity');
+  return snapshot.orderPlacedQuantity > 0 ? vendureProratedUnitPriceWithTax(snapshot) * quantity : 0;
 }
 
 /** Source order states that assert the goods left the warehouse. */
@@ -83,6 +301,7 @@ export async function importHistory(ctx: ImportContext) {
   // Explicit store_id predicates: the migration role may bypass RLS, so the
   // tenant boundary must live in the query itself.
   const lines = new Map((await tx.select().from(s.orderLine).where(eq(s.orderLine.storeId, storeId))).map(line => [line.id, line]));
+  await captureImportedEditBasis(ctx, [...lines.values()]);
   const payments = new Map((await tx.select().from(s.payment).where(eq(s.payment.storeId, storeId))).map(payment => [payment.id, payment]));
   const refs = await q('SELECT r.*, to_jsonb(r)::text AS source_record FROM order_line_reference r ORDER BY r.id');
   const fulfilledByLine = new Map<string, number>();
@@ -199,8 +418,7 @@ export async function importHistory(ctx: ImportContext) {
         ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order_line',
           detail: `refund ref ${ref.id} (refund ${refund.id}) claims qty ${ref.quantity} > placed ${Math.max(snapshot.placedQuantity, line.quantity)} on order_line ${ref.orderLineId} — refundedQty clamps at line maximum` });
       }
-      const placed = vendureLineMoney({ ...snapshot, quantity: snapshot.placedQuantity, orderPlacedQuantity: snapshot.placedQuantity });
-      return placed.lineTotal * ref.quantity / snapshot.placedQuantity;
+      return refundLineWeight({ ...snapshot, quantity: line.quantity, orderPlacedQuantity: snapshot.placedQuantity }, ref.quantity);
     });
     const amounts = allocateRefundItems(items, weights);
     for (let i = 0; i < members.length; i++) {

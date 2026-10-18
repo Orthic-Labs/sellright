@@ -3,7 +3,8 @@ import { shippingLabel } from '../lib/shipping-label.js';
 import * as s from '../db/schema.js';
 import { parseDate } from './store.js';
 import { optionalColumn } from './source-schema.js';
-import { ASSET_KEY_SEGMENT } from './artifacts.js';
+import { ASSET_KEY_SEGMENT, digest } from './artifacts.js';
+import type { ImportContext, PromotionSequenceProvenance } from './context.js';
 import { slugify } from '../lib/slug.js';
 
 const lower = (v: string | null) => (v ?? 'image').toLowerCase();
@@ -13,19 +14,25 @@ const lower = (v: string | null) => (v ?? 'image').toLowerCase();
  *  "10% off + free shipping" shape) — pick the discount action for
  *  type/value and report whether a free_shipping action rode along, so the
  *  caller can set promotion.freeShipping instead of dropping one benefit. */
-export function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: string; value: string }> }>): { type: 'percentage' | 'fixed' | 'free_shipping'; value: number; freeShipping: boolean } | null {
+export function actionToTypeValue(actions: SourceAction[]): { type: 'percentage' | 'fixed' | 'free_shipping'; value: number; freeShipping: boolean; discountScope: 'order' } | null {
   const discount = actions.find((x) => x.code === 'order_percentage_discount' || x.code === 'order_fixed_discount');
   const freeShipping = actions.some((x) => x.code === 'free_shipping');
-  const a = discount ?? actions[0];
-  if (!a) return null;
-  const arg = (n: string) => a.args?.find((x) => x.name === n)?.value;
-  if (a.code === 'order_percentage_discount') return { type: 'percentage', value: Number(arg('discount') ?? 0), freeShipping };
-  if (a.code === 'order_fixed_discount') return { type: 'fixed', value: Number(arg('amount') ?? 0), freeShipping };
-  if (a.code === 'free_shipping') return { type: 'free_shipping', value: 0, freeShipping: false };
+  const action = discount ?? actions[0];
+  if (!action) return null;
+  if (DISCOUNT_ACTIONS.has(action.code)) {
+    const args = action.args?.filter((arg) => arg.name === 'discount');
+    const raw = args?.[0]?.value;
+    // Fixed action executes args.discount. Integer target storage cannot retain
+    // fractional percentages; reject instead of silently rounding/defaulting.
+    if (args?.length !== 1 || typeof raw !== 'string' || !/^[+-]?\d+$/.test(raw)) throw new Error('Invalid source promotion discount');
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < -2147483648 || value > 2147483647) throw new Error('Invalid source promotion discount');
+    return { type: action.code === 'order_percentage_discount' ? 'percentage' : 'fixed', value, freeShipping, discountScope: 'order' };
+  }
+  if (action.code === 'free_shipping') return { type: 'free_shipping', value: 0, freeShipping: false, discountScope: 'order' };
   return null;
 }
 
-import type { ImportContext } from './context.js';
 
 type SourceAction = { code: string; args?: Array<{ name: string; value: string }> };
 const DISCOUNT_ACTIONS = new Set(['order_percentage_discount', 'order_fixed_discount']);
@@ -33,14 +40,108 @@ const DISCOUNT_ACTIONS = new Set(['order_percentage_discount', 'order_fixed_disc
 /** How a source promotion's action list maps onto the single-action target
  *  model. Exported for unit tests. */
 export function classifyPromotionActions(actions: SourceAction[]): 'single' | 'account_credit' | 'multi_action' | 'unsupported' {
-  if (!Array.isArray(actions) || actions.length === 0) return 'unsupported';
+  if (!Array.isArray(actions) || actions.length === 0 || actions.some(action => !action || typeof action.code !== 'string')) return 'unsupported';
   if (actions.some((a) => a?.code === 'account_credit_discount')) return 'account_credit';
-  if (actions.length === 1) return 'single';
+  if (actions.length === 1) return DISCOUNT_ACTIONS.has(actions[0]!.code) || actions[0]!.code === 'free_shipping' ? 'single' : 'unsupported';
   const codes = actions.map((a) => a?.code);
   const discounts = codes.filter((c) => DISCOUNT_ACTIONS.has(c)).length;
   const freeShipping = codes.filter((c) => c === 'free_shipping').length;
   if (actions.length === 2 && discounts === 1 && freeShipping === 1) return 'multi_action';
   return 'unsupported';
+}
+
+// Mirrors deployed PromotionService.getActivePromotionsInChannel: no secondary
+// ordering & no language filter. First-seen entity hydration retains raw facts.
+export const ACTIVE_PROMOTION_QUERY = `SELECT p.id::text AS id, p."couponCode" AS code, p.conditions, p.actions,
+       p."startsAt"::text AS starts, p."endsAt"::text AS ends, p."usageLimit" AS uselimit,
+       p."perCustomerUsageLimit" AS percust, p."priorityScore" AS prio,
+       translation.id::text AS translation_id, to_jsonb(p)::text AS source_record,
+       to_jsonb(translation)::text AS translation_record
+FROM promotion p
+LEFT JOIN promotion_channels_channel pc ON pc."promotionId" = p.id
+LEFT JOIN channel channel ON channel.id = pc."channelId"
+LEFT JOIN promotion_translation translation ON translation."baseId" = p.id
+WHERE channel.id = $1 AND p."deletedAt" IS NULL AND p.enabled = true
+ORDER BY p."priorityScore" ASC`;
+const ACTIVE_PROMOTION_SET_QUERY = `SELECT p.id::text AS id FROM promotion p
+WHERE p."deletedAt" IS NULL AND p.enabled = true
+  AND EXISTS (SELECT 1 FROM promotion_channels_channel pc WHERE pc."promotionId" = p.id AND pc."channelId" = $1)`;
+
+export function hydrateActivePromotions(rows: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  const hydrated = new Map<string, Record<string, unknown>>();
+  let previous = -Infinity;
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || !row.id || !Number.isSafeInteger(row.prio)
+        || Number(row.prio) < previous || typeof row.source_record !== 'string') throw new Error('Invalid active source promotion sequence');
+    previous = Number(row.prio);
+    const existing = hydrated.get(row.id);
+    if (existing) {
+      if (existing.source_record !== row.source_record) throw new Error('Conflicting source promotion identity');
+      continue;
+    }
+    hydrated.set(row.id, row);
+  }
+  return [...hydrated.values()];
+}
+
+export async function capturePromotionSequence(ctx: Pick<ImportContext, 'q' | 'channelId' | 'sourceKey' | 'exclusions'>) {
+  const identityRows = await ctx.q(`SELECT current_database() AS database,
+    (SELECT oid::text FROM pg_database WHERE datname = current_database()) AS database_oid,
+    inet_server_addr()::text AS server_address, inet_server_port() AS server_port,
+    current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only`);
+  if (identityRows.length !== 1 || identityRows[0]!.isolation !== 'repeatable read' || identityRows[0]!.read_only !== 'on') {
+    throw new Error('Promotion sequence requires source read-only repeatable-read snapshot');
+  }
+  const first = await ctx.q(ACTIVE_PROMOTION_QUERY, [ctx.channelId]);
+  const rows = hydrateActivePromotions(first);
+  const selected = await ctx.q(ACTIVE_PROMOTION_SET_QUERY, [ctx.channelId]);
+  const selectedIds = selected.map(row => row.id);
+  const expected = new Set(selectedIds);
+  if (selectedIds.some(id => typeof id !== 'string' || !id) || expected.size !== selectedIds.length
+      || expected.size !== rows.length || rows.some(row => !expected.has(row.id))) throw new Error('Incomplete active source promotion sequence');
+  const second = await ctx.q(ACTIVE_PROMOTION_QUERY, [ctx.channelId]);
+  const repeated = hydrateActivePromotions(second);
+  if (repeated.length !== rows.length || repeated.some(row => !expected.has(row.id))) throw new Error('Repeated source promotion set changed');
+  const firstRecords = new Map(rows.map(row => [row.id, row.source_record]));
+  if (repeated.some(row => firstRecords.get(row.id) !== row.source_record)) throw new Error('Repeated source promotion facts changed');
+  const orderedSourceIds = rows.map(row => String(row.id));
+  const repeatedSourceIds = repeated.map(row => String(row.id));
+  const repeatMatches = orderedSourceIds.every((id, index) => id === repeatedSourceIds[index]);
+  const priorityCounts = new Map<number, number>();
+  for (const row of rows) priorityCounts.set(Number(row.prio), (priorityCounts.get(Number(row.prio)) ?? 0) + 1);
+  const tiedPriorities = [...priorityCounts].filter(([, count]) => count > 1).map(([priority]) => priority);
+  if (!repeatMatches) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion', blocking: true,
+    detail: 'Source active-query tied sequence changed within snapshot; tied stack rank is unresolved',
+    count: rows.filter(row => tiedPriorities.includes(Number(row.prio))).length, sourceValues: orderedSourceIds });
+  const observation = {
+    version: 1 as const, authority: 'observed-active-query-sequence' as const, tieSemantics: 'source-secondary-order-unspecified' as const, query: ACTIVE_PROMOTION_QUERY,
+    sourceServiceSha256: '2719cb939725c12bd811d1151843251e21be71925b75a1d740a732712cd11799', queryDigest: digest({ sql: ACTIVE_PROMOTION_QUERY }),
+    sourceKey: ctx.sourceKey, channelId: ctx.channelId, sourceIdentity: identityRows[0]!, orderedSourceIds, repeatedSourceIds,
+    tiedPriorities, repeatMatches,
+    entries: rows.map((row, rank) => ({ sourceId: String(row.id), priority: Number(row.prio),
+      stackOrder: repeatMatches || !tiedPriorities.includes(Number(row.prio)) ? rank : null,
+      sourceRecord: String(row.source_record), actions: row.actions, conditions: row.conditions,
+      translationRecords: first.filter(joined => joined.id === row.id).map(joined => String(joined.translation_record)) })),
+  };
+  const provenance: PromotionSequenceProvenance = { ...observation, captureDigest: digest(observation) };
+  return { rows, provenance };
+}
+
+/** Verify active query membership after ordinary & credit promotion materialization. */
+export function promotionSequenceCoverage(ctx: Pick<ImportContext, 'id' | 'promotionSequence'>,
+  activeTargetIds: readonly string[]) {
+  if (!ctx.promotionSequence) return { type: 'unmappable-source-row' as const, table: 'promotion', blocking: true,
+    detail: 'Source active promotion sequence was not captured', count: 1 };
+  const expected = new Map(ctx.promotionSequence.orderedSourceIds.map(sourceId => [ctx.id('promotion', sourceId), sourceId]));
+  if (expected.size !== ctx.promotionSequence.orderedSourceIds.length) throw new Error('Source promotion target identity collision');
+  const actual = new Set(activeTargetIds);
+  const missing = [...expected].filter(([targetId]) => !actual.has(targetId)).map(([, sourceId]) => sourceId);
+  const unexpected = [...actual].filter(targetId => !expected.has(targetId));
+  if (!missing.length && !unexpected.length && actual.size === activeTargetIds.length) return null;
+  return { type: 'unmappable-source-row' as const, table: 'promotion', blocking: true,
+    detail: 'Imported active promotion set differs from captured selected-channel source query',
+    count: missing.length + unexpected.length + activeTargetIds.length - actual.size,
+    sourceValues: [...missing.map(id => 'missing-source:' + id), ...unexpected.map(id => 'unexpected-target:' + id)] };
 }
 
 // ── de-Vendure: promotion condition translation ─────────────────────────────
@@ -297,20 +398,17 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     }
 
     // --- promotions (coupon-code based) ---
-    // account_credit_discount promotions (the source's old store-credit
-    // mechanism — balances move to the points ledger in import/loyalty.ts)
-    // are recorded as a reviewed exclusion instead of failing the run.
+    // Dynamic account-credit promotions are owned by import/account-credit.ts,
+    // including disabled/deleted identities & exact private source snapshots.
     // R24: multi-action promotions (a discount action PLUS a free_shipping
     // action) are now imported faithfully — actionToTypeValue picks the
     // discount for type/value and promotion.freeShipping carries the
     // free-shipping benefit, instead of dropping it.
     let promoCount = 0;
-    const skippedCredit: string[] = [];
-    const promoRows = await q(
-      `SELECT id, "couponCode" AS code, conditions, actions, "startsAt" AS starts, "endsAt" AS ends,
-              "usageLimit" AS uselimit, "perCustomerUsageLimit" AS percust, "priorityScore" AS prio
-       FROM promotion WHERE enabled = true AND "deletedAt" IS NULL `,
-    );
+    const captured = await capturePromotionSequence(ctx);
+    const promoRows = captured.rows;
+    ctx.promotionSequence = captured.provenance;
+    const sourceRanks = new Map(captured.provenance.entries.map(entry => [entry.sourceId, entry.stackOrder]));
 
     // De-Vendure (item-targeting coupon conditions): `at_least_n_with_facets`
     // names source facet VALUE ids directly — never a native concept, and the
@@ -371,7 +469,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     for (const pr of promoRows) {
       const actions = typeof pr.actions === 'string' ? JSON.parse(pr.actions) : pr.actions;
       const shape = classifyPromotionActions(actions);
-      if (shape === 'account_credit') { skippedCredit.push(String(pr.id)); continue; }
+      if (shape === 'account_credit') continue;
       if (shape === 'unsupported') throw new Error('Unsupported promotion action: ' + pr.id);
       const tv = actionToTypeValue(actions);
       if (!tv) throw new Error('Unsupported promotion action: ' + pr.id);
@@ -382,16 +480,14 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       }
       const conditions = translatePromotionConditions(sourceConditions, facetToCollectionId);
       await tx.insert(s.promotion).values({
-        id: ctx.id('promotion', pr.id), storeId, code: pr.code, type: tv.type, value: tv.value, freeShipping: tv.freeShipping, conditions,
-        startsAt: parseDate(pr.starts), endsAt: parseDate(pr.ends),
-        usageLimit: pr.uselimit ?? null, perCustomerUsageLimit: pr.percust ?? null,
-        priority: pr.prio ?? 0, enabled: true,
+        id: ctx.id('promotion', pr.id), storeId, code: pr.code as string | null, type: tv.type, value: tv.value, freeShipping: tv.freeShipping,
+        discountScope: tv.discountScope, stackOrder: sourceRanks.get(String(pr.id)) ?? null, conditions,
+        startsAt: parseDate(pr.starts as string | null), endsAt: parseDate(pr.ends as string | null),
+        usageLimit: pr.uselimit as number | null, perCustomerUsageLimit: pr.percust as number | null,
+        priority: pr.prio as number, enabled: true,
       });
       promoCount++;
     }
-    if (skippedCredit.length) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion',
-      detail: `account_credit_discount promotions skipped (legacy store-credit mechanism; balances import as loyalty points): ${skippedCredit.join(',')}`,
-      count: skippedCredit.length });
 
     // --- collections (skip root; parent->null if parent is root) ---
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);

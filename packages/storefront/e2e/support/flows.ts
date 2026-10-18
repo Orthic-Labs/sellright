@@ -69,9 +69,12 @@ export async function payAndConfirm(page: Page, code: string): Promise<void> {
 
 /** Add a promo code on the checkout page (the dark order-summary rows). */
 export async function applyPromoAtCheckout(page: Page, code: string): Promise<void> {
-	await page.getByText(/add promo code/i).click();
+	await page.getByRole('button', { name: /^add coupon or credit code$/i }).click();
 	await page.getByPlaceholder(/enter promo code/i).fill(code);
 	await page.getByRole('button', { name: /^apply$/i }).click();
+	// Membership alone can include a rejected code. Only an applied code closes this input.
+	await expect(page.getByRole('button', { name: `Remove ${code}`, exact: true })).toBeVisible();
+	await expect(page.getByPlaceholder(/enter promo code/i)).toBeHidden();
 }
 
 /**

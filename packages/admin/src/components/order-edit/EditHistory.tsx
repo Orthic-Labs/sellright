@@ -29,7 +29,8 @@ export function EditHistory({ code, currency, payments, onChanged }: Props) {
   const [pick, setPick] = useState<Record<string, string>>({});
   const q = useQuery({ queryKey: ['order-edit-context', code], queryFn: () => api.get<EditContext>(`/orders/${encodeURIComponent(code)}/edit/context`) });
   const history = q.data?.history ?? [];
-  if (!history.length) return null;
+  const importedHistory = q.data?.importedHistory ?? [];
+  if (!history.length && !importedHistory.length) return null;
   const settled = payments.filter((p) => p.state === 'Settled');
 
   const run = async (editId: string, action: Action) => {
@@ -83,6 +84,38 @@ export function EditHistory({ code, currency, payments, onChanged }: Props) {
           );
         })}
       </ul>
+      {importedHistory.length > 0 && (
+        <div className={history.length ? 'mt-4' : ''}>
+          <h3 className="text-sm font-medium text-gray-700">Imported history · Read-only</h3>
+          <p className="mt-1 text-xs text-gray-500">Source timestamps shown as recorded; timezone unspecified.</p>
+          <ul className="rule-y rule-gray-100" aria-label="Imported edit history">
+            {importedHistory.map((h) => (
+              <li key={`imported-${h.id}`} className="py-2 text-sm break-words" data-testid={`imported-edit-${h.id}`}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-gray-600">{h.sourceCreatedAtText ?? 'Timestamp unavailable'}</span>
+                  <span className="text-gray-500">Source-recorded price change: {h.priceChange > 0 ? '+' : ''}{money(h.priceChange, currency)}</span>
+                </div>
+                {h.sourceUpdatedAtText && h.sourceUpdatedAtText !== h.sourceCreatedAtText && <div className="text-xs text-gray-500">Updated: {h.sourceUpdatedAtText}</div>}
+                {h.note && <p className="mt-1 whitespace-pre-wrap">{h.note}</p>}
+                {h.lineChanges.length > 0 && <ul className="mt-1 text-gray-600">
+                  {h.lineChanges.map((line, index) => <li key={`${line.lineId ?? 'unmapped'}-${index}`}>{line.label} · Quantity delta: {line.quantityDelta > 0 ? '+' : ''}{line.quantityDelta}</li>)}
+                </ul>}
+                {(['shipping', 'billing'] as const).map(kind => {
+                  const address = h.addressChanges[kind];
+                  return address && <div key={kind} className="mt-1 text-gray-600">
+                    <span className="font-medium">{kind === 'shipping' ? 'Shipping' : 'Billing'} address change recorded</span>
+                    {address.fields.map((field, index) => <div key={`${field.label}-${index}`}>{field.label}: {field.value}</div>)}
+                  </div>;
+                })}
+                {(h.links.refundId || h.links.paymentId) && <div className="mt-1 text-xs text-gray-500 break-all">
+                  {h.links.refundId && <div>Linked refund: {h.links.refundId}</div>}
+                  {h.links.paymentId && <div>Linked payment: {h.links.paymentId}</div>}
+                </div>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </FormSection>
   );
 }

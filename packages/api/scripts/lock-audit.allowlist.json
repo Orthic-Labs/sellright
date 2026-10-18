@@ -23,10 +23,10 @@
     },
     {
       "key": "src/payments/refunds.ts::finalizeRefund",
-      "sequence": "L3:order L5:paymentAttempt L2:license L5:licenseActivation L3:order",
-      "mixed": true,
+      "sequence": "L3:order L5:paymentAttempt L3:order",
+      "mixed": false,
       "orderViolation": true,
-      "why": "STOREKIT §5.8 #8 (refund finalize; order before licence; set pending step 2)"
+      "why": "STOREKIT §5.3/#8: requestRefund, reconcileSezzleRefunds, reconcileRefundAttempt & Stripe runMoney callers acquire the refund order with withLockedSet (L2 licences, L3 order, L4 reservations) before this helper takes the L5 attempt. Its later order write re-takes held L3; licence revocation is shared in revokeRefundLicenses. Syntactic audit does not follow caller lock sets or helper calls."
     }
   ]
 }

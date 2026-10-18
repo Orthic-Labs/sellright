@@ -5,7 +5,7 @@ import { LockSetUnstable, orderIdByCode, withLockedSet } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
-import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
+import { applyPaymentResult, amountDueForOrder, retryPreparedEditSettlement } from '../payments/settle.js';
 import { createPaymentIntent, resolveStripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -14,6 +14,7 @@ import { GatewayPaymentError, ownedOrder } from '../payments/gateway-payment.js'
 import { bindStripePreMint, openStripePreMint, reconcileStripeOrder, claimReconcileSlot } from '../payments/stripe-reconcile.js';
 import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError, runShapeSettlementResponse } from '../payments/policy/host.js';
 import { ReservationConflict } from '../payments/reservation.js';
+import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
 
 /** D13: the same ownership rule gateway-payment uses — a matching receipt
  *  token (x-receipt-token, returned by POST /checkout) or the signed-in
@@ -80,7 +81,6 @@ pay.openapi(
     // z.literal above makes this unreachable for a well-formed request, but keep
     // the provider guard fail-closed in case the route contract changes later.
     if (!provider) return errJson(c, 404, 'PAYMENT_METHOD_UNKNOWN', `unknown payment method: ${method}`);
-    if (!isPaymentMethodEnabled(st.config, method)) return errJson(c, 409, 'PAYMENT_METHOD_DISABLED', `payment method disabled: ${method}`, { extra: { state: 'Disabled' } });
 
     type R =
       | { kind: 'notfound' }
@@ -99,13 +99,33 @@ pay.openapi(
       const prepared = !preId ? { kind: 'notfound' as const } : await withLockedSet(st.id, { kind: 'order', orderId: preId }, async (tx) => {
         const order = await ownsOrder(tx, code, receipt, session);
         if (!order) return { kind: 'notfound' as const };
+        const intentId = typeof token === 'string' ? token : (token as { paymentIntentId?: string } | undefined)?.paymentIntentId;
+        const durable = await retryPreparedEditSettlement(tx, st.id, order.id, { method, ...(intentId ? { providerRef: intentId } : {}) });
+        if (durable) return { kind: 'noop' as const, state: durable.orderState };
+        if (!isPaymentMethodEnabled(st.config, method)) return { kind: 'shaped' as const, status: 409 as const, code: 'PAYMENT_METHOD_DISABLED', message: `payment method disabled: ${method}`, extra: { state: 'Disabled' } };
         // Order editing (G13): an edit that raised the total leaves a Paid /
         // PartiallyRefunded order with a balance; the shopper pays ONLY that.
         const balanceState = isBalanceState(order.state);
         if (order.state !== 'PendingPayment' && !balanceState) return { kind: 'badstate' as const, state: order.state };
         // MONEY-3: charge only what's still owed. Any settled tender already
         // recorded against this order is deducted before gateway capture.
-        const amountDue = await amountDueForOrder(tx, st.id, order.id, order.grandTotal);
+        const { preparedEditTender } = await import('../orders/order-edit-service.js');
+        const editTender = await preparedEditTender(tx, { storeId: st.id, orderId: order.id });
+        await assertNoPendingOrderEdit(tx, st.id, order.id, { allowEditId: editTender?.editId });
+        const amountDue = editTender?.amount ?? await amountDueForOrder(tx, st.id, order.id, order.grandTotal);
+        let paymentAttemptId: string | undefined;
+        if (editTender) {
+          const intentId = typeof token === 'string' ? token : (token as { paymentIntentId?: string } | undefined)?.paymentIntentId;
+          const [attempt] = intentId ? await tx.select().from(s.paymentAttempt).where(and(
+            eq(s.paymentAttempt.storeId, st.id), eq(s.paymentAttempt.orderId, order.id),
+            eq(s.paymentAttempt.method, 'stripe'), eq(s.paymentAttempt.operation, 'intent'), eq(s.paymentAttempt.providerRef, intentId),
+          )).limit(1) : [];
+          const [stage] = await tx.select({ settlement: s.orderEdit.settlement }).from(s.orderEdit).where(and(
+            eq(s.orderEdit.storeId, st.id), eq(s.orderEdit.orderId, order.id), eq(s.orderEdit.id, editTender.editId),
+          )).limit(1);
+          if (!attempt || (stage?.settlement as { paymentAttemptId?: string } | null)?.paymentAttemptId !== attempt.id) return { kind: 'badstate' as const, state: order.state };
+          paymentAttemptId = attempt.id;
+        }
         if (amountDue <= 0) return balanceState ? { kind: 'badstate' as const, state: order.state } : { kind: 'nodue' as const, state: order.state };
         // A balance payment is a SECOND payment on the order, so the default
         // per-order claim (already taken by the first payment) must not
@@ -115,15 +135,18 @@ pay.openapi(
         // balance. Replays of the SAME attempt keep the same count, so they
         // still dedupe; a settled balance moves the count on.
         if (balanceState) {
-          claimKey = `${baseClaimKey}:balance:${await settledTenderCount(tx, order.id)}`;
+          claimKey = editTender ? `${baseClaimKey}:edit:${editTender.editId}` : `${baseClaimKey}:balance:${await settledTenderCount(tx, order.id)}`;
         }
         const [existing] = await tx
           .select({ id: s.processedEvent.id })
           .from(s.processedEvent)
           .where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')))
           .limit(1);
-        if (existing) return { kind: 'noop' as const, state: order.state };
-        return { kind: 'ready' as const, order, amountDue };
+        if (existing) {
+          const replay = await retryPreparedEditSettlement(tx, st.id, order.id, { method, paymentAttemptId });
+          return { kind: 'noop' as const, state: replay?.orderState ?? order.state };
+        }
+        return { kind: 'ready' as const, order, amountDue, paymentAttemptId };
       });
       if (prepared.kind !== 'ready') return prepared;
 
@@ -155,7 +178,10 @@ pay.openapi(
           .values({ id: claimKey, storeId: st.id, type: 'payment' })
           .onConflictDoNothing()
           .returning({ id: s.processedEvent.id });
-        if (claimed.length === 0) return { kind: 'noop', state: order.state };
+        if (claimed.length === 0) {
+          const replay = await retryPreparedEditSettlement(tx, st.id, order.id, { method, paymentAttemptId: prepared.paymentAttemptId, ...(result.providerRef ? { providerRef: result.providerRef } : {}) });
+          return { kind: 'noop', state: replay?.orderState ?? order.state };
+        }
 
         const applied = await applyPaymentResult(tx, {
           storeId: st.id,
@@ -163,6 +189,7 @@ pay.openapi(
           method: provider.method,
           result,
           amount: prepared.amountDue,
+          paymentAttemptId: prepared.paymentAttemptId,
         });
         // PAYMENT-TIMING §4.2: the money is recorded above. The policy may only shape the response
         // (for example a 409 when an issued entitlement would now fail revalidation); it never rolls back.
@@ -188,7 +215,11 @@ pay.openapi(
         if (cancelledButSettled) return { kind: 'badstate', state: 'Cancelled' };
         return { kind: 'ok', state: applied.orderState, payment: result.state };
       }, { mustCommit: true }); // X-45: the gateway has already charged; this record must commit.
-    }).catch((e: unknown) => { if (e instanceof LockSetUnstable) return 'retry' as const; throw e; });
+    }).catch((e: unknown) => {
+      if (e instanceof LockSetUnstable) return 'retry' as const;
+      if (e instanceof Error && 'code' in e && e.code === 'ORDER_EDIT_PENDING') return { kind: 'shaped' as const, status: 409 as const, code: 'ORDER_EDIT_PENDING', message: e.message };
+      throw e;
+    });
 
     if (out === 'retry') return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
     if (out.kind === 'shaped') return errJson(c, out.status, out.code, out.message, { extra: { state: out.extra?.state ?? out.code } });
@@ -245,14 +276,18 @@ pay.openapi(
         await checkPaymentAttempt(tx, held, { provider: 'stripe', purpose: isBalanceState(o.state) ? 'balance' : 'checkout', order: o });
         // MONEY-3: mint the intent for what's actually still owed, never the raw
         // order total, so an existing settled tender cannot be charged twice.
-        const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
+        const { preparedEditTender } = await import('../orders/order-edit-service.js');
+        const editTender = await preparedEditTender(tx, { storeId: st.id, orderId: o.id });
+        await assertNoPendingOrderEdit(tx, st.id, o.id, { allowEditId: editTender?.editId });
+        const amountDue = editTender?.amount ?? await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
+        if (editTender && editTender.currency !== o.currency) throw new GatewayPaymentError(409, 'Order edit tender currency differs');
         // A balance (Paid / PartiallyRefunded) is its own attempt per settled
         // tender; see the key comment below.
         const balanceTenders = isBalanceState(o.state) ? await settledTenderCount(tx, o.id) : null;
-        return { order: o, amountDue, balanceTenders };
+        return { order: o, amountDue, balanceTenders, editTender };
       });
       if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
-      const { order, amountDue, balanceTenders } = prepared;
+      const { order, amountDue, balanceTenders, editTender } = prepared;
       if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
       if (amountDue <= 0) {
         // A Paid order with nothing owed is simply not payable (no balance); an
@@ -275,7 +310,7 @@ pay.openapi(
       // PI inside its 24h window and the shopper could never pay the new balance.
       // A replay that resolves to an already-settled attempt is skipped the same
       // way a cancelled one is.
-      const base = balanceTenders === null ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:bal${balanceTenders}`;
+      const base = editTender ? `pi:${order.id}:edit:${editTender.editId}:${amountDue}` : balanceTenders === null ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:bal${balanceTenders}`;
       for (let n = 0; n < 5; n++) {
         const key = n === 0 ? base : `${base}:${n}`;
         // PAYMENT-TIMING §4.2 (X-9): the pre-mint attempt row is written under the order set, after the
@@ -284,16 +319,31 @@ pay.openapi(
         const pendingId = await withLockedSet(st.id, { kind: 'order', orderId: order.id }, async (tx) => {
           const [cur] = await tx.select({ state: s.order.state }).from(s.order).where(eq(s.order.id, order.id)).limit(1).for('update');
           if (!cur || (cur.state !== 'PendingPayment' && !isBalanceState(cur.state))) return null;
-          return (await openStripePreMint(tx, st.id, { orderId: order.id, iterationKey: key, amount: amountDue, currency: order.currency, mode })).id;
+          const { preparedEditTender, bindPreparedEditTender } = await import('../orders/order-edit-service.js');
+          const currentTender = await preparedEditTender(tx, { storeId: st.id, orderId: order.id });
+          await assertNoPendingOrderEdit(tx, st.id, order.id, { allowEditId: editTender?.editId });
+          if (editTender && (currentTender?.editId !== editTender.editId || currentTender.amount !== amountDue || currentTender.currency !== order.currency)) return null;
+          const pending = await openStripePreMint(tx, st.id, { orderId: order.id, iterationKey: key, amount: amountDue, currency: order.currency, mode });
+          if (editTender) await bindPreparedEditTender(tx, { storeId: st.id, orderId: order.id, editId: editTender.editId, paymentAttemptId: pending.id });
+          return pending.id;
         });
         if (!pendingId) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
         const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: key });
         // Bind the minted PI to its pre-mint row (or to the attempt that already tracks it).
-        const tracked = await withStore(st.id, (tx) => bindStripePreMint(tx, st.id, { pendingAttemptId: pendingId, orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
+        const tracked = await withLockedSet(st.id, { kind: 'order', orderId: order.id }, async tx => {
+          const tracked = await bindStripePreMint(tx, st.id, { pendingAttemptId: pendingId, orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode });
+          if (editTender) {
+            const { bindPreparedEditTender } = await import('../orders/order-edit-service.js');
+            await bindPreparedEditTender(tx, { storeId: st.id, orderId: order.id, editId: editTender.editId, paymentAttemptId: tracked.id });
+          }
+          return tracked;
+        });
         if (tracked.status !== 'cancelled' && !(balanceTenders !== null && tracked.status === 'settled')) return c.json(intent, 200);
       }
       return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
     }).catch((e: unknown) => {
+      if (e instanceof Error && 'code' in e && e.code === 'ORDER_EDIT_PENDING') return errJson(c, 409, 'ORDER_EDIT_PENDING', e.message, { extra: { state: 'OrderEditPending' } });
+      if (e instanceof GatewayPaymentError) return errJson(c, e.status, e.code ?? 'ORDER_NOT_PAYABLE', e.message, { extra: { state: 'OrderEditPending' } });
       if (e instanceof LockSetUnstable) return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
       if (e instanceof PaymentPolicyVetoError) return errJson(c, 409, e.veto.code, e.veto.message, { extra: { state: e.veto.extra?.state ?? 'PolicyVeto' } });
       if (e instanceof PaymentPolicyUnavailableError) return errJson(c, 503, 'PAYMENT_POLICY_UNAVAILABLE', 'Payment is temporarily unavailable; retry shortly');

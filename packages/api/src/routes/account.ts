@@ -9,7 +9,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
@@ -260,7 +260,7 @@ account.openapi(
         discountTotal: z.number().int(), grandTotal: z.number().int(),
         placedAt: z.string().nullable(),
         shippingAddress: z.any(), billingAddress: z.any(),
-        promotionCode: z.string().nullable(),
+        promotionCode: z.string().nullable(), couponCodes: z.array(z.string()),
         payments: z.array(z.object({
           method: z.string(), state: z.string(), amount: z.number().int(),
           providerRef: z.string().nullable(), errorMessage: z.string().nullable(), createdAt: z.string(),
@@ -294,8 +294,9 @@ account.openapi(
       const payments = await loadOrderPayments(tx, order.id);
       const fulfillments = await loadOrderFulfillments(tx, order.id);
       const promotionCode = await loadOrderPromotionCode(tx, order.promotionId);
+      const couponCodes = await loadOrderCouponCodes(tx, order);
       const statusFacts = await loadOrderStatusFacts(tx, order);
-      return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode, statusFacts };
+      return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode, couponCodes, statusFacts };
     });
     if (out.kind !== 'ok') return out.kind === 'unauth' ? errJson(c, 404, 'NOT_AUTHENTICATED', 'not authenticated') : errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json({
@@ -304,7 +305,7 @@ account.openapi(
       discountTotal: out.order.discountTotal, grandTotal: out.order.grandTotal,
       placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,
       shippingAddress: out.order.shippingAddress ?? null, billingAddress: out.order.billingAddress ?? null,
-      promotionCode: out.promotionCode,
+      promotionCode: out.promotionCode, couponCodes: out.couponCodes,
       payments: out.payments, fulfillments: out.fulfillments, lines: out.lines,
     }, 200);
   },

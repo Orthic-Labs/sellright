@@ -26,25 +26,17 @@ const num = (value: unknown): number => {
 const netPriceOf = (gross: number, taxRate: number): number => gross / ((100 + taxRate) / 100);
 const grossPriceOf = (net: number, taxRate: number): number => net * ((100 + taxRate) / 100);
 
-/**
- * Reproduce Vendure's DefaultMoneyStrategy order-line economics from the fields
- * persisted on `order_line`. In Vendure, proratedLinePriceWithTax is the true
- * economic line value used for refunds: item promotions and distributed order
- * promotions are both represented in `adjustments` and tax in `taxLines`.
- *
- * This intentionally mirrors Vendure's Math.round(value * quantity) behavior.
- */
-export function vendureLineMoney(input: VendureLineSnapshotInput): ImportedLineMoney {
+function linePrices(input: VendureLineSnapshotInput) {
   const quantity = Math.max(0, Math.trunc(input.quantity));
-  const placedQuantity = Math.max(quantity, Math.trunc(input.orderPlacedQuantity || quantity));
+  const placedQuantity = Math.max(quantity, Math.trunc(input.orderPlacedQuantity || 0));
   const taxRate = input.taxLines.reduce((sum, line) => sum + num(line.taxRate), 0);
 
   let adjustmentPerUnit = 0;
   if (quantity > 0) {
     for (const adjustment of input.adjustments) {
-      const type = String(adjustment.type ?? '');
-      const basis = type === 'PROMOTION' ? quantity : Math.max(1, placedQuantity);
-      adjustmentPerUnit += num(adjustment.amount) / basis;
+      // Vendure 3.7.3 OrderLine.getUnitAdjustmentsTotal applies this same
+      // divisor to every adjustment type, including item-level PROMOTION.
+      adjustmentPerUnit += num(adjustment.amount) / placedQuantity;
     }
   }
 
@@ -52,6 +44,18 @@ export function vendureLineMoney(input: VendureLineSnapshotInput): ImportedLineM
   const unitNet = input.listPriceIncludesTax ? netPriceOf(input.listPrice, taxRate) : input.listPrice;
   const proratedUnitNet = input.listPriceIncludesTax ? netPriceOf(adjustedListPrice, taxRate) : adjustedListPrice;
   const proratedUnitGross = input.listPriceIncludesTax ? adjustedListPrice : grossPriceOf(adjustedListPrice, taxRate);
+
+  return { quantity, unitNet, proratedUnitNet, proratedUnitGross };
+}
+
+/**
+ * Reproduce Vendure's DefaultMoneyStrategy line projections from persisted
+ * `order_line` fields. Line totals round the unrounded prorated unit × current
+ * quantity. Cash refunds instead multiply the independently rounded
+ * proratedUnitPriceWithTax by refunded quantity; see the separate helper below.
+ */
+export function vendureLineMoney(input: VendureLineSnapshotInput): ImportedLineMoney {
+  const { quantity, unitNet, proratedUnitNet, proratedUnitGross } = linePrices(input);
 
   const unitPrice = Math.round(unitNet);
   const lineSubtotal = Math.round(unitNet * quantity);
@@ -64,4 +68,14 @@ export function vendureLineMoney(input: VendureLineSnapshotInput): ImportedLineM
   const lineDiscount = lineSubtotal - proratedLineNet;
 
   return { unitPrice, lineSubtotal, lineDiscount, lineTax, lineTotal };
+}
+
+/**
+ * Vendure OrderLine.proratedUnitPriceWithTax, rounded before refund quantity
+ * multiplication. PaymentService.getRefundAmount includes this basis only for
+ * lines with positive orderPlacedQuantity; the caller owns that eligibility test.
+ * This is cash-refund math, separate from exact account-credit unit allocations.
+ */
+export function vendureProratedUnitPriceWithTax(input: VendureLineSnapshotInput): number {
+  return Math.round(linePrices(input).proratedUnitGross);
 }

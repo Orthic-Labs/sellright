@@ -147,7 +147,7 @@ test.describe('edit a paid order', () => {
 		// someone else edits the same order after the preview was computed
 		await api.post(`/orders/${code}/edit/commit`, await (async () => {
 			const pv = await api.post(`/orders/${code}/edit/preview`, { ops: [{ op: 'add_adjustment', label: 'Other staff', amount: 100 }] });
-			return { ops: [{ op: 'add_adjustment', label: 'Other staff', amount: 100 }], expectedGrandTotal: pv.after.grandTotal, expectedBalance: pv.balance.amountDue, idempotencyKey: crypto.randomUUID(), settlement: { type: 'leave_due' } };
+			return { ops: [{ op: 'add_adjustment', label: 'Other staff', amount: 100 }], expectedGrandTotal: pv.after.grandTotal, expectedBalance: pv.balance.amountDue, previewAcceptanceHash: pv.previewAcceptanceHash, idempotencyKey: crypto.randomUUID(), settlement: { type: 'leave_due' } };
 		})());
 
 		await review.getByRole('button', { name: 'Commit changes' }).click();

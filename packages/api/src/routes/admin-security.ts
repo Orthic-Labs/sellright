@@ -10,7 +10,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
-import { getAdminCredentialsById, mutateAdminSecondFactor } from '../auth/admin-staff.js';
+import { AdminFactorMutationError, getAdminCredentialsById, mutateAdminSecondFactor } from '../auth/admin-staff.js';
 import { changeAdminPassword, type AdminPrincipal } from '../auth/admin-session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { remainingRecoveryCodes, verifySecondFactor, verifyTotpOnce } from '../auth/second-factor.js';
@@ -105,7 +105,8 @@ adminSecurity.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/2fa/disable', summary: 'Disable 2FA (current password + a TOTP or recovery code)',
     request: { body: { content: J(z.object({ code: z.string(), password: z.string().min(1) })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized / wrong password', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: tooMany },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized / wrong password', ...errBody },
+      403: { description: '2FA required by policy', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: tooMany },
   }),
   async (c) => guard(c, async () => {
     const { admin, token } = await requireAdmin(c);
@@ -115,11 +116,18 @@ adminSecurity.openapi(
     if (!creds?.totpSecret) return c.json({ enabled: false }, 200);
     const gate = await credentialGate(c, admin);
     if (!(await verifyPassword(password, creds.passwordHash))) await gate.fail('invalid password');
-    if (!(await verifySecondFactor(admin.id, creds.totpSecret, code))) await gate.fail('invalid code', 409);
-    await gate.ok();
-    if (!(await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, action: 'disable' }))) {
-      throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    try {
+      if (!(await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, action: 'disable', code }))) {
+        throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+      }
+    } catch (error) {
+      if (error instanceof AdminFactorMutationError) {
+        if (error.code === 'TOTP_REQUIRED') throw new HttpError(403, '2FA is required by security policy', 'TOTP_REQUIRED');
+        await gate.fail('invalid code', 409);
+      }
+      throw error;
     }
+    await gate.ok();
     await audit(c, admin, '2fa_disable');
     return c.json({ enabled: false }, 200);
   }),

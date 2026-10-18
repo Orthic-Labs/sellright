@@ -1,5 +1,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { refundQuantity, refundStockEffectsProjection, refundMerchandiseCompletionProjection } from '../payments/refunds.js';
+import { refundUnitBases, refundLineCashAmount, availableCreditRefundUnits, refundCreditProjection } from '../payments/refund-credit.js';
+import { readCurrentCreditEvidence } from '../account-credit/service.js';
 import { hasUnresolvedPayment } from '../payments/hold.js';
+import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
+import { OrderEditError } from '../orders/order-edit.js';
 import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
@@ -200,6 +205,8 @@ admin.openapi(
       if (!o) return null;
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       const payments = await tx.select().from(s.payment).where(eq(s.payment.orderId, o.id)).orderBy(desc(s.payment.createdAt));
+      const postedCredit = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
+        eq(s.accountCreditTransaction.orderId, o.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED')));
       const fulfillments = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
       const fulfillmentLines = fulfillments.length
         ? await tx.select().from(s.fulfillmentLine).where(inArray(s.fulfillmentLine.fulfillmentId, fulfillments.map((f) => f.id)))
@@ -208,6 +215,31 @@ admin.openapi(
       const refundLines = refunds.length
         ? await tx.select().from(s.refundLine).where(inArray(s.refundLine.refundId, refunds.map((r) => r.id)))
         : [];
+      const refundQuotes = new Map<string, { unitPrice: number | null; cashAmounts: number[]; quantity: number; totalQuantity: number }>();
+      try {
+        const evidence = await readCurrentCreditEvidence(tx, { storeId: st.storeId, orderId: o.id });
+        const units = refundUnitBases(o, lines, evidence ?? undefined, evidence?.pricingSources);
+        const reserved = refunds.filter(refund => refund.state !== 'Failed').map(refund => {
+          const selected = refundLines.filter(line => line.refundId === refund.id);
+          const projection = refundCreditProjection(refund.metadata);
+          return { metadata: refund.metadata, state: refund.state, lines: selected,
+            restored: projection?.state === 'posted' || projection?.state === 'not_applicable' ||
+              selected.every(line => evidence?.history.some(row => row.refundId === refund.id && row.orderLineId === line.orderLineId)) };
+        });
+        const eligible = evidence ? availableCreditRefundUnits(o, lines, evidence, reserved, evidence.pricingSources) : null;
+        for (const line of lines) {
+          const quantity = eligible?.get(line.id)?.length ?? Math.max(0, refundQuantity(line) - reserved.reduce((sum, refund) =>
+            sum + refund.lines.filter(item => item.orderLineId === line.id).reduce((n, item) => n + item.quantity, 0), 0));
+          const basis = units.get(line.id) ?? null;
+          const positions = eligible?.get(line.id);
+          const available = Array.isArray(basis) && positions ? positions.map(position => basis[position]!) : basis;
+          const cashAmounts = Array.from({ length: quantity }, (_, index) => refundLineCashAmount(line, index + 1, available, postedCredit.length > 0));
+          const first = cashAmounts[0];
+          const uniform = first !== undefined && cashAmounts.every((amount, index) => amount === first * (index + 1));
+          refundQuotes.set(line.id, { unitPrice: uniform ? first : null, cashAmounts, quantity,
+            totalQuantity: Array.isArray(basis) ? basis.length : refundQuantity(line) });
+        }
+      } catch { /* Read remains available; refund admission refuses unproven money. */ }
       // Locations feed the partial-fulfillment picker — enabled-only, this
       // store's own set (a single-location store still gets its default row).
       const locations = await tx.select({ id: s.location.id, name: s.location.name, code: s.location.code, isDefault: s.location.isDefault })
@@ -236,7 +268,11 @@ admin.openapi(
         // `id` is the order_line id the refund/return endpoints key their
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.
-        lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
+        hasPostedCredit: postedCredit.length === 1,
+        lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
+          refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
+          refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
+          id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
         // `state` here is the individual PAYMENT record's wire state (Settled
         // -> captured — BREAKING, pre-1.0), distinct from the order-level
         // `paymentStatus` above. See orders/status.ts.
@@ -250,6 +286,9 @@ admin.openapi(
         // exactly what was refunded/restocked, not just a lump order-level sum.
         refunds: refunds.map((r) => ({
           id: r.id, state: r.state, amount: r.amount, itemsAmount: r.itemsAmount, shippingAmount: r.shippingAmount,
+          creditRestoration: refundCreditProjection(r.metadata),
+          stockEffects: refundStockEffectsProjection(r.metadata),
+          merchandiseCompletion: refundMerchandiseCompletionProjection(r.metadata),
           reason: r.reason, createdAt: r.createdAt.toISOString(),
           lines: refundLines.filter((rl) => rl.refundId === r.id).map((rl) => ({ orderLineId: rl.orderLineId, quantity: rl.quantity, amount: rl.amount, restock: rl.restock })),
         })),
@@ -636,6 +675,14 @@ admin.openapi(
       if (await hasUnresolvedPayment(tx, o.id)) throw new HttpError(409, 'Resolve the pending payment before cancelling');
       if (o.state !== 'PendingPayment') return { kind: 'paid' as const, state: o.state };
       if (!canTransition(o.state as OrderState, 'Cancelled')) return { kind: 'badstate' as const, state: o.state };
+      try {
+        await assertNoPendingOrderEdit(tx, st.storeId, o.id);
+      } catch (error) {
+        if (error instanceof OrderEditError && error.code === 'ORDER_EDIT_PENDING') {
+          throw new HttpError(error.status, error.message, error.code);
+        }
+        throw error;
+      }
       // Release stock still reserved for unshipped units. Shipped units already
       // had their allocation released (see fulfill), so release = unfulfilled qty.
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));

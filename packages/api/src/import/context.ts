@@ -24,6 +24,26 @@ export interface ManifestExclusion {
   sourceValues?: string[];
 }
 
+/** Private observation of one source active-query sequence; ties have no source secondary key. */
+export interface PromotionSequenceProvenance {
+  version: 1;
+  authority: 'observed-active-query-sequence';
+  tieSemantics: 'source-secondary-order-unspecified';
+  query: string;
+  sourceServiceSha256: string;
+  queryDigest: string;
+  sourceKey: string;
+  channelId: number;
+  sourceIdentity: Record<string, unknown>;
+  orderedSourceIds: string[];
+  repeatedSourceIds: string[];
+  tiedPriorities: number[];
+  repeatMatches: boolean;
+  entries: Array<{ sourceId: string; priority: number; stackOrder: number | null; sourceRecord: string;
+    actions: unknown; conditions: unknown; translationRecords: string[] }>;
+  captureDigest: string;
+}
+
 export interface ImportContext {
   tx: Tx;
   source: PoolClient;
@@ -40,4 +60,6 @@ export interface ImportContext {
   exclusions: ManifestExclusion[];
   /** Complete private account mapping, including customers without sessions. */
   rollbackAuthBaseline?: RollbackAuthBaseline;
+  /** Retained only in private migration manifest; shared with credit promotion import. */
+  promotionSequence?: PromotionSequenceProvenance;
 }

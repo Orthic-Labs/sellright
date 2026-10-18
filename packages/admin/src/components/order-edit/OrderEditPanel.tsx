@@ -5,7 +5,7 @@ import { api, ApiError } from '../../api';
 import { useToast } from '../Toast';
 import { money } from '../../lib/format';
 import { FormSection, Field, InlineAlert, Spinner, Loading, ErrorState } from '../ui';
-import { buildOps, parseCents, refundSelection, WARNING_TEXT } from './ops';
+import { buildOps, couponCodesAfterOps, parseCents, refundSelection, WARNING_TEXT } from './ops';
 import {
   emptyStaged, type AddressForm, type CommitResponse, type EditContext, type Preview, type SettlementChoice, type StagedEdit,
 } from './types';
@@ -115,10 +115,11 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
 
   const commit = useMutation({
     mutationFn: () => {
-      const sig = JSON.stringify({ ops, settlement, reason, notify, total: pv!.after.grandTotal });
+      if (!pv || preview.isFetching || preview.error || !/^[0-9a-f]{64}$/.test(pv.previewAcceptanceHash ?? '')) throw new Error('Review a current preview before committing.');
+      const sig = JSON.stringify({ ops, settlement, reason, notify, total: pv.after.grandTotal, previewAcceptanceHash: pv.previewAcceptanceHash });
       if (keyRef.current.sig !== sig) keyRef.current = { sig, key: crypto.randomUUID() };
       return api.post<CommitResponse>(`/orders/${encodeURIComponent(code)}/edit/commit`, {
-        ops, expectedGrandTotal: pv!.after.grandTotal, expectedBalance: pv!.balance.amountDue, idempotencyKey: keyRef.current.key,
+        ops, expectedGrandTotal: pv.after.grandTotal, expectedBalance: pv.balance.amountDue, previewAcceptanceHash: pv.previewAcceptanceHash, idempotencyKey: keyRef.current.key,
         settlement, notifyCustomer: notify, reason: reason.trim() || undefined,
       });
     },
@@ -129,7 +130,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
       onCommitted();
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code === 'PREVIEW_STALE') { toast.error('Order changed — preview refreshed', 'Review the new totals and commit again.'); preview.refetch(); return; }
+      if (e instanceof ApiError && e.code === 'PREVIEW_STALE') { toast.error('Order changed — preview refreshed', 'Review the new preview and commit again.'); preview.refetch(); return; }
       toast.error('Edit failed', e instanceof Error ? e.message : 'unexpected error');
     },
   });
@@ -147,11 +148,13 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
   const diffFor = (id: string) => pv?.lines.find((l) => l.lineId === id);
   const refundSel = refundSelection(pv?.refund ?? null, -due, settlement?.type === 'refund_now' ? (settlement.paymentId ?? '') : '');
   const needsSettlement = !!pv && due !== 0;
-  const canCommit = !!pv && ops.length > 0 && pv.stockOk && (!needsSettlement || !!settlement)
+  const canCommit = !!pv && !preview.isFetching && !preview.error && /^[0-9a-f]{64}$/.test(pv.previewAcceptanceHash ?? '') && ops.length > 0 && pv.stockOk && (!needsSettlement || !!settlement)
     && !(settlementType === 'record_payment' && payAmount.trim() !== '' && parseCents(payAmount) == null)
     && !(settlement?.type === 'refund_now' && !refundSel.ok)
     && !(settlement?.type === 'send_pay_link' && !pv.recipientEmail);
   const set = (patch: Partial<StagedEdit>) => setSt((s) => ({ ...s, ...patch }));
+  const couponCodes = pv?.couponCodes ?? couponCodesAfterOps(ctx.couponCodes ?? [], st.couponOps);
+  const couponExists = couponCodes.some(value => value.toLowerCase() === couponInput.toLowerCase());
 
   const removeLine = (id: string, min: number) => set({ qty: { ...st.qty, [id]: min } });
 
@@ -218,13 +221,18 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
 
       <FormSection title="Discount, shipping & adjustments">
         <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="Coupon" hint={pv?.promotion ? `Applied: ${pv.promotion.code ?? 'automatic'} (${pv.promotion.type === 'percentage' ? `${pv.promotion.value}%` : pv.promotion.type === 'fixed' ? money(pv.promotion.value, currency) : 'free shipping'})` : 'No coupon on this order'}>
+          <Field label="Coupons" hint={couponCodes.length ? 'Codes on this order' : 'No coupon codes on this order'}>
+            {couponCodes.length > 0 && <ul className="stack-y-1 mb-2" aria-label="Coupon codes">
+              {couponCodes.map(couponCode => <li key={couponCode.toLowerCase()} className="flex items-center justify-between gap-2 text-sm">
+                <span className="whitespace-pre-wrap break-all">{couponCode}</span>
+                <button type="button" className="btn-ghost btn-sm" aria-label={`Remove coupon ${couponCode}`} onClick={() => setSt(s => ({ ...s, couponOps: [...s.couponOps, { op: 'remove_coupon', code: couponCode }] }))}>Remove</button>
+              </li>)}
+            </ul>}
             <div className="flex gap-2">
-              <input className="input" value={couponInput} onChange={(e) => setCouponInput(e.target.value)} placeholder="Code" aria-label="Coupon code" />
-              <button type="button" className="btn-ghost shrink-0" disabled={!couponInput.trim()} onClick={() => { set({ coupon: { mode: 'apply', code: couponInput.trim() } }); }}>Apply</button>
-              <button type="button" className="btn-ghost shrink-0" onClick={() => { set({ coupon: { mode: 'remove', code: '' } }); setCouponInput(''); }}>Remove</button>
+              <input className="input" value={couponInput} maxLength={255} onChange={(e) => setCouponInput(e.target.value)} placeholder="Code" aria-label="Coupon code" />
+              <button type="button" className="btn-ghost shrink-0" disabled={!couponInput.length || couponInput.length > 255 || couponExists} onClick={() => { setSt(s => ({ ...s, couponOps: [...s.couponOps, { op: 'apply_coupon', code: couponInput }] })); setCouponInput(''); }}>Apply</button>
             </div>
-            {st.coupon.mode !== 'keep' && <div className="mt-1 text-xs text-gray-500">{st.coupon.mode === 'remove' ? 'Coupon will be removed.' : `Will apply ${st.coupon.code}.`} <button type="button" className="underline" onClick={() => set({ coupon: { mode: 'keep', code: '' } })}>undo</button></div>}
+            {st.couponOps.length > 0 && <button type="button" className="mt-1 text-xs text-gray-500 underline" onClick={() => set({ couponOps: [] })}>Undo coupon changes</button>}
           </Field>
           <Field label="Shipping" hint={`Currently ${money(ctx.shipping.amount, currency)}${ctx.shipping.override ? ' (custom)' : ''}`}>
             <select className="input" aria-label="Shipping" value={st.shipping.mode === 'method' ? `m:${st.shipping.code}` : st.shipping.mode}
@@ -291,6 +299,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
         <FormSection title="Review and settle" description="What this edit does to the order, and how to settle the difference.">
           {preview.error ? <InlineAlert tone="critical">{(preview.error as Error).message}</InlineAlert> : !pv ? <Loading label="Calculating" /> : (
             <div className="stack-y-4">
+              {!/^[0-9a-f]{64}$/.test(pv.previewAcceptanceHash ?? '') && <InlineAlert tone="critical">Refresh this preview before committing. <button type="button" className="underline" disabled={preview.isFetching} onClick={() => preview.refetch()}>Refresh preview</button></InlineAlert>}
               {pv.warnings.map((w) => <InlineAlert key={w} tone="attention">{WARNING_TEXT[w] ?? w}</InlineAlert>)}
               {pv.address.shipping.countryChanged && <InlineAlert tone="info">The shipping country changed, so tax and shipping eligibility were recalculated.</InlineAlert>}
               {!pv.stockOk && <InlineAlert tone="critical">Not enough stock: {pv.stock.filter((x) => !x.ok).map((x) => `${x.sku} (need ${x.delta}, ${x.available ?? 0} available)`).join(', ')}.</InlineAlert>}

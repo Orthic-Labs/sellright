@@ -25,7 +25,7 @@
     "audit:dead-code": "knip --reporter json",
     "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
     "deps:check": "pnpm outdated -r || true; pnpm --dir packages/admin outdated || true",
-    "deps:audit": "pnpm audit --prod && pnpm --dir packages/admin audit --prod",
+    "deps:audit": "pnpm audit && pnpm --dir packages/admin audit",
     "deps:update": "pnpm up -r && pnpm --dir packages/admin up",
     "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest",
     "test:sdk-packed": "pnpm --filter @sellright/sample-plugin test"

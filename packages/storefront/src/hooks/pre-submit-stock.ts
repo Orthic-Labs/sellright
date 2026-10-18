@@ -1,4 +1,5 @@
 import { CartService, type CartLockScope } from '~/services/CartService';
+import type { ServerCart } from '~/sellright/types/cart';
 
 /** Thrown when the live pre-submit read shows a cart line that is no longer available. */
 export class PreSubmitStockError extends Error {
@@ -13,6 +14,9 @@ export interface CheckoutSnapshot {
 	token: string;
 	revision: number;
 	status: string;
+	quoteHash?: string;
+	/** Exact stock-validated response, used to display a changed quote. */
+	quote?: ServerCart;
 }
 
 /**
@@ -40,7 +44,8 @@ export const refreshStockBeforeSubmit = async (scope?: CartLockScope): Promise<C
 	// Checkout passes the scope of the lock it already holds (the lock is not re-entrant, so the public read would
 	// wait on itself); an independent caller passes none and takes the lock for this one read.
 	const fresh = scope ? await scope.readFresh() : await CartService.readFresh();
-	const snapshot: CheckoutSnapshot = { token: fresh.token, revision: fresh.revision, status: fresh.status };
+	const snapshot: CheckoutSnapshot = { token: fresh.token, revision: fresh.revision, status: fresh.status,
+		quoteHash: fresh.quoteHash, quote: fresh };
 	if (fresh.status === 'converted') return snapshot;
 	const lines = fresh.lines ?? [];
 	if (lines.length === 0) throw new PreSubmitStockError('Your cart is empty. Please add items before placing an order.');

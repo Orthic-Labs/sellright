@@ -16,13 +16,13 @@
  * disputes need human handling — we record + alert, never auto-cancel.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { bodyLimit } from 'hono/body-limit';
 import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
-import { DB_ACCOUNT_ID, resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
+import { resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
 import { recordDispute } from '../disputes/disputes.js';
 import { J, errBody, guard, requireAdmin, requireStore } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
@@ -62,20 +62,19 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
   const storeId = c.req.param('storeId');
   if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'unknown account' }, 404);
   const accountId = c.req.param('accountId');
-  // A DB-backed (one-click install) account has one credential set per mode
-  // and resolveGatewayAccount requires the mode for it — without this the
-  // route 404'd every DB-account chargeback. The signature selects the mode:
-  // only the mode whose signing key verifies is accepted.
+  // Every named or DB-backed account can have distinct mode credentials.
+  // Exactly one authenticated identity must own this callback.
   const candidates: GatewayAccount[] = [];
-  for (const mode of accountId === DB_ACCOUNT_ID ? (['live', 'test'] as const) : [undefined]) {
+  for (const mode of ['live', 'test'] as const) {
     try { candidates.push(await resolveGatewayAccount(storeId, 'nmi', accountId, mode)); } catch { /* not configured */ }
   }
-  if (!candidates.length) return c.json({ error: 'unknown account' }, 404);
+  if (!candidates.length) return c.json({ error: 'invalid signature' }, 401);
   const raw = await c.req.text();
-  const account = candidates.find((a) => verifyNmiSignature(raw, c.req.header('webhook-signature'), a.privateKey ?? ''));
-  if (!account) {
+  const verified = candidates.filter((a) => verifyNmiSignature(raw, c.req.header('webhook-signature'), a.privateKey ?? ''));
+  if (verified.length !== 1) {
     return c.json({ error: 'invalid signature' }, 401);
   }
+  const account = verified[0]!;
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return c.json({ error: 'invalid event' }, 400); }
   const body = NmiEvent.safeParse(parsed);
@@ -87,7 +86,9 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
     // Idempotency at the EVENT level too: a replayed batch event acks without
     // re-scanning. Dispute-level dedupe in recordDispute covers per-chargeback
     // retries even when event ids differ.
-    const eventId = body.data.event_id ? `nmi:${storeId}:${body.data.event_id}` : null;
+    const eventId = body.data.event_id ? `nmi:v2:${createHash('sha256').update(JSON.stringify(
+      ['nmi-event-v2', storeId, account.accountId, account.mode, body.data.event_id],
+    )).digest('hex')}` : null;
     if (eventId) {
       const claimed = await tx.insert(s.processedEvent)
         .values({ id: eventId, storeId, type: body.data.event_type! })
@@ -101,7 +102,7 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
       if (!transactionId) { skipped++; continue; }
       // The chargeback id IS the original gateway transaction id (DD parity) —
       // link it back to our payment/order ledger row.
-      const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
+      const payments = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
         .from(s.payment)
         // Transaction ids can collide across NMI accounts/modes — bind the
         // ledger lookup to the account+mode whose key signed this event.
@@ -110,7 +111,8 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
         .where(and(eq(s.payment.storeId, storeId), eq(s.payment.providerRef, transactionId),
           eq(s.payment.method, 'nmi'), eq(s.payment.gatewayAccount, account.accountId),
           eq(s.payment.gatewayMode, account.mode)))
-        .limit(1);
+        .limit(2);
+      const pay = payments.length === 1 ? payments[0] : undefined;
       let orderCode: string | null = null;
       if (pay?.orderId) {
         const [o] = await tx.select({ code: s.order.code }).from(s.order)
@@ -120,6 +122,8 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
       const res = await recordDispute(tx, storeId, {
         provider: 'nmi',
         providerRef: transactionId,
+        gatewayAccount: account.accountId,
+        gatewayMode: account.mode,
         paymentId: pay?.id ?? null,
         orderId: pay?.orderId ?? null,
         orderCode,
@@ -132,7 +136,7 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
       if (res.created) recorded++;
       else skipped++;
       if (!pay) {
-        logErr.error('nmi chargeback for unknown transaction', undefined, { storeId, transactionId });
+        logErr.error('nmi chargeback for unknown transaction', undefined, { storeId, transactionId, gatewayAccount: account.accountId, gatewayMode: account.mode });
       }
     }
     return { recorded, skipped };
@@ -155,6 +159,7 @@ disputeRoutes.openapi(
     const items = await withStore(st.storeId, async (tx) => {
       const rows = await tx.select({
         id: dispute.id, provider: dispute.provider, providerRef: dispute.providerRef,
+        gatewayAccount: dispute.gatewayAccount, gatewayMode: dispute.gatewayMode,
         orderId: dispute.orderId, amount: dispute.amount, currency: dispute.currency,
         reason: dispute.reason, status: dispute.status, notifiedAt: dispute.notifiedAt,
         createdAt: dispute.createdAt, orderCode: s.order.code,

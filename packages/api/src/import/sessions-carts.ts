@@ -3,7 +3,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
-import { parseJson, parseStrArray } from './store.js';
+import { parseJson } from './store.js';
+import { importedCouponCodes } from './orders.js';
 import type { ImportContext } from './context.js';
 
 export const legacyTokenHash = (token: string): string => createHash('sha256').update(token).digest('hex');
@@ -14,6 +15,14 @@ export function validSourceSession(row: { invalidated: unknown; expires: unknown
 }
 
 export async function importSessionsAndCarts(ctx: ImportContext): Promise<void> {
+  const canonicalCodes = new Map<string, string>();
+  const ambiguousCodes = new Set<string>();
+  for (const promo of await ctx.tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.storeId, ctx.storeId))) {
+    if (!promo.code) continue;
+    const key = promo.code.toLowerCase();
+    if (canonicalCodes.has(key) || ambiguousCodes.has(key)) { canonicalCodes.delete(key); ambiguousCodes.add(key); }
+    else canonicalCodes.set(key, promo.code);
+  }
   const rows = await ctx.q(`SELECT ss.id, ss.token, ss.type, ss.invalidated, ss.expires,
     ss."activeChannelId" AS channel, ss."activeOrderId" AS oid, ss."userId" AS uid,
     c.id AS cid, c."emailAddress" AS email,
@@ -22,6 +31,7 @@ export async function importSessionsAndCarts(ctx: ImportContext): Promise<void> 
     WHERE ss.invalidated=false AND ss.expires > transaction_timestamp() AND ss."activeChannelId"=$1
     ORDER BY ss.id`, [ctx.channelId]);
   const now = Date.now();
+  const classifiedCarts = new Set<string>();
   for (const row of rows) {
     if (!validSourceSession(row as Parameters<typeof validSourceSession>[0], ctx.channelId, now) || row.admin ||
       typeof row.token !== 'string' || !row.token ||
@@ -39,26 +49,36 @@ export async function importSessionsAndCarts(ctx: ImportContext): Promise<void> 
     let couponCode: string | null = null;
     let countryCode: string | null = null;
     if (row.oid != null) {
-      const [order] = await ctx.q(`SELECT o.id, o."couponCodes", o."shippingAddress"
+      const [order] = await ctx.q(`SELECT o.id, o."couponCodes", to_jsonb(o."couponCodes")::text AS raw_coupon_codes, o."shippingAddress"
         FROM "order" o JOIN order_channels_channel oc ON oc."orderId"=o.id
         WHERE o.id=$1 AND oc."channelId"=$2 AND o.active=true AND o."orderPlacedAt" IS NULL
           AND o."currencyCode"=$3 AND (o."customerId" IS NULL OR o."customerId"=$4)`,
       [row.oid, ctx.channelId, ctx.currency, authenticated ? row.cid : null]);
       if (order) {
         cartId = ctx.id('cart', order.id);
-        const coupons = Array.isArray(order.couponCodes) ? order.couponCodes : typeof order.couponCodes === 'string'
-          ? parseStrArray(order.couponCodes) ?? order.couponCodes.split(',').map(code => code.trim()).filter(Boolean) : [];
-        if (coupons.length > 1) ctx.exclusions.push({ type: 'unmapped-source-field', table: 'order',
-          detail: `active order ${order.id} has multiple coupon codes; target cart supports one revalidated coupon`,
-          blocking: true, sourceValues: coupons.filter((code): code is string => typeof code === 'string') });
-        couponCode = typeof coupons[0] === 'string' ? coupons[0] : null;
+        const coupons = importedCouponCodes(order.couponCodes, canonicalCodes);
+        if (!classifiedCarts.has(cartId)) {
+          classifiedCarts.add(cartId);
+          if (coupons.invalidCount) ctx.exclusions.push({ type: 'unmapped-source-field', table: 'order',
+            detail: 'Active-cart coupon members are invalid; exact source coupon snapshot retained privately',
+            blocking: true, count: coupons.invalidCount, sourceValues: [order.raw_coupon_codes] });
+          if (coupons.duplicateCount) ctx.exclusions.push({ type: 'merged-duplicate', table: 'order',
+            detail: 'Active-cart case-insensitive coupon duplicates retained privately; runtime membership deduplicated',
+            count: coupons.duplicateCount, sourceValues: [order.raw_coupon_codes] });
+          const unresolved = coupons.codes.filter(code => !canonicalCodes.has(code.toLowerCase()));
+          if (unresolved.length) ctx.exclusions.push({ type: 'unmapped-source-field', table: 'order', blocking: true,
+            detail: 'Active-cart coupon has no unambiguous target promotion; full intent retained for reconciliation',
+            count: unresolved.length, sourceValues: [order.raw_coupon_codes] });
+        }
+        couponCode = coupons.codes[0] ?? null;
         const address = (typeof order.shippingAddress === 'object' && order.shippingAddress !== null ? order.shippingAddress : parseJson(order.shippingAddress) ?? {}) as Record<string, unknown>;
         countryCode = typeof address.countryCode === 'string' && /^[A-Z]{2}$/.test(address.countryCode) ? address.countryCode : null;
         // Several valid source sessions can reference the same active order.
         const inserted = await ctx.tx.insert(s.cart).values({ id: cartId, storeId: ctx.storeId,
-          customerId, token: randomBytes(32).toString('hex'), expiresAt,
+          customerId, token: randomBytes(32).toString('hex'), expiresAt, couponCodes: coupons.codes,
         }).onConflictDoNothing().returning({ id: s.cart.id });
-        if (!inserted.length) await ctx.tx.update(s.cart).set({ expiresAt: sql`GREATEST(${s.cart.expiresAt}, ${expiresAt})` }).where(eq(s.cart.id, cartId));
+        if (!inserted.length) await ctx.tx.update(s.cart).set({ expiresAt: sql`GREATEST(${s.cart.expiresAt}, ${expiresAt})` })
+          .where(and(eq(s.cart.id, cartId), eq(s.cart.storeId, ctx.storeId)));
         if (inserted.length) {
           const lines = await ctx.q('SELECT "productVariantId" AS vid, SUM(quantity)::int AS quantity FROM order_line WHERE "orderId"=$1 GROUP BY "productVariantId" ORDER BY "productVariantId"', [order.id]);
           for (const line of lines) {

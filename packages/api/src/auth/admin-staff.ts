@@ -14,12 +14,13 @@
  *     shells, removes the lint suppression entirely, and centralizes the IDOR
  *     and "global tables are global" invariants in one auditable file.
  */
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { createHash } from 'node:crypto';
 import { env } from '../env.js';
-import { regenerateRecoveryCodesTx, deleteRecoveryCodes } from './second-factor.js';
+import { regenerateRecoveryCodesTx, deleteRecoveryCodes, verifySecondFactorTx } from './second-factor.js';
+import { totpRequiredFor } from './mfa-policy.js';
 import { normalizeEmail } from './email.js';
 import { openTotpSecret, sealTotpSecret } from './totp-secret.js';
 
@@ -57,13 +58,17 @@ export async function setAdminTotpSecret(adminId: string, secret: string): Promi
 /** Commit a verified factor mutation only while its credential snapshot & calling session remain current.
  * Factor, recovery-code replacement & session revocation share one transaction, serialized per admin.
  * Slow password/factor proof happens before this call; its results cannot resurrect superseded credentials. */
+export class AdminFactorMutationError extends Error {
+  constructor(readonly code: 'TOTP_REQUIRED' | 'INVALID_FACTOR') { super(code); }
+}
 export async function mutateAdminSecondFactor(input: {
   adminId: string; token: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null;
-  action: 'enable' | 'disable' | 'recovery'; secret?: string;
+  action: 'enable' | 'disable' | 'recovery'; secret?: string; code?: string;
 }): Promise<{ recoveryCodes: string[] } | null> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + input.adminId}, 0))`);
-    const [admin] = await tx.select({ passwordHash: s.adminUser.passwordHash, secret: s.adminUser.totpSecret })
+    const [admin] = await tx.select({ passwordHash: s.adminUser.passwordHash, secret: s.adminUser.totpSecret,
+      kind: s.adminUser.kind, isInstallationAdmin: s.adminUser.isInstallationAdmin })
       .from(s.adminUser).where(eq(s.adminUser.id, input.adminId)).for('update').limit(1);
     if (!admin || admin.passwordHash !== input.passwordHash || admin.secret !== input.totpVersion) return null;
     const tokenHash = createHash('sha256').update(input.token).digest('hex');
@@ -74,6 +79,28 @@ export async function mutateAdminSecondFactor(input: {
         sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`))
       .for('update').limit(1);
     if (!session || session.expiresAt.getTime() <= Date.now() || (idle > 0 && (session.lastSeenAt ?? session.createdAt).getTime() <= Date.now() - idle * 3600000)) return null;
+    if (input.action === 'disable') {
+      // Global credential row precedes membership & store locks. Its FK lock
+      // also prevents a new membership from appearing during this decision.
+      const memberships = await tx.select().from(s.adminUserStore).where(eq(s.adminUserStore.adminUserId, input.adminId))
+        .orderBy(s.adminUserStore.storeId).for('share');
+      const stores = memberships.length ? await tx.select().from(s.store).where(inArray(s.store.id, memberships.map(m => m.storeId)))
+        .orderBy(s.store.id).for('share') : [];
+      const required = totpRequiredFor({ kind: admin.kind === 'agent' ? 'agent' : 'human', isInstallationAdmin: admin.isInstallationAdmin,
+        stores: memberships.map(m => {
+          const store = stores.find(store => store.id === m.storeId);
+          if (!store) throw new Error('Admin store policy missing');
+          const config = store.config as { security?: { requireTotp?: unknown } } | null;
+          return { storeId: store.id, slug: store.slug, name: store.name, currency: store.currency, taxRate: store.taxRate,
+            shippingTaxable: store.shippingTaxable, role: m.role, permissions: null, requireTotp: config?.security?.requireTotp === true };
+        }) });
+      if (required) throw new AdminFactorMutationError('TOTP_REQUIRED');
+      // Proof consumption must follow policy & share its transaction: refusal
+      // cannot consume a recovery code or advance the durable TOTP replay guard.
+      if (!input.totpSecret || !await verifySecondFactorTx(input.adminId, input.totpSecret, input.code, tx)) {
+        throw new AdminFactorMutationError('INVALID_FACTOR');
+      }
+    }
     if (input.action === 'enable') {
       if (input.totpSecret || !input.secret) return null;
       await tx.update(s.adminUser).set({ totpSecret: sealTotpSecret(input.adminId, input.secret) }).where(eq(s.adminUser.id, input.adminId));

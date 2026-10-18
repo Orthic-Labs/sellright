@@ -5,17 +5,25 @@ const fixture = vi.hoisted(() => ({
   existing: {} as Record<string, unknown>,
   verification: false,
   reads: 0,
+  tender: null as null | { editId: string; amount: number; currency: string },
+  pending: false,
+  bind: vi.fn(),
+  retrySettlement: vi.fn(),
+  resolveAccount: vi.fn(),
 }));
 vi.mock('../db/client.js', async (original) => ({
   ...await original<typeof import('../db/client.js')>(),
   withAdvisoryLock: async (_key: string, run: () => Promise<unknown>) => run(),
   withStore: async (_store: string, run: (tx: unknown) => Promise<unknown>) => {
+    if (fixture.verification) {
+      const rows = [fixture.reads++ === 0 || fixture.existing.status === 'settled' ? fixture.existing : fixture.order];
+      const q = { from: () => q, where: () => q, limit: () => q, for: async () => rows,
+        then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(rows).then(resolve) };
+      return run({ select: () => q });
+    }
     const limit = vi.fn()
       .mockReturnValueOnce({ for: async () => [fixture.order] })
       .mockResolvedValueOnce([fixture.existing]);
-    if (fixture.verification) limit.mockReset().mockResolvedValue([
-      fixture.reads++ === 0 ? fixture.existing : fixture.order,
-    ]);
     const query = { from: () => query, where: () => query, limit };
     return run({ select: () => query });
   },
@@ -43,14 +51,35 @@ vi.mock('./gateway-account.js', async (original) => {
     // WS-A resolver wrappers — this suite exercises the (still env-only, via
     // GATEWAY_ACCOUNTS_JSON) reconciliation path, so they resolve exactly the
     // same fixture account synchronously-as-a-promise.
-    resolveConfiguredGatewayAccount: async () => fixtureAccount,
-    resolveGatewayAccount: async () => fixtureAccount,
+    resolveConfiguredGatewayAccount: fixture.resolveAccount.mockResolvedValue(fixtureAccount),
+    resolveGatewayAccount: fixture.resolveAccount,
   };
 });
+vi.mock('./settle.js', async original => ({
+  ...await original<typeof import('./settle.js')>(),
+  retryPreparedEditSettlement: fixture.retrySettlement,
+}));
+
+vi.mock('../orders/order-edit-service.js', () => ({
+  preparedEditTender: async () => fixture.tender,
+  bindPreparedEditTender: fixture.bind,
+}));
+vi.mock('../orders/edit-stage.js', async original => ({
+  ...await original<typeof import('../orders/edit-stage.js')>(),
+  assertNoPendingOrderEdit: async (_tx: unknown, _store: string, _order: string, options: { allowEditId?: string }) => {
+    if (fixture.pending && options.allowEditId !== fixture.tender?.editId) throw new Error('Resolve the pending order edit first');
+    if (fixture.pending && !fixture.tender) throw new Error('Resolve the pending order edit first');
+  },
+}));
 import { startGatewayPayment, verifyGatewayAttempt } from './gateway-payment.js';
 
 beforeEach(() => {
   fixture.verification = false;
+  fixture.tender = null;
+  fixture.pending = false;
+  fixture.bind.mockReset();
+  fixture.retrySettlement.mockReset().mockResolvedValue(null);
+  fixture.resolveAccount.mockClear();
   fixture.reads = 0;
   fixture.existing = {
     id: 'attempt', orderId: 'order', method: 'nmi', operation: 'charge',
@@ -82,4 +111,30 @@ it('returns a controlled conflict before querying a changed verification endpoin
   await expect(verifyGatewayAttempt('store', 'attempt')).rejects.toMatchObject({
     status: 409, message: 'Payment gateway environment changed; restore the original account configuration',
   });
+});
+
+it('fences a new ordinary tender while a prepared refund edit is pending', async () => {
+  fixture.pending = true;
+  await expect(start()).rejects.toMatchObject({ status: 409, code: 'ORDER_EDIT_PENDING' });
+  expect(fixture.bind).not.toHaveBeenCalled();
+});
+it('replays only the linked prepared edit attempt under its edit namespace', async () => {
+  fixture.pending = true;
+  fixture.tender = { editId: 'edit', amount: 250, currency: 'USD' };
+  fixture.existing.context = { nmiEnvironment: 'production' };
+  fixture.existing.idempotencyKey = 'reused:edit:edit';
+  await expect(start()).resolves.toMatchObject({ attemptId: 'attempt', status: 'pending' });
+  expect(fixture.bind).toHaveBeenCalledWith(expect.anything(), { storeId: 'store', orderId: 'order', editId: 'edit', paymentAttemptId: 'attempt' });
+});
+it('recovers durable edit tender before requiring gateway configuration', async () => {
+  fixture.retrySettlement.mockResolvedValue({ attempt: { ...fixture.existing, status: 'settled' }, orderState: 'Paid' });
+  await expect(start()).resolves.toMatchObject({ attemptId: 'attempt', status: 'settled' });
+  expect(fixture.resolveAccount).not.toHaveBeenCalled();
+});
+it('verifies settled gateway tender by durable replay without provider lookup', async () => {
+  fixture.verification = true;
+  fixture.existing.status = 'settled';
+  await expect(verifyGatewayAttempt('store', 'attempt')).resolves.toMatchObject({ attemptId: 'attempt', status: 'settled' });
+  expect(fixture.retrySettlement).toHaveBeenCalledWith(expect.anything(), 'store', 'order', { paymentAttemptId: 'attempt' });
+  expect(fixture.resolveAccount).not.toHaveBeenCalled();
 });

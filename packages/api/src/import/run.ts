@@ -6,11 +6,13 @@ import { z } from 'zod';
 import * as schema from '../db/schema.js';
 import type { Tx } from '../db/client.js';
 import { migrationId, type ImportContext, type ManifestExclusion } from './context.js';
-import { importCatalog } from './catalog.js';
+import { importCatalog, promotionSequenceCoverage } from './catalog.js';
 import { importSessionsAndCarts } from './sessions-carts.js';
 import { importCustomers } from './customers.js';
 import { importOrders } from './orders.js';
 import { importHistory } from './history.js';
+import { importOrderHistory } from './order-history.js';
+import { importAccountCredits, importAccountCreditTransactions } from './account-credit.js';
 import { importSettings } from './settings.js';
 import { importBusiness } from './business.js';
 import { importLoyalty } from './loyalty.js';
@@ -27,19 +29,15 @@ export const migrationConfig = z.object({
   // mode is optional: an account mapping WITHOUT a declared mode is not a
   // verified historical mapping — affected payments quarantine (SR-03).
   gatewayAccounts: z.record(z.string(), z.object({ accountId: z.string().min(1), mode: z.enum(['test', 'live']).optional() })),
-  // Optional loyalty program for the target store (merged into
-  // store.config.loyalty). Source store-credit balances are converted into
-  // points at its pointsPerDollarOff; without it (and without an existing
-  // target loyalty block) balances are listed as exclusions, not imported.
+  // Optional target loyalty configuration, independent of monetary credit.
   loyalty: LoyaltySettingsSchema.optional(),
 }).strict();
 type Config = z.input<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
-  'customer', 'address', 'customer_address_draft', 'financial_payment_archive', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',
+  'customer', 'address', 'customer_address_draft', 'financial_payment_archive', 'order', 'order_line', 'order_adjustment', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line', 'imported_order_modification', 'account_credit', 'account_credit_transaction',
   'promotion_usage', 'shipping_method', 'tax_zone', 'blog_post', 'affiliate', 'affiliate_settle', 'subscriber',
-  // Store-credit balances → points (import/loyalty.ts). References customer,
-  // so it sits after it (restore deletes in reverse order).
+  // Existing points remain part of untouched-tenant restore reconciliation.
   'loyalty_ledger',
   // Trigger-written during import: a stock insert that takes a variant from
   // unavailable to available enqueues a pending restock_event (migration 0049
@@ -141,6 +139,11 @@ export async function runMigration(input: {
     const ctx: ImportContext = { tx, source, q, ...phaseConfig, sourceColumns, exclusions,
       id: (entity, id) => migrationId(config.storeId, config.sourceKey, entity, id) };
     await importCatalog(ctx);
+    await importAccountCredits(ctx);
+    const activePromotionIds = (await target.query<{ id: string }>(
+      'SELECT id FROM promotion WHERE store_id=$1 AND enabled=true', [config.storeId])).rows.map(row => row.id);
+    const promotionCoverage = promotionSequenceCoverage(ctx, activePromotionIds);
+    if (promotionCoverage) exclusions.push(promotionCoverage);
     // Business records run before orders so affiliate-linked source promotions
     // disabled in the source are backfilled before order coupon attribution.
     await importBusiness(ctx);
@@ -148,8 +151,9 @@ export async function runMigration(input: {
     await importSessionsAndCarts(ctx);
     await importOrders(ctx);
     await importHistory(ctx);
-    // Only an EXPLICIT program (migration config or a pre-existing target
-    // store.config.loyalty) sets the conversion rate — never the defaults.
+    await importOrderHistory(ctx);
+    await importAccountCreditTransactions(ctx);
+    // Loyalty configuration never converts monetary account-credit value.
     const loyaltyRaw = loyaltyConfig ?? (storeConfig as { loyalty?: unknown }).loyalty;
     await importLoyalty(ctx, loyaltyRaw ? loyaltySettingsFromConfig({ loyalty: loyaltyRaw }) : null);
     await importSettings(ctx);
@@ -178,7 +182,7 @@ export async function runMigration(input: {
     // variant. Those are not restocks — the waitlist sweep must never mail
     // imported subscribers about stock that was already there at cutover.
     await target.query('UPDATE restock_event SET processed_at = now() WHERE store_id = $1 AND processed_at IS NULL', [config.storeId]);
-    const sourceDigest = digest({ config, sourceReads, assets });
+    const sourceDigest = digest({ config, sourceReads, assets, promotionSequence: ctx.promotionSequence });
     if (input.apply && sourceDigest !== input.expectedDigest) throw new Error('Source or migration configuration changed since dry run');
     const after: Record<string, unknown[]> = {};
     for (const table of MIGRATION_TABLES) {
@@ -188,7 +192,7 @@ export async function runMigration(input: {
     const parityBlockers = exclusions.filter(exclusion => exclusion.blocking === true);
     if (!ctx.rollbackAuthBaseline) throw new Error('Complete rollback account mapping was not captured');
     const manifest = { version: 1, storeId: config.storeId, sourceKey: config.sourceKey, sourceDigest,
-      rollbackAuthBaseline: ctx.rollbackAuthBaseline,
+      rollbackAuthBaseline: ctx.rollbackAuthBaseline, promotionSequence: ctx.promotionSequence,
       mode: input.apply ? 'apply' : 'dry-run', commitStatus: 'prepared', createdAt: new Date().toISOString(), before: { store: beforeStore }, after, exclusions, parityBlocked: parityBlockers.length > 0, parityBlockers,
       afterDigest: digest(Object.fromEntries(Object.entries(after).map(([table, rows]) =>
         [table, [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)))]))), assets };

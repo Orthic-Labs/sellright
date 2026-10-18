@@ -1,14 +1,17 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { hasPgCode, LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon } from '../money/coupon.js';
+import { type OrderTotals } from '../money/totals.js';
+import { resolvePromotionStack } from '../money/promotion-resolver.js';
+import { calculatePromotionStack, canonicalCouponCodes, PromotionStackError, type StackInput } from '../money/promotion-stack.js';
+import { buildOrderPricingSnapshot } from '../money/pricing-snapshot.js';
+import { reserve as reserveAccountCredit } from '../account-credit/service.js';
+import { AccountCreditError } from '../account-credit/types.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
-import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { applyGiftCard } from '../money/gift-card.js';
@@ -26,7 +29,7 @@ import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptance.js';
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
-import { cartResponse, CartOut } from './cart.js';
+import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodes, type PricedCart } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
@@ -58,6 +61,14 @@ function normalizeAddress(a: Record<string, unknown> | null | undefined): Record
  *  its stock reservation) rolls back. */
 class LoyaltyRedeemError extends Error {
   constructor(readonly reason: RedeemRejection) { super(reason); }
+}
+
+class CreditPaymentUnavailableError extends Error {
+  constructor(readonly quote: PricedCart) { super('This credit order needs a payable shipping or tax balance'); }
+}
+
+class QuoteChangedError extends Error {
+  constructor(readonly quote: PricedCart, readonly revision?: number) { super('Quote changed'); }
 }
 
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
@@ -93,6 +104,7 @@ type FingerprintBody = {
   items: Array<{ sku: string; quantity: number }>;
   cartToken?: string;
   couponCode?: string;
+  couponCodes?: string[]; acceptedQuoteHash?: string;
   giftCardCode?: string;
   redeemPoints?: number;
   shippingMethodCode?: string;
@@ -114,6 +126,8 @@ function fingerprintBasis(body: FingerprintBody): CheckoutFingerprintBasis {
     cartToken: body.cartToken ?? null,
     items,
     couponCode: body.couponCode ?? null,
+    ...(body.couponCodes !== undefined ? { couponCodes: body.couponCodes } : {}),
+    ...(body.acceptedQuoteHash !== undefined ? { acceptedQuoteHash: body.acceptedQuoteHash } : {}),
     giftCardCode: body.giftCardCode ?? null,
     // Only present when set, so fingerprints of pre-loyalty payloads (and
     // their Idempotency-Key replays) are byte-identical to before.
@@ -250,6 +264,7 @@ checkout.openapi(
               shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
+              couponCodes: CouponCodes.optional(), acceptedQuoteHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
               giftCardCode: z.string().optional(), // applied as a tender against the order total
               // Loyalty points to spend (signed-in customers only). A DISCOUNT
               // applied before tax, re-validated under a per-customer lock
@@ -286,7 +301,7 @@ checkout.openapi(
         content: { 'application/json': { schema: CheckoutOut } },
       },
       400: { description: 'Malformed checkout request body or Idempotency-Key header', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
+      409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional(), quote: EstimateOut.optional(), quoteHash: z.string().optional() }) } } },
       422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
@@ -311,7 +326,7 @@ checkout.openapi(
     // The request's discount/tender intent as sent, for policies (applied or not).
     const intent = { couponCode: body.couponCode, giftCardCode: body.giftCardCode, redeemPoints: body.redeemPoints };
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { pricingError: PromotionStackError } | { creditPaymentUnavailable: PricedCart } | { quoteChanged: PricedCart; revision?: number } | { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // A replay is decided under the STORED order's own lock set (order, licences, reservations — L2/L3/L4), never
     // under the attempt's set, which covers only the rolled-back attempt's new order id. The set is taken in a fresh
     // transaction, so the global lock order holds; the order is reread under the locks before the policy hook runs.
@@ -414,12 +429,12 @@ checkout.openapi(
         // 'stale'), a mismatched base 409s 'stale' + the current snapshot.
         const conflictShipCountry = (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country ?? null;
         if (body.expectedRevision == null) {
-          return { cartConflict: { code: 'revision_required' as const, snapshot: await cartResponse(tx, st, row, body.couponCode, token, conflictShipCountry) } };
+          return { cartConflict: { code: 'revision_required' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' }) } };
         }
         if (row.revision !== body.expectedRevision) {
-          return { cartConflict: { code: 'stale' as const, snapshot: await cartResponse(tx, st, row, body.couponCode, token, conflictShipCountry) } };
+          return { cartConflict: { code: 'stale' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' }) } };
         }
-        const lines = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, row.id));
+        const lines = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, row.id)).orderBy(asc(s.cartLine.createdAt), asc(s.cartLine.id));
         if (!lines.length) return { cartError: 'cart is empty, invalid, or already checked out' };
         items = lines.map((l) => ({ sku: l.sku, quantity: l.quantity })); // fail-closed
         cartRow = row;
@@ -465,6 +480,10 @@ checkout.openapi(
           }
         }
       }
+      const checkoutQuote = await priceCart(tx, st, items, { couponCodes: body.couponCodes ?? (body.couponCode !== undefined ? (body.couponCode ? [body.couponCode] : []) : cartRow?.couponCodes ?? []),
+        token, shipCountry: (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country,
+        shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' });
+      if (checkoutQuote.grandTotal <= 0 && checkoutQuote.coupons.some(coupon => coupon.kind === 'account_credit' && coupon.appliedAmount > 0)) throw new CreditPaymentUnavailableError(checkoutQuote);
       stockChanged = await reserveStockOrThrow(tx, st.id, items, bySku);
 
       const priceRule = variantPriceRuleFromConfig(st.config);
@@ -535,61 +554,8 @@ checkout.openapi(
         intent, held,
       });
 
-      // ── Discount: explicit coupon OR best automatic; re-validate server-side
-      //    + enforce usage limits ──────────────────────────────────────────────
-      let promotion: Promotion | undefined;
+      const couponCodes = canonicalCouponCodes(body.couponCodes ?? (body.couponCode !== undefined ? (body.couponCode ? [body.couponCode] : []) : cartRow?.couponCodes ?? []));
       let promoId: string | null = null;
-      {
-        const now = new Date();
-        const timeValid = and(
-          or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)),
-          or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
-        );
-        let promo: typeof s.promotion.$inferSelect | undefined;
-        if (body.couponCode) {
-          [promo] = await tx
-            .select()
-            .from(s.promotion)
-            .where(and(eq(s.promotion.code, body.couponCode), eq(s.promotion.enabled, true), timeValid))
-            .limit(1);
-        } else {
-          // No code → apply the best eligible AUTOMATIC promotion (code IS NULL).
-          const autos = await tx
-            .select()
-            .from(s.promotion)
-            .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
-          const best = selectAutomaticPromotion(
-            autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
-            { subtotal: subtotalCents, activeVerifications, items: couponItems },
-          );
-          promo = best ? autos.find((a) => a.id === best.id) : undefined;
-        }
-        if (promo) {
-          // Serialize concurrent redemptions of THIS promo: take a row lock and
-          // re-read usedCount under it, so the global/per-customer limit checks
-          // and the usedCount increment below can't race (check-then-increment).
-          // The lock is held until the txn commits.
-          const lockRes = await tx.execute(sql`SELECT used_count FROM promotion WHERE id = ${promo.id} FOR UPDATE`);
-          const usedNow = (lockRes as unknown as { rows: Array<{ used_count: number }> }).rows[0]?.used_count ?? promo.usedCount;
-          const globalOk = promo.usageLimit == null || usedNow < promo.usageLimit;
-          let perCustomerOk = true;
-          if (promo.perCustomerUsageLimit != null && customerId) {
-            const usedRows = await tx
-              .select({ n: count() })
-              .from(s.promotionUsage)
-              .where(and(eq(s.promotionUsage.promotionId, promo.id), eq(s.promotionUsage.customerId, customerId)));
-            perCustomerOk = (usedRows[0]?.n ?? 0) < promo.perCustomerUsageLimit;
-          }
-          const ev = evaluateCoupon(
-            { type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping },
-            { subtotal: subtotalCents, activeVerifications, items: couponItems },
-          );
-          // Apply only if valid AND within limits; else proceed at full price
-          // (server is authoritative — the returned grandTotal is the truth).
-          if (globalOk && perCustomerOk && ev.valid && ev.promotion) { promotion = ev.promotion; promoId = promo.id; }
-        }
-      }
-
       // Destination tax: the ship-to country's zone overrides the store flat rate.
       const taxZones = await tx
         .select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority })
@@ -597,8 +563,19 @@ checkout.openapi(
         .where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(taxZones, shipCountry, st.taxRate);
 
-      const discounted = calculateOrderTotals({ lines: priced.map(p => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-        shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+      const stackBasis = {
+        storeId: st.id, customerId: customerId ?? undefined, couponCodes, mode: 'payment' as const,
+        phase: 'AddingItems' as const, currency: st.currency, pricesIncludeTax: st.taxInclusive,
+        lines: priced.map((p, index) => ({ key: `${index}:${p.v.sku}`, quantity: p.qty, placedQuantity: p.qty,
+          unitListPrice: p.unitPrice, priceIncludesTax: st.taxInclusive, taxRateBps: taxRate })),
+        shipping: shippingAmount, shippingTaxRateBps: shippingCalculator?.taxRate ?? (st.shippingTaxable ? taxRate : 0),
+        shippingIncludesTax: shippingCalculator?.taxInclusive ?? st.taxInclusive,
+        couponContext: { activeVerifications, items: couponItems },
+      };
+      let stack = await resolvePromotionStack(tx, stackBasis);
+      let stackInput: StackInput = { ...stackBasis, couponCodes: stack.coupons.map(coupon => coupon.code), promotions: stack.resolvedPromotions ?? [] };
+      const discounted = calculatePromotionStack({ ...stackInput, shipping: 0 });
+      promoId = stack.selectedCredit?.promotionId ?? stack.applied[0]?.promotionId ?? null;
       // A discount-dependent rejection is deferred only while a policy that may replace the promotion is registered;
       // it is decided once the effective promotion is known (below). With no such policy it throws here, as always.
       let shippingRejectionDeferred = false;
@@ -637,13 +614,9 @@ checkout.openapi(
           else throw new LoyaltyRedeemError(plan.reason);
         } else redeem = { points: plan.points, discountCents: plan.discountCents };
       }
-      let totalsInput = {
-        shippingTaxRate: shippingCalculator?.taxRate, shippingTaxInclusive: shippingCalculator?.taxInclusive,
-        lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-        shipping: shippingAmount, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
-        pointsDiscount: redeem?.discountCents ?? 0,
-      };
-      let totals = calculateOrderTotals(totalsInput);
+      stackInput = { ...stackInput, pointsDiscount: redeem?.discountCents ?? 0 };
+      stack = calculatePromotionStack(stackInput);
+      let totals = stack;
       // Earn snapshot: registered customers only, on merchandise after every
       // discount (promo + points), excluding shipping and tax. Posted to the
       // ledger only when the order reaches Paid (postPaidOrderRewards).
@@ -685,7 +658,7 @@ checkout.openapi(
         ...(loyaltySnap ? { loyalty: loyaltySnap } : {}) };
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
-        idempotencyKey: idemKey, promotionId: promoId, receiptToken,
+        idempotencyKey: idemKey, promotionId: promoId, couponCodes, receiptToken,
         shippingMethodCode: shippingMethodChosen?.code ?? null, shippingMethodName: shippingMethodChosen?.name ?? null,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
@@ -728,10 +701,10 @@ checkout.openapi(
       // here, before any tender is taken.
       const replacement = checkoutPolicy.promotionReplacement;
       if (replacement) {
-        promotion = { type: 'fixed', value: replacement.fixedDiscount };
+        stackInput = { ...stackInput, promotions: [{ id: 'policy-replacement', code: null, kind: 'fixed', scope: 'order',
+          value: replacement.fixedDiscount, priority: 0, sequence: 0, conditions: null, freeShipping: false }] };
         promoId = null;
-        const replaced = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-          shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+        const replaced = calculatePromotionStack({ ...stackInput, shipping: 0, pointsDiscount: 0 });
         // Discount-dependent shipping eligibility, on the effective promotion's discounted merchandise total (either direction).
         if (shippingCalculator && (shippingRejectionDeferred || shippingCalculator.subtotalBasis === 'discounted_with_tax')
           && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
@@ -742,8 +715,8 @@ checkout.openapi(
           if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
           redeem = { points: plan.points, discountCents: plan.discountCents };
         }
-        totalsInput = { ...totalsInput, promotion, pointsDiscount: redeem?.discountCents ?? 0 };
-        totals = calculateOrderTotals(totalsInput);
+        stackInput = { ...stackInput, pointsDiscount: redeem?.discountCents ?? 0 };
+        totals = calculatePromotionStack(stackInput);
         loyaltySnap = loyaltySnapshotFor(totals);
         for (const [idx, l] of totals.lines.entries()) {
           await tx.update(s.orderLine).set({ lineDiscount: l.lineDiscount, lineTotal: l.lineTotal }).where(eq(s.orderLine.id, lineIds[idx]!));
@@ -754,7 +727,8 @@ checkout.openapi(
         if (redeemRejectionDeferred) throw new LoyaltyRedeemError(redeemRejectionDeferred);
       }
       if (checkoutPolicy.adjustments.length) {
-        totals = calculateOrderTotals({ ...totalsInput, adjustments: checkoutPolicy.adjustments.map((a) => ({ label: a.label, amount: a.amount })) });
+        stackInput = { ...stackInput, adjustments: checkoutPolicy.adjustments.map((a) => ({ label: a.label, amount: a.amount })) };
+        totals = calculatePromotionStack(stackInput);
         await tx.insert(s.orderAdjustment).values(checkoutPolicy.adjustments.map((a) => ({ storeId: st.id, orderId, label: a.label, amount: a.amount, actor: `policy:${a.policyId}` })));
       }
       // What the order row now holds; the placement check below must see the same metadata and total.
@@ -772,10 +746,46 @@ checkout.openapi(
         persisted = updated!;
       }
 
-      // Record promotion usage + bump the global counter (idempotent on order).
-      if (promoId) {
-        await tx.insert(s.promotionUsage).values({ storeId: st.id, promotionId: promoId, customerId, orderId });
-        await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promoId));
+      // Admit credit only after policies establish final economic facts. A stale
+      // accepted quote throws through the transaction, undoing every provisional write.
+      const quoteFor = (t: typeof totals): PricedCart => ({ ...checkoutQuote,
+        lines: checkoutQuote.lines.map((line, index) => ({ ...line, ...t.lines[index] })),
+        subtotal: t.subtotal, discountTotal: t.discountTotal, taxTotal: t.taxTotal, shippingTotal: t.shippingTotal,
+        grandTotal: t.grandTotal, pointsDiscount: t.pointsDiscount,
+        couponCodes: t.coupons.map(coupon => coupon.code), coupons: t.coupons.map(coupon => ({ ...coupon, appliedAmount: coupon.appliedAmount ?? 0 })), quoteHash: t.quoteHash });
+      const selected = totals.selectedCredit;
+      const hasCreditIntent = stack.resolvedPromotions?.some(p => p.kind === 'account_credit') || totals.coupons.some(c => c.kind === 'account_credit');
+      if (selected && selected.appliedAmount > 0) {
+        await tx.update(s.order).set({ grandTotal: totals.grandTotal }).where(eq(s.order.id, orderId));
+        try {
+          await reserveAccountCredit(tx, { storeId: st.id, orderId, accountId: selected.accountId, appliedAmount: selected.appliedAmount, phase: 'ArrangingPayment' });
+        } catch (error) {
+          if (!(error instanceof AccountCreditError) || error.code !== 'unavailable') throw error;
+          const refreshed = await resolvePromotionStack(tx, { ...stackBasis, pointsDiscount: stackInput.pointsDiscount, adjustments: stackInput.adjustments });
+          throw new QuoteChangedError(quoteFor(refreshed), cartRow?.revision);
+        }
+        if (!replacement) {
+          const heldStack = await resolvePromotionStack(tx, { ...stackBasis, mode: 'quote', orderId, phase: 'ArrangingPayment',
+            pointsDiscount: stackInput.pointsDiscount, adjustments: stackInput.adjustments });
+          stackInput = { ...stackInput, couponCodes: heldStack.coupons.map(coupon => coupon.code), phase: 'ArrangingPayment', promotions: heldStack.resolvedPromotions ?? [] };
+          totals = heldStack;
+        }
+      }
+      if ((hasCreditIntent && !body.acceptedQuoteHash) || (body.acceptedQuoteHash !== undefined && body.acceptedQuoteHash !== totals.quoteHash)) {
+        throw new QuoteChangedError(quoteFor(totals), cartRow?.revision);
+      }
+      const snapshot = buildOrderPricingSnapshot(stackInput, totals, new Map(priced.map((p, index) => [`${index}:${p.v.sku}`, lineIds[index]!]))) ;
+      const appliedIds = replacement ? [] : [...new Set(totals.applied.map(entry => entry.promotionId))];
+      promoId = totals.selectedCredit?.promotionId ?? appliedIds[0] ?? null;
+      await tx.update(s.order).set({ pricingSnapshot: snapshot, couponCodes: stackInput.couponCodes, promotionId: promoId,
+        subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal,
+        grandTotal: totals.grandTotal }).where(eq(s.order.id, orderId));
+      for (const [index, line] of totals.lines.entries()) await tx.update(s.orderLine).set({ lineSubtotal: line.lineSubtotal,
+        lineDiscount: line.lineDiscount, lineTotal: line.lineTotal }).where(eq(s.orderLine.id, lineIds[index]!));
+      persisted = { ...persisted, grandTotal: totals.grandTotal };
+      for (const promotionId of appliedIds) {
+        const inserted = await tx.insert(s.promotionUsage).values({ storeId: st.id, promotionId, customerId, orderId }).onConflictDoNothing().returning({ id: s.promotionUsage.id });
+        if (inserted.length) await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promotionId));
       }
 
       // Reserve the redeemed points against this order (same txn as the
@@ -888,6 +898,9 @@ checkout.openapi(
         if (!replayed) throw e;
         return replayed;
       }
+      if (e instanceof CreditPaymentUnavailableError) return { creditPaymentUnavailable: e.quote };
+      if (e instanceof PromotionStackError) return { pricingError: e };
+      if (e instanceof QuoteChangedError) return { quoteChanged: e.quote, revision: e.revision };
       if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
@@ -911,6 +924,9 @@ checkout.openapi(
     // never from inside it, and never on a rolled-back/replayed attempt.
     if (stockChanged) onStockChanged(st.slug);
 
+    if ('pricingError' in out) return promotionStackErrorJson(c, out.pricingError);
+    if ('creditPaymentUnavailable' in out) return errJson(c, 409, 'CREDIT_PAYMENT_UNAVAILABLE', 'This credit order needs a payable shipping or tax balance', { extra: { reason: 'PAYABLE_BALANCE_REQUIRED', quote: out.creditPaymentUnavailable, quoteHash: out.creditPaymentUnavailable.quoteHash } });
+    if ('quoteChanged' in out) return errJson(c, 409, 'QUOTE_CHANGED', 'price changed — review refreshed quote before paying', { extra: { quote: out.quoteChanged, quoteHash: out.quoteChanged.quoteHash, ...(out.revision !== undefined ? { revision: out.revision } : {}) } });
     if ('shippingError' in out) return errJson(c, 409, 'SHIPPING_UNAVAILABLE', 'shipping unavailable', { extra: { reason: out.shippingError } });
     if ('cartError' in out) return errJson(c, 409, 'CART_INVALID', out.cartError);
     if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);

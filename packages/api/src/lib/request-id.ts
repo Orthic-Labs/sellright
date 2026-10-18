@@ -77,22 +77,13 @@ export function accessLogMiddleware(): MiddlewareHandler {
 /**
  * Path for the access log WITHOUT secrets carried in path segments (subscriber/unsubscribe tokens, invite and
  * magic-link tokens, download keys...): the matched route TEMPLATE (`/v1/shop/subscriber/confirm/:token`) when a
- * concrete route matched, else a redacted path — percent-decoded first so an encoded token is caught too — where
- * every segment that was percent-encoded, is longer than 24 characters, or has a digit and 6+ characters
- * (ids, codes, tokens) becomes `:redacted` — short literals such as `v1` stay.
+ * concrete route matched, else a fixed sentinel. Unmatched path segments have no trusted schema that can
+ * distinguish public literals from tokens, regardless of length, alphabet, or encoding.
  */
 export function loggedPath(c: Context): string {
   try {
     const route = [...matchedRoutes(c)].reverse().find((r) => r.path !== '*' && !r.path.endsWith('/*') && r.method !== 'ALL');
     if (route) return route.path;
-  } catch { /* fall through to redaction */ }
-  return redactPath(c.req.path);
-}
-
-export function redactPath(raw: string): string {
-  return raw.split('/').map((seg) => {
-    let d = seg;
-    for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(d); i++) { try { d = decodeURIComponent(d); } catch { return ':redacted'; } }
-    return seg === '' ? '' : (d !== seg || /%/.test(d) || d.length > 24 || (/[0-9]/.test(d) && d.length >= 6) ? ':redacted' : seg);
-  }).join('/');
+  } catch { /* fall through to the safe sentinel */ }
+  return '<unmatched>';
 }

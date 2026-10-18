@@ -248,9 +248,9 @@ export const applyCoupon = $(async (cartState: CartContextState, code: string): 
   }
 });
 
-export const removeCoupon = $(async (cartState: CartContextState) => {
+export const removeCoupon = $(async (cartState: CartContextState, code?: string) => {
   try {
-    const res = await CartService.removeCoupon();
+    const res = await CartService.removeCoupon(code);
     applyResult(cartState, res);
   } catch (error) {
     reportError(cartState, error, 'Failed to remove coupon');

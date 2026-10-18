@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressToWire, addressValid, buildOps, parseCents, storedToForm } from './ops';
+import { addressToWire, addressValid, buildOps, couponCodesAfterOps, parseCents, storedToForm } from './ops';
 import { emptyStaged, type EditContext } from './types';
 
 const ctx = {
@@ -29,7 +29,7 @@ describe('buildOps', () => {
     st.qty = { l1: 1, l2: 1 };
     st.swaps = { l2: { sku: 'C', name: 'C' } };
     st.adds = [{ sku: 'D', name: 'D', quantity: 2 }, { sku: 'E', name: 'E', quantity: 0 }];
-    st.coupon = { mode: 'apply', code: ' TEN ' };
+    st.couponOps = [{ op: 'apply_coupon', code: ' TEN ' }];
     st.shipping = { mode: 'custom', code: '', amountCents: 250 };
     st.adjAdd = [{ label: ' Goodwill ', amountCents: -500 }, { label: '', amountCents: 5 }];
     st.adjRemove = ['adj1'];
@@ -37,7 +37,7 @@ describe('buildOps', () => {
       { op: 'set_quantity', lineId: 'l1', quantity: 1 },
       { op: 'swap_variant', lineId: 'l2', sku: 'C' },
       { op: 'add_item', sku: 'D', quantity: 2 },
-      { op: 'apply_coupon', code: 'TEN' },
+      { op: 'apply_coupon', code: ' TEN ' },
       { op: 'set_shipping_amount', amount: 250 },
       { op: 'remove_adjustment', adjustmentId: 'adj1' },
       { op: 'add_adjustment', label: 'Goodwill', amount: -500 },
@@ -45,13 +45,22 @@ describe('buildOps', () => {
   });
   it('shipping removal, coupon removal and address ops', () => {
     const st = emptyStaged();
-    st.coupon = { mode: 'remove', code: '' };
+    st.couponOps = [{ op: 'remove_coupon' }];
     st.shipping = { mode: 'none', code: '', amountCents: 0 };
     st.address = { saveToAddressBook: true, shipping: { fullName: '', line1: ' 1 A St ', line2: '', city: 'X', province: '', postalCode: '', country: 'ca', phone: '' } };
     expect(buildOps(ctx, st)).toEqual([
       { op: 'remove_coupon' }, { op: 'remove_shipping' },
       { op: 'set_address', kind: 'shipping', address: { fullName: undefined, line1: '1 A St', line2: undefined, city: 'X', province: undefined, postalCode: undefined, country: 'CA', phone: undefined }, saveToAddressBook: true },
     ]);
+  });
+  it('preserves ordered targeted coupon operations without collapsing membership', () => {
+    const st = emptyStaged();
+    st.couponOps = [{ op: 'apply_coupon', code: 'THREE' }, { op: 'remove_coupon', code: 'one' }, { op: 'apply_coupon', code: ' FOUR ' }];
+    expect(buildOps(ctx, st)).toEqual(st.couponOps);
+    expect(couponCodesAfterOps(['One', 'TWO'], st.couponOps)).toEqual(['TWO', 'THREE', ' FOUR ']);
+    expect(couponCodesAfterOps(['One', 'TWO'], [{ op: 'apply_coupon', code: 'one' }])).toEqual(['One', 'TWO']);
+    expect(couponCodesAfterOps(['One', 'TWO'], [{ op: 'apply_coupon', code: ' One ' }])).toEqual(['One', 'TWO', ' One ']);
+    expect(couponCodesAfterOps(['One', 'TWO'], [{ op: 'remove_coupon' }])).toEqual([]);
   });
 });
 

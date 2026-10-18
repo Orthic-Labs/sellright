@@ -48,7 +48,6 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             </div>
             <button
               onClick$={$(() => {
-                if (props.localCart.cart.coupon?.applied) return;
                 const willOpen = !props.promoExpanded.value;
                 props.promoExpanded.value = willOpen;
                 if (willOpen) {
@@ -59,7 +58,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
               })}
               class="inline-flex items-center py-0.5 mb-0.5 text-[12px] text-[rgba(253,250,246,0.42)] hover:text-[rgba(253,250,246,0.72)] transition-colors cursor-pointer bg-transparent border-0"
             >
-              <span>Add promo code</span>
+              <span>Add coupon or credit code</span>
             </button>
           </div>
         </div>

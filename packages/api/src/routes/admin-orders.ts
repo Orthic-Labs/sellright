@@ -104,9 +104,25 @@ adminOrders.openapi(
     // commit. Reset in .catch — every path there means a full rollback.
     let stockChanged = false;
     const res: R = await withStore(st.storeId, async (tx): Promise<R> => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' };
       if (o.state !== 'PendingPayment') return { kind: 'badstate', state: o.state };
+
+      // Match the main edit service's protection before stock or line writes.
+      // This legacy calculator cannot reproduce saved stacks or credit vectors.
+      const [creditEntry] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction)
+        .where(and(eq(s.accountCreditTransaction.storeId, st.storeId), eq(s.accountCreditTransaction.orderId, o.id))).limit(1);
+      const usages = await tx.select({ promotionId: s.promotionUsage.promotionId }).from(s.promotionUsage)
+        .where(and(eq(s.promotionUsage.storeId, st.storeId), eq(s.promotionUsage.orderId, o.id)));
+      const promotions = await tx.select().from(s.promotion).where(eq(s.promotion.storeId, st.storeId));
+      const applied = new Set([o.promotionId, ...usages.map(usage => usage.promotionId)]);
+      const codes = new Set(o.couponCodes.map(coupon => coupon.toLowerCase()));
+      if (o.pricingSnapshot != null || codes.size > 1 || creditEntry || promotions.some(promotion =>
+        (applied.has(promotion.id) || (promotion.code != null && codes.has(promotion.code.toLowerCase()))) &&
+        (promotion.type === 'account_credit' || promotion.discountScope === 'order'))) {
+        throw new HttpError(409, 'This order supports address changes only; its saved pricing must remain intact.', 'ORDER_PRICING_EDIT_UNSUPPORTED');
+      }
+      const currentPromotion = promotions.find(promotion => promotion.id === o.promotionId);
 
       // Release the order's current allocations, then re-reserve the new set
       // (throws → whole txn rolls back, leaving the order + stock untouched).
@@ -135,14 +151,11 @@ adminOrders.openapi(
 
       // Keep the order's existing promotion applied, recomputed on the new subtotal.
       let promotion;
-      if (o.promotionId) {
-        const [promo] = await tx.select().from(s.promotion).where(eq(s.promotion.id, o.promotionId)).limit(1);
-        if (promo) {
-          const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
-          const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
-          const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: subtotalCents, activeVerifications: [], items: couponItems });
-          if (ev.valid && ev.promotion) promotion = ev.promotion;
-        }
+      if (currentPromotion && currentPromotion.type !== 'account_credit') {
+        const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
+        const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
+        const ev = evaluateCoupon({ type: currentPromotion.type, value: currentPromotion.value, conditions: currentPromotion.conditions, freeShipping: currentPromotion.freeShipping }, { subtotal: subtotalCents, activeVerifications: [], items: couponItems });
+        if (ev.valid && ev.promotion) promotion = ev.promotion;
       }
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: o.shippingTotal, taxRate, taxInclusive: storeRow!.taxInclusive, shippingTaxable: storeRow!.shippingTaxable, promotion });
 
@@ -180,6 +193,7 @@ adminOrders.openapi(createRoute({
     // claw back from the carrier" scenario, or the reverse (refund shipping
     // only, keep the goods).
     shippingAmount: money.optional(),
+    creditMerchandiseReturn: z.boolean().optional(),
     reason: z.string().optional(),
   })) } }, responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
@@ -256,7 +270,7 @@ adminOrders.openapi(
 
 adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/returns/{id}/approve', summary: 'Approve a return and reserve its refund',
-  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional() })) }, },
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional(), creditMerchandiseReturn: z.boolean().optional() })) }, },
   responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
@@ -271,7 +285,7 @@ adminOrders.openapi(createRoute({
   }
   try {
     const result = await requestRefund({ storeId: st.storeId, orderId: rma.orderId, actor: admin.email,
-      idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId });
+      idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId, creditMerchandiseReturn: body.creditMerchandiseReturn });
     return c.json({ id, ...result }, 200);
   } catch (error) { if (error instanceof RefundError) throw new HttpError(error.status, error.message); throw error; }
 }));

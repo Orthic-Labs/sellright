@@ -4,7 +4,9 @@
  * Column names are snake_case (drizzle `casing: snake_case` in drizzle.config).
  * Commerce rules: docs/FEATURES.md and docs/ARCHITECTURE.md.
  */
+import { sql } from 'drizzle-orm';
 import {
+  check,
   pgTable,
   pgEnum,
   uuid,
@@ -49,7 +51,7 @@ export const paymentState = pgEnum('payment_state', [
 ]);
 export const refundState = pgEnum('refund_state', ['Pending', 'Settled', 'Failed']);
 export const returnStatus = pgEnum('return_status', ['requested', 'approved', 'rejected', 'received', 'refunded']);
-export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'free_shipping']);
+export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'free_shipping', 'account_credit']);
 // 'expired' is NOT auto-transitioned by any background job. Expiry is detected
 // at read time by comparing NOW() against license.expires_at. The only admin-
 // driven status transition is active → revoked. (ra-010)
@@ -417,7 +419,10 @@ export const promotion = pgTable('promotion', {
   storeId: uuid().notNull().references(() => store.id),
   code: text(), // null = automatic
   type: promotionType().notNull(),
-  value: integer().notNull(), // percent (basis points) or fixed cents
+  value: integer().notNull(), // percentage points or fixed cents
+  discountScope: text().$type<'line' | 'order'>().notNull().default('line'),
+  // Source imports supply observed active-query rank; native rows may omit it.
+  stackOrder: integer(),
   // R24 parity: a promotion can combine a percentage/fixed discount WITH free
   // shipping (DD's `order_percentage_discount` + `free_shipping` action
   // pair). `type` stays single-valued (percentage | fixed | free_shipping,
@@ -438,5 +443,8 @@ export const promotion = pgTable('promotion', {
   // 0052: bound affiliate recipient — presence drives auto-onboard/rotation
   // (affiliate/onboarding.ts). Raw-SQL writes predate this mapping.
   affiliateEmail: text(),
-});
+}, (t) => [
+  check('promotion_discount_scope_check', sql`${t.discountScope} IN ('line', 'order')`),
+  check('promotion_stack_order_check', sql`${t.stackOrder} IS NULL OR ${t.stackOrder} >= 0`),
+]);
 

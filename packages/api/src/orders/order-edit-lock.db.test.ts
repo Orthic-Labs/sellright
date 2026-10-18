@@ -6,8 +6,8 @@
 import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql, eq } from 'drizzle-orm';
-import { pool, withStore } from '../db/client.js';
-import { withLockedSet } from '../db/locks.js';
+import { pool, withStore, type Tx } from '../db/client.js';
+import { withLockedSet, type HeldLocks, type LockPlanContribution, type LockSubject } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -16,6 +16,27 @@ import type { EditOpT } from './order-edit.js';
 
 const stockHook = vi.hoisted(() => ({ onStockChanged: vi.fn() }));
 vi.mock('../manifest/stock-hook.js', () => stockHook);
+const lockProbe = vi.hoisted(() => ({
+  orderLocked: undefined as ((tx: Tx) => Promise<void>) | undefined,
+  orderFinished: undefined as (() => void) | undefined,
+  customerStarted: undefined as (() => void) | undefined,
+  customerLocked: undefined as (() => void) | undefined,
+}));
+vi.mock('../db/locks.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/locks.js')>();
+  return { ...actual, withLockedSet: async <T>(storeId: string, subject: LockSubject | readonly LockSubject[],
+    fn: (tx: Tx, held: HeldLocks, plan: LockPlanContribution) => Promise<T>, opts?: Parameters<typeof actual.withLockedSet>[3]): Promise<T> => {
+    const kind = 'kind' in subject ? subject.kind : null;
+    if (kind === 'customer') lockProbe.customerStarted?.();
+    return actual.withLockedSet(storeId, subject, async (tx, held, plan) => {
+      if (kind === 'order') await lockProbe.orderLocked?.(tx);
+      if (kind === 'customer') lockProbe.customerLocked?.();
+      const result = await fn(tx, held, plan);
+      if (kind === 'order') lockProbe.orderFinished?.();
+      return result;
+    }, opts);
+  } };
+});
 vi.mock('../payments/stripe-reconcile.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../payments/stripe-reconcile.js')>();
   return { ...actual, cancelOrderStripeIntents: async () => {} };
@@ -33,6 +54,22 @@ const LINE = '7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a0006';
 const LIC = '7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a0007';
 const CODE = 'LC-1';
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function barrier() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((ready) => { resolve = ready; });
+  return { promise, resolve };
+}
+async function waitForBlockedBy(pid: number): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const result = await pool.query<{ blocked: boolean }>(
+      'SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))) AS blocked', [pid],
+    );
+    if (result.rows[0]?.blocked) return;
+    await pause(10);
+  }
+  throw new Error('Revocation did not wait for the commit lock set');
+}
 
 async function wipe(): Promise<void> {
   await pool.query('TRUNCATE store CASCADE');
@@ -53,6 +90,7 @@ async function seed(): Promise<void> {
     await tx.insert(s.order).values({
       id: ORDER, storeId: STORE, code: CODE, state: 'Paid', currency: 'USD', customerId: CUSTOMER,
       subtotal: t.subtotal, discountTotal: t.discountTotal, shippingTotal: t.shippingTotal, taxTotal: t.taxTotal, grandTotal: t.grandTotal,
+      shippingMethodCode: 'std', shippingMethodName: 'Standard',
       shippingAddress: { fullName: 'Ship Er', line1: '1 Main St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US', phone: '555' },
       billingAddress: { fullName: 'Bill Er', line1: '2 Bill St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US' },
       metadata: {},
@@ -77,10 +115,10 @@ const orderQty = async () => withStore(STORE, async (tx) => {
 
 const ops: EditOpT[] = [{ op: 'set_quantity', lineId: LINE, quantity: 3 }];
 
-function commitEdit(idempotencyKey: string) {
-  return previewOrderEdit(STORE, CODE, ops).then((prev) => commitOrderEdit({
-    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: prev.after.grandTotal,
-    idempotencyKey, notifyCustomer: false, settlement: { type: 'leave_due' },
+function commitEdit(idempotencyKey: string, pricingOptions: { recalculateShipping?: boolean; recalculateShippingPromotions?: boolean } = {}, editOps = ops) {
+  return previewOrderEdit(STORE, CODE, editOps, pricingOptions).then((prev) => commitOrderEdit({
+    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops: editOps, expectedGrandTotal: prev.after.grandTotal,
+    previewAcceptanceHash: prev.previewAcceptanceHash, ...pricingOptions, idempotencyKey, notifyCustomer: false, settlement: { type: 'leave_due' },
   }));
 }
 
@@ -99,14 +137,22 @@ describe.skipIf(!isTestDb)('T-L2 order-edit commit vs licence revoke on one orde
     await wipe();
     await seed();
     stockHook.onStockChanged.mockClear();
+    lockProbe.orderLocked = undefined;
+    lockProbe.orderFinished = undefined;
+    lockProbe.customerStarted = undefined;
+    lockProbe.customerLocked = undefined;
   });
   afterAll(wipe);
 
   it('revoke holds the licence first, commit waits for the set; both finish, edit applied once', async () => {
     const revoke = revokeLicence();
     await pause(50);
-    const commit = commitEdit('lock-c-revoke-first');
-    const [r, c] = await Promise.all([revoke, commit]);
+    const commit = commitEdit('lock-c-revoke-first').then(result => ({ result }), error => ({ error }));
+    const [r, attempt] = await Promise.all([revoke, commit]);
+    // Revocation advances the full before fingerprint while commit waits. A
+    // fresh accepted preview is required; the refused attempt writes no edit.
+    if ('error' in attempt) expect(attempt.error).toMatchObject({ code: 'PREVIEW_STALE' });
+    const c = 'result' in attempt ? attempt.result : await commitEdit('lock-c-revoke-first');
     expect(r).toBe('revoked');
     expect(c.replay).toBe(false);
     expect(c.code).toBe(CODE);
@@ -115,13 +161,79 @@ describe.skipIf(!isTestDb)('T-L2 order-edit commit vs licence revoke on one orde
   }, 20000);
 
   it('commit holds the order set first, revoke waits for it; both finish without deadlock', async () => {
+    const locked = barrier(), release = barrier(), revokeStarted = barrier();
+    const trace: string[] = [];
+    let commitPid = 0;
+    lockProbe.orderLocked = async (tx) => {
+      const result = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      commitPid = Number(result.rows[0]?.pid);
+      if (!Number.isSafeInteger(commitPid) || commitPid < 1) throw new Error('Commit backend identity missing');
+      trace.push('commit:locked');
+      locked.resolve();
+      await release.promise;
+    };
+    lockProbe.orderFinished = () => { trace.push('commit:finished'); };
+    lockProbe.customerStarted = revokeStarted.resolve;
+    lockProbe.customerLocked = () => { trace.push('revoke:locked'); };
     const commit = commitEdit('lock-c-commit-first');
-    await pause(50);
-    const revoke = revokeLicence();
+    const commitDone = commit.then(() => undefined, () => undefined);
+    let revoke: ReturnType<typeof revokeLicence> | undefined;
+    let revokeDone: Promise<void> | undefined;
+    // Preview & intent retirement precede acquisition. A timer cannot establish
+    // which set won; enter the real locked callback before starting revocation.
+    try {
+      await Promise.race([locked.promise, commit.then(() => { throw new Error('Commit lock barrier was bypassed'); })]);
+      revoke = revokeLicence();
+      revokeDone = revoke.then(() => undefined, () => undefined);
+      await revokeStarted.promise;
+      await waitForBlockedBy(commitPid);
+      expect(trace).toEqual(['commit:locked']);
+    } finally {
+      release.resolve();
+      // Drain only launched work before wipe can run. Non-throwing joins keep
+      // any original barrier/assertion failure; successful setup rethrows an
+      // operation failure through the original promises below.
+      await Promise.all([commitDone, ...(revokeDone ? [revokeDone] : [])]);
+    }
+    if (!revoke) throw new Error('Revocation was not started');
     const [c, r] = await Promise.all([commit, revoke]);
+    expect(trace).toEqual(['commit:locked', 'commit:finished', 'revoke:locked']);
     expect(r).toBe('revoked');
     expect(c.replay).toBe(false);
     expect(await licenseStatus()).toBe('revoked');
     expect(await orderQty()).toBe(3);
   }, 20000);
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])('accepts unchanged preview shipping flags %s/%s under locks', async (recalculateShipping, recalculateShippingPromotions) => {
+    const options = { recalculateShipping, recalculateShippingPromotions };
+    const result = await commitEdit(`shipping-flags-${recalculateShipping}-${recalculateShippingPromotions}`, options);
+    expect(result.replay).toBe(false);
+    expect(await orderQty()).toBe(3);
+    const follow = await previewOrderEdit(STORE, CODE, [{ op: 'set_quantity', lineId: LINE, quantity: 4 }], { recalculateShipping: false, recalculateShippingPromotions: true });
+    expect(follow.after.shippingTotal).toBe(500);
+  });
+
+  it('rejects changed shipping options even when payable cents match accepted preview', async () => {
+    const preview = await previewOrderEdit(STORE, CODE, ops, { recalculateShipping: false, recalculateShippingPromotions: false });
+    await expect(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops,
+      expectedGrandTotal: preview.after.grandTotal, previewAcceptanceHash: preview.previewAcceptanceHash,
+      recalculateShipping: true, recalculateShippingPromotions: false, idempotencyKey: 'shipping-flags-stale', notifyCustomer: false, settlement: { type: 'leave_due' },
+    })).rejects.toMatchObject({ code: 'PREVIEW_STALE' });
+    expect(await orderQty()).toBe(2);
+  });
+
+  it.each([
+    { action: { op: 'set_shipping_amount', amount: 70 } as EditOpT, shipping: 70 },
+    { action: { op: 'remove_shipping' } as EditOpT, shipping: 0 },
+  ])('preserves explicit shipping transition $shipping through next retained edit', async ({ action, shipping }) => {
+    const options = { recalculateShipping: false, recalculateShippingPromotions: false };
+    await commitEdit(`carrier-before-${shipping}`, options);
+    await commitEdit(`carrier-replace-${shipping}`, options, [action]);
+    const followOps: EditOpT[] = [{ op: 'set_quantity', lineId: LINE, quantity: 4 }];
+    const follow = await previewOrderEdit(STORE, CODE, followOps, options);
+    expect(follow.after.shippingTotal).toBe(shipping);
+    await commitEdit(`carrier-after-${shipping}`, options, followOps);
+    const [order] = await withStore(STORE, tx => tx.select().from(s.order).where(eq(s.order.id, ORDER)));
+    expect(order!.shippingTotal).toBe(shipping);
+  });
 });

@@ -39,6 +39,14 @@ describe('source schema preflight', () => {
     expect(() => assertSourceSchema(schema)).toThrow(/"blog_post"\."slug".*incomplete/);
   });
 
+  it('requires edit-basis source relationships without guessing from order totals', () => {
+    const schema = minimal();
+    schema.get('order_line')!.delete('shippingLineId');
+    schema.get('order_line')!.delete('taxCategoryId');
+    schema.delete('surcharge');
+    expect(() => assertSourceSchema(schema)).toThrow(/"order_line"\."shippingLineId".*"order_line"\."taxCategoryId".*table "surcharge"/);
+  });
+
   it('reports unmapped custom fields on imported tables only', () => {
     const schema = minimal();
     schema.get('customer')!.add('customFieldsSheeridverifications'); // known

@@ -1,7 +1,9 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { request as httpRequest } from 'node:http';
+import { networkInterfaces } from 'node:os';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { env } from '../env.js';
 
 interface LookupAddress {
   address: string;
@@ -26,6 +28,10 @@ export interface SafeOutboundFetchOptions {
   lookup?: OutboundUrlLookup;
   request?: SafeOutboundRequest;
 }
+
+// Callers consume JSON or webhook acknowledgements, including Listmonk's
+// paginated lists & campaign HTML response. Never buffer an unbounded peer body.
+const MAX_OUTBOUND_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 const PRIVATE_HOSTNAMES = new Set([
   'localhost',
@@ -132,6 +138,37 @@ function mappedIpv4(bytes: number[]): string | null {
   return null;
 }
 
+/** Byte identity, including IPv4-mapped IPv6 aliases of an IPv4 address. */
+function addressIdentity(address: string): string | null {
+  if (isIP(address) === 4) return '4:' + ipv4ToBytes(address)!.join('.');
+  if (isIP(address) !== 6) return null;
+  const bytes = parseIpv6ToBytes(address);
+  if (!bytes) return null;
+  const mapped = mappedIpv4(bytes);
+  return mapped ? '4:' + mapped : '6:' + Buffer.from(bytes).toString('hex');
+}
+
+function currentSelfAddresses(): Set<string> {
+  const addresses = new Set<string>();
+  // Only operator config & OS interface addresses define host identity. This
+  // never resolves configured hostnames or consumes forwarded/request headers.
+  const configured = env.OUTBOUND_SELF_IPS.trim();
+  for (const address of configured ? configured.split(',') : []) {
+    const identity = addressIdentity(address.trim());
+    if (!identity) throw new Error('Invalid OUTBOUND_SELF_IPS inventory');
+    addresses.add(identity);
+  }
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      // OS IPv6 scope identifiers do not alter address bytes.
+      const identity = addressIdentity(entry.address.split('%')[0]!);
+      if (!identity) throw new Error('Invalid host network interface address');
+      addresses.add(identity);
+    }
+  }
+  return addresses;
+}
+
 function allZero(bytes: number[]): boolean {
   return bytes.every((b) => b === 0);
 }
@@ -184,6 +221,7 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   if (!hostname || isPrivateHostname(hostname)) throw new Error('Outbound URL must not target private network hosts');
   if (isIP(hostname)) {
     if (isPrivateOrSpecialAddress(hostname)) throw new Error('Outbound URL must not target private network hosts');
+    if (currentSelfAddresses().has(addressIdentity(hostname)!)) throw new Error('Outbound URL must not target this host');
     url.hash = '';
     return { url, address: hostname, family: isIP(hostname) };
   }
@@ -193,6 +231,10 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   if (!records.length) throw new Error('Outbound URL host could not be resolved');
   if (records.some((record) => isPrivateOrSpecialAddress(record.address))) {
     throw new Error('Outbound URL must not resolve to private network addresses');
+  }
+  const selfAddresses = currentSelfAddresses();
+  if (records.some((record) => selfAddresses.has(addressIdentity(normalizeHostname(record.address))!))) {
+    throw new Error('Outbound URL must not resolve to this host');
   }
 
   url.hash = '';
@@ -235,6 +277,76 @@ async function nodeRequestWithPinnedLookup(
   const headers = headersToRecord(init.headers);
 
   return await new Promise<Response>((resolve, reject) => {
+    let responseBody = Buffer.alloc(0);
+    let receivedBytes = 0;
+    let settled = false;
+    let bodyless = false;
+    let response: IncomingMessage | undefined;
+    const detachBodyListeners = () => {
+      response?.off('data', onData);
+      response?.off('end', onEnd);
+      response?.off('aborted', onAborted);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      responseBody = Buffer.alloc(0);
+      detachBodyListeners();
+      // Error listeners stay until close to consume errors emitted by destroy.
+      // Destruction carries no peer-provided error or response body.
+      response?.destroy();
+      req.destroy();
+      reject(error);
+    };
+    const onData = (chunk: Buffer | string) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
+      if (bodyless && bytes > 0) {
+        fail(new Error('Outbound response must not contain a body'));
+        return;
+      }
+      if (bytes > MAX_OUTBOUND_RESPONSE_BYTES - receivedBytes) {
+        fail(new Error('Outbound response exceeds 8388608 byte limit'));
+        return;
+      }
+      if (bytes === 0) return;
+      const nextSize = receivedBytes + bytes;
+      if (responseBody.length < nextSize) {
+        // Coalesce tiny chunks too: retained memory & per-chunk object overhead
+        // stay bounded rather than accumulating millions of small Buffers.
+        const capacity = Math.min(MAX_OUTBOUND_RESPONSE_BYTES, Math.max(64 * 1024, nextSize, responseBody.length * 2));
+        const grown = Buffer.allocUnsafe(capacity);
+        responseBody.copy(grown, 0, 0, receivedBytes);
+        responseBody = grown;
+      }
+      (Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).copy(responseBody, receivedBytes);
+      receivedBytes = nextSize;
+    };
+    const onAborted = () => fail(new Error('Outbound response aborted'));
+    const onResponseError = (error: Error) => fail(error);
+    const onRequestError = (error: Error) => fail(error);
+    const onEnd = () => {
+      if (settled || !response) return;
+      try {
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(response.headers)) {
+          if (Array.isArray(value)) {
+            for (const item of value) responseHeaders.append(key, item);
+          } else if (value != null) {
+            responseHeaders.set(key, String(value));
+          }
+        }
+        const result = new Response(bodyless ? null : responseBody.subarray(0, receivedBytes), {
+          status: response.statusCode ?? 0,
+          statusText: response.statusMessage,
+          headers: responseHeaders,
+        });
+        settled = true;
+        responseBody = Buffer.alloc(0);
+        detachBodyListeners();
+        resolve(result);
+      } catch (error) { fail(error instanceof Error ? error : new Error('Invalid outbound response')); }
+    };
     const req = request(url, {
       method: init.method ?? 'GET',
       headers,
@@ -242,26 +354,29 @@ async function nodeRequestWithPinnedLookup(
       servername: connect.servername,
       signal: init.signal as AbortSignal | undefined,
     }, (res) => {
-      const chunks: Buffer[] = [];
-      res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      res.on('end', () => {
-        const responseHeaders = new Headers();
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (Array.isArray(value)) {
-            for (const item of value) responseHeaders.append(key, item);
-          } else if (value != null) {
-            responseHeaders.set(key, String(value));
-          }
-        }
-        resolve(new Response(Buffer.concat(chunks), {
-          status: res.statusCode ?? 0,
-          statusText: res.statusMessage,
-          headers: responseHeaders,
-        }));
+      response = res;
+      res.on('error', onResponseError);
+      res.once('close', () => {
+        if (!settled) fail(new Error('Outbound response closed before completion'));
+        detachBodyListeners();
+        res.off('error', onResponseError);
       });
+      if (settled) { res.destroy(); return; }
+      bodyless = (init.method ?? 'GET').toUpperCase() === 'HEAD' || [204, 205, 304].includes(res.statusCode ?? 0);
+      const declaredLength = res.headers['content-length']?.trim();
+      // HEAD & 304 may describe a representation larger than their absent body.
+      if (!bodyless && typeof declaredLength === 'string' && /^\d+$/.test(declaredLength) && BigInt(declaredLength) > BigInt(MAX_OUTBOUND_RESPONSE_BYTES)) {
+        fail(new Error('Outbound response exceeds 8388608 byte limit'));
+        return;
+      }
+      res.on('data', onData);
+      res.once('end', onEnd);
+      res.once('aborted', onAborted);
     });
-    req.on('error', reject);
-    req.end(body);
+    req.on('error', onRequestError);
+    req.once('close', () => req.off('error', onRequestError));
+    try { req.end(body); }
+    catch (error) { fail(error instanceof Error ? error : new Error('Outbound request failed')); }
   });
 }
 

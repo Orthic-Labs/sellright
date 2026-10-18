@@ -56,9 +56,10 @@ export async function remainingRecoveryCodes(adminId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
-async function consumeRecoveryCode(adminId: string, code: string): Promise<boolean> {
+type FactorDb = Pick<typeof db, 'select' | 'update' | 'insert' | 'delete' | 'execute'>;
+async function consumeRecoveryCode(adminId: string, code: string, tx: FactorDb = db): Promise<boolean> {
   if (normalizeRecoveryCode(code).length !== 16) return false;
-  const used = await db
+  const used = await tx
     .update(s.adminRecoveryCode)
     .set({ usedAt: new Date() })
     .where(and(eq(s.adminRecoveryCode.adminUserId, adminId), eq(s.adminRecoveryCode.codeHash, hashRecoveryCode(code)), isNull(s.adminRecoveryCode.usedAt)))
@@ -74,17 +75,19 @@ async function consumeRecoveryCode(adminId: string, code: string): Promise<boole
  * last step per admin in process memory. Rows older than the ±1-step window are pruned on the way.
  */
 export async function verifyTotpOnce(adminId: string, secretB32: string, code: string): Promise<boolean> {
+  return db.transaction(tx => verifyTotpOnceTx(adminId, secretB32, code, tx));
+}
+
+async function verifyTotpOnceTx(adminId: string, secretB32: string, code: string, tx: FactorDb): Promise<boolean> {
   const step = matchTotpStep(secretB32, code);
   if (step === null) return false;
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'totp-step:' + adminId}, 0))`);
-    await tx.delete(s.adminTotpUsedStep).where(and(eq(s.adminTotpUsedStep.adminUserId, adminId), lt(s.adminTotpUsedStep.step, step - 10)));
-    const [later] = await tx.select({ step: s.adminTotpUsedStep.step }).from(s.adminTotpUsedStep)
-      .where(and(eq(s.adminTotpUsedStep.adminUserId, adminId), gte(s.adminTotpUsedStep.step, step))).limit(1);
-    if (later) return false; // replay (same step) or an older code after a newer one was used
-    await tx.insert(s.adminTotpUsedStep).values({ adminUserId: adminId, step });
-    return true;
-  });
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'totp-step:' + adminId}, 0))`);
+  await tx.delete(s.adminTotpUsedStep).where(and(eq(s.adminTotpUsedStep.adminUserId, adminId), lt(s.adminTotpUsedStep.step, step - 10)));
+  const [later] = await tx.select({ step: s.adminTotpUsedStep.step }).from(s.adminTotpUsedStep)
+    .where(and(eq(s.adminTotpUsedStep.adminUserId, adminId), gte(s.adminTotpUsedStep.step, step))).limit(1);
+  if (later) return false; // replay (same step) or an older code after a newer one was used
+  await tx.insert(s.adminTotpUsedStep).values({ adminUserId: adminId, step });
+  return true;
 }
 
 /** Verify the second factor for an admin whose (plaintext) TOTP secret is `secretB32`: a 6-digit TOTP
@@ -94,4 +97,11 @@ export async function verifySecondFactor(adminId: string, secretB32: string, cod
   const c = code.trim();
   if (/^\d{6}$/.test(c)) return verifyTotpOnce(adminId, secretB32, c);
   return consumeRecoveryCode(adminId, c);
+}
+
+/** Credential mutation owns this transaction, including successful proof consumption. */
+export async function verifySecondFactorTx(adminId: string, secretB32: string, code: string | undefined, tx: FactorDb): Promise<boolean> {
+  if (!code) return false;
+  const c = code.trim();
+  return /^\d{6}$/.test(c) ? verifyTotpOnceTx(adminId, secretB32, c, tx) : consumeRecoveryCode(adminId, c, tx);
 }

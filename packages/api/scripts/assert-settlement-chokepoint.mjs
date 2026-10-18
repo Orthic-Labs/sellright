@@ -26,7 +26,8 @@ export const LOCUS = { file: 'src/payments/settlement/record.ts', symbol: 'recor
 const PROTECTED = new Set(['payment', 'order', 'subscription_invoice_payment', 'settlement_operation', 'order_pending_effect']);
 const ALWAYS_PROTECTED = new Set(['payment', 'subscription_invoice_payment', 'settlement_operation', 'order_pending_effect']); // any write
 const WRITE = new Set(['insert', 'update', 'delete']);
-const isTest = (f) => /\.(test|spec)\.ts$/.test(f);
+// Production packaging strips *.testkit.*; fixture helpers share test-only treatment.
+const isTest = (f) => /\.(test|spec|testkit)\.ts$/.test(f);
 
 export function loadAllowlist(path) {
   return JSON.parse(readFileSync(path, 'utf8')).entries;

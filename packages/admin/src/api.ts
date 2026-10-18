@@ -119,7 +119,8 @@ export interface OrderDetail {
   placedAt: string | null; createdAt: string;
   shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
   customer: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
-  lines: { id: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
+  hasPostedCredit?: boolean;
+  lines: { id: string; sku: string; name: string; quantity: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
   payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
   fulfillments: {
     id: string; state: string; trackingCode: string | null; carrier: string | null;
@@ -128,11 +129,62 @@ export interface OrderDetail {
   }[];
   refunds: {
     id: string; state: string; amount: number; itemsAmount: number | null; shippingAmount: number | null;
+    creditRestoration?: { state: 'posted' | 'not_applicable' | 'reconciliation_required'; amount: number; errorCode?: string } | null;
     reason: string | null; createdAt: string;
     lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
   }[];
   locations: { id: string; name: string; code: string; isDefault: boolean }[];
   events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } }[];
+}
+type RefundLineBasis = Pick<OrderDetail['lines'][number], 'quantity' | 'refundQuantity' | 'refundAvailableQuantity' | 'refundCashAmounts' | 'refundUnitPrice' | 'refundedQty'>;
+
+/** Current API availability already excludes returned/reserved units. */
+export function refundAvailableUnits(line: RefundLineBasis): number | null {
+  if (Object.hasOwn(line, 'refundAvailableQuantity')) {
+    const available = line.refundAvailableQuantity;
+    return typeof available === 'number' && Number.isSafeInteger(available) && available >= 0 ? available : null;
+  }
+  const quantity = line.refundQuantity ?? line.quantity;
+  if (!Number.isSafeInteger(quantity) || quantity < 0 || !Number.isSafeInteger(line.refundedQty) || line.refundedQty < 0) return null;
+  return Math.max(0, quantity - line.refundedQty);
+}
+
+/** Null means cash basis is unproven; zero is a valid proven cash amount. */
+export function refundCashForQuantity(line: RefundLineBasis, quantity: number): number | null {
+  const available = refundAvailableUnits(line);
+  if (available === null || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > available) return null;
+  if (Object.hasOwn(line, 'refundCashAmounts')) {
+    const amounts = line.refundCashAmounts;
+    if (!Array.isArray(amounts) || amounts.length !== available) return null;
+    let previous = 0;
+    for (const amount of amounts) {
+      if (!Number.isSafeInteger(amount) || amount < previous) return null;
+      previous = amount;
+    }
+    return amounts[quantity - 1];
+  }
+  const price = line.refundUnitPrice;
+  if (typeof price !== 'number' || !Number.isSafeInteger(price) || price < 0) return null;
+  const amount = price * quantity;
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+
+/** Blank selection refunds all remaining units, so every current cash proof must be valid. */
+export function refundCashForRemainingLines(lines: readonly RefundLineBasis[]): number | null {
+  let total = 0;
+  for (const line of lines) {
+    const available = refundAvailableUnits(line);
+    if (available === null) return null;
+    if (available === 0) {
+      // Current API proof failures also report zero availability; validate the vector even for hidden lines.
+      if (Object.hasOwn(line, 'refundCashAmounts') && (!Array.isArray(line.refundCashAmounts) || line.refundCashAmounts.length !== 0)) return null;
+      continue;
+    }
+    const amount = refundCashForQuantity(line, available);
+    if (amount === null || !Number.isSafeInteger(total + amount)) return null;
+    total += amount;
+  }
+  return total;
 }
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
 export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; onHand: number; allocated: number; available: number; optionIds?: string[]; }

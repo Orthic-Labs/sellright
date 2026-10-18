@@ -1,4 +1,4 @@
-import type { AddressForm, EditContext, StagedEdit, WireOp } from './types';
+import type { AddressForm, CouponOp, EditContext, StagedEdit, WireOp } from './types';
 
 const nz = (v: string) => (v.trim() ? v.trim() : undefined);
 
@@ -14,6 +14,17 @@ export const addressToWire = (a: AddressForm) => ({
   province: nz(a.province), postalCode: nz(a.postalCode), country: a.country.trim().toUpperCase(), phone: nz(a.phone),
 });
 
+/** Pending membership for display while a server preview loads. Code identity
+ * is case-insensitive; spaces remain meaningful, matching the API contract. */
+export function couponCodesAfterOps(current: readonly string[], ops: readonly CouponOp[]): string[] {
+  let codes = current.filter((code, index) => current.findIndex(value => value.toLowerCase() === code.toLowerCase()) === index);
+  for (const op of ops) {
+    if (op.op === 'remove_coupon') codes = op.code === undefined ? [] : codes.filter(code => code.toLowerCase() !== op.code!.toLowerCase());
+    else if (op.code.length > 0 && !codes.some(code => code.toLowerCase() === op.code.toLowerCase())) codes.push(op.code);
+  }
+  return codes;
+}
+
 /** Turn the staged page state into the wire op list the API expects (order matters:
  *  quantity changes first, then swaps, adds, coupon, shipping, adjustments, addresses). */
 export function buildOps(ctx: EditContext, st: StagedEdit): WireOp[] {
@@ -24,8 +35,7 @@ export function buildOps(ctx: EditContext, st: StagedEdit): WireOp[] {
   }
   for (const [lineId, sw] of Object.entries(st.swaps)) ops.push({ op: 'swap_variant', lineId, sku: sw.sku, ...(sw.quantity ? { quantity: sw.quantity } : {}) });
   for (const a of st.adds) if (a.quantity > 0) ops.push({ op: 'add_item', sku: a.sku, quantity: a.quantity, ...(a.unitPrice != null ? { unitPrice: a.unitPrice } : {}) });
-  if (st.coupon.mode === 'remove') ops.push({ op: 'remove_coupon' });
-  else if (st.coupon.mode === 'apply' && st.coupon.code.trim()) ops.push({ op: 'apply_coupon', code: st.coupon.code.trim() });
+  ops.push(...st.couponOps);
   if (st.shipping.mode === 'method' && st.shipping.code) ops.push({ op: 'set_shipping_method', code: st.shipping.code });
   else if (st.shipping.mode === 'custom') ops.push({ op: 'set_shipping_amount', amount: Math.max(0, st.shipping.amountCents) });
   else if (st.shipping.mode === 'none') ops.push({ op: 'remove_shipping' });

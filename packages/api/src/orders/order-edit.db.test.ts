@@ -110,6 +110,8 @@ async function makeOrder(o: {
     const [ord] = await tx.insert(s.order).values({
       storeId: STORE, code, state, currency: 'USD', customerId, receiptToken: RT, promotionId: promoRow?.id ?? null,
       subtotal: t.subtotal, discountTotal: t.discountTotal, shippingTotal: t.shippingTotal, taxTotal: t.taxTotal, grandTotal: t.grandTotal,
+      shippingMethodCode: o.shipping == null ? 'std' : null, shippingMethodName: o.shipping == null ? 'Standard' : null,
+      shippingOverride: o.shipping != null,
       shippingAddress: o.ship ?? { fullName: 'Ship Er', line1: '1 Main St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US', phone: '555' },
       billingAddress: { fullName: 'Bill Er', line1: '2 Bill St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US' },
       metadata: o.email === null ? {} : { contact: { email: o.email ?? 'cust@example.test' } },
@@ -138,12 +140,16 @@ const outbox = async (kind?: string) => withStore(STORE, (tx) => tx.select().fro
 const audits = async (action: string) => withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, action)));
 
 let key = 0;
-async function commit(code: string, ops: EditOpT[], over: Partial<CommitInput> = {}, settlement?: SettlementT) {
-  const prev = await previewOrderEdit(STORE, code, ops);
-  return commitOrderEdit({
+async function acceptedCommit(code: string, ops: EditOpT[], over: Partial<CommitInput> = {}, settlement?: SettlementT): Promise<CommitInput> {
+  const prev = await previewOrderEdit(STORE, code, ops, over);
+  return {
     storeId: STORE, storeSlug: SLUG, code, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: prev.after.grandTotal,
+    previewAcceptanceHash: prev.previewAcceptanceHash,
     idempotencyKey: `k-${++key}`, notifyCustomer: true, settlement, ...over,
-  });
+  };
+}
+async function commit(code: string, ops: EditOpT[], over: Partial<CommitInput> = {}, settlement?: SettlementT) {
+  return commitOrderEdit(await acceptedCommit(code, ops, over, settlement));
 }
 async function expectErr(p: Promise<unknown>, code: string) {
   let err: unknown;
@@ -406,6 +412,8 @@ describe('settlement paths', () => {
     const r = await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 2 }], {}, { type: 'record_payment', method: 'cash', amount: 500 });
     expect(r.amountDue).toBe(1500);
     await expectErr(commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'record_payment', method: 'cash', amount: 5000 }), 'SETTLEMENT_INVALID');
+    expect((await orderRow(o.code)).grandTotal).toBe(4500);
+    expect(await linesOf(o.code)).toHaveLength(2);
   });
 
   it('record_payment fully covering an unpaid (PendingPayment) order takes it to Paid', async () => {
@@ -439,16 +447,27 @@ describe('guards: stale preview, idempotency, state', () => {
   it('rejects a stale preview and applies nothing', async () => {
     const o = await makeOrder({});
     const ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
-    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', principalKind: 'human', ops, expectedGrandTotal: 12345, idempotencyKey: 'stale', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
+    const input = await acceptedCommit(o.code, ops, { expectedGrandTotal: 12345 }, { type: 'leave_due' });
+    await expectErr(commitOrderEdit(input), 'PREVIEW_STALE');
     expect(await linesOf(o.code)).toHaveLength(1);
     expect((await orderRow(o.code)).grandTotal).toBe(o.grandTotal);
+  });
+
+  it('requires the accepted preview hash even when the total matches', async () => {
+    const o = await makeOrder({});
+    const ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
+    const input = await acceptedCommit(o.code, ops, {}, { type: 'leave_due' });
+    await expectErr(commitOrderEdit({ ...input, previewAcceptanceHash: undefined }), 'PREVIEW_STALE');
+    expect(await linesOf(o.code)).toHaveLength(1);
+    expect((await orderRow(o.code)).grandTotal).toBe(o.grandTotal);
+    expect(await withStore(STORE, (tx) => tx.select().from(s.orderEdit))).toHaveLength(0);
   });
 
   it('commit is idempotent per key: a replay returns the stored result and does not double-apply', async () => {
     const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }, { sku: 'B', qty: 1 }] });
     const l = (await linesOf(o.code)).find((x) => x.variantSku === 'B')!;
     const ops: EditOpT[] = [{ op: 'remove_line', lineId: l.id }];
-    const input = { storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', principalKind: 'human' as const, ops, expectedGrandTotal: 2500, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'refund_now' } as SettlementT };
+    const input = await acceptedCommit(o.code, ops, { actor: 'a', idempotencyKey: 'same-key' }, { type: 'refund_now' });
     const r1 = await commitOrderEdit(input);
     const r2 = await commitOrderEdit(input);
     expect(r1.replay).toBe(false);
@@ -529,15 +548,57 @@ describe('address editing (G5)', () => {
     const toCanada = { ...addr, city: 'Toronto', province: 'ON', postalCode: 'M5V', country: 'CA' };
     await expectErr(saveOrderAddress({ storeId: STORE, code: o.code, actor: 'a', kind: 'shipping', address: toCanada }), 'COUNTRY_CHANGE_REQUIRES_EDIT');
     expect((await orderRow(o.code)).shippingAddress).toMatchObject({ country: 'US' });
+    await withStore(STORE, (tx) => tx.update(s.productVariant).set({ price: 1500 }).where(eq(s.productVariant.id, V['A']!.id)));
+    const facts = () => withStore(STORE, async tx => ({
+      orders: await tx.select().from(s.order), lines: await tx.select().from(s.orderLine), stock: await tx.select().from(s.stock),
+      payments: await tx.select().from(s.payment), edits: await tx.select().from(s.orderEdit), audits: await tx.select().from(s.auditLog),
+    }));
+    const beforePreview = await facts();
     const op: EditOpT = { op: 'set_address', kind: 'shipping', address: toCanada };
     const p = await previewOrderEdit(STORE, o.code, [op]);
     expect(p.address.shipping).toEqual({ changed: true, countryChanged: true });
+    expect(p.before).toMatchObject({ subtotal: 2000, taxTotal: 0, grandTotal: 2500 });
+    expect(p.after.subtotal).toBe(2000); // address repricing preserves the proven merchandise list price
     expect(p.after.taxTotal).toBe(100); // 5% of 2000 items
     expect(p.balance.amountDue).toBe(100);
+    expect(await facts()).toEqual(beforePreview);
     const r = await commit(o.code, [op], {}, { type: 'record_payment', method: 'cash', reference: 'tax diff' });
     expect(r.amountDue).toBe(0);
     expect((await orderRow(o.code)).shippingAddress).toMatchObject({ country: 'CA' });
     expect((await orderRow(o.code)).taxTotal).toBe(100);
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 2, lineTax: 100 });
+    const back: EditOpT = { op: 'set_address', kind: 'shipping', address: addr };
+    const returning = await previewOrderEdit(STORE, o.code, [back]);
+    expect(returning.before).toMatchObject({ subtotal: 2000, taxTotal: 100, grandTotal: 2600 });
+    expect(returning.after).toMatchObject({ subtotal: 2000, taxTotal: 0, grandTotal: 2500 });
+    expect(returning.balance.amountDue).toBe(-100);
+    await commit(o.code, [back], {}, { type: 'leave_credit' });
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 2, lineTax: 0 });
+    const manualPayments = await withStore(STORE, tx => tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.method, 'manual'))));
+    expect(manualPayments).toHaveLength(1);
+    expect(manualPayments[0]!.amount).toBe(100);
+    expect(await audits('record_payment')).toHaveLength(1);
+  });
+
+  it('country repricing preserves an admitted inclusive list price after the live price changes', async () => {
+    await withStore(STORE, tx => tx.update(s.store).set({ taxInclusive: true }).where(eq(s.store.id, STORE)));
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }], shipping: 0 });
+    await withStore(STORE, async tx => {
+      await tx.update(s.order).set({ subtotal: 1050, grandTotal: 1050 }).where(eq(s.order.id, o.id));
+      await tx.update(s.orderLine).set({ unitPrice: 1050, lineSubtotal: 1050, lineTotal: 1050 }).where(eq(s.orderLine.orderId, o.id));
+      await tx.update(s.payment).set({ amount: 1050 }).where(eq(s.payment.orderId, o.id));
+      await tx.insert(s.taxZone).values({ storeId: STORE, name: 'CA', countries: ['CA'], rate: 500 });
+    });
+    // Admit the original zero-tax basis before changing destination or the live variant price.
+    await commit(o.code, [{ op: 'set_address', kind: 'billing', address: addr }], { notifyCustomer: false });
+    await withStore(STORE, tx => tx.update(s.productVariant).set({ price: 1500 }).where(eq(s.productVariant.id, V['A']!.id)));
+    const op: EditOpT = { op: 'set_address', kind: 'shipping', address: { ...addr, country: 'CA' } };
+    const preview = await previewOrderEdit(STORE, o.code, [op]);
+    expect(preview.before).toMatchObject({ subtotal: 1050, taxTotal: 0, grandTotal: 1050 });
+    expect(preview.after).toMatchObject({ subtotal: 1050, taxTotal: 50, grandTotal: 1050 });
+    expect(preview.balance.amountDue).toBe(0);
+    await commit(o.code, [op], { notifyCustomer: false });
+    expect((await linesOf(o.code))[0]).toMatchObject({ unitPrice: 1000, quantity: 1, lineSubtotal: 1000, lineTax: 50, lineTotal: 1050 });
   });
 });
 
@@ -571,13 +632,22 @@ describe('pay link: /pay charges ONLY the balance on a Paid order', () => {
 
   it('two successive edits each get their own balance payment (claim keyed per payment count)', async () => {
     const o = await makeOrder({});
-    await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'send_pay_link' });
+    const ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
+    await commit(o.code, ops, {}, { type: 'send_pay_link' });
     expect((await app.request(`/v1/shop/orders/${o.code}/pay`, { method: 'POST', headers: hdr, body: JSON.stringify({ method: 'stripe' }) })).status).toBe(200);
-    await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'send_pay_link' });
+    const accepted = await acceptedCommit(o.code, ops, {}, { type: 'send_pay_link' });
+    expect((await previewOrderEdit(STORE, o.code, ops)).previewAcceptanceHash).toBe(accepted.previewAcceptanceHash);
+    await commitOrderEdit(accepted);
     const r2 = await app.request(`/v1/shop/orders/${o.code}/pay`, { method: 'POST', headers: hdr, body: JSON.stringify({ method: 'stripe' }) });
     expect(r2.status).toBe(200);
     expect(await r2.json()).toMatchObject({ payment: 'Settled' });
+    expect((await commitOrderEdit(accepted)).replay).toBe(true);
     expect(chargeCalls.map((c) => c.amount)).toEqual([1000, 1000]);
+    const lines = await linesOf(o.code);
+    const snapshot = (await orderRow(o.code)).pricingSnapshot as { lines: Array<{ key: string; orderLineId: string }> };
+    expect(lines).toHaveLength(3);
+    expect(new Set(snapshot.lines.map(line => line.key)).size).toBe(3);
+    expect(new Set(snapshot.lines.map(line => line.orderLineId))).toEqual(new Set(lines.map(line => line.id)));
   });
 });
 
@@ -607,11 +677,13 @@ describe('persisted shipping method (migration 0086)', () => {
     expect(p.warnings).not.toContain('SHIPPING_METHOD_INFERRED');
   });
 
-  it('legacy NULL code keeps the inference fallback and warns', async () => {
+  it('legacy NULL code requires a mapped calculator or explicit amount before economic edits', async () => {
     const o = await makeOrder({});
-    const p = await previewOrderEdit(STORE, o.code, []);
-    expect(p.shipping.methodCode).toBe('std');
-    expect(p.warnings).toContain('SHIPPING_METHOD_INFERRED');
+    await setMethod(o.id, null, null);
+    await expectErr(previewOrderEdit(STORE, o.code, []), 'ORDER_PRICING_EDIT_UNSUPPORTED');
+    const p = await previewOrderEdit(STORE, o.code, [{ op: 'set_shipping_amount', amount: 500 }]);
+    expect(p.shipping).toMatchObject({ amount: 500, override: true, methodCode: null });
+    expect((await orderRow(o.code)).grandTotal).toBe(o.grandTotal);
   });
 
   it('an edit that sets the method persists code + name; a custom amount clears them; a plain edit leaves them', async () => {
@@ -642,15 +714,15 @@ describe('loyalty earn follows an edit of a Paid order', () => {
   it('posts the delta on the order\'s own rate, once per edit id (replay is a no-op)', async () => {
     const o = await earnedOrder();
     const l = (await linesOf(o.code))[0]!;
-    const input = { idempotencyKey: 'loy-up' };
     const pay = { type: 'record_payment', method: 'cash' } as const;
-    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, pay); // 4000 -> 40 pts, paid in full
+    const input = await acceptedCommit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], { idempotencyKey: 'loy-up' }, pay);
+    const r = await commitOrderEdit(input); // 4000 -> 40 pts, paid in full
     expect(r.replay).toBe(false);
     const adj = (await ledger(o.customerId!)).filter((x) => x.kind === 'adjust');
     expect(adj).toHaveLength(1);
     expect(adj[0]).toMatchObject({ points: 20, reason: 'order_edit_earn', orderId: o.id });
     expect(adj[0]!.sourceRef).toBe(`order_edit:${r.editId}:earn`);
-    const again = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, pay);
+    const again = await commitOrderEdit(input);
     expect(again.replay).toBe(true);
     expect((await ledger(o.customerId!)).filter((x) => x.kind === 'adjust')).toHaveLength(1);
     expect(await balance(o.customerId!)).toBe(40);
@@ -832,7 +904,7 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
     const o2 = await makeOrder({}); await addIntent(o2.id, 'open', 2);
     intentSpy.cancel = false; // gateway could not cancel it
     const prev = await previewOrderEdit(STORE, o2.code, [op]);
-    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o2.code, actor: 'a', principalKind: 'human', ops: [op], expectedGrandTotal: prev.after.grandTotal, idempotencyKey: 'surv', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PAYMENT_UNRESOLVED');
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o2.code, actor: 'a', principalKind: 'human', ops: [op], expectedGrandTotal: prev.after.grandTotal, previewAcceptanceHash: prev.previewAcceptanceHash, idempotencyKey: 'surv', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PAYMENT_UNRESOLVED');
     expect((await orderRow(o2.code)).shippingAddress).toMatchObject({ country: 'US' });
   });
 
@@ -847,10 +919,11 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
   it('an idempotent replay or stale preview never cancels a newer intent', async () => {
     const o = await makeOrder({}); const l = (await linesOf(o.code))[0]!;
     const ops: EditOpT[] = [{ op: 'set_quantity', lineId: l.id, quantity: 3 }];
-    const r1 = await commit(o.code, ops, { idempotencyKey: 'same-key' }, { type: 'leave_due' });
+    const input = await acceptedCommit(o.code, ops, { idempotencyKey: 'same-key' }, { type: 'leave_due' });
+    const r1 = await commitOrderEdit(input);
     expect(r1.replay).toBe(false);
     await addIntent(o.id, 'open'); intentSpy.calls.length = 0;
-    const r2 = await commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: r1.grandTotal, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'leave_due' } });
+    const r2 = await commitOrderEdit(input);
     expect(r2.replay).toBe(true);
     expect(intentSpy.calls).toEqual([]);
     expect(await intentStatuses(o.id)).toEqual(['open']);

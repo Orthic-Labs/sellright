@@ -20,11 +20,14 @@
  *   7. purge refuses a Paid order without force
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
+import * as s from '../db/schema.js';
+import { issue } from '../account-credit/service.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
@@ -130,7 +133,7 @@ async function seedOrder(opts: SeedOrderOpts): Promise<string> {
   return orderId;
 }
 
-type BulkBody = { results: { code: string; ok: boolean; error?: string }[]; succeeded: number; skipped: number };
+type BulkBody = { results: { code: string; ok: boolean; error?: string; errorCode?: string }[]; succeeded: number; skipped: number };
 type ListBody = { items: { code: string }[]; total: number; page: number; pageSize: number };
 
 async function callBulk(path: string, body: unknown): Promise<{ status: number; body: BulkBody }> {
@@ -318,6 +321,82 @@ describe('bulk-purge (cascade)', () => {
     expect(await orderState('O-PURGE-2')).toBe('PendingPayment'); // untouched
   });
 
+  it('retains source modification & credit ledger history while unlinking purged order/payment/refund/line references', async () => {
+    const code = 'O-PURGE-HISTORY';
+    const orderId = await seedOrder({ code, state: 'PartiallyRefunded', deleted: true, withChildren: true });
+    const fixture = await withStore(STORE, async tx => {
+      const [payment] = await tx.select().from(s.payment).where(eq(s.payment.orderId, orderId));
+      const [line] = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId));
+      const [refund] = await tx.insert(s.refund).values({ storeId: STORE, orderId, paymentId: payment!.id,
+        amount: 100, state: 'Settled', metadata: { effectsApplied: true } }).returning();
+      const issued = await issue(tx, { storeId: STORE, amount: 1000, email: 'history@bulk.test', issuanceKey: 'purge-history' });
+      const [redeem] = await tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: issued.account.id,
+        kind: 'REDEEM', status: 'POSTED', amount: 100, delta: -100, balanceAfter: 900, orderId, orderCode: code,
+        orderLineId: line!.id, quantity: 1, allocation: '{"source-line":[100]}', operationalAllocation: { [line!.id]: [100] },
+        idempotencyKey: 'purge-redeem', sourceKey: 'synthetic:purge', sourceId: 'redeem',
+        sourceOrderId: '17', sourceOrderLineId: '19', sourceDigest: 'retained-redeem', sourceRecord: '{"amount":100,"kind":"REDEEM"}' }).returning();
+      const [restore] = await tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: issued.account.id,
+        kind: 'RESTORE', status: 'POSTED', amount: 100, delta: 100, balanceAfter: 1000, relatedTransactionId: redeem!.id,
+        orderId, orderCode: code, refundId: refund!.id, orderLineId: line!.id, quantity: 1,
+        idempotencyKey: 'purge-restore', sourceKey: 'synthetic:purge', sourceId: 'restore',
+        sourceOrderId: '17', sourceRefundId: '23', sourceOrderLineId: '19', sourceDigest: 'retained-restore', sourceRecord: '{"amount":100,"kind":"RESTORE"}' }).returning();
+      const [history] = await tx.insert(s.importedOrderModification).values({ id: randomUUID(), storeId: STORE,
+        sourceKey: 'synthetic:purge', sourceId: '29', sourceDigest: 'retained-modification',
+        sourceRecord: '{"id":"29","orderId":"17","priceChange":-100}', sourceReferences: ['{"id":"19","quantity":1}'],
+        sourceOrderId: '17', sourceRefundId: '23', sourcePaymentId: '31', orderId, refundId: refund!.id, paymentId: payment!.id,
+        scopeDisposition: 'selected_channel', priceChange: -100, note: 'Retained historical note',
+        sourceCreatedAt: '2020-01-02 03:04:05', shippingAddressChange: '{"city":"Austin"}' }).returning();
+      return { account: issued.account, redeem: redeem!, restore: restore!, history: history! };
+    });
+
+    // Existing paid-order policy still requires force & an attributable reason.
+    expect((await callBulk('bulk-purge', { codes: [code] })).body.succeeded).toBe(0);
+    const result = await callBulk('bulk-purge', { codes: [code], force: true, reason: 'Synthetic retention regression' });
+    expect(result.body).toMatchObject({ succeeded: 1, skipped: 0, results: [{ code, ok: true }] });
+    expect(await orderState(code)).toBeNull();
+    const retained = await withStore(STORE, async tx => ({
+      history: (await tx.select().from(s.importedOrderModification).where(eq(s.importedOrderModification.id, fixture.history.id)))[0],
+      entries: await tx.select().from(s.accountCreditTransaction).where(inArray(s.accountCreditTransaction.id, [fixture.redeem.id, fixture.restore.id])),
+      account: (await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, fixture.account.id)))[0],
+    }));
+    expect(retained.history).toEqual({ ...fixture.history, orderId: null, refundId: null, paymentId: null });
+    expect(retained.entries).toHaveLength(2);
+    for (const original of [fixture.redeem, fixture.restore]) {
+      expect(retained.entries.find(entry => entry.id === original.id)).toEqual({ ...original, orderId: null, refundId: null, orderLineId: null });
+    }
+    expect(retained.account).toEqual(fixture.account);
+  });
+
+  it('refuses even forced purge of pending credit hold before any per-order history/account mutation', async () => {
+    const code = 'O-PURGE-CREDIT-HOLD';
+    const orderId = await seedOrder({ code, deleted: true });
+    const fixture = await withStore(STORE, async tx => {
+      const issued = await issue(tx, { storeId: STORE, amount: 500, email: 'hold@bulk.test', issuanceKey: 'purge-hold' });
+      await tx.update(s.order).set({ promotionId: issued.account.promotionId }).where(eq(s.order.id, orderId));
+      await tx.insert(s.accountCreditTransaction).values({ storeId: STORE, accountCreditId: issued.account.id,
+        kind: 'RESERVE', status: 'PENDING', orderId, orderCode: code, amount: 100, delta: 0, idempotencyKey: 'purge-pending-hold' });
+      const [history] = await tx.insert(s.importedOrderModification).values({ id: randomUUID(), storeId: STORE,
+        sourceKey: 'synthetic:purge', sourceId: 'held-history', sourceDigest: 'held-source-digest',
+        sourceRecord: '{"id":"held-history"}', sourceOrderId: 'held-order', orderId,
+        scopeDisposition: 'selected_channel', priceChange: 0, note: 'Retain during refused purge' }).returning();
+      return { accountId: issued.account.id, historyId: history!.id };
+    });
+    const snapshot = () => withStore(STORE, async tx => ({
+      order: await tx.select().from(s.order).where(eq(s.order.id, orderId)),
+      lines: await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)),
+      entries: await tx.select().from(s.accountCreditTransaction).where(eq(s.accountCreditTransaction.accountCreditId, fixture.accountId)),
+      account: await tx.select().from(s.accountCredit).where(eq(s.accountCredit.id, fixture.accountId)),
+      history: await tx.select().from(s.importedOrderModification).where(eq(s.importedOrderModification.id, fixture.historyId)),
+      audit: await tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, orderId)),
+    }));
+    const before = await snapshot();
+    const result = await callBulk('bulk-purge', { codes: [code], force: true, reason: 'Cannot override a live credit hold' });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ succeeded: 0, skipped: 1, results: [{ code, ok: false, errorCode: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }] });
+    expect(result.body.results[0]!.error).toMatch(/cancellation or reconciliation/);
+    expect(await snapshot()).toEqual(before);
+  });
+
   it('(7) purge refuses a Paid order without force', async () => {
     await seedOrder({ code: 'O-PURGE-3', state: 'Paid', deleted: true });
     const res = await callBulk('bulk-purge', { codes: ['O-PURGE-3'] });
@@ -341,7 +420,7 @@ describe('bulk-purge (cascade)', () => {
   it('purge handles every FK that references order (fails when a new FK is added)', async () => {
     const HANDLED = new Set([
       'order_line', 'license', 'payment', 'payment_attempt', 'refund', 'return_request', 'fulfillment', 'promotion_usage', 'order_edit', 'order_adjustment', 'order_reservation', // delete-cascaded
-      'cart', 'stock_movement', 'gift_card_transaction', 'subscription', 'dispute', // unlinked (nullable) back-refs
+      'cart', 'stock_movement', 'gift_card_transaction', 'subscription', 'dispute', 'imported_order_modification', 'account_credit_transaction', // retained, unlinked (nullable) back-refs
     ]);
     const r = await pool.query(
       `SELECT conrelid::regclass::text AS child FROM pg_constraint WHERE contype='f' AND confrelid='"order"'::regclass`,

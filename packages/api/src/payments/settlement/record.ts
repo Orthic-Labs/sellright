@@ -16,6 +16,10 @@ import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
 import * as s from '../../db/schema.js';
 import { consumeForSettlement } from '../reservation.js';
+import { redeemAfterSettlement } from '../../account-credit/service.js';
+import type { CreditReconciliation } from '../../account-credit/types.js';
+import { readOrderPricingSnapshot } from '../../money/pricing-snapshot.js';
+import { err as logger } from '../../lib/logger.js';
 import { canTransition, type OrderState } from '../../money/fsm.js';
 import { registerBuiltinEffectHandlers } from './handlers.js';
 import { enqueueEffects, executeEffectsNow, type EffectMode, type EffectRequest } from './effects.js';
@@ -76,6 +80,7 @@ export interface SettlementOperation {
 }
 
 export interface SettlementResult {
+  creditReconciliation?: CreditReconciliation;
   /** This call recorded the operation (false on a replay or a payment conflict). */
   created: boolean;
   /** The operation fact was already recorded: nothing was mutated and no effect row was created. */
@@ -107,6 +112,33 @@ async function paymentOrderId(tx: Tx, storeId: string, paymentId: string): Promi
   const [p] = await tx.select({ orderId: s.payment.orderId }).from(s.payment)
     .where(and(eq(s.payment.id, paymentId), eq(s.payment.storeId, storeId))).limit(1);
   return p?.orderId ?? null;
+}
+
+/** A provider success remains successful when its accepted credit snapshot cannot post. */
+async function postAcceptedCredit(tx: Tx, storeId: string, orderId: string): Promise<CreditReconciliation | undefined> {
+  await tx.execute(sql`SAVEPOINT settlement_credit_snapshot`);
+  try {
+    const [hold] = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
+      eq(s.accountCreditTransaction.storeId, storeId), eq(s.accountCreditTransaction.orderId, orderId),
+      eq(s.accountCreditTransaction.kind, 'RESERVE'), eq(s.accountCreditTransaction.status, 'PENDING'))).limit(1);
+    if (!hold) { await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`); return; }
+    const [order] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.id, orderId))).limit(1);
+    if (!order || !['Paid', 'PartiallyRefunded', 'Refunded'].includes(order.state)) { await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`); return; }
+    const lines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity }).from(s.orderLine).where(and(eq(s.orderLine.storeId, storeId), eq(s.orderLine.orderId, orderId)));
+    const snapshot = readOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'settlement',
+      totals: { subtotal: order.subtotal, discountTotal: order.discountTotal, shippingTotal: order.shippingTotal,
+        taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount: (order.metadata as { loyalty?: { pointsDiscount?: number } } | null)?.loyalty?.pointsDiscount ?? 0 } });
+    if (!snapshot?.selectedCredit) throw new Error('Accepted credit allocation is unavailable');
+    const result = await redeemAfterSettlement(tx, { storeId, orderId, appliedAmount: snapshot.selectedCredit.appliedAmount, allocation: snapshot.selectedCredit.allocation });
+    await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`);
+    return result.ok ? undefined : result;
+  } catch {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT settlement_credit_snapshot`);
+    await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`);
+    const result: CreditReconciliation = { ok: false, event: 'account_credit.reconciliation_required', operation: 'redeem', storeId, orderId, errorCode: 'accepted_snapshot_invalid' };
+    logger.error('Account credit requires reconciliation', undefined, result);
+    return result;
+  }
 }
 
 export async function recordSettlementOperation(tx: Tx, op: SettlementOperation): Promise<SettlementResult> {
@@ -340,10 +372,12 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
   // transaction. No-op for orders without held reservations and for orders that are not Paid|PartiallyRefunded
   // after the apply (money on a cancelled order keeps its hold; I1 / payment_after_cancel).
   let consumedReservationIds: string[] = [];
+  let creditReconciliation: CreditReconciliation | undefined;
   if (CONSUMING_KINDS.has(op.kind)) {
     const orderId = applied.orderId ?? op.orderId ?? (applied.paymentId ? await paymentOrderId(tx, op.storeId, applied.paymentId) : null);
     // The Paid transition op carries no payment row of its own: the consumed payment is the order's latest Settled one.
     const paymentId = applied.paymentId ?? (orderId ? await latestSettledPaymentId(tx, op.storeId, orderId) : null);
+    if (orderId) creditReconciliation = await postAcceptedCredit(tx, op.storeId, orderId);
     if (orderId) consumedReservationIds = (await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId })).map((r) => r.id);
   }
   // PAYMENT-TIMING §3.7.1: issuance-class effects carry the reservations this settlement consumed (informational;
@@ -354,7 +388,7 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
   const created = await enqueueEffects(tx, op.storeId, { kind: op.kind, id: operationId }, effects);
   if ((op.effectMode ?? 'inline') === 'inline') await executeEffectsNow(tx, created.map((r) => r.id));
   return {
-    created: true, replayed: false, operationRowId: opRow.id, paymentId: applied.paymentId,
+    created: true, replayed: false, operationRowId: opRow.id, paymentId: applied.paymentId, creditReconciliation,
     invoicePaymentId: applied.invoicePaymentId, effectIds: created.map((r) => r.id), storedClassification: op.classification,
   };
 }
