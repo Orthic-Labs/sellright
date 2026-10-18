@@ -73,7 +73,7 @@ function buildSource(variant: Variant): string[] {
     TABLE('"user"', ['id int PRIMARY KEY', 'verified boolean']),
     TABLE('session', ['id int PRIMARY KEY', 'token text', 'type text', 'invalidated boolean', 'expires timestamptz', '"activeChannelId" int', '"activeOrderId" int', '"userId" int']),
     TABLE('administrator', ['"userId" int', '"deletedAt" timestamp']),
-    TABLE('order_channels_channel', ['"orderId" int', '"channelId" int']),
+    TABLE('order_channels_channel', ['"orderId" int', '"channelId" int', 'PRIMARY KEY ("orderId", "channelId")']),
     TABLE('authentication_method', ['"userId" int', 'type text', '"passwordHash" text']),
     TABLE('customer', ['id int PRIMARY KEY', '"emailAddress" text', '"firstName" text', '"lastName" text',
       '"phoneNumber" text', '"userId" int, "deletedAt" timestamp', '"createdAt" timestamp', '"updatedAt" timestamp', ...customerCf]),
@@ -85,7 +85,8 @@ function buildSource(variant: Variant): string[] {
       '"shippingAddress" text', '"billingAddress" text', '"couponCodes" text', '"customerId" int',
       '"createdAt" timestamp', '"updatedAt" timestamp', ...(dd ? ['"customFieldsIspreorder" boolean'] : []), 'active boolean NOT NULL DEFAULT false']),
     TABLE('order_line', ['id int PRIMARY KEY', '"productVariantId" int', '"orderId" int', 'quantity int',
-      '"orderPlacedQuantity" int', '"listPrice" int', '"listPriceIncludesTax" boolean', 'adjustments text', '"taxLines" text']),
+      '"orderPlacedQuantity" int', '"listPrice" int', '"listPriceIncludesTax" boolean', 'adjustments text', '"taxLines" text',
+      '"shippingLineId" int', '"taxCategoryId" int']),
     TABLE('product', ['id int PRIMARY KEY', 'enabled boolean', '"featuredAssetId" int', '"deletedAt" timestamp']),
     TABLE('product_translation', ['"baseId" int', '"languageCode" varchar(5)', 'name text', 'slug text', 'description text']),
     TABLE('product_variant', ['id int PRIMARY KEY', '"productId" int', 'sku text', 'enabled boolean',
@@ -132,7 +133,9 @@ function buildSource(variant: Variant): string[] {
     TABLE('order_promotions_promotion', ['"orderId" int', '"promotionId" int']),
     TABLE('shipping_method', ['id int PRIMARY KEY', 'code text', 'checker text', 'calculator text', '"deletedAt" timestamp']),
     TABLE('shipping_method_translation', ['"baseId" int', '"languageCode" varchar(5)', 'name text']),
-    TABLE('shipping_line', ['id int PRIMARY KEY', '"orderId" int', '"shippingMethodId" int']),
+    TABLE('shipping_line', ['id int PRIMARY KEY', '"orderId" int', '"shippingMethodId" int',
+      '"listPrice" int', '"listPriceIncludesTax" boolean', 'adjustments text', '"taxLines" text']),
+    TABLE('surcharge', ['id int PRIMARY KEY', '"orderId" int', '"listPrice" int', '"listPriceIncludesTax" boolean', '"taxLines" text']),
     TABLE('tax_rate', ['id int PRIMARY KEY', 'enabled boolean', '"zoneId" int', '"categoryId" int', 'value int', '"customerGroupId" int']),
     // Plugin tables exist only where the source enabled the plugin. Both
     // stores run BlogPlugin; affiliate + waitlist are DD-only.
@@ -196,10 +199,11 @@ const DD_SEED = [
      (1, 'ORD-1', 'PaymentSettled', 'USD', '2024-03-01 00:00:00', 1000, 1000, 0, 0, '{"line1":"1 Main St"}', '{"line1":"1 Main St"}', 'AFF10', 1, '2024-03-01 00:00:00', '2024-03-01 00:00:00', false),
      (2, 'ORD-2', 'PaymentSettled', 'USD', '2024-03-02 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, NULL, '2024-03-02 00:00:00', '2024-03-02 00:00:00', true),
      (3, 'ORD-3', 'PaymentSettled', 'USD', '2024-03-03 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, NULL, '2024-03-03 00:00:00', '2024-03-03 00:00:00', false)`,
+  `INSERT INTO order_channels_channel VALUES (1, 1), (2, 1), (3, 1)`,
   `INSERT INTO order_line VALUES
-     (1, 1, 1, 1, 1, 1000, false, '[]', '[]'),
-     (2, 1, 2, 1, 1, 1000, false, '[]', '[]'),
-     (3, 1, 3, 1, 1, 1000, false, '[]', '[]')`,
+     (1, 1, 1, 1, 1, 1000, false, '[]', '[]', NULL, 1),
+     (2, 1, 2, 1, 1, 1000, false, '[]', '[]', NULL, 1),
+     (3, 1, 3, 1, 1, 1000, false, '[]', '[]', NULL, 1)`,
   `INSERT INTO payment_method VALUES
      (1, 'nmi-payment', '{"code":"nmi","args":[{"name":"testMode","value":"false"}]}'),
      (2, 'sezzle', '{"code":"sezzle","args":[]}'),
@@ -233,9 +237,10 @@ const RH_SEED = [
   `INSERT INTO "order" VALUES
      (1, 'ORD-1', 'PaymentSettled', 'USD', '2024-03-01 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, 1, '2024-03-01 00:00:00', '2024-03-01 00:00:00'),
      (2, 'ORD-2', 'PaymentSettled', 'USD', '2024-03-02 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, NULL, '2024-03-02 00:00:00', '2024-03-02 00:00:00')`,
+  `INSERT INTO order_channels_channel VALUES (1, 1), (2, 1)`,
   `INSERT INTO order_line VALUES
-     (1, 1, 1, 1, 1, 1000, false, '[]', '[]'),
-     (2, 1, 2, 1, 1, 1000, false, '[]', '[]')`,
+     (1, 1, 1, 1, 1, 1000, false, '[]', '[]', NULL, 1),
+     (2, 1, 2, 1, 1, 1000, false, '[]', '[]', NULL, 1)`,
   `INSERT INTO payment_method VALUES
      (1, 'stripe', '{"code":"stripe","args":[{"name":"testMode","value":"false"}]}')`,
   `INSERT INTO payment VALUES
@@ -473,7 +478,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const client = await sourcePool.connect();
     try {
       await client.query(`INSERT INTO "order" VALUES (3, 'ORD-3', 'PaymentSettled', 'USD', '2024-03-03 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, NULL, '2024-03-03 00:00:00', '2024-03-03 00:00:00')`);
-      await client.query(`INSERT INTO order_line VALUES (3, 1, 3, 1, 1, 1000, false, '[]', '[]')`);
+      await client.query('INSERT INTO order_channels_channel VALUES (3, 1)');
+      await client.query(`INSERT INTO order_line VALUES (3, 1, 3, 1, 1, 1000, false, '[]', '[]', NULL, 1)`);
       await client.query(`INSERT INTO payment VALUES (3, '2024-03-03 00:00:00', 3, 'stripe', 'Settled', 1000, 'pi_test_rh_3', '{"testMode":"true","paymentIntentId":"pi_test_rh_3"}', NULL)`);
     } finally { client.release(); }
     const storeId = randomUUID();
@@ -499,7 +505,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const client = await sourcePool.connect();
     try {
       await client.query(`INSERT INTO "order" VALUES (3, 'ORD-3', 'PaymentSettled', 'USD', '2024-03-03 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, NULL, '2024-03-03 00:00:00', '2024-03-03 00:00:00')`);
-      await client.query(`INSERT INTO order_line VALUES (3, 1, 3, 1, 1, 1000, false, '[]', '[]')`);
+      await client.query('INSERT INTO order_channels_channel VALUES (3, 1)');
+      await client.query(`INSERT INTO order_line VALUES (3, 1, 3, 1, 1, 1000, false, '[]', '[]', NULL, 1)`);
       await client.query(`INSERT INTO payment_method VALUES (2, 'sezzle', '{"code":"sezzle","args":[{"name":"testMode","value":"true"}]}')`);
       await client.query(`INSERT INTO payment VALUES (3, '2024-03-03 00:00:00', 3, 'sezzle', 'Settled', 1000, 'sez-rh-1', NULL, NULL)`);
     } finally { client.release(); }
@@ -689,6 +696,62 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(await targetRows(storeId, 'store')).toEqual([]);
   });
 
+  it('retains exact source edit-basis records without changing imported financial projections', async () => {
+    await resetSource('rh', 'basis-' + randomUUID().slice(0, 8));
+    // Historical shipping was fully discounted; retaining LIST must not turn
+    // its 500-cent basis into a new operational shipping charge.
+    await sourcePool.query(`INSERT INTO shipping_line VALUES
+      (7,1,1,500,false,'[{"amount":-500,"type":"PROMOTION","description":"Historical shipping waiver"}]','[{"taxRate":0}]')`);
+    await sourcePool.query(`INSERT INTO surcharge VALUES (9,1,0,false,'[]')`);
+    await sourcePool.query('UPDATE order_line SET "shippingLineId"=7, "taxCategoryId"=1 WHERE id=1');
+    await sourcePool.query('ALTER TABLE order_line ADD COLUMN "customFieldsRetained" jsonb');
+    const exactFacts = String.raw`{"unsafe":9007199254740993,"fraction":0.123456789012345678901,"nullable":null}`;
+    await sourcePool.query('UPDATE order_line SET "customFieldsRetained"=$1::jsonb WHERE id=1', [exactFacts]);
+    const original = (await sourcePool.query(`SELECT
+      (SELECT to_jsonb(o)::text FROM "order" o WHERE id=1) AS header,
+      (SELECT to_jsonb(l)::text FROM order_line l WHERE id=1) AS line,
+      (SELECT to_jsonb(l)::text FROM shipping_line l WHERE id=7) AS shipping,
+      (SELECT to_jsonb(c)::text FROM surcharge c WHERE id=9) AS surcharge`)).rows[0];
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(await targetRows(storeId, 'order')).toEqual([]);
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const orderId = migrationId(storeId, 'vendure:test', 'order', 1);
+    const order = await targetOne(storeId, 'order', `AND id = '${orderId}'`);
+    const basis = order.metadata.vendure.editBasisV1;
+    expect(basis).toMatchObject({ version: 1, format: 'retained-pg-jsonb-text-v1', sourceKey: 'vendure:test', sourceOrderId: '1',
+      sourceOrderRecord: original.header,
+      header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' },
+      shippingLines: [{ sourceId: '7', sourceRecord: original.shipping }],
+      surcharges: [{ sourceId: '9', sourceRecord: original.surcharge }],
+      lines: [{ sourceId: '1', orderLineId: migrationId(storeId, 'vendure:test', 'order-line', 1), sourceRecord: original.line }] });
+    expect(basis.sourceDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(basis.lines[0].sourceRecord).toContain('9007199254740993');
+    expect(basis.lines[0].sourceRecord).toContain('0.123456789012345678901');
+    expect(order).toMatchObject({ subtotal: 1000, discount_total: 0, shipping_total: 0, tax_total: 0, grand_total: 1000,
+      shipping_method_code: 'standard' });
+    const line = await targetOne(storeId, 'order_line', `AND order_id = '${orderId}'`);
+    expect(line).toMatchObject({ unit_price: 1000, line_subtotal: 1000, line_discount: 0, line_tax: 0, line_total: 1000 });
+    expect((await targetRows(storeId, 'payment', `AND order_id = '${orderId}'`)).map(payment => payment.amount)).toEqual([1000]);
+    const empty = await targetOne(storeId, 'order', `AND id = '${migrationId(storeId, 'vendure:test', 'order', 2)}'`);
+    expect(empty.metadata.vendure.editBasisV1).toMatchObject({ shippingLines: [], surcharges: [],
+      header: { subTotal: '1000', subTotalWithTax: '1000', shipping: '0', shippingWithTax: '0' } });
+  });
+
+  it.each(['missing', 'other-channel'])('refuses historical edit-basis capture with %s order channel ownership', async (ownership) => {
+    await resetSource('rh', 'ownership-' + randomUUID().slice(0, 8));
+    await sourcePool.query('DELETE FROM order_channels_channel WHERE "orderId"=1');
+    if (ownership === 'other-channel') {
+      await sourcePool.query(`INSERT INTO channel VALUES (2,'USD',false,1)`);
+      await sourcePool.query('INSERT INTO order_channels_channel VALUES (1,2)');
+    }
+    const storeId = randomUUID(), f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath }))
+      .rejects.toThrow('Edit basis source order ownership missing');
+    expect(await targetRows(storeId, 'order')).toEqual([]);
+  });
+
   it('preserves non-date source shipping copy without creating a fulfillment timestamp', async () => {
     await resetSource('dd', 'label-' + randomUUID().slice(0, 8));
     const label = '  Ships late fall & <updates pending>  ';
@@ -839,7 +902,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       `INSERT INTO product_variant_translation VALUES (2, 'en', 'Widget Unstocked')`,
       `INSERT INTO product_variant_price VALUES (2, 1, 'USD', 1200)`,
       `INSERT INTO "order" VALUES (4, 'ORD-4', 'Cancelled', 'USD', '2024-03-04 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`,
-      `INSERT INTO order_line VALUES (4, 1, 4, 1, 1, 1000, false, '[]', '[]')`,
+      `INSERT INTO order_channels_channel VALUES (4, 1)`,
+      `INSERT INTO order_line VALUES (4, 1, 4, 1, 1, 1000, false, '[]', '[]', NULL, 1)`,
       `INSERT INTO payment VALUES
          (4, '2024-03-04 00:00:00', 4, 'sezzle', 'Authorized', 1000, 'sz-auth-4', '{}', NULL),
          (5, '2024-03-04 00:00:00', NULL, 'sezzle', 'Authorized', 1000, 'sz-orphan-5', '{}', NULL)`,
@@ -872,6 +936,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const tag = 'p' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
     await sourcePool.query(`INSERT INTO "order" VALUES (4, 'ORD-4', 'PaymentAuthorized', 'USD', '2024-03-04 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`);
+    await sourcePool.query('INSERT INTO order_channels_channel VALUES (4, 1)');
     await sourcePool.query(`INSERT INTO payment VALUES (4, '2024-03-04 00:00:00', 4, 'sezzle', 'Authorized', 1000, 'sz-auth-4', '{}', NULL)`);
     const f = await fixtureConfig(randomUUID(), { sezzle: { accountId: 'sez-acct', mode: 'live' } });
     await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath }))
@@ -883,11 +948,12 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     await resetSource('dd', tag);
     const total = hasPlacedQuantity ? 5000 : 4800;
     await sourcePool.query(`INSERT INTO "order" VALUES (4, 'ORD-4', 'PaymentSettled', 'USD', '2024-03-04 00:00:00', $1, $1, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`, [total]);
+    await sourcePool.query('INSERT INTO order_channels_channel VALUES (4, 1)');
     // Current quantity remains positive for zero, unknown & cancellation-era placed quantities.
     await sourcePool.query(`INSERT INTO order_line VALUES
-      (4, 1, 4, 2, 0, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]'),
-      (5, 1, 4, 2, NULL, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]'),
-      (6, 1, 4, 2, 4, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]')`);
+      (4, 1, 4, 2, 0, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]', NULL, 1),
+      (5, 1, 4, 2, NULL, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]', NULL, 1),
+      (6, 1, 4, 2, 4, 1000, false, '[{"amount":-400,"type":"PROMOTION"}]', '[]', NULL, 1)`);
     if (!hasPlacedQuantity) await sourcePool.query('ALTER TABLE order_line DROP COLUMN "orderPlacedQuantity"');
     await sourcePool.query(`INSERT INTO payment VALUES (4, '2024-03-04 00:00:00', 4, 'nmi-payment', 'Settled', $1, 'nmi-txn-400', '{}', NULL)`, [total]);
     const storeId = randomUUID();
@@ -920,7 +986,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const tag = 'f' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
     await sourcePool.query(`INSERT INTO "order" VALUES (5, 'ORD-5', 'Delivered', 'USD', '2024-03-05 00:00:00', 2000, 2000, 0, 0, NULL, NULL, NULL, 1, '2024-03-05 00:00:00', '2024-03-06 00:00:00', false)`);
-    await sourcePool.query(`INSERT INTO order_line VALUES (5, 1, 5, 2, 2, 1000, false, '[]', '[]')`);
+    await sourcePool.query('INSERT INTO order_channels_channel VALUES (5, 1)');
+    await sourcePool.query(`INSERT INTO order_line VALUES (5, 1, 5, 2, 2, 1000, false, '[]', '[]', NULL, 1)`);
     await sourcePool.query(`INSERT INTO payment VALUES (5, '2024-03-05 00:00:00', 5, 'nmi-payment', 'Settled', 2000, 'nmi-txn-500', '{}', NULL)`);
     const storeId = randomUUID();
     const f = await fixtureConfig(storeId, {
@@ -1025,15 +1092,18 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const extra = [
       // ORD-DRIFT-LINES: header stale (5000), lines 4000+6000, settled 10800.
       `INSERT INTO "order" VALUES (10, 'DRIFT-LINES', 'Delivered', 'USD', '2024-03-04', 5000, 5000, 800, 800, NULL, NULL, NULL, 1, '2024-03-04', '2024-03-04', false)`,
-      `INSERT INTO order_line VALUES (10, 1, 10, 1, 1, 4000, false, '[]', '[]'), (12, 1, 10, 1, 1, 6000, false, '[]', '[]')`,
+      `INSERT INTO order_channels_channel VALUES (10, 1)`,
+      `INSERT INTO order_line VALUES (10, 1, 10, 1, 1, 4000, false, '[]', '[]', NULL, 1), (12, 1, 10, 1, 1, 6000, false, '[]', '[]', NULL, 1)`,
       `INSERT INTO payment VALUES (10, '2024-03-04', 10, 'nmi-payment', 'Settled', 10800, 'txn-drift-1', '{}', NULL)`,
       // ORD-DRIFT-UNRES: header 5000, lines 9000, settled 3300 — nothing agrees.
       `INSERT INTO "order" VALUES (11, 'DRIFT-UNRES', 'Delivered', 'USD', '2024-03-05', 5000, 5000, 800, 800, NULL, NULL, NULL, 1, '2024-03-05', '2024-03-05', false)`,
-      `INSERT INTO order_line VALUES (11, 1, 11, 1, 1, 9000, false, '[]', '[]')`,
+      `INSERT INTO order_channels_channel VALUES (11, 1)`,
+      `INSERT INTO order_line VALUES (11, 1, 11, 1, 1, 9000, false, '[]', '[]', NULL, 1)`,
       `INSERT INTO payment VALUES (11, '2024-03-05', 11, 'nmi-payment', 'Settled', 3300, 'txn-drift-2', '{}', NULL)`,
       // ORD-MOD: 'Modifying' admin-edit state + a dummy-handler manual capture.
       `INSERT INTO "order" VALUES (12, 'MOD-1', 'Modifying', 'USD', '2024-03-06', 2000, 2000, 0, 0, NULL, NULL, NULL, 1, '2024-03-06', '2024-03-06', false)`,
-      `INSERT INTO order_line VALUES (13, 1, 12, 1, 1, 2000, false, '[]', '[]')`,
+      `INSERT INTO order_channels_channel VALUES (12, 1)`,
+      `INSERT INTO order_line VALUES (13, 1, 12, 1, 1, 2000, false, '[]', '[]', NULL, 1)`,
       `INSERT INTO payment_method VALUES (9, 'standard-payment', '{"code":"dummy-payment-handler","args":[]}')`,
       `INSERT INTO payment VALUES (12, '2024-03-06', 12, 'standard-payment', 'Settled', 2000, NULL, NULL, NULL)`,
       // Sentinel 'imported' transactionId on a settled NMI payment (order 3).
@@ -1122,7 +1192,6 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
         (2,23,'stranger@example.com','issue-2','USD',1000,1000,false),
         (3,24,'buyer@example.com','issue-3','USD',900,900,true),
         (4,25,'buyer@example.com','issue-4','USD',700,0,false)`);
-      await client.query(`INSERT INTO order_channels_channel VALUES (1,1)`);
       await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey","orderId","relatedTransactionId") VALUES
         (1,1,'ISSUE','POSTED',5000,5000,5000,'issue:1',NULL,NULL),
         (2,1,'ADJUST','POSTED',2450,-2450,2550,'adjust:1',NULL,1),
@@ -1195,7 +1264,6 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       await seedPromotionScope(client, [20]);
       await client.query(`INSERT INTO account_credit (id,"promotionId","emailNormalized","issuanceKey","currencyCode","initialAmount",balance,disabled)
         VALUES (1,20,'buyer@example.com','monetary-issuance','USD',1300,1200,false)`);
-      await client.query(`INSERT INTO order_channels_channel VALUES (1,1)`);
       await client.query(`INSERT INTO account_credit_transaction (id,"accountCreditId",kind,status,amount,delta,"balanceAfter","idempotencyKey","orderId",allocation,"relatedTransactionId") VALUES
         (1,1,'ISSUE','POSTED',1300,1300,1300,'issue:monetary',NULL,NULL,NULL),
         (2,1,'REDEEM','POSTED',100,-100,1200,'redeem:monetary',1,'{"1":[100]}'::jsonb,1)`);

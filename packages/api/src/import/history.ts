@@ -5,6 +5,138 @@ import { vendureProratedUnitPriceWithTax, type VendureLineSnapshotInput } from '
 import { parseDate } from './store.js';
 import { digest } from './artifacts.js';
 
+export interface EditBasisSourceOrder {
+  id: string; selected: boolean; sourceRecord: string;
+  subTotal: string | null; subTotalWithTax: string | null; shipping: string | null; shippingWithTax: string | null;
+}
+export interface EditBasisSourceChild { id: string; orderId: string; sourceRecord: string }
+export interface EditBasisSourceLine extends EditBasisSourceChild { shippingLineId: string | null }
+interface EditBasisTargetOrder { id: string; storeId: string; metadata: unknown }
+interface EditBasisTargetLine extends EditBasisTargetOrder { orderId: string }
+
+/** Retained source facts only. LIST cannot be recovered from reconciled NET.
+ * Every monetary lexeme & full PostgreSQL JSON record stays text, never parsed
+ * through JavaScript numbers or reconstructed from operational line totals. */
+export function buildImportedEditBasis(input: {
+  storeId: string; sourceKey: string; id: ImportContext['id'];
+  orders: readonly EditBasisSourceOrder[]; lines: readonly EditBasisSourceLine[];
+  shippingLines: readonly EditBasisSourceChild[]; surcharges: readonly EditBasisSourceChild[];
+  targetOrders: readonly EditBasisTargetOrder[]; targetLines: readonly EditBasisTargetLine[];
+}) {
+  const sourceId = (value: unknown): string => {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+    if (typeof value === 'string' && /^[1-9][0-9]*$/.test(value)) return value;
+    throw new Error('Invalid edit basis source identity');
+  };
+  const indexed = <T extends { id: string }>(rows: readonly T[]) => {
+    const map = new Map<string, T>();
+    for (const row of rows) {
+      const id = sourceId(row.id);
+      if (map.has(id)) throw new Error('Duplicate edit basis source identity');
+      map.set(id, row);
+    }
+    return map;
+  };
+  const orders = indexed(input.orders), lines = indexed(input.lines);
+  const shippingLines = indexed(input.shippingLines), surcharges = indexed(input.surcharges);
+  const orderTargets = new Map<string, EditBasisTargetOrder>();
+  for (const row of input.targetOrders) {
+    const vendure = (row.metadata as { vendure?: { id?: unknown; sourceKey?: unknown } } | null)?.vendure;
+    const id = sourceId(vendure?.id);
+    if (row.storeId !== input.storeId || vendure?.sourceKey !== input.sourceKey || row.id !== input.id('order', id) || orderTargets.has(id)) {
+      throw new Error('Edit basis target source/tenant identity mismatch');
+    }
+    const source = orders.get(id);
+    if (!source || source.selected !== true) throw new Error('Edit basis source order ownership missing');
+    orderTargets.set(id, row);
+  }
+  if (orders.size !== orderTargets.size) throw new Error('Edit basis source order set differs from target');
+  const lineTargets = new Map<string, EditBasisTargetLine>();
+  for (const row of input.targetLines) {
+    const vendure = (row.metadata as { vendure?: { id?: unknown } } | null)?.vendure;
+    const id = sourceId(vendure?.id), source = lines.get(id);
+    const parent = source && orderTargets.get(source.orderId);
+    if (row.storeId !== input.storeId || row.id !== input.id('order-line', id) || !parent || row.orderId !== parent.id || lineTargets.has(id)) {
+      throw new Error('Edit basis line source/tenant ownership mismatch');
+    }
+    lineTargets.set(id, row);
+  }
+  if (lines.size !== lineTargets.size) throw new Error('Edit basis source line set differs from target');
+  for (const row of [...lines.values(), ...shippingLines.values(), ...surcharges.values()]) {
+    if (!orderTargets.has(sourceId(row.orderId)) || typeof row.sourceRecord !== 'string' || !row.sourceRecord) {
+      throw new Error('Edit basis source child ownership/record missing');
+    }
+  }
+  for (const line of lines.values()) {
+    if (line.shippingLineId == null) continue;
+    const shippingLine = shippingLines.get(sourceId(line.shippingLineId));
+    if (!shippingLine || shippingLine.orderId !== line.orderId) throw new Error('Edit basis line shipping ownership mismatch');
+  }
+  const sorted = <T extends { id: string }>(rows: readonly T[]) => [...rows].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
+  const byOrder = <T extends EditBasisSourceChild>(rows: readonly T[]) => {
+    const map = new Map<string, T[]>();
+    for (const row of rows) { const group = map.get(row.orderId) ?? []; group.push(row); map.set(row.orderId, group); }
+    return map;
+  };
+  const shippingByOrder = byOrder(input.shippingLines), surchargesByOrder = byOrder(input.surcharges), linesByOrder = byOrder(input.lines);
+  const records = (rows: readonly EditBasisSourceChild[]) => sorted(rows)
+    .map(row => ({ sourceId: row.id, sourceRecord: row.sourceRecord }));
+  return input.targetOrders.map(target => {
+    const sourceOrderId = sourceId((target.metadata as { vendure: { id: unknown } }).vendure.id);
+    const order = orders.get(sourceOrderId)!;
+    const header = { subTotal: order.subTotal, subTotalWithTax: order.subTotalWithTax,
+      shipping: order.shipping, shippingWithTax: order.shippingWithTax };
+    if (typeof order.sourceRecord !== 'string' || !order.sourceRecord || Object.values(header).some(value => value !== null && typeof value !== 'string')) {
+      throw new Error('Invalid edit basis source header transport');
+    }
+    const payload = { version: 1 as const, format: 'retained-pg-jsonb-text-v1' as const,
+      sourceKey: input.sourceKey, sourceOrderId, sourceOrderRecord: order.sourceRecord, header,
+      shippingLines: records(shippingByOrder.get(sourceOrderId) ?? []), surcharges: records(surchargesByOrder.get(sourceOrderId) ?? []),
+      lines: sorted(linesByOrder.get(sourceOrderId) ?? []).map(line => ({ sourceId: line.id,
+        orderLineId: lineTargets.get(line.id)!.id, sourceRecord: line.sourceRecord })) };
+    return { orderId: target.id, editBasisV1: { ...payload, sourceDigest: digest(payload) } };
+  });
+}
+
+export type ImportedEditBasisV1 = ReturnType<typeof buildImportedEditBasis>[number]['editBasisV1'];
+
+/** Uses the same ctx.q read-only repeatable-read transaction as all import
+ * phases. Queries participate in reviewed global source digest as well. */
+async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonly EditBasisTargetLine[]) {
+  const identity = await ctx.q(`SELECT current_setting('transaction_isolation') AS isolation,
+    current_setting('transaction_read_only') AS read_only`);
+  if (identity.length !== 1 || identity[0]!.isolation !== 'repeatable read' || identity[0]!.read_only !== 'on') {
+    throw new Error('Edit basis requires source read-only repeatable-read snapshot');
+  }
+  const targetOrders = await ctx.tx.select().from(s.order).where(eq(s.order.storeId, ctx.storeId));
+  const ids = targetOrders.map(order => {
+    const vendure = (order.metadata as { vendure?: { id?: unknown; sourceKey?: unknown } } | null)?.vendure;
+    if (vendure?.sourceKey !== ctx.sourceKey || vendure.id == null) throw new Error('Edit basis target source identity missing');
+    return String(vendure.id);
+  });
+  const orders = await ctx.q(`SELECT o.id::text AS id, to_jsonb(o)::text AS "sourceRecord",
+    o."subTotal"::text AS "subTotal", o."subTotalWithTax"::text AS "subTotalWithTax",
+    o.shipping::text AS shipping, o."shippingWithTax"::text AS "shippingWithTax",
+    EXISTS(SELECT 1 FROM order_channels_channel c WHERE c."orderId"=o.id AND c."channelId"=$2) AS selected
+    FROM "order" o WHERE o.id::text=ANY($1::text[]) ORDER BY o.id`, [ids, ctx.channelId]) as EditBasisSourceOrder[];
+  const lines = await ctx.q(`SELECT l.id::text AS id, l."orderId"::text AS "orderId",
+    l."shippingLineId"::text AS "shippingLineId", to_jsonb(l)::text AS "sourceRecord"
+    FROM order_line l WHERE l."orderId"::text=ANY($1::text[]) ORDER BY l.id`, [ids]) as EditBasisSourceLine[];
+  const shippingLines = await ctx.q(`SELECT l.id::text AS id, l."orderId"::text AS "orderId", to_jsonb(l)::text AS "sourceRecord"
+    FROM shipping_line l WHERE l."orderId"::text=ANY($1::text[]) ORDER BY l.id`, [ids]) as EditBasisSourceChild[];
+  const surcharges = await ctx.q(`SELECT c.id::text AS id, c."orderId"::text AS "orderId", to_jsonb(c)::text AS "sourceRecord"
+    FROM surcharge c WHERE c."orderId"::text=ANY($1::text[]) ORDER BY c.id`, [ids]) as EditBasisSourceChild[];
+  const captures = buildImportedEditBasis({ storeId: ctx.storeId, sourceKey: ctx.sourceKey, id: ctx.id,
+    orders, lines, shippingLines, surcharges, targetOrders, targetLines });
+  const targetsById = new Map(targetOrders.map(order => [order.id, order]));
+  for (const capture of captures) {
+    const order = targetsById.get(capture.orderId)!;
+    const metadata = order.metadata as Record<string, unknown> & { vendure: Record<string, unknown> };
+    await ctx.tx.update(s.order).set({ metadata: { ...metadata, vendure: { ...metadata.vendure, editBasisV1: capture.editBasisV1 } } })
+      .where(and(eq(s.order.storeId, ctx.storeId), eq(s.order.id, order.id)));
+  }
+}
+
 /** Source refund references have quantities, not amounts. Allocate the exact
  * source items total proportionally with deterministic largest remainders. */
 export function allocateRefundItems(total: number, weights: number[]): number[] {
@@ -89,6 +221,7 @@ export async function importHistory(ctx: ImportContext) {
   // Explicit store_id predicates: the migration role may bypass RLS, so the
   // tenant boundary must live in the query itself.
   const lines = new Map((await tx.select().from(s.orderLine).where(eq(s.orderLine.storeId, storeId))).map(line => [line.id, line]));
+  await captureImportedEditBasis(ctx, [...lines.values()]);
   const payments = new Map((await tx.select().from(s.payment).where(eq(s.payment.storeId, storeId))).map(payment => [payment.id, payment]));
   const refs = await q('SELECT r.*, to_jsonb(r)::text AS source_record FROM order_line_reference r ORDER BY r.id');
   const fulfilledByLine = new Map<string, number>();

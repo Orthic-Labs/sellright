@@ -38,7 +38,7 @@ export const REQUIRED_SOURCE_COLUMNS: Record<string, readonly string[]> = {
   order: ['id', 'active', 'code', 'state', 'currencyCode', 'orderPlacedAt', 'subTotal', 'subTotalWithTax', 'shipping', 'shippingWithTax', 'shippingAddress', 'billingAddress', 'couponCodes', 'customerId', 'createdAt', 'updatedAt'],
   // orderPlacedQuantity is optional: older Vendure snapshots lack it and the
   // importer falls back to quantity.
-  order_line: ['id', 'productVariantId', 'orderId', 'quantity', 'listPrice', 'listPriceIncludesTax', 'adjustments', 'taxLines'],
+  order_line: ['id', 'productVariantId', 'orderId', 'quantity', 'listPrice', 'listPriceIncludesTax', 'adjustments', 'taxLines', 'shippingLineId', 'taxCategoryId'],
   product: ['id', 'enabled', 'featuredAssetId', 'deletedAt'],
   product_translation: ['baseId', 'languageCode', 'name', 'slug', 'description'],
   product_variant: ['id', 'productId', 'sku', 'enabled', 'trackInventory', 'useGlobalOutOfStockThreshold', 'outOfStockThreshold', 'deletedAt', 'taxCategoryId'],
@@ -78,6 +78,9 @@ export const REQUIRED_SOURCE_COLUMNS: Record<string, readonly string[]> = {
   shipping_method_translation: ['baseId', 'languageCode', 'name'],
   // The order's chosen method (persisted on the imported order, migration 0086).
   shipping_line: ['id', 'orderId', 'shippingMethodId'],
+  // Edit basis retains all raw shipping/surcharge economics rather than
+  // deriving LIST, tax or shipping method from reconciled NET totals.
+  surcharge: ['id', 'orderId'],
   tax_rate: ['id', 'enabled', 'zoneId', 'categoryId', 'value', 'customerGroupId'],
 };
 
