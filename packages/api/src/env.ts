@@ -36,6 +36,12 @@ const EnvSchema = z.object({
   // Interface to bind. Default 0.0.0.0 (reverse proxies on a Docker bridge
   // need it); set 127.0.0.1 for local-only instances (tests, rehearsals).
   HOST: z.string().default('0.0.0.0'),
+  // Trusted operator inventory supplements current OS interfaces for public
+  // host/NAT addresses not visible inside the API's network namespace.
+  OUTBOUND_SELF_IPS: z.string().refine(
+    value => value.trim() === '' || value.split(',').every(address => isIP(address.trim()) !== 0 && !address.includes('%')),
+    'OUTBOUND_SELF_IPS must be comma-separated literal IPv4 or IPv6 addresses',
+  ).default(''),
   SMTP_HOST: optionalEnvString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: optionalEnvString,

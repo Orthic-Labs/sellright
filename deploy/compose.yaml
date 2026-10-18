@@ -98,6 +98,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3300
+      OUTBOUND_SELF_IPS: ${OUTBOUND_SELF_IPS:-}
       # Runtime serves requests as the non-owner app role (NOSUPERUSER
       # NOBYPASSRLS). The privileged migration URL below is used ONLY by the
       # migrate/bootstrap steps in `command`; index.js never sees it. The API

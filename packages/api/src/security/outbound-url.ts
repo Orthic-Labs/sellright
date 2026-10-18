@@ -1,7 +1,9 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { env } from '../env.js';
 
 interface LookupAddress {
   address: string;
@@ -136,6 +138,37 @@ function mappedIpv4(bytes: number[]): string | null {
   return null;
 }
 
+/** Byte identity, including IPv4-mapped IPv6 aliases of an IPv4 address. */
+function addressIdentity(address: string): string | null {
+  if (isIP(address) === 4) return '4:' + ipv4ToBytes(address)!.join('.');
+  if (isIP(address) !== 6) return null;
+  const bytes = parseIpv6ToBytes(address);
+  if (!bytes) return null;
+  const mapped = mappedIpv4(bytes);
+  return mapped ? '4:' + mapped : '6:' + Buffer.from(bytes).toString('hex');
+}
+
+function currentSelfAddresses(): Set<string> {
+  const addresses = new Set<string>();
+  // Only operator config & OS interface addresses define host identity. This
+  // never resolves configured hostnames or consumes forwarded/request headers.
+  const configured = env.OUTBOUND_SELF_IPS.trim();
+  for (const address of configured ? configured.split(',') : []) {
+    const identity = addressIdentity(address.trim());
+    if (!identity) throw new Error('Invalid OUTBOUND_SELF_IPS inventory');
+    addresses.add(identity);
+  }
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      // OS IPv6 scope identifiers do not alter address bytes.
+      const identity = addressIdentity(entry.address.split('%')[0]!);
+      if (!identity) throw new Error('Invalid host network interface address');
+      addresses.add(identity);
+    }
+  }
+  return addresses;
+}
+
 function allZero(bytes: number[]): boolean {
   return bytes.every((b) => b === 0);
 }
@@ -188,6 +221,7 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   if (!hostname || isPrivateHostname(hostname)) throw new Error('Outbound URL must not target private network hosts');
   if (isIP(hostname)) {
     if (isPrivateOrSpecialAddress(hostname)) throw new Error('Outbound URL must not target private network hosts');
+    if (currentSelfAddresses().has(addressIdentity(hostname)!)) throw new Error('Outbound URL must not target this host');
     url.hash = '';
     return { url, address: hostname, family: isIP(hostname) };
   }
@@ -197,6 +231,10 @@ async function checkOutboundUrl(rawUrl: string, opts: { lookup?: OutboundUrlLook
   if (!records.length) throw new Error('Outbound URL host could not be resolved');
   if (records.some((record) => isPrivateOrSpecialAddress(record.address))) {
     throw new Error('Outbound URL must not resolve to private network addresses');
+  }
+  const selfAddresses = currentSelfAddresses();
+  if (records.some((record) => selfAddresses.has(addressIdentity(normalizeHostname(record.address))!))) {
+    throw new Error('Outbound URL must not resolve to this host');
   }
 
   url.hash = '';
