@@ -4,16 +4,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { refundSelection } from './ops';
+import { couponCodesAfterOps, refundSelection } from './ops';
+import type { CouponOp } from './types';
 
 const CTX = {
   editable: { items: true },
+  couponCodes: ['ONE', 'TWO'],
   lines: [{ id: 'l1', sku: 'A-1', name: 'Alpha', quantity: 2, unitPrice: 1000, lineTotal: 2000, fulfilledQty: 0, refundedQty: 0, minQuantity: 0 }],
   shipping: { amount: 0, override: false }, shippingMethods: [], adjustments: [],
 };
 const totals = { subtotal: 1000, discountTotal: 0, shippingTotal: 0, taxTotal: 0, adjustmentTotal: 0, grandTotal: 1000 };
 const PREVIEW = {
   code: 'X', state: 'Paid', currency: 'USD', before: { ...totals, grandTotal: 2000 }, after: totals, lines: [], adjustments: [],
+  couponCodes: ['ONE', 'TWO'], previewAcceptanceHash: 'a'.repeat(64),
   shipping: { amount: 0, override: false, methodCode: null, methodName: null }, promotion: null, stock: [], stockOk: true,
   balance: { newGrandTotal: 1000, settled: 2000, refunded: 0, netPaid: 2000, editRefunded: 0, amountDue: -1000 },
   settlementOptions: ['refund_now', 'leave_credit'],
@@ -25,14 +28,14 @@ const PREVIEW = {
 const get = vi.fn(async (p: string) => p.includes('/edit/variants')
   ? { items: [{ sku: 'B-2', name: 'Widget', productName: 'Gizmo', unitPrice: 1234, available: 5 }] }
   : CTX);
-const post = vi.fn(async (_p: string, _b?: unknown) => PREVIEW);
+const post = vi.fn(async (_p: string, _b?: unknown): Promise<unknown> => PREVIEW);
 vi.mock('../../api', () => ({ api: { get: (p: string) => get(p), post: (p: string, b?: unknown) => post(p, b) }, ApiError: class extends Error {} }));
 vi.mock('../Toast', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }) }));
 
 import { OrderEditPanel } from './OrderEditPanel';
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-afterEach(() => { document.body.innerHTML = ''; get.mockClear(); post.mockClear(); });
+afterEach(() => { document.body.innerHTML = ''; get.mockClear(); post.mockReset(); post.mockImplementation(async () => PREVIEW); });
 
 async function mount(qc: QueryClient, currency = 'USD') {
   const el = document.createElement('div'); document.body.appendChild(el);
@@ -59,6 +62,90 @@ describe('refundSelection', () => {
 });
 
 describe('OrderEditPanel', () => {
+  it('keeps source-blocked orders outside economic editing', async () => {
+    get.mockImplementationOnce(async () => ({ ...CTX, editable: { items: false, blockedReason: 'Recorded source pricing requires reconciliation.' } }));
+    await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(document.body.textContent).toContain('Recorded source pricing requires reconciliation.');
+    expect(document.querySelector('input[aria-label="Coupon code"]')).toBeNull();
+    expect(document.querySelector('input[aria-label="Quantity of A-1"]')).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('shows every coupon, removes only its chosen code & appends untrimmed codes', async () => {
+    post.mockImplementation(async (_p, body) => {
+      const ops = (body as { ops: CouponOp[] }).ops.filter(op => op.op === 'apply_coupon' || op.op === 'remove_coupon');
+      return { ...PREVIEW, couponCodes: couponCodesAfterOps(CTX.couponCodes, ops) };
+    });
+    await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(document.querySelector('button[aria-label="Remove coupon ONE"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="Remove coupon TWO"]')).toBeTruthy();
+    await act(async () => { document.querySelector<HTMLButtonElement>('button[aria-label="Remove coupon ONE"]')!.click(); }); await flush();
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ops: [{ op: 'remove_coupon', code: 'ONE' }] });
+    expect(document.querySelector('button[aria-label="Remove coupon ONE"]')).toBeNull();
+    expect(document.querySelector('button[aria-label="Remove coupon TWO"]')).toBeTruthy();
+
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Coupon code"]')!;
+    const apply = [...document.querySelectorAll('button')].find(button => button.textContent === 'Apply')!;
+    await act(async () => { setInput(input, 'two'); }); await flush();
+    expect(apply.disabled).toBe(true);
+    await act(async () => { setInput(input, ' THREE '); });
+    await act(async () => { apply.click(); }); await flush();
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ops: [{ op: 'remove_coupon', code: 'ONE' }, { op: 'apply_coupon', code: ' THREE ' }] });
+    expect(document.querySelector('button[aria-label="Remove coupon TWO"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="Remove coupon  THREE "]')).toBeTruthy();
+  });
+
+  it('binds commits & retry identity to refreshed preview hashes even at equal totals', async () => {
+    let hash = 'a'.repeat(64);
+    post.mockImplementation(async (path) => path.endsWith('/commit')
+      ? { settlement: { type: 'leave_due', status: 'pending' }, replay: false }
+      : { ...PREVIEW, previewAcceptanceHash: hash, balance: { ...PREVIEW.balance, amountDue: 0 } });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await mount(qc);
+    await act(async () => { setInput(document.querySelector<HTMLInputElement>('input[aria-label="Quantity of A-1"]')!, '1'); }); await flush();
+    const commit = [...document.querySelectorAll('button')].find(button => button.textContent === 'Commit changes')!;
+    expect(commit.disabled).toBe(false);
+    await act(async () => { commit.click(); }); await flush();
+    const first = post.mock.calls.find(([path]) => path.endsWith('/commit'))![1] as { previewAcceptanceHash: string; idempotencyKey: string; expectedGrandTotal: number };
+    expect(first.previewAcceptanceHash).toBe(hash);
+    hash = 'b'.repeat(64);
+    await act(async () => { await qc.refetchQueries({ queryKey: ['order-edit-preview'] }); }); await flush();
+    await act(async () => { commit.click(); }); await flush();
+    const requests = post.mock.calls.filter(([path]) => path.endsWith('/commit'));
+    expect(requests).toHaveLength(2);
+    const second = requests[1]![1] as typeof first;
+    expect(second.previewAcceptanceHash).toBe(hash);
+    expect(second.expectedGrandTotal).toBe(first.expectedGrandTotal);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it('accepts 255-character coupon codes & refuses 256 even past DOM input limits', async () => {
+    await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Coupon code"]')!;
+    const apply = [...document.querySelectorAll('button')].find(button => button.textContent === 'Apply')!;
+    expect(input.maxLength).toBe(255);
+    await act(async () => { setInput(input, 'X'.repeat(256)); });
+    expect(input.value).toHaveLength(256);
+    expect(apply.disabled).toBe(true);
+    await act(async () => { apply.click(); });
+    expect(post).not.toHaveBeenCalled();
+    const validCode = 'X'.repeat(255);
+    await act(async () => { setInput(input, validCode); });
+    expect(apply.disabled).toBe(false);
+    await act(async () => { apply.click(); }); await flush();
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ops: [{ op: 'apply_coupon', code: validCode }] });
+  });
+
+  it('prevents commit when preview supplies no acceptance hash', async () => {
+    post.mockImplementation(async () => ({ ...PREVIEW, previewAcceptanceHash: undefined, balance: { ...PREVIEW.balance, amountDue: 0 } }));
+    await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => { setInput(document.querySelector<HTMLInputElement>('input[aria-label="Quantity of A-1"]')!, '1'); }); await flush();
+    const commit = [...document.querySelectorAll('button')].find(button => button.textContent === 'Commit changes')!;
+    expect(commit.disabled).toBe(true);
+    await act(async () => { commit.click(); });
+    expect(post.mock.calls.some(([path]) => path.endsWith('/commit'))).toBe(false);
+  });
+
   it.each([
     ['EUR', '€12.34'],
     ['GBP', '£12.34'],

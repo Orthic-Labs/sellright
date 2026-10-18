@@ -13,7 +13,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { HttpError, J, errBody, money, requireAdmin, requireHuman, requirePermission, requireStore, requireWrite, guard } from './admin-helpers.js';
 import {
-  AddressInput, EditOp, OrderEditError, Settlement, normalizeAddress,
+  AddressInput, EditOp, OrderEditError, PreviewAcceptanceHash, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
 import { commitOrderEdit, loadEditContext, retryOrderEditRefund, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
 
@@ -64,7 +64,8 @@ adminOrderEdit.openapi(
 adminOrderEdit.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/orders/{code}/edit/preview', summary: 'Preview an order edit (stateless; nothing is written)',
-    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ ops: Ops })) } }, responses,
+    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ ops: Ops })) } },
+    responses: { ...responses, 200: { description: 'OK', content: J(z.object({ previewAcceptanceHash: PreviewAcceptanceHash.optional() }).passthrough()) } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -84,6 +85,7 @@ adminOrderEdit.openapi(
         ops: Ops.min(1),
         expectedGrandTotal: money.min(0),
         expectedBalance: money.optional(),
+        previewAcceptanceHash: PreviewAcceptanceHash.optional(),
         idempotencyKey: z.string().min(1).max(200),
         settlement: Settlement.optional(),
         notifyCustomer: z.boolean().default(true),
@@ -107,6 +109,7 @@ adminOrderEdit.openapi(
     const result = await translate(() => commitOrderEdit({
       storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, principalKind: admin.kind, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,
+      previewAcceptanceHash: body.previewAcceptanceHash,
       settlement: body.settlement, notifyCustomer: body.notifyCustomer, reason: body.reason,
     }));
     return c.json(result, 200);

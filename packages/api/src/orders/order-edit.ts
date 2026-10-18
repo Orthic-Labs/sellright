@@ -19,6 +19,7 @@
  */
 import { z } from '@hono/zod-openapi';
 import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
+import { canonicalCouponCodes } from '../money/promotion-stack.js';
 import { isEntitlementBearing } from '../licensing/entitlements.js';
 
 export class OrderEditError extends Error {
@@ -30,6 +31,8 @@ export class OrderEditError extends Error {
 
 // ── operation schema ─────────────────────────────────────────────────────────
 const cents = z.number().int();
+/** Hash emitted by economic previews; exact identity is verified by the service. */
+export const PreviewAcceptanceHash = z.string().regex(/^[0-9a-f]{64}$/);
 export const AddressInput = z.object({
   fullName: z.string().trim().max(200).nullish(),
   line1: z.string().trim().min(1).max(200),
@@ -51,8 +54,8 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('remove_line'), lineId: z.string().uuid() }),
   z.object({ op: z.literal('swap_variant'), lineId: z.string().uuid(), sku: z.string().min(1), quantity: z.number().int().min(1).optional() }),
   z.object({ op: z.literal('add_item'), sku: z.string().min(1), quantity: z.number().int().min(1).max(100000), unitPrice: cents.min(0).optional() }),
-  z.object({ op: z.literal('apply_coupon'), code: z.string().trim().min(1).max(100) }),
-  z.object({ op: z.literal('remove_coupon') }),
+  z.object({ op: z.literal('apply_coupon'), code: z.string().min(1).max(255) }),
+  z.object({ op: z.literal('remove_coupon'), code: z.string().min(1).max(255).optional() }),
   z.object({ op: z.literal('set_shipping_method'), code: z.string().min(1) }),
   z.object({ op: z.literal('set_shipping_amount'), amount: cents.min(0) }),
   z.object({ op: z.literal('remove_shipping') }),
@@ -133,7 +136,10 @@ export interface WAdjustment { id: string | null; label: string; amount: number 
 export interface WorkingOrder {
   lines: WLine[];
   adjustments: WAdjustment[];
-  promotion: { kind: 'keep' } | { kind: 'none' } | { kind: 'apply'; promo: PromoFacts };
+  /** Complete membership; code identity is case-insensitive but preserves whitespace. */
+  couponCodes: string[];
+  /** Legacy display compatibility only; pricing resolves facts from couponCodes. */
+  readonly promotion: Readonly<{ kind: 'keep' } | { kind: 'none' } | { kind: 'apply'; promo: PromoFacts }>;
   shipping: { kind: 'keep' } | { kind: 'method'; method: ShippingMethodFacts } | { kind: 'custom'; amount: number } | { kind: 'none' };
   shippingAddress?: Address;
   billingAddress?: Address;
@@ -142,7 +148,8 @@ export interface WorkingOrder {
 
 export interface EditLookups {
   variantsBySku: Map<string, VariantFacts>;
-  promosByCode: Map<string, PromoFacts>;
+  /** Caller-admitted coupon identities; membership staging never interprets pricing facts. */
+  promosByCode: Map<string, unknown>;
   methodsByCode: Map<string, ShippingMethodFacts>;
   unitPriceFor: (v: VariantFacts) => number;
 }
@@ -207,6 +214,7 @@ export function applyEditOps(initial: WorkingOrder, ops: EditOpT[], lookups: Edi
     ...initial,
     lines: initial.lines.map((l) => ({ ...l })),
     adjustments: initial.adjustments.map((a) => ({ ...a })),
+    couponCodes: canonicalCouponCodes(initial.couponCodes),
   };
   let seq = 0;
   for (const op of ops) {
@@ -254,12 +262,17 @@ export function applyEditOps(initial: WorkingOrder, ops: EditOpT[], lookups: Edi
         break;
       }
       case 'apply_coupon': {
-        const promo = lookups.promosByCode.get(op.code);
-        if (!promo) throw new OrderEditError(409, 'COUPON_NOT_FOUND', `coupon not found or not active: ${op.code}`, { code: op.code });
-        w.promotion = { kind: 'apply', promo };
+        const identity = op.code.toLowerCase();
+        const matches = [...lookups.promosByCode].filter(([code]) => code.toLowerCase() === identity);
+        if (matches.length !== 1) throw new OrderEditError(409, 'COUPON_NOT_FOUND', `coupon not found or not active: ${op.code}`, { code: op.code });
+        w.couponCodes = canonicalCouponCodes([...w.couponCodes, op.code]);
         break;
       }
-      case 'remove_coupon': w.promotion = { kind: 'none' }; break;
+      case 'remove_coupon': {
+        const identity = op.code?.toLowerCase();
+        w.couponCodes = identity === undefined ? [] : w.couponCodes.filter(code => code.toLowerCase() !== identity);
+        break;
+      }
       case 'set_shipping_method': {
         const m = lookups.methodsByCode.get(op.code);
         if (!m) throw new OrderEditError(409, 'SHIPPING_METHOD_NOT_FOUND', `shipping method not found: ${op.code}`, { code: op.code });
