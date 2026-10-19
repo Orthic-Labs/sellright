@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
-import { LEGACY_PROBE_MODE, checkEnv, defaultLoadEnv, effectiveHash, loadSchema, renderEnvProduction, validateSchema } from './env-check.mjs';
+import { LEGACY_PROBE_MODE, checkEnv, defaultLoadEnv, effectiveHash, finalEffectiveHash, loadSchema, renderEnvProduction, validateSchema } from './env-check.mjs';
 import { ComposeError, Problems } from './lib/util.mjs';
 import { miniLoadEnv } from './fixtures/support.mjs';
 
@@ -274,11 +274,13 @@ test('Vite loadEnv: file precedence and process override are what the contract a
 	assert.equal(e.VITE_X, 'production');
 	assert.equal(e.VITE_ONLY_ENV, '1');
 	assert.equal(realLoadEnv(LEGACY_PROBE_MODE, dir, 'VITE_').VITE_X, 'local', 'the probe mode sees only .env and .env.local');
+	const savedViteX = process.env.VITE_X;
 	process.env.VITE_X = 'process';
 	try {
 		assert.equal(realLoadEnv('production', dir, 'VITE_').VITE_X, 'process');
 	} finally {
-		delete process.env.VITE_X;
+		if (savedViteX === undefined) delete process.env.VITE_X;
+		else process.env.VITE_X = savedViteX;
 	}
 });
 
@@ -301,4 +303,36 @@ test('Vite loadEnv: legacy conflict and precedence end to end', needVite, async 
 	assert.deepEqual(x.problems.codes(), ['env-legacy-conflict']);
 	assert.equal(x.r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' })));
 	assert.ok(!x.r.names.includes('STRIPE_SECRET_NOT_REAL'));
+});
+
+test('Vite loadEnv: NODE_ENV from .env stays runtime-only in public maps and hashes', needVite, async () => {
+	const savedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => name === 'NODE_ENV' || name.startsWith('VITE_')));
+	for (const name of Object.keys(savedEnv)) delete process.env[name];
+	try {
+		const brand = baseBrand();
+		brand.requiredEnv = ['VITE_STORE_NAME', 'SELLRIGHT_API_URL'];
+		const files = {
+			'.env': 'NODE_ENV=production\nSELLRIGHT_API_URL=https://private.example\n',
+		};
+		const { r, problems, dir } = await run({ brand, files, loadEnv: realLoadEnv });
+		assert.deepEqual(problems.list, []);
+		assert.ok(!r.names.includes('VITE_USER_NODE_ENV'));
+		assert.equal(r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' })));
+		writeFileSync(path.join(dir, '.env.production'), r.envProduction);
+		assert.equal(await finalEffectiveHash({ buildDir: dir, loadEnv: realLoadEnv }), r.hash);
+
+		const mystery = await run({
+			brand,
+			files: { '.env': 'NODE_ENV=production\nSELLRIGHT_API_URL=https://private.example\nVITE_MYSTERY=1\n' },
+			loadEnv: realLoadEnv,
+		});
+		assert.ok(mystery.problems.codes().includes('env-unknown-name'));
+		assert.ok(mystery.problems.list.some((problem) => problem.message.includes('VITE_MYSTERY')));
+		assert.ok(!mystery.r.names.includes('VITE_USER_NODE_ENV'));
+	} finally {
+		for (const name of Object.keys(process.env)) {
+			if (name === 'NODE_ENV' || name.startsWith('VITE_')) delete process.env[name];
+		}
+		Object.assign(process.env, savedEnv);
+	}
 });
