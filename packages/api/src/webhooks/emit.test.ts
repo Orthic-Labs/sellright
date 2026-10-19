@@ -95,17 +95,19 @@ vi.mock('../db/client.js', async () => {
             h.statements.push(statement.sql);
             h.claims.push(storeId);
             if (h.failStores.has(storeId)) throw new Error(`claim failed: ${storeId}`);
-            const cutoff = Date.parse(String(statement.params[0]));
+            expect(statement.params).toEqual([storeId, storeId, storeId, h.cutoff]);
+            const cutoff = Date.parse(String(statement.params[3]));
             const row = h.rows.get(storeId)?.find((r) => r.status === 'pending' && r.nextAttemptAt <= cutoff);
             if (!row) return { rows: [] };
             row.status = 'processing'; row.attempts++;
             return { rows: [{ ...row }] };
           },
           update: () => ({ set: (values: { status: string; nextAttemptAt?: Date }) => ({
-            where: async () => {
+            where: async (condition: SQL) => {
               await h.finalizers.get(storeId)?.();
               const row = h.rows.get(storeId)?.find((r) => r.status === 'processing');
               if (!row) throw new Error('No claimed row');
+              expect(dialect.sqlToQuery(condition).params).toEqual([storeId, row.id]);
               row.status = values.status;
               if (values.nextAttemptAt) row.nextAttemptAt = values.nextAttemptAt.getTime();
               h.finalized.push(row.id);

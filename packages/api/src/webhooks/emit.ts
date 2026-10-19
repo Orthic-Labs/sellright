@@ -77,9 +77,12 @@ async function claimDueWebhooks(storeTransaction: StoreTransaction, storeId: str
           SET status = 'processing', attempts = wd.attempts + 1, claimed_at = now(), updated_at = now()
           FROM webhook_endpoint we
           WHERE we.id = wd.endpoint_id
+            AND wd.store_id = ${storeId}
+            AND we.store_id = ${storeId}
             AND wd.id IN (
               SELECT id FROM webhook_delivery
-              WHERE status = 'pending' AND next_attempt_at <= ${cutoff}::timestamptz
+              WHERE store_id = ${storeId}
+                AND status = 'pending' AND next_attempt_at <= ${cutoff}::timestamptz
               ORDER BY next_attempt_at, id
               LIMIT 1
               FOR UPDATE SKIP LOCKED
@@ -106,7 +109,7 @@ async function finalizeWebhookDelivery(
 ): Promise<'delivered' | 'retry' | 'dead'> {
   return storeTransaction(storeId, async (tx) => {
     if (outcome.ok) {
-      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
+      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(and(eq(s.webhookDelivery.storeId, storeId), eq(s.webhookDelivery.id, d.id)));
       return 'delivered';
     }
     // `d.attempts` is the post-claim value (incremented at claim time); use it
@@ -121,7 +124,7 @@ async function finalizeWebhookDelivery(
       claimedAt: null,
       firstFailedAt: sql`coalesce(${s.webhookDelivery.firstFailedAt}, now())`,
       updatedAt: new Date(),
-    }).where(eq(s.webhookDelivery.id, d.id));
+    }).where(and(eq(s.webhookDelivery.storeId, storeId), eq(s.webhookDelivery.id, d.id)));
     return giveUp ? 'dead' : 'retry';
   });
 }
