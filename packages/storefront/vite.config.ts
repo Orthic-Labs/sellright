@@ -62,7 +62,7 @@ export default defineConfig((config) => {
           join_vars: true, // Join consecutive var statements
           reduce_vars: true, // Improve optimization of variables assigned with and used as constant values
           collapse_vars: true, // Collapse single-use variables
-          pure_getters: true, // Assume getters have no side effects
+          pure_getters: false, // Qwik reactive getters can evaluate nested QRLs & change lexical capture state.
           warnings: false, // Don't show warnings in production
         },
         mangle: {
