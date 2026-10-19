@@ -59,6 +59,11 @@ const int = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 const optInt = (v, min, max) => v == null || int(v, min, max);
 const optBool = v => v == null || typeof v === 'boolean';
 const nonEmpty = (v, max) => typeof v === 'string' && v.trim().length > 0 && text(v, max);
+const optionalCouponCodes = v => v === undefined || (Array.isArray(v) && v.length <= 12 && v.every(code => nonEmpty(code, 32)));
+const optionalRedeemPoints = v => v === undefined || (Number.isSafeInteger(v) && v >= 0 && v <= 1000000);
+const cartQuoteContext = b => (b.shipCountry === undefined || (typeof b.shipCountry === 'string' && /^[A-Z]{2}$/.test(b.shipCountry))) &&
+  (b.shippingMethodCode === undefined || ['standard', 'express'].includes(b.shippingMethodCode)) &&
+  (b.pricingIntent === undefined || ['preview', 'checkout'].includes(b.pricingIntent)) && optionalRedeemPoints(b.redeemPoints);
 const iso = v => v == null || (typeof v === 'string' && v.length <= 40 && /^\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)$/.test(v) && !Number.isNaN(Date.parse(v)));
 // Owner-feature bodies (points, reviews, order edit, blog). Each is bounded the
 // same way as the commerce bodies above and rejects anything with an outbound
@@ -127,7 +132,7 @@ export function interactiveBody(path, body) {
   if (/^\/v1\/admin\/products\/[^/]+\/variants$/.test(path)) return only(body,['sku','name','price','onHand']) && /^DEMO-[A-Z-]+$/.test(body.sku) && text(body.name) && Number.isInteger(body.price) && body.price>=0 && body.price<=100000 && Number.isInteger(body.onHand) && body.onHand>=0 && body.onHand<=1000;
   if (only(body,[]) && /^\/v1\/admin\/(products|variants|promotions)\/[^/]+$/.test(path)) return true;
   if (path.startsWith('/v1/shop/cart')) {
-    return only(body, ['items', 'lines', 'expectedRevision', 'couponCode']) && text(body.couponCode, 32) &&
+    return only(body, ['items', 'lines', 'expectedRevision', 'couponCode', 'couponCodes', 'shipCountry', 'shippingMethodCode', 'pricingIntent', 'redeemPoints']) && text(body.couponCode, 32) && optionalCouponCodes(body.couponCodes) && cartQuoteContext(body) &&
       [body.items, body.lines].every(lines => lines == null || (Array.isArray(lines) && lines.length <= 12 &&
         lines.every(line => only(line, ['sku', 'quantity']) && /^DEMO-[A-Z-]+$/.test(line.sku) && Number.isInteger(line.quantity) && line.quantity >= 0 && line.quantity <= 10)));
   }
@@ -139,7 +144,9 @@ export function interactiveBody(path, body) {
   // the request ever reaches the real app (see settle()/execute() there);
   // nothing accepted in this branch is ever trusted as the source of truth.
   // Every field stays individually bounded so this can't become a blank check.
-  if (path === '/v1/shop/checkout') return only(body, ['cartToken', 'expectedRevision', 'shippingMethodCode', 'couponCode', 'shipping', 'email', 'shippingAddress', 'billingAddress', 'giftCardCode', 'items']) &&
+  if (path === '/v1/shop/checkout') return only(body, ['cartToken', 'expectedRevision', 'shippingMethodCode', 'couponCode', 'couponCodes', 'acceptedQuoteHash', 'redeemPoints', 'shipping', 'email', 'shippingAddress', 'billingAddress', 'giftCardCode', 'items']) &&
+    optionalCouponCodes(body.couponCodes) && optionalRedeemPoints(body.redeemPoints) &&
+    (body.acceptedQuoteHash === undefined || (typeof body.acceptedQuoteHash === 'string' && /^[0-9a-f]{64}$/.test(body.acceptedQuoteHash))) &&
     /^[a-f0-9-]{36}$/.test(body.cartToken) && Number.isInteger(body.expectedRevision) && body.expectedRevision>=0 && ['standard', 'express'].includes(body.shippingMethodCode) && text(body.couponCode, 32) &&
     (body.shipping == null || (Number.isInteger(body.shipping) && body.shipping >= 0 && body.shipping <= 100000)) &&
     text(body.email, 254) && text(body.giftCardCode, 32) &&

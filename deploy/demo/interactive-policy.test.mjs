@@ -57,6 +57,33 @@ test('cart mutations accept an optional bounded coupon code alongside bounded li
   assert.equal(interactiveBody(`/v1/shop/cart/${token}/lines`,{lines:[{sku:'DEMO-NOTEBOOK',quantity:1}],couponCode:'WELCOME10'}),true);
   assert.equal(interactiveBody(`/v1/shop/cart/${token}/lines`,{lines:[{sku:'DEMO-NOTEBOOK',quantity:1}],couponCode:'x'.repeat(64)}),false);
 });
+test('current cart add, update and coupon payloads accept bounded quote context',()=>{
+  const p='/v1/shop/cart/de000000-0000-4000-8000-000000000001/lines';
+  assert.equal(interactiveBody(p,{lines:[{sku:'DEMO-NOTEBOOK',quantity:1}],shipCountry:'US'}),true);
+  const context={shipCountry:'US',shippingMethodCode:'express',pricingIntent:'checkout',redeemPoints:1000000};
+  assert.equal(interactiveBody(p,{lines:[{sku:'DEMO-NOTEBOOK',quantity:2}],expectedRevision:1,...context}),true);
+  assert.equal(interactiveBody(p,{lines:[],couponCodes:['WELCOME10'],expectedRevision:2,...context}),true);
+  assert.equal(interactiveBody(p,{lines:[],couponCodes:[],expectedRevision:3,...context,pricingIntent:'preview',redeemPoints:0}),true);
+  assert.equal(interactiveBody(p,{lines:[],couponCodes:Array.from({length:12},()=> 'X'.repeat(32))}),true);
+  for(const bad of [{shipCountry:'us'},{shipCountry:'USA'},{shipCountry:1},{shipCountry:null},{shippingMethodCode:'overnight'},{shippingMethodCode:null},{pricingIntent:'other'},{pricingIntent:null},{redeemPoints:-1},{redeemPoints:1000001},{redeemPoints:1.5},{redeemPoints:Number.MAX_SAFE_INTEGER+1},{redeemPoints:'1'},{redeemPoints:null},{couponCodes:'WELCOME10'},{couponCodes:null},{couponCodes:Array.from({length:13},()=> 'X')},{couponCodes:['']},{couponCodes:[' ']},{couponCodes:['X'.repeat(33)]},{couponCodes:[1]},{couponCodes:['<X>']},{quoteContext:{}},{amount:1},{lines:[{sku:'OTHER',quantity:1}]},{lines:[{sku:'DEMO-NOTEBOOK',quantity:11}]},{lines:[{sku:'DEMO-NOTEBOOK',quantity:1,unitPrice:1}]}])
+    assert.equal(interactiveBody(p,{lines:[],...bad}),false,JSON.stringify(bad));
+});
+test('current native checkout payload accepts bounded coupons, points and its exact quote hash',()=>{
+  const p='/v1/shop/checkout';
+  const body={cartToken:'de000000-0000-4000-8000-000000000001',expectedRevision:4,shippingMethodCode:'standard',email:'shopper@example.com',shippingAddress:{line1:'1 Sample Street',city:'Sample City',country:'US'},billingAddress:null,giftCardCode:'GIFT10',items:[{sku:'__cart__',quantity:1}],couponCode:'WELCOME10',couponCodes:['WELCOME10'],acceptedQuoteHash:'0123456789abcdef'.repeat(4),redeemPoints:100};
+  assert.equal(interactiveBody(p,body),true);
+  for(const redeemPoints of [0,1000000])assert.equal(interactiveBody(p,{...body,redeemPoints}),true);
+  assert.equal(interactiveBody(p,{...body,couponCodes:Array.from({length:12},()=> 'X'.repeat(32))}),true);
+  for(const bad of [{couponCodes:'WELCOME10'},{couponCodes:null},{couponCodes:Array.from({length:13},()=> 'X')},{couponCodes:['']},{couponCodes:[' ']},{couponCodes:['X'.repeat(33)]},{couponCodes:[1]},{couponCodes:['<X>']},{redeemPoints:-1},{redeemPoints:1000001},{redeemPoints:1.5},{redeemPoints:Number.MAX_SAFE_INTEGER+1},{redeemPoints:'1'},{redeemPoints:null},{acceptedQuoteHash:'a'.repeat(63)},{acceptedQuoteHash:'a'.repeat(65)},{acceptedQuoteHash:'A'.repeat(64)},{acceptedQuoteHash:'g'.repeat(64)},{acceptedQuoteHash:null},{acceptedQuoteHash:{}},{quoteContext:{}},{amount:1}])
+    assert.equal(interactiveBody(p,{...body,...bad}),false,JSON.stringify(bad));
+});
+test('legacy estimate adapter keeps its cart-reference-only payload',()=>{
+  const p='/v1/shop/cart/estimate';
+  const body={cartToken:'de000000-0000-4000-8000-000000000001',shippingMethodCode:'standard',couponCode:'WELCOME10'};
+  assert.equal(interactiveBody(p,body),true);
+  for(const extra of [{items:[{sku:'DEMO-NOTEBOOK',quantity:1}]},{shipCountry:'US'},{couponCodes:['WELCOME10']},{redeemPoints:1},{acceptedQuoteHash:'a'.repeat(64)}])
+    assert.equal(interactiveBody(p,{...body,...extra}),false,JSON.stringify(extra));
+});
 test('the Host allowlist admits loopback, the public hostname and whatever address this process is bound to, nothing else',()=>{
   for(const host of ['localhost','127.0.0.1','demo.sellright.cc','172.22.0.1'])assert.equal(allowedDemoHost(host,'172.22.0.1'),true,host);
   for(const host of ['evil.example','172.22.0.1.evil.example','demo.sellright.cc.evil.example','10.0.0.1'])assert.equal(allowedDemoHost(host,'172.22.0.1'),false,host);
