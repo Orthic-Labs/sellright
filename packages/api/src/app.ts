@@ -281,7 +281,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       // yet, so no sr_csrf cookie exists to double-submit. The invite token
       // itself (hashed, single-use, expiry-checked in the handler) is the
       // isolation there, exactly like login/logout before a session exists.
-      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
+      // Cache purge is machine-only: its handler requires the explicit shared-token header
+      // even when a session cookie is present. Keep this exception to the exact POST path.
+      const machineCachePurge = m === 'POST' && new URL(c.req.url).pathname === '/v1/admin/cache/purge';
+      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept' || machineCachePurge;
       if (!exempt && !csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
     }
     await next();
