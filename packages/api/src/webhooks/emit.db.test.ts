@@ -17,7 +17,9 @@
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { pool, withStore } from '../db/client.js';
+import { Pool } from 'pg';
+import { pool, runStoreTransaction, withStore } from '../db/client.js';
+import { afterCommit } from '../db/after-commit.js';
 import { env } from '../env.js';
 
 // vi.mock is hoisted — applies before ANY import below resolves.
@@ -38,37 +40,37 @@ async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
 }
 
-async function seedStore(): Promise<void> {
+async function seedStore(storeId = STORE): Promise<void> {
   await pool.query(
     `INSERT INTO store (id, slug, name) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
-    [STORE, 'webhook-emit-test', 'Webhook Emit Test Store'],
+    [storeId, `webhook-emit-${storeId}`, 'Webhook Emit Test Store'],
   );
 }
 
 /** Seed one enabled endpoint subscribed to '*' and return its id. */
-async function seedEndpoint(url = 'https://example.com/hook'): Promise<string> {
-  return withStore(STORE, async (tx) => {
+async function seedEndpoint(url = 'https://example.com/hook', storeId = STORE): Promise<string> {
+  return withStore(storeId, async (tx) => {
     const r = await tx.execute(
-      sql`INSERT INTO webhook_endpoint (store_id, url, topics, secret) VALUES (${STORE}, ${url}, ARRAY['*'], 'test-secret') RETURNING id`,
+      sql`INSERT INTO webhook_endpoint (store_id, url, topics, secret) VALUES (${storeId}, ${url}, ARRAY['*'], 'test-secret') RETURNING id`,
     );
     return (r.rows[0] as { id: string }).id;
   });
 }
 
 /** Insert one due (next_attempt_at in the past) pending delivery row. */
-async function enqueueDueDelivery(endpointId: string, topic = 'order.created'): Promise<string> {
-  return withStore(STORE, async (tx) => {
+async function enqueueDueDelivery(endpointId: string, topic = 'order.created', storeId = STORE): Promise<string> {
+  return withStore(storeId, async (tx) => {
     const r = await tx.execute(
       sql`INSERT INTO webhook_delivery (store_id, endpoint_id, topic, payload, next_attempt_at)
-          VALUES (${STORE}, ${endpointId}, ${topic}, ${'{"ok":true}'}::jsonb, now() - interval '1 minute')
+          VALUES (${storeId}, ${endpointId}, ${topic}, ${'{"ok":true}'}::jsonb, now() - interval '1 minute')
           RETURNING id`,
     );
     return (r.rows[0] as { id: string }).id;
   });
 }
 
-async function rowStatus(id: string): Promise<{ status: string; attempts: number; deliveredAt: Date | null; lastError: string | null; nextAttemptAt: Date }> {
-  return withStore(STORE, async (tx) => {
+async function rowStatus(id: string, storeId = STORE): Promise<{ status: string; attempts: number; deliveredAt: Date | null; lastError: string | null; nextAttemptAt: Date }> {
+  return withStore(storeId, async (tx) => {
     const r = await tx.execute(
       sql`SELECT status, attempts, delivered_at AS "deliveredAt", last_error AS "lastError", next_attempt_at AS "nextAttemptAt" FROM webhook_delivery WHERE id = ${id}`,
     );
@@ -82,32 +84,31 @@ describe('webhook delivery (PERF-14)', () => {
     await wipe();
     await seedStore();
   });
-  afterAll(async () => {
-    await wipe();
-    await pool.end();
-  });
+  afterAll(async () => { await wipe(); });
 
   it('does not hold a pooled connection while the outbound fetch is in flight', async () => {
     const endpointId = await seedEndpoint();
     await enqueueDueDelivery(endpointId);
 
-    // Structural assertion: while the outbound call is "in flight" (this mock
-    // body executing), the withStore txn that claimed the row has ALREADY
-    // committed and released its client — so total checked-out connections is
-    // 0 (pool.totalCount - pool.idleCount === 0). Before the PERF-14 fix, the
-    // claim txn's connection would still be checked out here because
-    // safeOutboundFetch ran inside it.
+    // Track acquire/release across every pool, including the pass-scoped pool.
+    // Claim must have committed & released before outbound HTTP begins.
+    const events = vi.spyOn(Pool.prototype, 'emit');
     let sawFullyIdleDuringFetch = false;
     vi.mocked(safeOutboundFetch).mockImplementation(async () => {
-      const checkedOut = pool.totalCount - pool.idleCount;
-      sawFullyIdleDuringFetch = checkedOut === 0;
+      const checkedOut = new Set<unknown>();
+      for (const [event, ...args] of events.mock.calls) {
+        if (event === 'acquire') checkedOut.add(args[0]);
+        if (event === 'release') checkedOut.delete(args[1]);
+      }
+      sawFullyIdleDuringFetch = checkedOut.size === 0;
       return new Response(null, { status: 200 });
     });
 
-    const res = await deliverWebhooks({ log: () => {} });
-
-    expect(res.delivered).toBe(1);
-    expect(sawFullyIdleDuringFetch).toBe(true);
+    try {
+      const res = await deliverWebhooks({ log: () => {} });
+      expect(res.delivered).toBe(1);
+      expect(sawFullyIdleDuringFetch).toBe(true);
+    } finally { events.mockRestore(); }
   });
 
   it('claims, signs, and marks delivered on a 2xx response', async () => {
@@ -184,3 +185,65 @@ describe('webhook delivery (PERF-14)', () => {
     expect(after.attempts).toBe(6);
   });
 });
+
+
+describe('webhook fairness with PostgreSQL', () => {
+  beforeEach(async () => { vi.clearAllMocks(); await wipe(); await seedStore(); });
+
+  it('delivers healthy store while 50 stalled-store rows await their first HTTP result', async () => {
+    const healthyStore = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    await seedStore(healthyStore);
+    const stalledEndpoint = await seedEndpoint('https://stalled.example/hook');
+    const healthyEndpoint = await seedEndpoint('https://healthy.example/hook', healthyStore);
+    for (let i = 0; i < 50; i++) await enqueueDueDelivery(stalledEndpoint);
+    const healthyId = await enqueueDueDelivery(healthyEndpoint, 'order.created', healthyStore);
+    let unblock!: () => void;
+    const stalled = new Promise<void>((resolve) => { unblock = resolve; });
+    const active = new Map<string, number>();
+    let total = 0; let peak = 0; let storePeak = 0;
+    vi.mocked(safeOutboundFetch).mockImplementation(async (url) => {
+      const host = new URL(url).hostname;
+      total++; active.set(host, (active.get(host) ?? 0) + 1);
+      peak = Math.max(peak, total); storePeak = Math.max(storePeak, active.get(host)!);
+      try {
+        if (host === 'stalled.example') await stalled;
+        return new Response(null, { status: 200 });
+      } finally { total--; active.set(host, active.get(host)! - 1); }
+    });
+    const work = deliverWebhooks();
+    try {
+      await vi.waitFor(async () => {
+        expect((await rowStatus(healthyId, healthyStore)).status).toBe('delivered');
+        expect(active.get('stalled.example')).toBe(1);
+      });
+      const pending = await withStore(STORE, async (tx) => tx.execute(sql`SELECT status, count(*)::integer AS count FROM webhook_delivery GROUP BY status`));
+      expect(pending.rows).toEqual(expect.arrayContaining([{ status: 'processing', count: 1 }, { status: 'pending', count: 49 }]));
+    } finally { unblock(); }
+    expect(await work).toEqual({ delivered: 51, failed: 0 });
+    expect(peak).toBeLessThanOrEqual(2); expect(storePeak).toBe(1);
+  });
+
+  it('cancels an active pg query by public end, awaits close & emits no late SQL or hook', async () => {
+    const client = await pool.connect();
+    const release = vi.spyOn(client, 'release');
+    const end = vi.spyOn(client, 'end');
+    const query = vi.spyOn(client, 'query');
+    let closed = false;
+    client.once('end', () => { closed = true; });
+    const hook = vi.fn();
+    await expect(runStoreTransaction(client, STORE, async (tx) => {
+      afterCommit(tx, hook);
+      await client.query('SELECT pg_sleep(5)');
+      await client.query('SELECT 42 AS late_sql');
+    }, undefined, { timeoutMs: 100 })).rejects.toThrow('timed out after 100ms');
+    expect(closed).toBe(true);
+    expect(end).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledExactlyOnceWith(true);
+    expect(hook).not.toHaveBeenCalled();
+    expect(query.mock.calls.map(([statement]) => statement)).toContain('SELECT pg_sleep(5)');
+    expect(query.mock.calls.map(([statement]) => statement)).not.toContain('ROLLBACK');
+    expect(query.mock.calls.map(([statement]) => statement)).not.toContain('SELECT 42 AS late_sql');
+  });
+});
+
+afterAll(async () => { await wipe(); await pool.end(); });

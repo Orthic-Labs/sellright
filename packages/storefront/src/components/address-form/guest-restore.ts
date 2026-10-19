@@ -29,6 +29,7 @@ export function guestRestorePatch(
 	customer: CustomerFields | undefined,
 	shipping: ShippingFields | undefined,
 	guest: GuestShippingAddress,
+	explicitCountryCode?: string,
 ): { customer: Partial<CustomerFields>; shipping: Partial<ShippingFields> } {
 	const customerPatch: Partial<CustomerFields> = {};
 	for (const key of CUSTOMER_KEYS) {
@@ -38,6 +39,9 @@ export function guestRestorePatch(
 	for (const key of SHIPPING_KEYS) {
 		if (guest[key] && !shipping?.[key]) shippingPatch[key] = guest[key];
 	}
-	if (guest.countryCode && guest.countryCode !== shipping?.countryCode) shippingPatch.countryCode = guest.countryCode;
+	const countryCode = explicitCountryCode && /^[A-Z]{2}$/.test(explicitCountryCode)
+		? explicitCountryCode
+		: guest.countryCode;
+	if (countryCode && countryCode !== shipping?.countryCode) shippingPatch.countryCode = countryCode;
 	return { customer: customerPatch, shipping: shippingPatch };
 }

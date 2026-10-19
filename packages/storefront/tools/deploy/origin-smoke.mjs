@@ -11,26 +11,81 @@ import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_PATHS = ['/'];
 
-/** One GET. Resolves { status, headers, body } or rejects on a network error or timeout. */
+/** One GET. Resolves { status, headers, body } or rejects on network, timeout, or body-limit failure. */
 export function httpGet(url, { host, timeoutMs = 10000, maxBytes = 2 << 20 } = {}) {
 	return new Promise((resolve, reject) => {
 		const u = new URL(url);
 		const lib = u.protocol === 'https:' ? https : http;
 		const headers = { accept: 'text/html,*/*', 'user-agent': 'origin-smoke' };
 		if (host) headers.host = host;
-		const req = lib.request(u, { method: 'GET', headers, ...(u.protocol === 'https:' && host ? { servername: host } : {}) }, (res) => {
-			const chunks = [];
-			let size = 0;
-			res.on('data', (c) => {
-				size += c.length;
-				if (size <= maxBytes) chunks.push(c);
-			});
-			res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
-			res.on('error', reject);
-		});
-		req.setTimeout(timeoutMs, () => req.destroy(new Error(`timeout after ${timeoutMs} ms`)));
-		req.on('error', reject);
-		req.end();
+		let req;
+		let res;
+		let deadline;
+		let settled = false;
+		let size = 0;
+		const chunks = [];
+		const onTimeout = () => finish(new Error(`timeout after ${timeoutMs} ms`));
+		const onError = (error) => finish(error);
+		const onAborted = () => finish(new Error('response aborted'));
+		const onRequestClose = () => req.removeListener('error', onError);
+		const onResponseClose = () => {
+			if (!settled) finish(new Error('response closed before end'));
+			res.removeListener('error', onError);
+		};
+		const cleanup = () => {
+			clearTimeout(deadline);
+			if (req) {
+				req.setTimeout(0);
+				req.removeListener('timeout', onTimeout);
+				req.removeListener('response', onResponse);
+			}
+			if (res) {
+				res.removeListener('data', onData);
+				res.removeListener('end', onEnd);
+				res.removeListener('aborted', onAborted);
+			}
+		};
+		function finish(error, result) {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			if (error) {
+				// Do not pass the error to destroy: queued socket errors are
+				// absorbed by onError until each stream closes, then detached.
+				res?.destroy();
+				req?.destroy();
+				reject(error);
+			} else resolve(result);
+		}
+		const onData = (chunk) => {
+			size += chunk.length;
+			if (size > maxBytes) {
+				finish(new Error(`body exceeds ${maxBytes} bytes`));
+				return;
+			}
+			chunks.push(chunk);
+		};
+		const onEnd = () => finish(null, { status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') });
+		const onResponse = (response) => {
+			res = response;
+			res.on('data', onData);
+			res.once('end', onEnd);
+			res.on('error', onError);
+			res.once('aborted', onAborted);
+			res.once('close', onResponseClose);
+		};
+		try {
+			req = lib.request(u, { method: 'GET', headers, ...(u.protocol === 'https:' && host ? { servername: host } : {}) }, onResponse);
+			req.on('error', onError);
+			req.once('close', onRequestClose);
+			req.setTimeout(timeoutMs, onTimeout);
+			// Independent of socket activity: DNS, headers and the complete
+			// body must all finish inside the same wall-clock budget.
+			if (timeoutMs > 0) deadline = setTimeout(onTimeout, timeoutMs);
+			req.end();
+		} catch (error) {
+			finish(error);
+		}
 	});
 }
 

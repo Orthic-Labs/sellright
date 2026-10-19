@@ -65,7 +65,10 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 
 		const guestData = await loadGuestShippingAddress();
 		if (guestData) {
-			const patch = guestRestorePatch(appState.customer, appState.shippingAddress, guestData);
+			const explicitCountryCode = CountryPreferenceService.hasExplicitCountrySelection()
+				? CountryPreferenceService.getCountry()
+				: undefined;
+			const patch = guestRestorePatch(appState.customer, appState.shippingAddress, guestData, explicitCountryCode);
 			if (Object.keys(patch.customer).length) appState.customer = { ...appState.customer, ...patch.customer };
 			if (Object.keys(patch.shipping).length) appState.shippingAddress = { ...appState.shippingAddress, ...patch.shipping };
 			if (patch.shipping.countryCode) localCountryCode.value = patch.shipping.countryCode;
