@@ -44,7 +44,10 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const currentImageIndex = useSignal(0);
   const groups = useComputed$(() => getOptionGroups(product.variants));
   // Named variants without option groups use one selection slot containing the catalog SKU.
-  const selectionSize = useComputed$(() => groups.value.length || (product.variants.length > 1 ? 1 : 0));
+  const selectionSize = useComputed$(() => {
+    const variants = product.variants;
+    return getOptionGroups(variants).length || (variants.length > 1 ? 1 : 0);
+  });
   const selectedValues = useSignal<(string | null)[]>([]);
   const preOrderConsent = useSignal(false);
   const hasVariantAssets = product.variants.some((v) => (v.assets?.length || 0) > 0);
