@@ -58,5 +58,6 @@ overrides:
   shell-quote: ^1.11.0
 
 minimumReleaseAgeExclude:
-  - nodemailer@10.1.0
+  - nodemailer@10.1.0 || 10.1.7
   - prettier@3.9.10
+  - '@rightkit/legal@0.6.1'

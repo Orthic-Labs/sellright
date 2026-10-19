@@ -22,7 +22,7 @@
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { financialReconciliationMetadata } from '../import/financial-reconciliation.testkit.js';
 import { randomUUID } from 'node:crypto';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -33,6 +33,10 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
 import { adminOrderOps } from './admin-order-ops.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
+import * as settlement from '../payments/settlement/record.js';
+
+vi.mock('../manifest/stock-hook.js', () => ({ onStockChanged: vi.fn() }));
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -175,10 +179,11 @@ async function stockAllocated(): Promise<number> {
 }
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   await wipe();
   token = await seedStoreAndAdmin();
 });
-afterEach(wipe);
+afterEach(async () => { vi.restoreAllMocks(); await wipe(); });
 afterAll(() => pool.end());
 
 describe('bulk imported financial quarantine', () => {
@@ -290,6 +295,158 @@ describe('bulk-soft-delete / restore', () => {
     const body = res.body;
     expect(body.succeeded).toBe(0);
     expect(body.results[0]!.error).toMatch(/not trashed/i);
+  });
+});
+
+describe('bulk-purge stock reservations (#278)', () => {
+  async function stockState() {
+    return withStore(STORE, async tx => {
+      const [row] = await tx.select({ onHand: s.stock.onHand, allocated: s.stock.allocated }).from(s.stock).where(eq(s.stock.variantId, VARIANT));
+      return row!;
+    });
+  }
+
+  it('keeps the PendingPayment allocation while trashed, then releases two units only after purge commits', async () => {
+    const code = 'O-PURGE-RESERVED';
+    await seedOrder({ code, allocated: 2 });
+    await withStore(STORE, tx => tx.update(s.stock).set({ onHand: 20 }).where(eq(s.stock.variantId, VARIANT)));
+    expect(await stockState()).toEqual({ onHand: 20, allocated: 2 });
+    expect((await callBulk('bulk-soft-delete', { codes: [code] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 20, allocated: 2 });
+    expect(onStockChanged).not.toHaveBeenCalled();
+
+    const result = await callBulk('bulk-purge', { codes: [code] });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ succeeded: 1, results: [{ code, ok: true }] });
+    expect(await orderState(code)).toBeNull();
+    expect(await stockState()).toEqual({ onHand: 20, allocated: 0 });
+    expect(onStockChanged).toHaveBeenCalledExactlyOnceWith(SLUG);
+  });
+
+  it('does not release or notify again for an order already cancelled through bulk-cancel', async () => {
+    const code = 'O-PURGE-CANCELLED';
+    await seedOrder({ code, allocated: 2 });
+    expect((await callBulk('bulk-cancel', { codes: [code] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 0 });
+    expect((await callBulk('bulk-soft-delete', { codes: [code] })).body.succeeded).toBe(1);
+    vi.mocked(onStockChanged).mockClear();
+
+    expect((await callBulk('bulk-purge', { codes: [code] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 0 });
+    expect(onStockChanged).not.toHaveBeenCalled();
+  });
+
+  it('releases only the unshipped unit without restocking the shipped unit', async () => {
+    const code = 'O-PURGE-PART-SHIPPED';
+    const orderId = await seedOrder({ code, state: 'Paid', deleted: true, allocated: 2 });
+    await withStore(STORE, async tx => {
+      await tx.update(s.orderLine).set({ fulfilledQty: 1 }).where(eq(s.orderLine.orderId, orderId));
+      await tx.update(s.stock).set({ onHand: 19, allocated: 1 }).where(eq(s.stock.variantId, VARIANT));
+    });
+    expect((await callBulk('bulk-purge', { codes: [code], force: true, reason: 'Retire partially shipped order' })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 19, allocated: 0 });
+    expect(onStockChanged).toHaveBeenCalledExactlyOnceWith(SLUG);
+  });
+
+  it('does not release refunded/cancelled units again or consume another order allocation', async () => {
+    const code = 'O-PURGE-REFUNDED';
+    const orderId = await seedOrder({ code, state: 'Paid', allocated: 1, withChildren: true });
+    await seedOrder({ code: 'O-PURGE-OTHER-REFUND', allocated: 3 });
+    const [line] = await withStore(STORE, tx => tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)));
+    const refund = await app.request(`/v1/admin/orders/${code}/refund`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+      body: JSON.stringify({ idempotencyKey: 'purge-refund', lines: [{ orderLineId: line!.id, quantity: 1 }] }),
+    });
+    expect(refund.status).toBe(200);
+    expect(await refund.json()).toMatchObject({ refunded: 1000, state: 'Refunded' });
+    const [refundedLine] = await withStore(STORE, tx => tx.select().from(s.orderLine).where(eq(s.orderLine.id, line!.id)));
+    expect(refundedLine).toMatchObject({ cancelledQty: 1, refundedQty: 1 });
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 3 });
+    expect((await callBulk('bulk-soft-delete', { codes: [code] })).body.succeeded).toBe(1);
+    vi.mocked(onStockChanged).mockClear();
+
+    expect((await callBulk('bulk-purge', { codes: [code], force: true, reason: 'Retire refunded order' })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 3 });
+    expect(await orderState('O-PURGE-OTHER-REFUND')).toBe('PendingPayment');
+    expect(onStockChanged).not.toHaveBeenCalled();
+  });
+
+  it('preserves the reservation belonging to another live order', async () => {
+    await seedOrder({ code: 'O-PURGE-OWN', deleted: true, allocated: 2 });
+    await seedOrder({ code: 'O-PURGE-OTHER', allocated: 3 });
+    expect(await stockAllocated()).toBe(5);
+    expect((await callBulk('bulk-purge', { codes: ['O-PURGE-OWN'] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 3 });
+    expect(await orderState('O-PURGE-OTHER')).toBe('PendingPayment');
+    expect(onStockChanged).toHaveBeenCalledExactlyOnceWith(SLUG);
+  });
+
+  it('bounds allocation at zero when the remaining line quantity exceeds recorded allocation', async () => {
+    const orderId = await seedOrder({ code: 'O-PURGE-BOUND', deleted: true, allocated: 1 });
+    await withStore(STORE, tx => tx.update(s.orderLine).set({ quantity: 2 }).where(eq(s.orderLine.orderId, orderId)));
+    expect((await callBulk('bulk-purge', { codes: ['O-PURGE-BOUND'] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 0 });
+  });
+
+  it('ignores a line whose variant was detached without touching another reservation', async () => {
+    const orderId = await seedOrder({ code: 'O-PURGE-NO-VARIANT', deleted: true });
+    await seedOrder({ code: 'O-PURGE-OTHER-VARIANT', allocated: 3 });
+    await withStore(STORE, tx => tx.update(s.orderLine).set({ variantId: null }).where(eq(s.orderLine.orderId, orderId)));
+    expect((await callBulk('bulk-purge', { codes: ['O-PURGE-NO-VARIANT'] })).body.succeeded).toBe(1);
+    expect(await stockState()).toEqual({ onHand: 100, allocated: 3 });
+    expect(onStockChanged).not.toHaveBeenCalled();
+  });
+
+  it.each(['not trashed', 'paid without force', 'paid without reason', 'pending payment'] as const)('leaves stock and lines unchanged when refused: %s', async refusal => {
+    const code = 'O-PURGE-REFUSED';
+    const orderId = await seedOrder({ code, deleted: refusal !== 'not trashed',
+      state: refusal.startsWith('paid') ? 'Paid' : 'PendingPayment', allocated: 2 });
+    if (refusal === 'pending payment') await withStore(STORE, tx => tx.insert(s.payment).values({ storeId: STORE, orderId, amount: 1000, method: 'manual', state: 'Pending' }));
+    const before = await withStore(STORE, async tx => ({
+      order: await tx.select().from(s.order).where(eq(s.order.id, orderId)),
+      lines: await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)),
+      stock: await tx.select().from(s.stock).where(eq(s.stock.variantId, VARIANT)),
+    }));
+    const result = await callBulk('bulk-purge', { codes: [code], force: refusal === 'paid without reason' });
+    expect(result.body).toMatchObject({ succeeded: 0, skipped: 1, results: [{ code, ok: false }] });
+    const after = await withStore(STORE, async tx => ({
+      order: await tx.select().from(s.order).where(eq(s.order.id, orderId)),
+      lines: await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)),
+      stock: await tx.select().from(s.stock).where(eq(s.stock.variantId, VARIANT)),
+    }));
+    expect(after).toEqual(before);
+    expect(onStockChanged).not.toHaveBeenCalled();
+  });
+
+  it('rolls stock, cascade and audit back without notifying when settlement recording fails', async () => {
+    const code = 'O-PURGE-ROLLBACK';
+    const orderId = await seedOrder({ code, deleted: true, allocated: 2, withChildren: true });
+    const snapshot = () => withStore(STORE, async tx => ({
+      order: await tx.select().from(s.order).where(eq(s.order.id, orderId)),
+      lines: await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, orderId)),
+      payments: await tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)),
+      licenses: await tx.select().from(s.license).where(eq(s.license.orderId, orderId)),
+      cart: await tx.select().from(s.cart).where(eq(s.cart.convertedOrderId, orderId)),
+      audit: await tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, orderId)),
+      stock: await tx.select().from(s.stock).where(eq(s.stock.variantId, VARIANT)),
+    }));
+    const before = await snapshot();
+    let allocatedBeforeFailure: number | undefined;
+    vi.spyOn(settlement, 'recordSettlementOperation').mockImplementationOnce(async tx => {
+      const [stock] = await tx.select({ allocated: s.stock.allocated }).from(s.stock).where(eq(s.stock.variantId, VARIANT));
+      allocatedBeforeFailure = stock?.allocated;
+      throw new Error('injected purge settlement failure');
+    });
+    const result = await app.request('/v1/admin/orders/bulk-purge', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+      body: JSON.stringify({ codes: [code] }),
+    });
+    expect(result.status).toBe(500);
+    expect(allocatedBeforeFailure).toBe(0);
+    expect(await snapshot()).toEqual(before);
+    expect(onStockChanged).not.toHaveBeenCalled();
   });
 });
 
@@ -405,7 +562,7 @@ describe('bulk-purge (cascade)', () => {
 
   it('refuses even forced purge of pending credit hold before any per-order history/account mutation', async () => {
     const code = 'O-PURGE-CREDIT-HOLD';
-    const orderId = await seedOrder({ code, deleted: true });
+    const orderId = await seedOrder({ code, deleted: true, allocated: 2 });
     const fixture = await withStore(STORE, async tx => {
       const issued = await issue(tx, { storeId: STORE, amount: 500, email: 'hold@bulk.test', issuanceKey: 'purge-hold' });
       await tx.update(s.order).set({ promotionId: issued.account.promotionId }).where(eq(s.order.id, orderId));
@@ -431,6 +588,8 @@ describe('bulk-purge (cascade)', () => {
     expect(result.body).toMatchObject({ succeeded: 0, skipped: 1, results: [{ code, ok: false, errorCode: 'ACCOUNT_CREDIT_HOLD_UNRESOLVED' }] });
     expect(result.body.results[0]!.error).toMatch(/cancellation or reconciliation/);
     expect(await snapshot()).toEqual(before);
+    expect(await stockAllocated()).toBe(2);
+    expect(onStockChanged).not.toHaveBeenCalled();
   });
 
   it('(7) purge refuses a Paid order without force', async () => {
