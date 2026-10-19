@@ -17,20 +17,21 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
     selectedVariant,
     showCtaTooltip,
     showFromPrefix,
+    waitlistAvailable,
   } = props;
   // The fixed bar never covers the purchase controls: while an option selector, the pre-order consent or the in-page add button
   // is on screen, the bar steps aside (those controls are then in reach); it returns once they scroll away. Layout only, no data.
   const yielding = useSignal(false);
   const measure = $(() => {
     const vh = window.innerHeight;
-    yielding.value = [...document.querySelectorAll('.sr-pdp .sr-sel-group, .sr-pdp .sr-consent, .sr-pdp .sr-cta-desktop')].some((el) => {
+    yielding.value = [...document.querySelectorAll('.sr-pdp .sr-sel-group, .sr-pdp .sr-consent, .sr-pdp .sr-cta-desktop, .sr-pdp #sr-pdp-waitlist')].some((el) => {
       const r = el.getBoundingClientRect();
       return r.height > 0 && r.bottom > 72 && r.top < vh;
     });
   });
   useOnWindow('scroll', measure);
   useOnWindow('resize', measure);
-  useVisibleTask$(() => measure(), { strategy: 'document-ready' });
+  useVisibleTask$(({ track }) => { track(() => props.waitlistAvailable); measure(); }, { strategy: 'document-ready' });
   return (
     <div class={`sr-mobile-bar${yielding.value ? ' is-yielding' : ''}`} aria-hidden={yielding.value ? 'true' : undefined} inert={yielding.value || undefined}>
       <div class="sr-mobile-bar-meta">
@@ -46,7 +47,14 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
         </div>
       </div>
       {allVariantsSoldOut.value ? (
-        <button class="sr-cta-btn oos">Out of Stock</button>
+        waitlistAvailable ? (
+          <button type="button" class="sr-cta-btn ready" onClick$={() => {
+            const target = document.querySelector<HTMLInputElement>('#sr-pdp-waitlist input[type="email"]');
+            if (!target) return;
+            target.focus({ preventScroll: true });
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }}>Notify me</button>
+        ) : <button class="sr-cta-btn oos">Out of Stock</button>
       ) : (
         <button
           class={ctaClass.value}

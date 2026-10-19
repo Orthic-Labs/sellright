@@ -6,7 +6,8 @@ import { liveListingAvailability, readLiveListing as fetchLiveListing } from '~/
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
-import { theme } from '~/theme/theme.config';
+import { shopCategoryFilters } from '~/theme/theme.config';
+import { categoryFacets, filterCategoryProducts } from '~/utils/shop-categories';
 import { useCatalogLoader } from '~/platform/shop';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
@@ -16,22 +17,8 @@ export { useCatalogLoader };
 export { useConfiguratorDetail } from '~/platform/configurator-detail';
 export { head, onStaticGenerate } from '~/platform/shop';
 
-// Category filter labels are generic and store-configurable (VITE_SHOP_CATEGORIES,
-// comma-separated) — matched against product tags client-side. Neutral default
-// is ['New', 'Bestsellers', 'Sale']; see src/theme/theme.config.ts.
-const HARDCODED_SHOP_FILTERS: FacetWithValues[] = [
- {
-  id: 'category',
-  name: 'Category',
-  open: true,
-  values: theme.shopCategories.map((name, i) => ({ id: String(i + 1), name, selected: false })),
- },
-];
-
-// Map facet filter IDs to tag names for client-side filtering
-const FACET_ID_TO_NAME: Record<string, string> = Object.fromEntries(
- theme.shopCategories.map((name, i) => [String(i + 1), name]),
-);
+// Both shop and search use the same configured category identities and tags.
+const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
 
 const BaseShopPage = component$(() => {
  const catalog = useCatalogLoader();
@@ -54,7 +41,7 @@ const BaseShopPage = component$(() => {
   facetValues: FacetWithValues[];
  }>({
   showMenu: false,
-  facetValues: HARDCODED_SHOP_FILTERS.map(facet => ({
+  facetValues: SHOP_FILTERS.map(facet => ({
    ...facet,
    values: facet.values.map(value => ({ ...value, selected: false })),
   })),
@@ -83,10 +70,8 @@ const BaseShopPage = component$(() => {
  const getDisplayProducts = () => {
   // If text search is active, use API data
   if (searchTerm.value && apiData.value) {
-   const filterName = FACET_ID_TO_NAME[facetIds.value[0]];
-   const products = apiData.value.items.filter(item =>
-    (!inStockOnly.value || item.inStock) && (!filterName || (item.tags ?? []).includes(filterName)),
-   );
+   const products = filterCategoryProducts(apiData.value.items, shopCategoryFilters, facetIds.value)
+    .filter(item => !inStockOnly.value || item.inStock);
    return { products, count: products.length };
   }
 
@@ -106,12 +91,7 @@ const BaseShopPage = component$(() => {
   }
 
   // Category filter
-  if (facetIds.value.length > 0) {
-   const filterName = FACET_ID_TO_NAME[facetIds.value[0]];
-   if (filterName) {
-    products = products.filter(p => (p.tags ?? []).includes(filterName));
-   }
-  }
+  products = filterCategoryProducts(products, shopCategoryFilters, facetIds.value);
 
   // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then manifest order
   const sorted = [...products].sort((a, b) => {
@@ -130,7 +110,7 @@ const BaseShopPage = component$(() => {
    facetIds.value = [id];
   }
   // Update filter UI selected state
-  state.facetValues = HARDCODED_SHOP_FILTERS.map(facet => ({
+  state.facetValues = SHOP_FILTERS.map(facet => ({
    ...facet,
    values: facet.values.map(value => ({
     ...value,
@@ -272,7 +252,7 @@ const BaseShopPage = component$(() => {
        onClick$={() => {
         facetIds.value = [];
         searchTerm.value = '';
-        state.facetValues = HARDCODED_SHOP_FILTERS.map(facet => ({
+        state.facetValues = SHOP_FILTERS.map(facet => ({
          ...facet,
          values: facet.values.map(value => ({ ...value, selected: false })),
         }));

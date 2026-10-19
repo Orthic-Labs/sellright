@@ -6,6 +6,7 @@ import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
+import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
@@ -36,6 +37,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     return <div class="text-center py-8">Product not found</div>;
   }
   const isEnhancing = useSignal(false);
+  const liveStockReady = useSignal(false);
   const enhancementError = useSignal<string | null>(null);
   const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
   const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
@@ -148,14 +150,17 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const stockReadGen = useSignal(0);
   const refreshLiveStock = $(async () => {
     const gen = ++stockReadGen.value;
+    liveStockReady.value = false;
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
       const stock = await getProductStock(product.slug);
       if (gen !== stockReadGen.value) return;
       if (!stock) return;
+      const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
       const merged = mergeProductStock(product, stock);
       product.variants = merged.variants;
+      liveStockReady.value = waitlistStockReady;
       const isCompleteSelection =
         selectionSize.value > 0 &&
         selectedValues.value.length === selectionSize.value &&
@@ -365,6 +370,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isImageLoading={isImageLoading}
       isOutOfStock={isOutOfStock}
       isPreOrder={isPreOrder}
+      liveStockReady={liveStockReady}
       modalImageIndex={modalImageIndex}
       modalImageSrc={modalImageSrc}
       navigateModal={navigateModal}

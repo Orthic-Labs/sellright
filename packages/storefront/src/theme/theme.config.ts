@@ -1,3 +1,5 @@
+import { projectShopCategories } from '~/utils/shop-categories';
+
 /**
  * Central store theme/brand config. Every brand-specific string (name, domain,
  * support email, social links, colors, fonts, legal entity, address) flows
@@ -106,6 +108,14 @@ export interface StoreTheme {
 	isDemo: boolean;
 }
 
+// Read raw IDs directly: an explicitly empty mapping is malformed, not absent.
+const categoryLabels = envOrUndefined('VITE_SHOP_CATEGORIES')?.split(',').map((name) => name.trim()).filter(Boolean)
+	?? ['New', 'Bestsellers', 'Sale'];
+export const shopCategoryFilters = projectShopCategories(
+	categoryLabels,
+	(import.meta.env as Record<string, string | undefined>).VITE_SHOP_CATEGORY_IDS,
+);
+
 export const theme: StoreTheme = {
 	storeName: env('VITE_STORE_NAME', 'Storefront Demo'),
 	legalName: env('VITE_STORE_LEGAL_NAME', env('VITE_STORE_NAME', 'Storefront Demo')),
@@ -149,10 +159,7 @@ export const theme: StoreTheme = {
 	currency: env('VITE_STORE_CURRENCY', 'USD'),
 	locale: env('VITE_STORE_LOCALE', 'en'),
 	storageNamespace: env('VITE_STORE_STORAGE_NAMESPACE', 'dd'),
-	shopCategories: (() => {
-		const raw = envOrUndefined('VITE_SHOP_CATEGORIES');
-		return raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : ['New', 'Bestsellers', 'Sale'];
-	})(),
+	shopCategories: categoryLabels,
 	policies: {
 		shipping: { label: env('VITE_POLICY_SHIPPING_LABEL', 'Flat-Rate'), sub: env('VITE_POLICY_SHIPPING_SUB', 'Shipping') },
 		returns: { label: env('VITE_POLICY_RETURNS_LABEL', '1 Week'), sub: env('VITE_POLICY_RETURNS_SUB', 'Defect Returns') },

@@ -9,6 +9,8 @@ export { Link } from '@qwik.dev/router';
 export { OptimizedImage } from '~/components/ui/LazyImage';
 export { RichContent } from '~/platform/widgets/RichContent';
 export { TurnstileMount } from '~/platform/widgets/TurnstileMount';
+export { RestockForm } from '~/platform/widgets/RestockForm';
+export type { RestockFormProps } from '~/platform/widgets/RestockForm';
 export { YouTubeFacade } from '~/platform/widgets/YouTubeFacade';
 export type { YouTubeFacadeProps } from '~/platform/widgets/YouTubeFacade';
 export { default as VerificationButton } from '~/components/verification/VerificationButton';
