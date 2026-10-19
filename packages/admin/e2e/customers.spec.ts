@@ -72,7 +72,11 @@ test.describe('customers', () => {
 		// clearing the tags field removes them
 		await page.getByRole('button', { name: 'Edit' }).click();
 		await field(page, 'Tags (comma-separated)').fill('');
+		const clearSave = page.waitForResponse((r) => r.url().endsWith(`/v1/admin/customers/${id}`) && r.request().method() === 'PATCH');
 		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		const clearedResponse = await clearSave;
+		expect(clearedResponse.ok()).toBeTruthy();
+		expect(clearedResponse.request().postDataJSON()).toMatchObject({ tags: null });
 		await expect(toast(page, 'Customer saved')).toBeVisible();
 		const [cleared] = await readRows<{ tags: string[] | null }>(api, 'select tags from customer where id = $1', [id]);
 		expect(cleared!.tags).toBeNull();
