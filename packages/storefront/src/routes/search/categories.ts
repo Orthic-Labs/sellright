@@ -1,5 +1,5 @@
 import type { CatalogListResponse } from '~/sellright/types/catalog';
-import { filterCategoryProducts, type ShopCategory } from '~/utils/shop-categories';
+import { filterCategoryProducts, type ShopCategory } from '~/config/shop-categories';
 
 type SearchProducts = (params: { term?: string; take: number }) => Promise<CatalogListResponse>;
 

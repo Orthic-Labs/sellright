@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { searchByCategories } from './categories';
-import { categoryFacets, filterCategoryProducts, projectShopCategories } from '~/utils/shop-categories';
+import { categoryFacets, filterCategoryProducts, projectShopCategories } from '~/config/shop-categories';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 
 const item = (slug: string, tags: string[]): CatalogListItem => ({

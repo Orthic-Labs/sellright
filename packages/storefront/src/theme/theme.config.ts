@@ -1,4 +1,4 @@
-import { projectShopCategories } from '~/utils/shop-categories';
+import { projectShopCategories } from '~/config/shop-categories';
 
 /**
  * Central store theme/brand config. Every brand-specific string (name, domain,

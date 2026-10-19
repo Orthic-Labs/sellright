@@ -9,7 +9,7 @@ import { projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { shopCategoryFilters } from '~/theme/theme.config';
 import { searchByCategories } from './categories';
-import { categoryFacets } from '~/utils/shop-categories';
+import { categoryFacets } from '~/config/shop-categories';
 
 // Resolve the shop's stable configured category IDs against native tags.
 export const executeQuery = $(

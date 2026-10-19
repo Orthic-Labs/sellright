@@ -7,7 +7,7 @@ import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { shopCategoryFilters } from '~/theme/theme.config';
-import { categoryFacets, filterCategoryProducts } from '~/utils/shop-categories';
+import { categoryFacets, filterCategoryProducts } from '~/config/shop-categories';
 import { useCatalogLoader } from '~/platform/shop';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
