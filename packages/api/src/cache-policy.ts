@@ -12,6 +12,8 @@
  * zero max-age (see isNoStoreOnly) is kept verbatim on any route, method and status, since it is as restrictive as `private, no-store` (a client
  * contract may pin e.g. `no-cache, no-store, must-revalidate`). Nothing becomes more cacheable; CDN headers and `cache-tag` are still stripped.
  *
+ * Requests carrying x-store-slug always forbid storage before any exception, including an empty header; strict no-store values stay verbatim.
+ *
  * An exception must be provably stock-free AND identical for every visitor of the store (no cookie, auth, cart or
  * price/availability dependence). Add one only with a `reason` saying why, and a `source` file; the unit test fails
  * when a source file sets a cacheable Cache-Control that is not listed here.
@@ -293,6 +295,12 @@ export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler
   const extra = options.extraExceptions ?? [];
   return async (c, next) => {
     await next();
+    // Host URLs can resolve another tenant through this header; even an empty selector must never enter a shared cache.
+    if (c.req.raw.headers.has('x-store-slug')) {
+      if (isNoStoreOnly(c.res.headers.get('cache-control'))) keepNoStoreVerbatim(c);
+      else applyNoStore(c);
+      return;
+    }
     const safeRead = c.req.method === 'GET' || c.req.method === 'HEAD';
     if (safeRead && c.res.status === 200) {
       // Static (reviewed) exceptions keep their own Cache-Control; so do registered (plugin) ones, but only when the handler itself set a

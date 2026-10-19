@@ -1,3 +1,4 @@
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 /** Disposable *_test database only. Covers capability adoption & exactly-once cart effects. */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
@@ -55,7 +56,8 @@ async function seed(guest = false) {
   invalidateStoreCache();
 }
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); await pool.query('DELETE FROM session'); }
-beforeEach(async () => { await wipe(); await seed(); });
+beforeEach(async () => {
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend()); await wipe(); await seed(); });
 afterAll(async () => { await wipe(); await pool.end(); });
 
 describe('legacy customer bootstrap', () => {

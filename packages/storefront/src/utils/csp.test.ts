@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { googleIdentityCsp, googleSignInClientIdForHost } from '../config/google-signin';
-import { buildCsp, IP_LOOKUP_ORIGIN, TURNSTILE_ORIGIN } from './csp';
+import { buildCsp, IP_LOOKUP_ORIGIN, SHEERID_ORIGIN, TURNSTILE_ORIGIN } from './csp';
 import { YOUTUBE_EMBED_ORIGIN } from '../platform/youtube';
 
 const directive = (csp: string, name: string) => csp.split('; ').find((d) => d.startsWith(`${name} `)) ?? '';
@@ -31,6 +31,42 @@ describe('buildCsp — Turnstile origin only when a site key is configured', () 
 			expect(directive(csp, 'script-src')).toContain('https://js.stripe.com');
 			expect(directive(csp, 'frame-src')).toContain('https://hooks.stripe.com');
 		}
+	});
+});
+
+describe('buildCsp — explicit SheerID opt-in', () => {
+	it('adds only the exact SDK origin to script-src and frame-src, preserving every other directive', () => {
+		const base = buildCsp({ nonce: 'n' });
+		const enabled = buildCsp({ nonce: 'n', sheerIdEnabled: true });
+		expect(SHEERID_ORIGIN).toBe('https://services.sheerid.com');
+		expect(enabled.split('; ')).toEqual(base.split('; ').map((line) => (
+			['script-src', 'frame-src'].includes(line.split(' ')[0]) ? `${line} ${SHEERID_ORIGIN}` : line
+		)));
+		expect(enabled).not.toContain('*.sheerid.com');
+		expect(enabled).not.toContain('unsafe-eval');
+		expect(directive(enabled, 'script-src')).toContain("'nonce-n'");
+		expect(directive(enabled, 'script-src')).not.toContain("'unsafe-inline'");
+	});
+
+	it('keeps the original policy byte-identical without opt-in', () => {
+		const base = buildCsp({ nonce: 'n' });
+		expect(base).not.toContain(SHEERID_ORIGIN);
+		for (const sheerIdEnabled of [undefined, false]) {
+			expect(buildCsp({ nonce: 'n', sheerIdEnabled })).toBe(base);
+		}
+	});
+
+	it('preserves existing provider options without adding arbitrary brand origins', () => {
+		const options = {
+			nonce: 'n', apiOrigin: 'https://api.example.test', turnstileSiteKey: 'k', ipCountryFallback: '0',
+			google: googleIdentityCsp('x.apps.googleusercontent.com'),
+			analytics: { script: ['https://analytics.example.test'], connect: ['https://analytics.example.test'] },
+			youtubeEmbed: true,
+		};
+		const base = buildCsp(options);
+		const enabled = buildCsp({ ...options, sheerIdEnabled: true });
+		expect(enabled.split(` ${SHEERID_ORIGIN}`).join('')).toBe(base);
+		expect(enabled.split('; ').filter((line) => line.includes(SHEERID_ORIGIN)).map((line) => line.split(' ')[0])).toEqual(['script-src', 'frame-src']);
 	});
 });
 
@@ -107,6 +143,11 @@ describe('entry.express.tsx emits the built policy', () => {
 		expect(src).toContain('turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY');
 		expect(src).toContain('ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK');
 		expect(src).toContain("res.setHeader('Content-Security-Policy', cspDirectives)");
+	});
+
+	it('uses the canonical SheerID enablement config shared with the homepage', () => {
+		expect(src).toMatch(/import\s*\{\s*theme\s*\}\s*from["']\.\/theme\/theme\.config["']/);
+		expect(src).toContain('sheerIdEnabled: theme.sheerIdEnabled');
 	});
 
 	it('every Turnstile loader in the base (sign-in, login modal, contact controller, shared widget) uses the allowed origin', () => {

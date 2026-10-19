@@ -25,11 +25,12 @@ import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
-import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
+import { checkoutIpRetryAfter, clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptance.js';
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodes, type PricedCart } from './cart.js';
+import { CartTooLargeError, boundedCartItems, cartTooLargeFields } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
@@ -311,11 +312,18 @@ checkout.openapi(
     const body = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key') || null;
     const token = customerToken(c);
-    // Rate-limit: throttle anonymous checkout spam (an authenticated customer
-    // is bound by the same window — login is the friction point if it's a
-    // bot behind a credential-stuffing script).
+    // Bound identity-lookup work first, while allowing distinct customers on
+    // a shared NAT their own fine budget. Neither key trusts raw credentials.
     const ip = clientIp(c);
-    const checkoutBucket = `checkout:${token ?? ip}`;
+    const ipRetry = await checkoutIpRetryAfter(ip, st.id);
+    if (ipRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many checkouts — try again in ${ipRetry}s`);
+    // Close this scoped transaction before the rate backend borrows a pool
+    // client. The order transaction still resolves the session again below,
+    // so revocation/expiry & customer benefits keep their original checks.
+    const checkoutCustomerId = token
+      ? await withStore(st.id, async (tx) => (await resolveCustomer(tx, token))?.id ?? null)
+      : null;
+    const checkoutBucket = `checkout:${st.id}:${checkoutCustomerId ?? 'guest'}`;
     const checkoutRetry = await loginRetryAfter(ip, checkoutBucket);
     if (checkoutRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many checkouts — try again in ${checkoutRetry}s`);
 
@@ -326,7 +334,7 @@ checkout.openapi(
     // The request's discount/tender intent as sent, for policies (applied or not).
     const intent = { couponCode: body.couponCode, giftCardCode: body.giftCardCode, redeemPoints: body.redeemPoints };
 
-    type Result = { pricingError: PromotionStackError } | { creditPaymentUnavailable: PricedCart } | { quoteChanged: PricedCart; revision?: number } | { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { cartTooLarge: CartTooLargeError } | { pricingError: PromotionStackError } | { creditPaymentUnavailable: PricedCart } | { quoteChanged: PricedCart; revision?: number } | { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // A replay is decided under the STORED order's own lock set (order, licences, reservations — L2/L3/L4), never
     // under the attempt's set, which covers only the rolled-back attempt's new order id. The set is taken in a fresh
     // transaction, so the global lock order holds; the order is reread under the locks before the policy hook runs.
@@ -429,12 +437,12 @@ checkout.openapi(
         // 'stale'), a mismatched base 409s 'stale' + the current snapshot.
         const conflictShipCountry = (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country ?? null;
         if (body.expectedRevision == null) {
-          return { cartConflict: { code: 'revision_required' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' }) } };
+          return { cartConflict: { code: 'revision_required' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout', conflictCode: 'revision_required' }) } };
         }
         if (row.revision !== body.expectedRevision) {
-          return { cartConflict: { code: 'stale' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' }) } };
+          return { cartConflict: { code: 'stale' as const, snapshot: await cartResponse(tx, st, row, body.couponCodes ?? body.couponCode, token, conflictShipCountry, { shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout', conflictCode: 'stale' }) } };
         }
-        const lines = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, row.id)).orderBy(asc(s.cartLine.createdAt), asc(s.cartLine.id));
+        const lines = await boundedCartItems(tx, row);
         if (!lines.length) return { cartError: 'cart is empty, invalid, or already checked out' };
         items = lines.map((l) => ({ sku: l.sku, quantity: l.quantity })); // fail-closed
         cartRow = row;
@@ -898,6 +906,7 @@ checkout.openapi(
         if (!replayed) throw e;
         return replayed;
       }
+      if (e instanceof CartTooLargeError) return { cartTooLarge: e };
       if (e instanceof CreditPaymentUnavailableError) return { creditPaymentUnavailable: e.quote };
       if (e instanceof PromotionStackError) return { pricingError: e };
       if (e instanceof QuoteChangedError) return { quoteChanged: e.quote, revision: e.revision };
@@ -924,6 +933,7 @@ checkout.openapi(
     // never from inside it, and never on a rolled-back/replayed attempt.
     if (stockChanged) onStockChanged(st.slug);
 
+    if ('cartTooLarge' in out) return errJson(c, 409, 'CART_TOO_LARGE', out.cartTooLarge.message, { extra: cartTooLargeFields(out.cartTooLarge) });
     if ('pricingError' in out) return promotionStackErrorJson(c, out.pricingError);
     if ('creditPaymentUnavailable' in out) return errJson(c, 409, 'CREDIT_PAYMENT_UNAVAILABLE', 'This credit order needs a payable shipping or tax balance', { extra: { reason: 'PAYABLE_BALANCE_REQUIRED', quote: out.creditPaymentUnavailable, quoteHash: out.creditPaymentUnavailable.quoteHash } });
     if ('quoteChanged' in out) return errJson(c, 409, 'QUOTE_CHANGED', 'price changed — review refreshed quote before paying', { extra: { quote: out.quoteChanged, quoteHash: out.quoteChanged.quoteHash, ...(out.revision !== undefined ? { revision: out.revision } : {}) } });

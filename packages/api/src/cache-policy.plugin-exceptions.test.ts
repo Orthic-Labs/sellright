@@ -31,6 +31,83 @@ function app() {
   return a;
 }
 
+describe('store-selector requests never share cached exception responses', () => {
+  it('keeps strict no-store values verbatim on selected requests & strips every cache-targeted header', async () => {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    const cases = [
+      ['/frozen', 'no-cache, no-store, must-revalidate'],
+      ['/bare', 'no-store'],
+    ] as const;
+    for (const [path, value] of cases) {
+      a.all(path, (c) => c.json({}, 200, {
+        'cache-control': value,
+        'cdn-cache-control': 'max-age=300',
+        'cloudflare-cdn-cache-control': 'max-age=300',
+        'surrogate-control': 'max-age=300',
+        expires: 'Wed, 21 Oct 2037 07:28:00 GMT',
+        'cache-tag': 'tenant-metadata',
+      }));
+    }
+    for (const [path, value] of cases) {
+      for (const selector of ['other-store', '']) {
+        for (const method of ['GET', 'POST']) {
+          const response = await a.request(path, { method, headers: { 'x-store-slug': selector } });
+          expect(response.headers.get('cache-control'), path + ' ' + method).toBe(value);
+          for (const name of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires', 'cache-tag']) {
+            expect(response.headers.get(name), path + ' ' + name).toBeNull();
+          }
+        }
+      }
+    }
+  });
+
+  it('forces static SEO, revocation & registered exceptions to no-store for every present selector', async () => {
+    registerCacheableExceptions([PATCHES]);
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    const paths = [
+      '/v1/shop/seo/robots.txt',
+      '/v1/shop/seo/sitemap-products.xml',
+      '/v1/shop/seo/jsonld/organization',
+      '/v1/shop/seo/indexnow-key.txt',
+      '/v1/pro/revocations',
+      '/releases/patches.json',
+    ];
+    for (const path of paths) {
+      a.get(path, (c) => c.json({ selector: c.req.header('x-store-slug') ?? null }, 200, {
+        'cache-control': path === '/v1/pro/revocations' ? 'public, max-age=60' : 'public, max-age=300',
+        'cdn-cache-control': 'max-age=300',
+        'cloudflare-cdn-cache-control': 'max-age=300',
+        'surrogate-control': 'max-age=300',
+        expires: 'Wed, 21 Oct 2037 07:28:00 GMT',
+        'cache-tag': 'tenant-metadata',
+      }));
+    }
+    for (const path of paths) {
+      const ordinary = await a.request(path);
+      expect(ordinary.status, path).toBe(200);
+      expect(ordinary.headers.get('cache-control'), path).toBe(path === '/v1/pro/revocations' ? 'public, max-age=60' : 'public, max-age=300');
+      for (const name of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control']) {
+        expect(ordinary.headers.get(name), path + ' ' + name).toBe('max-age=300');
+      }
+      expect(ordinary.headers.get('expires'), path).toBe('Wed, 21 Oct 2037 07:28:00 GMT');
+      expect(ordinary.headers.get('cache-tag'), path).toBeNull();
+      for (const selector of ['other-store', '']) {
+        for (const method of ['GET', 'HEAD']) {
+          const selected = await a.request(path, { method, headers: { 'X-Store-Slug': selector } });
+          expect(selected.status, path + ' ' + method).toBe(200);
+          expect(selected.headers.get('cache-control'), path).toBe(NO_STORE);
+          for (const name of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires', 'cache-tag']) {
+            expect(selected.headers.get(name), path + ' ' + name).toBeNull();
+          }
+          if (method === 'GET') expect(await selected.json()).toEqual({ selector });
+        }
+      }
+    }
+  });
+});
+
 describe('registerCacheableExceptions', () => {
   it('a registered path keeps its header on GET 200 (and loses cache-tag)', async () => {
     registerCacheableExceptions([PATCHES, STATUS]);

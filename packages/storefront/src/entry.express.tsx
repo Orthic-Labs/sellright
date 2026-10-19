@@ -16,6 +16,7 @@ import { snapshotGuard } from"./utils/snapshot-guard";
 import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
+import { theme } from"./theme/theme.config";
 import { analyticsCsp } from"./platform/head-analytics";
 import { BRAND_HEAD } from"./platform/brand-data";
 import { getRouterOrigin, validatedRequestHost } from"./utils/trusted-request.server";
@@ -141,14 +142,16 @@ app.use((req, res, next) => {
 	//   form-action 'self'
 	//   frame-ancestors 'none'
 	//   upgrade-insecure-requests
-	// The directive list lives in utils/csp.ts (pure, unit-tested). Two origins are conditional: Cloudflare Turnstile
+	// The directive list lives in utils/csp.ts (pure, unit-tested). Conditional origins include Cloudflare Turnstile
 	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
-	// is enabled; Google Identity origins (script/style/connect/frame) join only when Google sign-in is on. All read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
+	// is enabled; SheerID (script-src + frame-src) uses the same built theme flag as its homepage offer.
+	// Google Identity origins (script/style/connect/frame) join only when Google sign-in is on.
 	const cspDirectives = buildCsp({
 		nonce,
 		apiOrigin,
 		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
 		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
+		sheerIdEnabled: theme.sheerIdEnabled,
 		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
 		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
 		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).

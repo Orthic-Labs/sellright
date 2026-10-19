@@ -15,6 +15,14 @@ describe('guestRestorePatch', () => {
 		expect(guestRestorePatch({}, { countryCode: 'US' }, { countryCode: 'CA' }).shipping).toEqual({ countryCode: 'CA' });
 	});
 
+	it('keeps an explicit country preference over a stale guest country on reload', () => {
+		expect(guestRestorePatch({}, { countryCode: 'US' }, { countryCode: 'US' }, 'CA').shipping).toEqual({ countryCode: 'CA' });
+	});
+
+	it('falls back to remembered guest country when no explicit preference exists', () => {
+		expect(guestRestorePatch({}, { countryCode: 'US' }, { countryCode: 'CA' }).shipping).toEqual({ countryCode: 'CA' });
+	});
+
 	it('fills empty fields from a fuller record but never overwrites typed values', () => {
 		const patch = guestRestorePatch(
 			{ firstName: '', lastName: 'Typed', emailAddress: '' },

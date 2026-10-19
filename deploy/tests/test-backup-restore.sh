@@ -7,11 +7,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' 0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$*"; }
-mkdir -p "$tmp/bin" "$tmp/home" "$tmp/plain" "$tmp/capture"
+mkdir -p "$tmp/bin" "$tmp/home" "$tmp/plain" "$tmp/capture" "$tmp/source/deploy"
+printf 'services: {}\n' > "$tmp/source/deploy/compose.build.yaml"
 chmod 700 "$tmp/plain"
 printf 'SELLRIGHT_IMAGE_TAG=test\n' > "$tmp/home/.env"
 printf '{"masterKey":"fixture-key","kitId":"fixture-kit"}\n' > "$tmp/kit.json"
-export SELLRIGHT_HOME="$tmp/home" TEST_ROOT="$tmp" TMPDIR="$tmp/plain"
+export SELLRIGHT_HOME="$tmp/home" SELLRIGHT_SOURCE="$tmp/source" TEST_ROOT="$tmp" TMPDIR="$tmp/plain"
 export PATH="$tmp/bin:$PATH"
 
 cat > "$tmp/bin/date" <<'STUB'
@@ -28,14 +29,52 @@ for arg in "$@"; do
     --volume|--volume=*) echo 'host bind mount forbidden' >&2; exit 91 ;;
   esac
 done
+# Public backup resolves its existing container before private output setup.
+# This metadata read creates no backup/plaintext and needs no output-mode guard.
+case "$*" in
+  *' ps -q api')
+    [ "${TEST_FAIL:-}" != no-api ] || exit 34
+    printf '%064d\n' 7
+    exit 0 ;;
+esac
 # Inspect permissions while files exist, before success/failure cleanup runs.
 find "$SELLRIGHT_HOME/backups" "$TMPDIR" -type d ! -perm 700 -print > "$TEST_ROOT/bad-modes"
 find "$SELLRIGHT_HOME/backups" "$TMPDIR" -type f ! -perm 600 -print >> "$TEST_ROOT/bad-modes"
 [ ! -s "$TEST_ROOT/bad-modes" ] || { cat "$TEST_ROOT/bad-modes" >&2; exit 92; }
+# Record the actual content override, not a tag inferred from config.
+for arg in "$@"; do
+  case "$arg" in
+    */verified-api.yaml|*/previous-api.yaml)
+      image=$(sed -n 's/^    image: //p' "$arg")
+      printf '%s %s\n' "$image" "$*" >> "$TEST_ROOT/executed-images" ;;
+  esac
+done
 case "$*" in
-  *' ps -q api')
-    [ "${TEST_FAIL:-}" != no-api ] || exit 34
-    printf '%064d\n' 7 ;;
+  *' config --format json')
+    printf '{"name":"fixture","services":{"api":{"image":"local-api:mutable"},"admin":{"image":"local-admin:mutable"},"storefront":{"image":"local-store:mutable"}}}\n' ;;
+  'image inspect --format {{.Id}} '*)
+    [ "${TEST_FAIL:-}" != missing-image ] || exit 47
+    # A later tag change cannot change an already captured ID.
+    touch "$TEST_ROOT/tag-moved"
+    printf 'sha256:%064d\n' 9 ;;
+  'image inspect --format {{json .RepoDigests}} '*)
+    ref=${*##* }; printf '["%s@sha256:%064d"]\n' "${ref%:*}" 9 ;;
+  *' ps --all --quiet api')
+    [ "${TEST_FAIL:-}" != census ] || exit 44
+    if [ "${TEST_TARGET:-existing}" != fresh ]; then printf '%064d\n' 7; fi
+    if [ "${TEST_TARGET:-}" = multiple ]; then printf '%064d\n' 5; fi
+    [ ! -f "$TEST_ROOT/helper-created" ] || printf '%064d\n' 6 ;;
+  inspect*'{{.Image}}|{{.State.Running}}|'*)
+    running=true
+    [ "${TEST_TARGET:-}" != stopped ] || running=false
+    printf 'sha256:%064d|%s|fixture|api|False\n' 8 "$running" ;;
+  inspect*'{{.Id}}'*sellright-restore-*) printf '%064d\n' 6 ;;
+  *' run --pull never -d --no-deps --name sellright-restore-'*) touch "$TEST_ROOT/helper-created" ;;
+  *'node /tmp/restore.js assert-empty')
+    [ "${TEST_NONEMPTY:-}" != storage ] && [ "${TEST_NONEMPTY:-}" != state ] || exit 45 ;;
+  *'SELECT'*'pg_namespace'*)
+    [ "${TEST_NONEMPTY:-}" != unknown-db ] || exit 46
+    if [ "${TEST_NONEMPTY:-}" = database ]; then printf 'f\n'; else printf 't\n'; fi ;;
   inspect*'{{.Image}}'*) printf 'sha256:%064d\n' 8 ;;
   *' pg_dump '*)
     printf 'database-fixture\n'
@@ -66,7 +105,7 @@ case "$*" in
     [ "${TEST_FAIL:-}" != rollback ] || exit 39
     cp "$TEST_ROOT/previous-files" "$TEST_ROOT/live-files" ;;
   *' stop api') printf stopped > "$TEST_ROOT/api" ;;
-  *' up -d --wait --wait-timeout 120 api')
+  *' up --pull never --no-build -d --no-deps --wait --wait-timeout 120 api')
     if [ "${TEST_FAIL:-}" = restart ] && [ ! -f "$TEST_ROOT/restart-failed" ]; then
       touch "$TEST_ROOT/restart-failed"; exit 40
     fi
@@ -81,7 +120,8 @@ case "$*" in
     printf restored > "$TEST_ROOT/live-db" ;;
   *'ALTER DATABASE sellright RENAME TO sellright_failed_'*) mv "$TEST_ROOT/live-db" "$TEST_ROOT/failed-db" ;;
   *'ALTER DATABASE sellright_prev_'*' RENAME TO sellright;'*) mv "$TEST_ROOT/previous-db" "$TEST_ROOT/live-db" ;;
-  'rm -f sellright-restore-'*) touch "$TEST_ROOT/helper-removed" ;;
+  *' rm -f -s api') printf absent > "$TEST_ROOT/api" ;;
+  'rm -f sellright-restore-'*) touch "$TEST_ROOT/helper-removed"; rm -f "$TEST_ROOT/helper-created" ;;
   *) : ;;
 esac
 STUB
@@ -99,6 +139,11 @@ case "$1" in
     cat "$in" > "$out" ;;
   *) exit 99 ;;
 esac
+STUB
+cat > "$tmp/bin/cosign" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_ROOT/cosign.log"
+[ "${TEST_FAIL:-}" != signature ]
 STUB
 cat > "$tmp/bin/rclone" <<'STUB'
 #!/bin/sh
@@ -176,7 +221,9 @@ done
 # Restore's safety backup stays local in this fixture.
 printf 'SELLRIGHT_OFFSITE_REMOTE=\n' >> "$SELLRIGHT_HOME/.env"
 reset_restore() {
-  rm -f "$tmp/previous-db" "$tmp/failed-db" "$tmp/restart-failed" "$tmp/helper-removed"
+  rm -f "$tmp/previous-db" "$tmp/failed-db" "$tmp/restart-failed" "$tmp/helper-removed" "$tmp/helper-created"
+  : > "$tmp/executed-images"
+  rm -f "$tmp/tag-moved"
   printf original > "$tmp/live-db"
   printf original > "$tmp/live-files"
   printf running > "$tmp/api"
@@ -189,7 +236,7 @@ assert_original() {
 }
 for set_name in encrypted legacy; do
   reset_restore
-  (umask 000; sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/$set_name" --yes) > "$tmp/restore.log" 2>&1 || { cat "$tmp/restore.log" >&2; fail "$set_name restore"; }
+  (umask 000; sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/$set_name" --yes) > "$tmp/restore.log" 2>&1 || { cat "$tmp/restore.log" >&2; fail "$set_name restore"; }
   [ "$(cat "$tmp/capture/database")" = database.dump-restored ] || fail 'database stdin'
   [ "$(cat "$tmp/live-db")" = restored ] && [ "$(cat "$tmp/live-files")" = restored ] || fail 'incoherent promotion'
   [ "$(cat "$tmp/api")" = running ] || fail 'promoted API unhealthy'
@@ -202,7 +249,7 @@ done
 pass 'plain & authenticated restore stage before promotion, wait for health & clean private staging'
 for step in stage-assets stage-downloads stage-hash stage-extract list restore; do
   reset_restore
-  if TEST_FAIL="$step" sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
   assert_original
   if sed -n '/ stop api/p; / RENAME TO /p; / pg_dump /p; /restore.js promote/p' "$tmp/docker.log" | sed -n '1p' | { read -r line; [ -n "$line" ]; }; then fail 'live mutation before full preflight'; fi
   [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'plaintext staging survived preflight failure'
@@ -210,20 +257,92 @@ done
 pass 'archive/hash/extraction/DB preflight failures leave live state untouched'
 for step in snapshot rename promote restart; do
   reset_restore
-  if TEST_FAIL="$step" sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
   assert_original
   [ -f "$tmp/helper-removed" ] || fail 'helper survived recovered failure'
 done
 reset_restore
-if TEST_FAIL=rollback sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail 'rollback failure accepted'; fi
+if TEST_FAIL=rollback sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail 'rollback failure accepted'; fi
 [ "$(cat "$tmp/api")" = stopped ] || fail 'API reopened after rollback failure'
 [ ! -f "$tmp/helper-removed" ] || fail 'recovery snapshots removed after rollback failure'
 grep 'rollback failed.*Retained helper' "$tmp/failed-restore.log" >/dev/null || fail 'missing recovery guidance'
 pass 'snapshot, rename, file promotion & health failures recover coherently; rollback failure fails closed with retained snapshots'
 reset_restore
 printf 'invalid-tag\n' > "$tmp/encrypted/assets.tar.gz.enc.hmac"
-if sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-decrypt.log" 2>&1; then fail 'bad integrity tag accepted'; fi
+if sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-decrypt.log" 2>&1; then fail 'bad integrity tag accepted'; fi
 assert_original
 [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'decrypted staging survived integrity failure'
 [ -f "$tmp/encrypted/database.dump.enc" ] || fail 'caller backup removed'
 pass 'bad authentication tag preserves caller set & live state, cleans plaintext'
+
+reset_restore
+if TEST_FAIL=signature sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/signature.log" 2>&1; then fail 'unsigned restore accepted'; fi
+! grep ' run --pull never ' "$tmp/docker.log" >/dev/null || fail 'helper launched before signature verification'
+assert_original
+pass 'registry verification failure precedes helper execution'
+
+for step in dump assets; do
+  reset_restore
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/required-backup.log" 2>&1; then fail "existing target skipped failed $step safety backup"; fi
+  assert_original
+  ! grep -E ' RENAME TO |restore.js promote| stop api' "$tmp/docker.log" >/dev/null || fail 'live mutation after failed safety backup'
+done
+pass 'existing target cannot promote after failed safety backup'
+
+
+printf 'fixture-tag\n' > "$tmp/encrypted/assets.tar.gz.enc.hmac"
+for set_name in legacy encrypted; do
+  reset_restore
+  : > "$tmp/cosign.log"
+  TEST_TARGET=fresh sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/$set_name" --yes > "$tmp/fresh.log" 2>&1 || { cat "$tmp/fresh.log" >&2; fail "fresh $set_name restore"; }
+  [ ! -s "$tmp/cosign.log" ] || fail 'explicit local mode called cosign'
+  [ -f "$tmp/tag-moved" ] || fail 'local image not resolved before launch'
+
+  [ "$(cat "$tmp/live-db")" = restored ] && [ "$(cat "$tmp/live-files")" = restored ] || fail 'fresh promotion failed'
+  ! grep ' pg_dump ' "$tmp/docker.log" >/dev/null || fail 'empty target safety backup attempted'
+  grep 'target proven empty' "$tmp/fresh.log" >/dev/null || fail 'empty proof absent'
+  new_image=$(printf 'sha256:%064d' 9)
+  [ "$(sed -n '1s/ .*//p' "$tmp/executed-images")" = "$new_image" ] || fail 'helper did not use frozen local image'
+  grep "^$new_image .* up --pull never --no-build " "$tmp/executed-images" >/dev/null || fail 'promotion did not use frozen local image'
+  ! grep -E '(^pull | build( |$))' "$tmp/docker.log" >/dev/null || fail 'source restore pulled/built'
+done
+pass 'fresh plain/encrypted targets use exact prebuilt image for helper and promotion without safety backup'
+
+for state in database storage state unknown-db; do
+  reset_restore
+  if TEST_TARGET=fresh TEST_NONEMPTY="$state" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/not-empty.log" 2>&1; then fail "missing API accepted $state"; fi
+  [ "$(cat "$tmp/live-db")" = original ] && [ "$(cat "$tmp/live-files")" = original ] || fail 'nonempty target changed'
+  ! grep -E ' RENAME TO |restore.js promote| stop api' "$tmp/docker.log" >/dev/null || fail 'nonempty target promoted/stopped'
+done
+for target in stopped multiple; do
+  reset_restore
+  if TEST_TARGET="$target" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/stopped.log" 2>&1; then fail 'stopped API treated as empty'; fi
+  ! grep ' run --pull never ' "$tmp/docker.log" >/dev/null || fail 'helper started for stopped/ambiguous API'
+done
+for step in census missing-image; do
+  reset_restore
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/unknown.log" 2>&1; then fail "unknown $step accepted"; fi
+  ! grep ' run --pull never ' "$tmp/docker.log" >/dev/null || fail 'helper launched on unknown admission'
+done
+pass 'nonempty or unknown targets and stopped existing API cannot skip backup'
+
+reset_restore
+if TEST_TARGET=fresh TEST_FAIL=promote sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/fresh-failure.log" 2>&1; then fail 'fresh promotion failure accepted'; fi
+[ "$(cat "$tmp/live-db")" = original ] && [ "$(cat "$tmp/live-files")" = original ] || fail 'fresh rollback lost empty snapshot'
+[ "$(cat "$tmp/api")" = absent ] || fail 'fresh rollback booted API'
+! grep ' up --pull never ' "$tmp/docker.log" >/dev/null || fail 'fresh rollback started API'
+
+reset_restore
+if TEST_FAIL=restart sh "$SCRIPT" restore --from-source --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/old-image.log" 2>&1; then fail 'failed health accepted'; fi
+assert_original
+old_image=$(printf 'sha256:%064d' 8)
+grep "^$old_image .* up --pull never --no-build " "$tmp/executed-images" >/dev/null || fail 'rollback used drifted configured tag'
+pass 'failure recovers original frozen image/data; fresh failure leaves API absent'
+
+reset_restore
+TEST_TARGET=fresh sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/legacy" --yes > "$tmp/registry.log" 2>&1 || { cat "$tmp/registry.log" >&2; fail 'verified registry restore'; }
+# pulled_image_digest retains familiar repository spelling from the daemon.
+registry_image=$(printf 'local-api@sha256:%064d' 9)
+grep "^$registry_image .* run --pull never " "$tmp/executed-images" >/dev/null || fail 'helper did not use verified digest'
+grep "^$registry_image .* up --pull never --no-build " "$tmp/executed-images" >/dev/null || fail 'promotion did not use verified digest'
+pass 'registry helper & promotion execute verified digest rather than floating tag'

@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -11,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { DeployError, EXIT, InjectedCrash, pathsFor, takeLock } from './lib.mjs';
 import { LockHeldError, acquireOsLock } from '../compose/lib/os-lock.mjs';
 import { hashJson } from '../compose/lib/util.mjs';
-import { main as smokeMain, runSmoke } from './origin-smoke.mjs';
+import { httpGet, main as smokeMain, runSmoke } from './origin-smoke.mjs';
 import { main as preflightMain, offendingNames } from './preflight-env.mjs';
 import { assertNoSymlinkAncestors, assertTreesReal, carryServer, main as stageMain, checkArtifacts, recoverSwap, removeTree, restoreOps, restorePrevious, seed, swap, swapOps } from './stage.mjs';
 import { equalSnapshots, sha, snapshot, writeBuilt } from './fixtures/world.mjs';
@@ -113,6 +114,106 @@ test('origin-smoke: a refused connection fails, an empty list never passes, and 
 		assert.equal(await smokeMain([base, '--host', 'h', '--path', '/err'], out), 1);
 		assert.equal(await smokeMain([base, '--host', 'h', '--redirect', '/moved=301'], out), 0);
 	});
+});
+
+test('origin-smoke: a continuously active body still exceeds the absolute deadline', async () => {
+	let writes = 0;
+	let closed = false;
+	await withServer((_req, res) => {
+		res.writeHead(200, { 'content-type': 'text/html' });
+		res.write('<html>');
+		const interval = setInterval(() => {
+			writes++;
+			if (writes === 30) { clearInterval(interval); res.end('</html>'); }
+			else res.write('.');
+		}, 10);
+		res.once('close', () => { closed = true; clearInterval(interval); });
+	}, async base => {
+		await assert.rejects(httpGet(base, { timeoutMs: 100 }), /timeout after 100 ms/);
+		assert.ok(writes > 1, 'body activity occurred well inside the inactivity threshold');
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.equal(closed, true, 'deadline destroys the active response');
+	});
+});
+
+test('origin-smoke: oversized bodies reject and close instead of returning truncated success', async () => {
+	let closed = false;
+	await withServer((_req, res) => {
+		res.writeHead(200, { 'content-type': 'text/html' });
+		res.write('<html>secret-body-must-not-appear-in-errors');
+		const end = setTimeout(() => res.end('</html>'), 250);
+		res.once('close', () => { closed = true; clearTimeout(end); });
+	}, async base => {
+		await assert.rejects(httpGet(base, { timeoutMs: 1000, maxBytes: 8 }), { message: 'body exceeds 8 bytes' });
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.equal(closed, true);
+	});
+});
+
+test('origin-smoke: the header wait is bounded and incomplete responses reject', async () => {
+	await withServer((req, res) => {
+		if (req.url === '/headers') {
+			const end = setTimeout(() => res.end('<html>late</html>'), 250);
+			res.once('close', () => clearTimeout(end));
+		} else {
+			res.writeHead(200, { 'content-type': 'text/html' });
+			res.write('<html>');
+			setTimeout(() => res.destroy(), 10);
+		}
+	}, async base => {
+		await assert.rejects(httpGet(base + '/headers', { timeoutMs: 50 }), /timeout after 50 ms/);
+		await assert.rejects(httpGet(base + '/aborted', { timeoutMs: 1000 }), /aborted|closed/);
+	});
+});
+
+test('origin-smoke: completion cleans timers/listeners and absorbs late errors on failure', async t => {
+	const streams = [];
+	const mock = t.mock.method(http, 'request', (_url, _options, onResponse) => {
+		const req = new EventEmitter();
+		const res = new EventEmitter();
+		const state = { req, res, timeouts: [], destroys: 0 };
+		streams.push(state);
+		const index = streams.length;
+		req.setTimeout = (ms, fn) => { state.timeouts.push(ms); if (fn) req.on('timeout', fn); return req; };
+		req.destroy = () => {
+			state.destroys++;
+			req.emit('error', new Error('late socket error'));
+			req.emit('close');
+			return req;
+		};
+		res.destroy = () => { res.emit('error', new Error('late response error')); res.emit('close'); return res; };
+		req.once('response', onResponse);
+		req.end = () => queueMicrotask(() => {
+			if (index === 2) { req.emit('error', new Error('network failure')); return; }
+			if (index === 3) { req.emit('timeout'); return; }
+			res.statusCode = 201;
+			res.headers = { 'content-type': 'text/plain', 'x-smoke': 'kept' };
+			req.emit('response', res);
+			res.emit('data', Buffer.from('complete'));
+			res.emit('end');
+			res.emit('close');
+			req.emit('close');
+		});
+		return req;
+	});
+	try {
+		assert.deepEqual(await httpGet('http://example.invalid', { timeoutMs: 20 }), {
+			status: 201, headers: { 'content-type': 'text/plain', 'x-smoke': 'kept' }, body: 'complete',
+		});
+		await assert.rejects(httpGet('http://example.invalid', { timeoutMs: 20 }), { message: 'network failure' });
+		await assert.rejects(httpGet('http://example.invalid', { timeoutMs: 20 }), { message: 'timeout after 20 ms' });
+		assert.equal((await httpGet('http://example.invalid', { timeoutMs: 0 })).body, 'complete');
+		await new Promise(resolve => setTimeout(resolve, 40));
+		assert.equal(streams[0].destroys, 0, 'completed request has no live deadline');
+		assert.equal(streams[1].destroys, 1, 'late error does not destroy twice');
+		assert.equal(streams[2].destroys, 1, 'socket inactivity still destroys the request');
+		assert.equal(streams[3].destroys, 0, 'explicit zero timeout remains an opt-out');
+		for (const { req, res, timeouts } of streams) {
+			assert.equal(timeouts.at(-1), 0, 'inactivity timer disabled');
+			assert.deepEqual(req.eventNames(), [], 'request listeners removed at close');
+			assert.deepEqual(res.eventNames(), [], 'response listeners removed at close');
+		}
+	} finally { mock.mock.restore(); }
 });
 
 // ------------------------------------------------------------------ build-guard (C7)

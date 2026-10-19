@@ -27,6 +27,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 import type { LegalManifest } from '@rightkit/legal';
 import { checkout } from './checkout.js';
 import { cart } from './cart.js';
@@ -120,7 +121,8 @@ async function seed(): Promise<void> {
 }
 
 beforeEach(async () => {
-  clearLoginAttempts('unknown', 'checkout:unknown');
+  await rateLimitBackend().clear('checkout-ip', `unknown|${STORE}`);
+  await clearLoginAttempts('unknown', `checkout:${STORE}:guest`);
   await wipe();
   await seed();
 });

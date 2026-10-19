@@ -163,31 +163,59 @@ export type Tx = NodePgDatabase<typeof schema> & { $client: Pool | PoolClient };
 
 type TxFactory = (client: PoolClient) => Tx;
 
-/** Transaction core extracted so rollback-failure behavior is unit-testable. */
+/** Transaction core extracted so rollback-failure behavior is unit-testable.
+ * Optional deadline closes the actual non-pipelined pg connection: query_timeout
+ * alone only abandons its caller while SQL can still be running on the server.
+ * This owner alone releases the client, after physical closure on timeout. */
 export async function runStoreTransaction<T>(
   client: PoolClient,
   storeId: string,
   fn: (tx: Tx) => Promise<T>,
   makeTx: TxFactory = (c) => drizzle(c, drizzleOpts),
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   let broken = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timeoutError: Error | undefined;
+  let closing: Promise<void> | undefined;
+  const deadline = options.timeoutMs === undefined ? undefined : new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = new Error(`Store transaction timed out after ${options.timeoutMs}ms`);
+      broken = true;
+      discardAfterCommit(client);
+      // pg's public end() destroys a socket with an active non-pipelined query.
+      // Retain its promise: release(true) alone does not wait for socket close.
+      try { closing = client.end(); }
+      catch (error) { closing = Promise.reject(error); }
+      void closing.then(() => reject(timeoutError), () => reject(timeoutError));
+    }, options.timeoutMs);
+  });
+  const bounded = <U>(work: Promise<U>): Promise<U> => deadline ? Promise.race([work, deadline]) : work;
   try {
-    await client.query('BEGIN');
-    beginAfterCommit(client);
-    await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const result = await fn(makeTx(client));
-    await client.query('COMMIT');
-    flushAfterCommit(client);
-    return result;
+    return await bounded((async () => {
+      await client.query('BEGIN');
+      if (timeoutError) throw timeoutError;
+      beginAfterCommit(client);
+      await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
+      if (timeoutError) throw timeoutError;
+      const result = await fn(makeTx(client));
+      if (timeoutError) throw timeoutError;
+      await client.query('COMMIT');
+      if (timeoutError) throw timeoutError;
+      flushAfterCommit(client);
+      return result;
+    })());
   } catch (err) {
     discardAfterCommit(client);
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      broken = true;
+    if (!timeoutError) {
+      try { await bounded(client.query('ROLLBACK')); }
+      catch { broken = true; }
     }
-    throw err;
+    throw timeoutError ?? err;
   } finally {
+    clearTimeout(timer);
+    // Consume a close failure too, preserving the transaction/timeout error.
+    if (closing) await closing.catch(() => { broken = true; });
     client.release(broken);
   }
 }

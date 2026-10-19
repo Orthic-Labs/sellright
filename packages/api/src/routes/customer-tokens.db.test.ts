@@ -18,6 +18,7 @@ import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-d
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createHash } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -39,6 +40,7 @@ import { auth } from './auth.js';
 import { hashPassword } from '../auth/password.js';
 import * as passwordAuth from '../auth/password.js';
 import { createSession } from '../auth/session.js';
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 
 const STORE_A = 'aaaaaaaa-1111-1111-1111-111111111111';
 const STORE_B = 'bbbbbbbb-2222-2222-2222-222222222222';
@@ -73,12 +75,13 @@ async function seedStores(): Promise<void> {
 }
 
 beforeEach(async () => {
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend());
   vi.mocked(verifyTurnstileToken).mockResolvedValue(true);
   await wipe();
   await seedStores();
   invalidateStoreCache();
 });
-afterAll(async () => { await wipe(); await pool.end(); });
+afterAll(async () => { await wipe(); _setRateLimitBackendForTest(undefined); await pool.end(); });
 
 const hdr = (slug: string, extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': slug, ...extra });
 
@@ -290,6 +293,179 @@ describe('email-address-change flow (emailAddressChangeHandler parity)', () => {
     expect(wrong.status).toBe(401);
     expect(await outbox(STORE_B)).toHaveLength(0);
   });
+
+  it('keeps one credential budget when destinations rotate, including concurrent guesses', async () => {
+    const cust = await seedCustomer(STORE_B, 'rotating-destinations@b.test');
+    const token = await sessionFor(STORE_B, cust.id);
+    const spy = vi.spyOn(passwordAuth, 'verifyPassword');
+    try {
+      const results = await Promise.all(Array.from({ length: 12 }, (_, i) =>
+        requestChange(token, `rotated-${i}@b.test`, 'wrong-password')));
+      expect(results.filter((r) => r.status === 401)).toHaveLength(8);
+      expect(results.filter((r) => r.status === 429)).toHaveLength(4);
+      expect(spy).toHaveBeenCalledTimes(8);
+      expect((await requestChange(token, 'another-new-destination@b.test')).status).toBe(429);
+      expect(spy).toHaveBeenCalledTimes(8);
+      expect(await outbox(STORE_B)).toHaveLength(0);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('bounds invalid sessions by tenant/IP without password work or raw-token keys', async () => {
+    const backend = createMemoryRateLimitBackend();
+    const consume = vi.spyOn(backend, 'consume');
+    _setRateLimitBackendForTest(backend);
+    const spy = vi.spyOn(passwordAuth, 'verifyPassword');
+    try {
+      for (let i = 0; i < 50; i++) {
+        expect((await requestChange(`unknown-session-${i}`, `invalid-${i}@b.test`)).status).toBe(401);
+      }
+      expect((await requestChange('unknown-session-51', 'invalid-51@b.test')).status).toBe(429);
+      expect(spy).not.toHaveBeenCalled();
+      expect(consume.mock.calls).toHaveLength(51);
+      for (const [bucket, key] of consume.mock.calls) {
+        expect(bucket).toBe('customer-email-change-ip');
+        expect(key).toContain(STORE_B);
+        expect(key).not.toContain('unknown-session');
+      }
+    } finally { spy.mockRestore(); consume.mockRestore(); }
+  });
+
+  it('reserves credential attempts without holding a store transaction connection', async () => {
+    const cust = await seedCustomer(STORE_B, 'pool-safe@b.test');
+    const token = await sessionFor(STORE_B, cust.id);
+    const backend = createMemoryRateLimitBackend();
+    const original = backend.consume.bind(backend);
+    const consume = vi.spyOn(backend, 'consume').mockImplementation(async (...args) => {
+      expect(pool.totalCount - pool.idleCount).toBe(0);
+      return original(...args);
+    });
+    _setRateLimitBackendForTest(backend);
+    expect((await requestChange(token, 'pool-safe-new@b.test')).status).toBe(200);
+    expect(consume).toHaveBeenCalledTimes(2); // IP ceiling, then validated customer budget
+  });
+
+  async function plantReset(customerId: string, raw: string) {
+    await withStore(STORE_B, (tx) => tx.insert(s.customerToken).values({
+      storeId: STORE_B, customerId, kind: 'password_reset',
+      tokenHash: createHash('sha256').update(raw).digest('hex'), expiresAt: new Date(Date.now() + 3600_000),
+    }));
+  }
+
+  const reset = (raw: string) => Promise.resolve(app.request('/v1/shop/auth/reset-password', {
+    method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ token: raw, password: 'recovered-password' }),
+  }));
+  const consumeChange = (raw: string) => Promise.resolve(app.request('/v1/shop/auth/verify-email-change', {
+    method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ token: raw }),
+  }));
+
+  async function lockCustomer(client: PoolClient, customerId: string): Promise<number> {
+    await client.query('BEGIN');
+    await client.query("SET LOCAL statement_timeout = '15s'");
+    await client.query("SELECT set_config('app.current_store', $1, true)", [STORE_B]);
+    const { rows } = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    await client.query('SELECT id FROM customer WHERE id = $1 FOR UPDATE', [customerId]);
+    return rows[0]!.pid;
+  }
+
+  async function waitForCustomerWaiters(blockerPid: number, count: number) {
+    for (let attempt = 0; attempt < 400; attempt++) {
+      const { rows } = await pool.query<{ n: number }>(`
+        WITH RECURSIVE waiters AS (
+          SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))
+          UNION
+          SELECT activity.pid FROM pg_stat_activity activity JOIN waiters ON waiters.pid = ANY(pg_blocking_pids(activity.pid))
+          WHERE activity.datname = current_database()
+        ) SELECT count(DISTINCT pid)::int AS n FROM waiters`, [blockerPid]);
+      if (rows[0]!.n >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`expected ${count} requests waiting on fixture customer lock`);
+  }
+
+  it('password recovery invalidates a previously prepared email-change link', async () => {
+    const cust = await seedCustomer(STORE_B, 'recover-old@b.test');
+    const session = await sessionFor(STORE_B, cust.id);
+    expect((await requestChange(session, 'recover-attacker@b.test')).status).toBe(200);
+    const raw = tokenFrom((await outbox(STORE_B))[0]!);
+    const resetRaw = 'recover-password-reset-token';
+    await plantReset(cust.id, resetRaw);
+    expect((await reset(resetRaw)).status).toBe(200);
+    expect((await consumeChange(raw)).status).toBe(409);
+    expect((await requestChange(session, 'recover-after@b.test')).status).toBe(401);
+    const after = await pool.query('SELECT email, password_hash FROM customer WHERE id = $1', [cust.id]);
+    expect(after.rows[0]!.email).toBe('recover-old@b.test');
+    expect(await passwordAuth.verifyPassword('recovered-password', after.rows[0]!.password_hash)).toBe(true);
+  });
+
+  for (const first of ['reset', 'issue'] as const) {
+    it(`serializes reset vs issuance when ${first} holds customer lock first`, async () => {
+      const cust = await seedCustomer(STORE_B, 'issue-race-old@b.test');
+      const session = await sessionFor(STORE_B, cust.id);
+      const resetRaw = 'issue-race-password-reset-token';
+      await plantReset(cust.id, resetRaw);
+      const blocker = await pool.connect();
+      let issueRequest: Promise<Response> | undefined;
+      let resetRequest: Promise<Response> | undefined;
+      const issue = () => Promise.resolve(requestChange(session, 'issue-race-new@b.test'));
+      try {
+        const blockerPid = await lockCustomer(blocker, cust.id);
+        if (first === 'reset') resetRequest = reset(resetRaw);
+        else issueRequest = issue();
+        await waitForCustomerWaiters(blockerPid, 1);
+        if (first === 'reset') issueRequest = issue();
+        else resetRequest = reset(resetRaw);
+        await waitForCustomerWaiters(blockerPid, 2);
+        await blocker.query('COMMIT');
+        expect((await resetRequest!).status).toBe(200);
+        expect((await issueRequest!).status).toBe(first === 'reset' ? 401 : 200);
+        expect((await pool.query('SELECT email FROM customer WHERE id = $1', [cust.id])).rows[0]!.email).toBe('issue-race-old@b.test');
+        const pending = await pool.query("SELECT id FROM customer_token WHERE customer_id = $1 AND kind = 'email_change' AND used_at IS NULL", [cust.id]);
+        expect(pending.rows).toHaveLength(0);
+        const messages = (await outbox(STORE_B)).filter((r) => r.kind === 'email_change');
+        expect(messages).toHaveLength(first === 'reset' ? 0 : 1);
+        if (messages.length) expect((await consumeChange(tokenFrom(messages[0]!))).status).toBe(409);
+        expect((await pool.query('SELECT id FROM "session" WHERE customer_id = $1', [cust.id])).rows).toHaveLength(0);
+      } finally {
+        await blocker.query('ROLLBACK').catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled([issueRequest, resetRequest]);
+      }
+    }, 30_000);
+  }
+
+  for (const first of ['reset', 'consume'] as const) {
+    it(`serializes reset vs redemption when ${first} holds customer lock first`, async () => {
+      const cust = await seedCustomer(STORE_B, 'consume-race-old@b.test');
+      const session = await sessionFor(STORE_B, cust.id);
+      expect((await requestChange(session, 'consume-race-new@b.test')).status).toBe(200);
+      const raw = tokenFrom((await outbox(STORE_B))[0]!);
+      const resetRaw = 'consume-race-password-reset-token';
+      await plantReset(cust.id, resetRaw);
+      const blocker = await pool.connect();
+      let consumeRequest: Promise<Response> | undefined;
+      let resetRequest: Promise<Response> | undefined;
+      try {
+        const blockerPid = await lockCustomer(blocker, cust.id);
+        if (first === 'reset') resetRequest = reset(resetRaw);
+        else consumeRequest = consumeChange(raw);
+        await waitForCustomerWaiters(blockerPid, 1);
+        if (first === 'reset') consumeRequest = consumeChange(raw);
+        else resetRequest = reset(resetRaw);
+        await waitForCustomerWaiters(blockerPid, 2);
+        await blocker.query('COMMIT');
+        expect((await resetRequest!).status).toBe(first === 'reset' ? 200 : 409);
+        expect((await consumeRequest!).status).toBe(first === 'reset' ? 409 : 200);
+        const after = (await pool.query('SELECT email, password_hash FROM customer WHERE id = $1', [cust.id])).rows[0]!;
+        expect(after.email).toBe(first === 'reset' ? 'consume-race-old@b.test' : 'consume-race-new@b.test');
+        expect(await passwordAuth.verifyPassword(first === 'reset' ? 'recovered-password' : 'correcthorsebattery', after.password_hash)).toBe(true);
+        expect((await consumeChange(raw)).status).toBe(409);
+      } finally {
+        await blocker.query('ROLLBACK').catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled([consumeRequest, resetRequest]);
+      }
+    }, 30_000);
+  }
 
   it('sends the verification link to the NEW address, branded for the store', async () => {
     const cust = await seedCustomer(STORE_B, 'old@b.test');

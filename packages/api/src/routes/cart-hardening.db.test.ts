@@ -1,3 +1,4 @@
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 /**
  * DB integration tests for cart hardening (CART-01..CART-04) and the
  * per-store variant pricing parity fix.
@@ -81,6 +82,7 @@ async function seed(): Promise<void> {
 }
 
 beforeEach(async () => {
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend());
   clearLoginAttempts('unknown', 'checkout:unknown');
   await wipe();
   await seed();
