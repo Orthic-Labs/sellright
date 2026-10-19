@@ -186,6 +186,29 @@ describe('updateLine — revisioned absolute set', () => {
 		expect(calls).toHaveLength(2);
 	});
 
+	it.each([undefined, 'stale', 'revision_required', 'converted', 'merged'] as const)(
+		'a snapshotless budget refusal (%s) preserves its error and cart without retry',
+		async code => {
+			setCookie('tok_srv');
+			enqueue(
+				respond(200, serverCart({ revision: 4 })),
+				respond(409, {
+					error: { code: 'CART_TOO_LARGE', message: 'Cart exceeds 200 distinct SKUs' },
+					code, revision: 6, status: code === 'converted' || code === 'merged' ? code : 'active',
+				}),
+			);
+			await expect(CartService.updateLine('SKU1', 2)).rejects.toMatchObject({
+				status: 409, code: 'CART_TOO_LARGE', message: 'Cart exceeds 200 distinct SKUs',
+			});
+			expect(patchCalls()).toHaveLength(1);
+			expect(calls).toHaveLength(2);
+			expect(cookieValue()).toBe('tok_srv');
+			expect(CartService.getCart()).toMatchObject({
+				revision: 4, status: 'active', lines: [{ sku: 'SKU1', quantity: 1 }],
+			});
+		},
+	);
+
 	it('404 CART_NOT_FOUND on refresh retires that cart and tells the shopper to re-add', async () => {
 		setCookie('tok_srv');
 		enqueue(respond(404, { error: { code: 'CART_NOT_FOUND', message: 'not found' } }));

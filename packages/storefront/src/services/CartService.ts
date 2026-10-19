@@ -137,7 +137,8 @@ export const couponMembership = (codes: readonly string[]): string[] => {
   return codes.filter(code => { const key = code.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
 };
 
-const isStaleConflict = (c: CartConflict | null): c is CartConflict => !!c && (c.code === 'stale' || c.code === 'revision_required');
+type SnapshotCartConflict = Extract<CartConflict, { cart: ServerCart }>;
+const isStaleConflict = (c: SnapshotCartConflict | null): c is SnapshotCartConflict => !!c && (c.code === 'stale' || c.code === 'revision_required');
 
 export class CartService {
   private static cart: Cart = EMPTY_CART;
@@ -487,10 +488,12 @@ export class CartService {
     return data.revision;
   }
 
-  private static asConflict(e: unknown): CartConflict | null {
+  private static asConflict(e: unknown): SnapshotCartConflict | null {
     if (!(e instanceof SellRightError) || e.status !== 409) return null;
     const body = e.body as CartConflict | undefined;
-    return body && typeof body.revision === 'number' && body.cart ? body : null;
+    // Budget refusals carry revision/status but no snapshot. Preserve their
+    // error, token and mirror; only snapshot-bearing conflicts can recover.
+    return body && typeof body.revision === 'number' && 'cart' in body && body.cart ? body : null;
   }
 
   /**
