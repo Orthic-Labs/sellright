@@ -71,8 +71,11 @@ export function findVariant(
   groups: { groupName: string; values: string[] }[],
   selected: (string | null)[],
 ): CatalogVariant | undefined {
-  // Single variant with no option groups — return it directly
-  if (groups.length === 0) return variants[0];
+  // No-option singletons resolve directly; multiple named variants require their actual SKU.
+  if (groups.length === 0) {
+    if (variants.length === 1) return variants[0];
+    return selected.length === 1 ? variants.find(v => v.sku === selected[0]) : undefined;
+  }
   if (selected.some(v => !v)) return undefined;
   return variants.find(v =>
     v.options && groups.every((g, i) =>

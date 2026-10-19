@@ -12,6 +12,8 @@ import {
 	priceDeltaLabel,
 } from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
+import { toCartEnrichment } from '~/platform/controllers/product-model';
+import { formatPrice } from '~/utils/price-format';
 
 // Loose option literals: `position`/`group.position` are required on the wire
 // schema, but fixtures intentionally omit them to exercise the pre-migration
@@ -171,6 +173,13 @@ describe('PDP stock state — live stock is authoritative over the pre-order fla
 		expect(isPreOrderPresented(plainLive, [plainLive])).toBe(false);
 	});
 
+	it('disabled variants remain unavailable even when stock & pre-order flags are true', () => {
+		const disabled = variant({ sku: 'disabled', enabled: false, inStock: true, isPreOrder: true, options: [] });
+		expect(isVariantPurchasable(disabled)).toBe(false);
+		expect(isActivePreOrder(disabled)).toBe(false);
+		expect(areAllVariantsSoldOut([disabled])).toBe(true);
+	});
+
 	it('missing stock fails closed (never purchasable)', () => {
 		const missing = { isPreOrder: true } as unknown as CatalogVariant;
 		expect(isVariantPurchasable(missing)).toBe(false);
@@ -201,6 +210,42 @@ describe('findVariant', () => {
 	it('returns the single variant when there are no option groups', () => {
 		const v = variant({ sku: 'only', options: [] });
 		expect(findVariant([v], [], [])).toBe(v);
+	});
+
+	it('requires an explicit SKU for multiple named variants without options', () => {
+		const white = variant({ sku: 'white-sku', name: 'White', inStock: false, options: [] });
+		const black = variant({ sku: 'black-sku', name: 'Black', options: [] });
+		for (const selection of [[], [null], ['missing'], ['Black'], ['white-sku', 'black-sku']]) {
+			expect(findVariant([white, black], [], selection)).toBeUndefined();
+		}
+		expect(getOptionGroups([white, black])).toEqual([]);
+	});
+
+	it('carries the chosen second SKU, price & name into cart enrichment without fabricated options', () => {
+		const white = variant({ sku: 'white-sku', name: 'White', price: 1200, inStock: false, availableQuantity: 0, options: [] });
+		const black = variant({ id: 'catalog-id', sku: 'black-sku', name: 'Black', price: 1575, salePrice: 1495, options: [] });
+		const chosen = findVariant([white, black], [], ['black-sku']);
+		expect(chosen).toBe(black);
+		expect(chosen?.sku).toBe('black-sku');
+		expect(isVariantPurchasable(chosen)).toBe(true);
+		expect(liveUnitPrice(chosen, false, chosen!.price)).toBe(1495);
+		expect(formatPrice(liveUnitPrice(chosen, false, chosen!.price), 'USD')).toBe('$14.95');
+		expect(toCartEnrichment({ slug: 'bead' }, chosen!, undefined)).toMatchObject({ slug: 'bead', name: 'Black', options: '' });
+		expect(findVariant([white, black], [], ['catalog-id'])).toBeUndefined();
+	});
+
+	it('retains exact named selection when stock changes, while blocking unavailable or disabled adds', () => {
+		const white = variant({ sku: 'white-sku', name: 'White', inStock: false, options: [] });
+		const black = variant({ sku: 'black-sku', name: 'Black', options: [] });
+		for (const unavailable of [
+			{ ...black, inStock: false, availableQuantity: 0 },
+			{ ...black, enabled: false },
+		]) {
+			const chosen = findVariant([white, unavailable], [], ['black-sku']);
+			expect(chosen?.sku).toBe('black-sku');
+			expect(isVariantPurchasable(chosen)).toBe(false);
+			expect(isSelectionOutOfStock(true, chosen)).toBe(true);
+		}
 	});
 
 	it('resolves the exact variant matching all selected values', () => {
