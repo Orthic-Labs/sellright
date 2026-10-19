@@ -15,7 +15,8 @@ export const RestockForm = component$<RestockFormProps>((props) => {
 	const disposed = useSignal(false);
 	const status = useSignal<FormStatus>('idle');
 	const message = useSignal('');
-	const containerId = `sr-restock-${useId()}`;
+	const formId = useId();
+	const containerId = `sr-restock-${formId}`;
 	useStylesScoped$(`.sr-restock{border:1px solid var(--rule);padding:20px;margin:20px 0;scroll-margin:100px 0}.sr-restock-title{display:block;margin-bottom:16px}.sr-restock-fields{display:flex;flex-wrap:wrap;gap:10px}.sr-restock-input{flex:1;min-width:160px;min-height:44px;border:1px solid var(--rule);background:var(--white);color:var(--ink);padding:10px}.sr-restock-submit{min-height:44px;padding:10px 18px;background:var(--ink);color:var(--white);border:0;cursor:pointer}.sr-restock-submit:disabled{opacity:.5;cursor:default}.sr-restock-hp{position:absolute;left:-9999px}.sr-restock-error{margin-top:10px}.sr-restock-alt{display:inline-block;margin-top:14px;color:var(--mid)}`);
 	useVisibleTask$(({ cleanup }) => {
 		disposed.value = false;
