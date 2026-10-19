@@ -7,19 +7,19 @@ import { FacetWithValues } from '~/types';
 import { createSEOHead } from '~/utils/seo';
 import { projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
+import { shopCategoryFilters } from '~/theme/theme.config';
+import { searchByCategories } from './categories';
+import { categoryFacets } from '~/config/shop-categories';
 
-// SellRight's catalog search has no facet/facet-value aggregation (unlike the
-// old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
-// for URL-contract compatibility (the `f=` query param) but never actually
-// narrows results, matching prior behavior (the old adapter always returned
-// an empty facetValues array too).
+// Resolve the shop's stable configured category IDs against native tags.
 export const executeQuery = $(
-	async (term: string): Promise<CatalogListResponse> => searchProducts({ term: term || undefined, take: 60 })
+	async (term: string, facetIds: string[] = []): Promise<CatalogListResponse> =>
+		searchByCategories(term, facetIds, shopCategoryFilters, searchProducts)
 );
 
 export const useSearchLoader = routeLoader$(async ({ query }) => {
 	const term = query.get('q') || '';
-	const search = await executeQuery(term);
+	const search = await executeQuery(term, query.get('f')?.split('-') || []);
 	return { search, query };
 }, {
 	// Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
@@ -59,23 +59,20 @@ export default component$(() => {
 	}>({
 		showMenu: false,
 		search: searchLoader.value.search,
-		// SellRight has no facet aggregation — always empty (see executeQuery).
-		facetValues: [],
+		facetValues: categoryFacets(shopCategoryFilters, searchLoader.value.query.get('f')?.split('-') || []),
 		facetValueIds: searchLoader.value.query.get('f')?.split('-') || [],
 	});
 
-	// Only update on URL changes (SSR-friendly)
-	useTask$(async ({ track }) => {
-		track(() => searchLoader.value.query);
-
-		const term = searchLoader.value.query.get('q') || '';
-		const activeFacetValueIds: string[] = searchLoader.value.query.get('f')?.split('-') || [];
-
-		// Only update if data has changed
-		if (JSON.stringify(state.facetValueIds) !== JSON.stringify(activeFacetValueIds)) {
-			state.search = await executeQuery(term);
-			state.facetValueIds = activeFacetValueIds;
-		}
+	// The route loader handles both q-only and f-only navigation. Reuse its
+	// result so resumed pages do not issue a second, potentially stale search.
+	useTask$(({ track }) => {
+		const loaded = track(() => searchLoader.value);
+		const ids = loaded.query.get('f')?.split('-') || [];
+		const open = state.facetValues[0]?.open ?? true;
+		state.search = loaded.search;
+		state.facetValueIds = ids;
+		state.facetValues = categoryFacets(shopCategoryFilters, ids);
+		state.facetValues[0].open = open;
 	});
 
 	const onFilterChange = $(async (id: string) => {
@@ -133,7 +130,7 @@ export default component$(() => {
 						onOpenCloseFilter$={platformAction('filters.value', onOpenCloseFilter)}
 					/>
 				)}
-				<div class="sm:col-span-5 lg:col-span-4">
+				<div class={state.facetValues.length ? 'sm:col-span-5 lg:col-span-4' : 'sm:col-span-5'}>
 					<div class="grid grid-cols-1 gap-y-10 gap-x-6 sm:grid-cols-2 lg:grid-cols-4 xl:gap-x-8">
 						{(state.search.items || []).map((item) => (
 							<ProductCard

@@ -65,6 +65,19 @@ test('the checked-in schema is valid and each name has exactly one owner', () =>
 	}
 });
 
+
+test('stable shop category IDs pass compose public configuration and survive build env rendering', async () => {
+	const brand = baseBrand();
+	brand.publicConfig.VITE_SHOP_CATEGORIES = 'folding knives,fixed blades,edc,fidget,apparel';
+	brand.publicConfig.VITE_SHOP_CATEGORY_IDS = '1,3,5,6,4';
+	const { r, problems } = await run({ brand });
+	assert.deepEqual(problems.list, []);
+	assert.ok(r.names.includes('VITE_SHOP_CATEGORY_IDS'));
+	assert.match(r.envProduction, /VITE_SHOP_CATEGORY_IDS="1,3,5,6,4"/);
+	const fixtureSchema = loadSchema(path.join(HERE, 'fixtures', 'base-fixture', 'packages', 'storefront', 'brand-env.schema.json'));
+	assert.ok(fixtureSchema.publicBuildConfig.VITE_SHOP_CATEGORY_IDS);
+});
+
 test('a clean brand passes and reports names and a hash only', async () => {
 	const { r, problems } = await run();
 	assert.deepEqual(problems.list, []);

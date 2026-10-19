@@ -126,6 +126,9 @@
     "VITE_SHOP_CATEGORIES": {
       "description": "Shop category list"
     },
+    "VITE_SHOP_CATEGORY_IDS": {
+      "description": "Optional comma-separated stable numeric category IDs, parallel to VITE_SHOP_CATEGORIES"
+    },
     "VITE_HOME_SPOTLIGHT_SLUG": {
       "description": "Homepage spotlight product slug"
     },

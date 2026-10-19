@@ -6,6 +6,7 @@ import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
+import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
@@ -36,12 +37,19 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     return <div class="text-center py-8">Product not found</div>;
   }
   const isEnhancing = useSignal(false);
+  const liveStockReady = useSignal(false);
   const enhancementError = useSignal<string | null>(null);
   const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
   const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
   const currentImageIndex = useSignal(0);
   const groups = useComputed$(() => getOptionGroups(product.variants));
+  // Named variants without option groups use one selection slot containing the catalog SKU.
+  const selectionSize = useComputed$(() => {
+    const variants = product.variants;
+    return getOptionGroups(variants).length || (variants.length > 1 ? 1 : 0);
+  });
   const selectedValues = useSignal<(string | null)[]>([]);
+  const preOrderConsent = useSignal(false);
   const hasVariantAssets = product.variants.some((v) => (v.assets?.length || 0) > 0);
   const baseGalleryList: GalleryImage[] = galleryImages;
   const orderedAssets = useSignal<GalleryImage[]>(baseGalleryList);
@@ -120,6 +128,18 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       currentImageIndex.value = 0;
     }
   });
+  const handleNamedVariantSelect$ = $((e: Event) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-variant-sku]');
+    if (!btn || btn.disabled) return;
+    const variant = product.variants.find(v => v.sku === btn.dataset.variantSku);
+    if (!isVariantPurchasable(variant) || !variant) return;
+    selectedValues.value = [variant.sku];
+    preOrderConsent.value = false;
+    const list = variant.assets?.length ? variant.assets : baseGalleryList;
+    orderedAssets.value = list;
+    currentImageSig.value = list[0];
+    currentImageIndex.value = 0;
+  });
   useOnDocument('keydown', $((event: Event) => {
     const e = event as KeyboardEvent;
     if (!showImageModal.value) return;
@@ -133,22 +153,25 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const stockReadGen = useSignal(0);
   const refreshLiveStock = $(async () => {
     const gen = ++stockReadGen.value;
+    liveStockReady.value = false;
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
       const stock = await getProductStock(product.slug);
       if (gen !== stockReadGen.value) return;
       if (!stock) return;
+      const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
       const merged = mergeProductStock(product, stock);
       product.variants = merged.variants;
+      liveStockReady.value = waitlistStockReady;
       const isCompleteSelection =
-        groups.value.length > 0 &&
-        selectedValues.value.length === groups.value.length &&
+        selectionSize.value > 0 &&
+        selectedValues.value.length === selectionSize.value &&
         selectedValues.value.every(v => v !== null);
       if (isCompleteSelection) {
         const resolved = findVariant(product.variants, groups.value, selectedValues.value);
         if (!resolved) {
-          selectedValues.value = Array(groups.value.length).fill(null);
+          selectedValues.value = Array(selectionSize.value).fill(null);
         }
       }
     } catch (error) {
@@ -222,9 +245,9 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const { handleTouchStart$, handleTouchMove$, handleTouchEnd$, touchState: _touchState } =
     useImageGalleryTouchHandling(orderedAssets, currentImageIndex, changeImage);
   useTask$(({ track }) => {
-    track(() => groups.value.length);
-    if (selectedValues.value.length !== groups.value.length)
-      selectedValues.value = Array(groups.value.length).fill(null);
+    track(() => selectionSize.value);
+    if (selectedValues.value.length !== selectionSize.value)
+      selectedValues.value = Array(selectionSize.value).fill(null);
   });
   const resolvedVariant = useComputed$(() =>
     findVariant(product.variants, groups.value, selectedValues.value)
@@ -250,12 +273,11 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   });
   const allVariantsSoldOut = useComputed$(() => areAllVariantsSoldOut(product.variants));
   const allGroupsSelected = useComputed$(() =>
-    groups.value.length > 0 && selectedValues.value.length === groups.value.length && selectedValues.value.every(v => v !== null)
+    selectedValues.value.length === selectionSize.value && selectedValues.value.every(v => v !== null)
   );
   const isOutOfStock = useComputed$(() => {
     return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value);
   });
-  const preOrderConsent = useSignal(false);
   const showCtaTooltip = useSignal(false);
   const ctaTooltipFading = useSignal(false);
   const addItemToOrderErrorSignal = useSignal('');
@@ -338,6 +360,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       groups={groups}
       handleAddToCart={handleAddToCart}
       handleGroupSelect$={handleGroupSelect$}
+      handleNamedVariantSelect$={handleNamedVariantSelect$}
       handleDotClick$={handleDotClick$}
       handleGalleryItemClick$={handleGalleryItemClick$}
       handleGalleryScroll={handleGalleryScroll}
@@ -350,6 +373,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isImageLoading={isImageLoading}
       isOutOfStock={isOutOfStock}
       isPreOrder={isPreOrder}
+      liveStockReady={liveStockReady}
       modalImageIndex={modalImageIndex}
       modalImageSrc={modalImageSrc}
       navigateModal={navigateModal}

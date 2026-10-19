@@ -27,7 +27,7 @@ const MOUNTS: Record<SlotName, Mount> = {
 	'payment.badges': { file: 'components/footer/footer.tsx', handle: 'PaymentBadgesView', keeps: /\{hasPaymentBadges && <PaymentBadgesView placement="footer" \/>\}/ },
 	'pdp.payment-widget': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'PaymentWidgetView', keeps: /\{hasPaymentWidget && <PaymentWidgetView priceCents=\{widgetPriceCents\} \/>\}/ },
 	'pdp.guarantee-modal': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'GuaranteeModalView', keeps: /\{hasGuaranteeModal && <GuaranteeModalView / },
-	'pdp.waitlist': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'WaitlistView', keeps: /\{hasWaitlist && <WaitlistView / },
+	'pdp.waitlist': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'WaitlistView', keeps: /const waitlistAvailable = hasWaitlist && [^\n]+;[\s\S]*\{waitlistAvailable && \(\s*<div id="sr-pdp-waitlist">\s*<WaitlistView / },
 	'account.order-card': { file: 'routes/account/orders/index.tsx', handle: 'OrderCardView', keeps: /if \(hasOrderCard\) return <OrderCardView[^>]*\/>;\n\s*return \(\n\s*<a/ },
 	'account.sustainability-badge': { file: 'routes/account/index.tsx', handle: 'SustainabilityBadgeView', keeps: /\{hasSustainabilityBadge && <SustainabilityBadgeView / },
 	'legal.copy': { file: 'routes/privacy/index.tsx', handle: 'LegalCopyView', keeps: /\{hasLegalCopy \? <LegalCopyView section="privacy\.payment-processors" \/> : 'payment service providers'\}/ },

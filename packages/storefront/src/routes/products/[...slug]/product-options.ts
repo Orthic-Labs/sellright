@@ -1,23 +1,25 @@
 import type { CatalogVariant } from '~/sellright/types/catalog';
 import { effectiveVariantPrice } from '~/sellright/types/catalog';
 
-// getOptionGroups and findVariant live in platform/controllers/product-model.ts (brand views PR2 §5), bodies unchanged.
+// getOptionGroups and findVariant live in platform/controllers/product-model.ts (brand views PR2 §5).
 import { getOptionGroups, findVariant } from '~/platform/controllers/product-model';
 export { getOptionGroups, findVariant };
 
-type StockFlags = Pick<CatalogVariant, 'inStock' | 'isPreOrder'>;
+type PurchasableVariant = Pick<CatalogVariant, 'inStock'> & Partial<Pick<CatalogVariant, 'enabled'>>;
+type StockFlags = PurchasableVariant & Pick<CatalogVariant, 'isPreOrder'>;
 
 /** LOCKED stock rule: the live `inStock` read is authoritative. `isPreOrder`
  *  is catalog metadata and can never make a variant purchasable on its own;
- *  anything other than `inStock === true` (missing included) fails closed. */
-export function isVariantPurchasable(variant: Pick<CatalogVariant, 'inStock'> | null | undefined): boolean {
-  return variant?.inStock === true;
+ *  anything other than `inStock === true` (missing included) fails closed.
+ *  A disabled catalog variant is never purchasable, even with live stock. */
+export function isVariantPurchasable(variant: PurchasableVariant | null | undefined): boolean {
+  return variant?.inStock === true && variant.enabled !== false;
 }
 
 /** A variant is sold as a pre-order only while the live read says it is in
  *  stock. A flagged pre-order with `inStock === false` is simply out of stock. */
 export function isActivePreOrder(variant: StockFlags | null | undefined): boolean {
-  return !!variant && variant.isPreOrder === true && variant.inStock === true;
+  return !!variant && variant.isPreOrder === true && isVariantPurchasable(variant);
 }
 
 /** Pre-order presentation (label, consent, price): the selected variant when
@@ -28,7 +30,7 @@ export function isPreOrderPresented(selected: StockFlags | null | undefined, var
 }
 
 /** Every variant is out of stock on the live read, pre-order flag or not. */
-export function areAllVariantsSoldOut(variants: Pick<CatalogVariant, 'inStock'>[]): boolean {
+export function areAllVariantsSoldOut(variants: PurchasableVariant[]): boolean {
   return variants.every((v) => !isVariantPurchasable(v));
 }
 
@@ -37,7 +39,7 @@ export function areAllVariantsSoldOut(variants: Pick<CatalogVariant, 'inStock'>[
  *  simply not yet purchasable) and is never wiped. */
 export function isSelectionOutOfStock(
   selectionComplete: boolean,
-  selected: Pick<CatalogVariant, 'inStock'> | null | undefined,
+  selected: PurchasableVariant | null | undefined,
 ): boolean {
   if (!selectionComplete) return false;
   if (!selected) return false;

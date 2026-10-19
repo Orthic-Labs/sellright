@@ -3,7 +3,7 @@ import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
+import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
@@ -12,6 +12,7 @@ import { ProductReviews } from '~/components/reviews/ProductReviews';
 import { starString } from '~/utils/rewards';
 import { productPageContent } from '~/platform/brand-data';
 import { useRelatedProducts } from '~/platform/product-related';
+import { PRODUCT_UUID } from '~/platform/controllers/restock-form';
 import { formatPrice } from '~/utils/price-format';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
@@ -21,7 +22,7 @@ const hasWaitlist = hasView('pdp.waitlist');
 const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
   let widgetPriceCents = 0;
   if (hasPaymentWidget) {
@@ -33,6 +34,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
   // routes.json productPage: editorial content for this product and the related row (empty unless the brand turns it on).
   const content = productPageContent(String(product?.slug ?? ''));
   const related = useRelatedProducts();
+  const waitlistAvailable = hasWaitlist && liveStockReady.value && allVariantsSoldOut.value && typeof productId === 'string' && PRODUCT_UUID.test(productId) && product.variants.some((v: CatalogVariant) => v.enabled !== false);
+  const namedVariantPricesVary = groups.value.length === 0 && new Set(product.variants.map((v: CatalogVariant) => effectiveVariantPrice(v))).size > 1;
   return (
     <div class="sr-pdp">
       <div class="sr-layout">
@@ -199,6 +202,32 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           />
           {hasPaymentWidget && <PaymentWidgetView priceCents={widgetPriceCents} />}
           <div class="sr-rule" />
+          {groups.value.length === 0 && product.variants.length > 1 && (
+            <div class="sr-sel-group">
+              <div class="sr-sel-head">
+                <span class="sr-sel-label">01 — Variant</span>
+                {selectedVariant.value && <span class="sr-sel-chosen">{selectedVariant.value.name}</span>}
+              </div>
+              <div class="sr-pill-grid">
+                {product.variants.map((variant: CatalogVariant) => {
+                  const available = isVariantPurchasable(variant);
+                  const chosen = selectedValues.value[0] === variant.sku;
+                  return (
+                    <button key={variant.sku}
+                      class={`sr-pill${chosen ? ' active' : ''}${!available ? ' oos' : ''}`}
+                      disabled={!available}
+                      aria-pressed={chosen}
+                      data-variant-sku={variant.sku}
+                      onClick$={handleNamedVariantSelect$}
+                    >
+                      <span>{variant.name}</span>
+                      {namedVariantPricesVary && <span class="sr-pill-price">{formatPrice(effectiveVariantPrice(variant), product.currency || undefined)}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
             const isLocked = groupIdx > 0 && !selectedValues.value[groupIdx - 1];
@@ -375,7 +404,11 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </div>
             )}
           </div>
-          {hasWaitlist && <WaitlistView productId={productId} productName={product.name || ''} soldOut={!!allVariantsSoldOut.value} />}
+          {waitlistAvailable && (
+            <div id="sr-pdp-waitlist">
+              <WaitlistView productId={productId} productName={product.name || ''} soldOut={true} />
+            </div>
+          )}
           <ProductTrustBar />
           {hasGuaranteeModal && <GuaranteeModalView productId={productId} productName={product.name || ''} />}
           <div class="sr-rule" />
@@ -447,6 +480,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         selectedVariant={selectedVariant}
         showCtaTooltip={showCtaTooltip}
         showFromPrefix={showFromPrefix}
+        waitlistAvailable={waitlistAvailable}
       />
       {showImageModal.value && (
         <ProductImageModal
