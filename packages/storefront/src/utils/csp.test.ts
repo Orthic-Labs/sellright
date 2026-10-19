@@ -146,7 +146,7 @@ describe('entry.express.tsx emits the built policy', () => {
 	});
 
 	it('uses the canonical SheerID enablement config shared with the homepage', () => {
-		expect(src).toMatch(/import\s*\{\s*theme\s*\}\s*from[\"']\.\/theme\/theme\.config[\"']/);
+		expect(src).toMatch(/import\s*\{\s*theme\s*\}\s*from["']\.\/theme\/theme\.config["']/);
 		expect(src).toContain('sheerIdEnabled: theme.sheerIdEnabled');
 	});
 
