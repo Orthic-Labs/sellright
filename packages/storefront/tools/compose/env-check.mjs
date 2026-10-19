@@ -152,7 +152,14 @@ export function effectiveHash(effective) {
 
 export async function defaultLoadEnv() {
 	const vite = await import('vite');
-	return vite.loadEnv;
+	return (mode, envDir, prefixes) => {
+		const effective = vite.loadEnv(mode, envDir, prefixes);
+		const publicPrefixes = prefixes === undefined ? ['VITE_'] : Array.isArray(prefixes) ? prefixes : [prefixes];
+		if (!publicPrefixes.includes('VITE_') || !Object.hasOwn(effective, 'VITE_USER_NODE_ENV')) return effective;
+		const publicEnv = { ...effective };
+		delete publicEnv.VITE_USER_NODE_ENV;
+		return publicEnv;
+	};
 }
 
 /**
