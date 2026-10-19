@@ -652,9 +652,9 @@ adminOrderOps.openapi(
     const stripeDiscover = await stripeDiscoverable(st.storeId, purgeStore?.config ?? {});
     for (const code of [...new Set(codes)] as string[]) {
       const preId = await orderIdByCode(st.storeId, code);
-      const r: { ok: true } | { ok: false; error: string; errorCode?: BulkErrorCode } = !preId
+      const r: { ok: true; stockChanged: boolean } | { ok: false; error: string; errorCode?: BulkErrorCode } = !preId
         ? { ok: false, error: 'order not found' }
-        : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string; errorCode?: BulkErrorCode }> => {
+        : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true; stockChanged: boolean } | { ok: false; error: string; errorCode?: BulkErrorCode }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (importedFinancialReconciliationRequired(o.metadata)) {
@@ -732,6 +732,18 @@ adminOrderOps.openapi(
         if (attempts.length) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email,
           entity: 'order', entityId: o.id, action: 'archive_payment_attempts', data: { attempts } });
         await tx.delete(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, o.id));
+        // Purge retires the remaining reservation, not physical stock. Fulfilled
+        // units already left onHand; cancelled/refunded units were released earlier.
+        const lines = await tx.select().from(s.orderLine).where(and(eq(s.orderLine.orderId, o.id), eq(s.orderLine.storeId, st.storeId)));
+        let stockChanged = false;
+        for (const line of lines) {
+          const remaining = Math.max(line.quantity - line.fulfilledQty - line.cancelledQty, 0);
+          if (remaining > 0 && line.variantId) {
+            await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${remaining}, 0)` })
+              .where(and(eq(s.stock.variantId, line.variantId), eq(s.stock.storeId, st.storeId)));
+            stockChanged = true;
+          }
+        }
         await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         // Chokepoint operation `order_purge` (order.id): the order's payments are snapshotted on the
         // operation row first (so invoice evidence survives), then payment rows and the order row go.
@@ -739,8 +751,10 @@ adminOrderOps.openapi(
           storeId: st.storeId, kind: 'order_purge', operationId: o.id, effects: [],
           mutations: [{ type: 'order_purge', orderId: o.id }],
         });
-        return { ok: true };
+        return { ok: true, stockChanged };
       });
+      // Only the successful transaction result can publish a stock change.
+      if (r.ok && r.stockChanged) onStockChanged(st.slug);
       results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error, ...(r.errorCode ? { errorCode: r.errorCode } : {}) });
     }
     const succeeded = results.filter((r) => r.ok).length;
