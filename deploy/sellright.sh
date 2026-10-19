@@ -37,7 +37,16 @@ cmd_logs() {
   compose logs -f --tail=200 "$@"
 }
 
-cmd_backup() (
+cmd_backup() {
+  require_home
+  backup_api_container=$(compose ps -q api) || die "could not resolve existing API container for backup"
+  backup_existing_api "$backup_api_container" "$@"
+}
+
+# Internal exact-container seam also used by restore after its identity checks;
+# one-off restore helpers can never be mistaken for the original API.
+backup_existing_api() (
+  backup_api_container=$1; shift
   require_home
   umask 077
   backup_root="${SELLRIGHT_HOME}/backups"
@@ -58,7 +67,6 @@ cmd_backup() (
   out_dir=$(mktemp -d "${backup_root}/${stamp}.XXXXXX")
   # Backup runs before the registry gate. Execute tar in the existing API
   # container, never a fresh container from a mutable configured image tag.
-  backup_api_container=$(compose ps -q api) || die "could not resolve existing API container for backup"
   case "$backup_api_container" in ''|*[!a-f0-9]*) die "existing API container required for backup" ;; esac
   [ "${#backup_api_container}" -eq 64 ] || die "invalid existing API container identity"
   backup_api_image=$(docker inspect --format '{{.Image}}' "$backup_api_container") || die "could not resolve existing API image for backup"
@@ -225,6 +233,11 @@ async function main() {
       }
     }
     await extract('assets'); await extract('downloads');
+  } else if (op === 'assert-empty') {
+    for (const root of ['assets', 'downloads', 'state']) {
+      const live = `/app/var/${root}`, stat = fs.lstatSync(live);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.readdirSync(live).length) throw Error('restore target storage is not empty: ' + root);
+    }
   } else if (op === 'snapshot') {
     for (const root of ['assets', 'downloads']) copyContents(`/app/var/${root}`, `${base}/previous/${root}`);
     fs.writeFileSync(`${base}/snapshot-complete`, 'yes');
@@ -239,6 +252,55 @@ async function main() {
 }
 main().catch(e => { console.error('Restore staging:', e.message); process.exitCode = 1; });
 JS
+}
+
+# Every helper/recreation uses frozen API bytes; neither path pulls or builds.
+restore_compose() {
+  compose -f "$restore_override" "$@"
+}
+
+# Before helper creation, every service container counts (including stopped
+# containers/one-offs). Afterwards exclude only this exact owned helper ID.
+restore_api_ids() {
+  ids=$(compose ps --all --quiet api) || return 1
+  for id in $ids; do
+    case "$id" in ''|*[!a-f0-9]*) return 1 ;; esac
+    [ "${#id}" -eq 64 ] || return 1
+    [ "$id" = "${restore_helper_id:-}" ] || printf '%s\n' "$id"
+  done
+}
+
+restore_api_metadata() {
+  docker inspect --format '{{.Image}}|{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.oneoff"}}' "$1"
+}
+
+restore_assert_api_unchanged() {
+  current_api=$(restore_api_ids) || die "could not recheck restore API containers"
+  [ "$current_api" = "$restore_original_api" ] || die "API containers changed during restore"
+  if [ -n "$restore_original_api" ]; then
+    current_metadata=$(restore_api_metadata "$restore_original_api") || die "could not recheck original API identity"
+    [ "$current_metadata" = "$restore_original_metadata" ] || die "original API identity/state changed during restore"
+  fi
+}
+
+restore_assert_empty() {
+  restore_assert_api_unchanged
+  [ -z "$restore_original_api" ] || die "existing API requires a safety backup"
+  # Fresh appliance DBs contain system objects + public/plpgsql only. Any
+  # unknown query result/error fails closed; no missing-API inference is used.
+  empty_database=$(compose exec -T postgres psql -X -At -v ON_ERROR_STOP=1 -U sellright -d sellright -c "SELECT
+    NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname <> 'public' AND nspname <> 'information_schema' AND nspname !~ '^pg_')
+    AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public')
+    AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public')
+    AND NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public')
+    AND NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname <> 'plpgsql')
+    AND NOT EXISTS (SELECT 1 FROM pg_largeobject_metadata)
+    AND NOT EXISTS (SELECT 1 FROM pg_foreign_server)
+    AND NOT EXISTS (SELECT 1 FROM pg_publication)
+    AND NOT EXISTS (SELECT 1 FROM pg_subscription)
+    AND NOT EXISTS (SELECT 1 FROM pg_event_trigger);") || die "could not prove empty restore database"
+  [ "$empty_database" = t ] || die "missing API with nonempty/unknown database; safety backup required"
+  docker exec "$restore_container" node /tmp/restore.js assert-empty || die "missing API with nonempty/unknown storage; safety backup required"
 }
 
 # Rollback checks the catalog, rather than trusting a successful client return:
@@ -261,14 +323,20 @@ restore_rollback() {
     docker exec "$restore_container" node /tmp/restore.js rollback || return 1
   fi
   compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright ALLOW_CONNECTIONS true;" || return 1
-  compose up -d --wait --wait-timeout 120 api || { compose stop api; return 1; }
-  log "Original database, assets and downloads recovered; API healthy."
+  if [ "$restore_fresh" -eq 1 ]; then
+    restore_compose rm -f -s api || return 1
+    log "Original empty database and storage recovered; API remains absent."
+  else
+    compose -f "$restore_previous_override" up --pull never --no-build -d --no-deps --wait --wait-timeout 120 api || { compose stop api; return 1; }
+    log "Original database, assets and downloads recovered; original API image healthy."
+  fi
 }
 
 cmd_restore() (
   umask 077
   restore_dir=""; restore_container=""; restore_lock=0; temp_created=0
-  live_stopped=0; files_changed=0; retain=0
+  live_stopped=0; files_changed=0; retain=0; restore_fresh=0
+  restore_helper_id=""; restore_original_api=""; restore_original_metadata=""
   # Called only by the EXIT trap; ShellCheck cannot track that invocation.
   # shellcheck disable=SC2329
   restore_cleanup() {
@@ -291,12 +359,13 @@ cmd_restore() (
   }
   trap 'restore_cleanup' 0
   trap 'exit 1' HUP INT TERM
-  kit=""; set_file=""; yes=0
+  kit=""; set_file=""; yes=0; from_source=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --kit) [ $# -ge 2 ] || die "missing --kit value"; kit="$2"; shift 2 ;;
       --set) [ $# -ge 2 ] || die "missing --set value"; set_file="$2"; shift 2 ;;
       --yes) yes=1; shift ;;
+      --from-source) from_source=1; shift ;;
       *) die "unknown restore option: $1" ;;
     esac
   done
@@ -346,8 +415,46 @@ cmd_restore() (
     done
     work_dir="$restore_dir"
   fi
+  restore_override="${restore_dir}/verified-api.yaml"
+  restore_previous_override="${restore_dir}/previous-api.yaml"
+  if [ "$from_source" -eq 1 ]; then
+    : "${SELLRIGHT_SOURCE:?--from-source requires SELLRIGHT_SOURCE=/path/to/checked-out/sellright}"
+    [ -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" ] || die "SELLRIGHT_SOURCE has no deploy/compose.build.yaml"
+    config_json=$(compose --project-directory "${SELLRIGHT_SOURCE}/deploy" -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" config --format json) || die "could not resolve source restore config"
+    ref=$(printf '%s' "$config_json" | jq -er '.services.api.image | select(type == "string" and length > 0)') || die "could not resolve local API image"
+    case "$ref" in -*) die "invalid local API image reference" ;; esac
+    image=$(docker image inspect --format '{{.Id}}' "$ref") || die "local API image missing; build explicitly before restore"
+    printf '%s\n' "$image" | LC_ALL=C grep -Eq '^sha256:[a-f0-9]{64}$' || die "invalid local API image ID"
+    printf 'services:\n  api:\n    image: %s\n    pull_policy: never\n' "$image" > "$restore_override"
+  else
+    verified_images="${restore_dir}/verified-images.yaml"
+    cosign_verify_images "$verified_images" || die "restore image signature verification failed"
+    image=$(sed -n '/^  api:$/ {n;s/^    image: //p;}' "$verified_images")
+    printf '%s\n' "$image" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$' || die "missing verified API digest"
+    printf 'services:\n  api:\n    image: %s\n    pull_policy: never\n' "$image" > "$restore_override"
+    config_json=$(compose config --format json) || die "could not resolve restore project"
+  fi
+  restore_project=$(printf '%s' "$config_json" | jq -er '.name | select(type == "string" and test("^[a-z0-9][a-z0-9_-]*$"))') || die "invalid restore project identity"
+  restore_original_api=$(restore_api_ids) || die "could not resolve original API containers"
+  if [ -n "$restore_original_api" ]; then
+    case "$restore_original_api" in *[!a-f0-9]*) die "ambiguous original API containers" ;; esac
+    [ "${#restore_original_api}" -eq 64 ] || die "invalid original API container"
+    restore_original_metadata=$(restore_api_metadata "$restore_original_api") || die "could not inspect original API"
+    IFS='|' read -r old_image old_running old_project old_service old_oneoff <<EOF
+$restore_original_metadata
+EOF
+    printf '%s\n' "$old_image" | LC_ALL=C grep -Eq '^sha256:[a-f0-9]{64}$' || die "invalid original API image"
+    [ "$old_project" = "$restore_project" ] && [ "$old_service" = api ] && [ "$old_oneoff" = False ] || die "unexpected original API container identity"
+    [ "$old_running" = true ] || die "stopped/unknown API requires an operator safety backup before restore"
+    printf 'services:\n  api:\n    image: %s\n    pull_policy: never\n' "$old_image" > "$restore_previous_override"
+  else
+    restore_fresh=1
+  fi
   # Override appliance command; this container never starts API/migrations.
-  compose run -d --no-deps --name "$restore_container" api node -e 'setInterval(() => {}, 3600000)' >/dev/null
+  # run has no --no-build flag: omit --build & force local frozen content.
+  restore_compose run --pull never -d --no-deps --name "$restore_container" api node -e 'setInterval(() => {}, 3600000)' >/dev/null
+  restore_helper_id=$(docker inspect --format '{{.Id}}' "$restore_container") || die "could not identify restore helper"
+  printf '%s\n' "$restore_helper_id" | LC_ALL=C grep -Eq '^[a-f0-9]{64}$' || die "invalid restore helper identity"
   restore_helper_source | docker exec -i "$restore_container" sh -c 'umask 077; cat > /tmp/restore.js'
   for part in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
     [ -f "${work_dir}/${part}" ] || continue
@@ -358,11 +465,24 @@ cmd_restore() (
   compose exec -T postgres createdb -U sellright "$restore_db"
   temp_created=1
   compose exec -T postgres pg_restore -U sellright -d "$restore_db" --exit-on-error --single-transaction --no-owner --no-privileges < "${work_dir}/database.dump"
-  log "All backup parts validated and staged; taking pre-restore safety backup..."
-  cmd_backup >&2
-  live_stopped=1
-  compose stop api
-  docker exec "$restore_container" node /tmp/restore.js snapshot
+  restore_assert_api_unchanged
+  if [ "$restore_fresh" -eq 1 ]; then
+    restore_assert_empty
+    log "All backup parts validated and staged; target proven empty, no safety backup needed."
+  else
+    log "All backup parts validated and staged; taking pre-restore safety backup..."
+    backup_existing_api "$restore_original_api" >&2
+    restore_assert_api_unchanged
+  fi
+  if [ "$restore_fresh" -eq 1 ]; then
+    restore_assert_empty
+    docker exec "$restore_container" node /tmp/restore.js snapshot
+    live_stopped=1
+  else
+    live_stopped=1
+    compose stop api
+    docker exec "$restore_container" node /tmp/restore.js snapshot
+  fi
   # Block new connections before terminating existing clients and renaming.
   for db in sellright "$restore_db"; do
     compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE ${db} ALLOW_CONNECTIONS false;"
@@ -373,7 +493,7 @@ cmd_restore() (
   files_changed=1
   docker exec "$restore_container" node /tmp/restore.js promote
   compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U sellright -d postgres -c "ALTER DATABASE sellright ALLOW_CONNECTIONS true;"
-  compose up -d --wait --wait-timeout 120 api
+  restore_compose up --pull never --no-build -d --no-deps --wait --wait-timeout 120 api
   live_stopped=0
   log "Restore promoted; API healthy. Previous database preserved as '${prev_db}'."
 )
@@ -671,11 +791,14 @@ Commands:
   logs [service]      Tail logs (all services, or one)
   backup [--offsite]  Take a database + assets + downloads backup set
   recovery-kit        Print the recovery kit (master key + backup location)
-  restore --kit <f> --set <dir> [--yes]
+  restore --kit <f> --set <dir> [--yes] [--from-source]
                       Restore + PROMOTE database, assets, and downloads from
                       a backup set (encrypted or plain). Destructive: takes a
                       pre-restore safety backup first and prompts for
-                      confirmation unless --yes is given.
+                      confirmation unless --yes is given. Proven empty targets
+                      need no safety backup. Default verifies registry images;
+                      --from-source uses already-built local API content at
+                      SELLRIGHT_SOURCE without pulling or building.
   setup-link          Print how to claim/reset the installation admin
   reset-admin <email> Reset the admin account directly
   maintenance <on|off|status>

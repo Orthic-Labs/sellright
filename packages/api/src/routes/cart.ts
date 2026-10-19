@@ -2,7 +2,7 @@ import { shippingLabelSql } from '../lib/shipping-label.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
-import { and, asc, eq, gt, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
@@ -22,7 +22,8 @@ import { legacyCustomerToken } from '../auth/cookies.js';
 import { digest } from '../import/artifacts.js';
 import { cartExpiry, cartLifecycleFromConfig } from '../cart/ttl.js';
 import { clientIp } from '../auth/rate-limit.js';
-import { cartRetryAfter, recordCartAttempt } from './apps.limit.js';
+import { consumeCartAttempt } from './apps.limit.js';
+import { MAX_CART_LINES, CartTooLargeError, boundedCartItems, cartTooLargeFields, normalizeCartLines, type CartBoundReason } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 /** Per-store effective-price rule (see money/pricing.ts) — resolved from
@@ -202,6 +203,14 @@ export const EstimateOut = z.object({
 });
 
 export const cart = new OpenAPIHono();
+const publicCartBudget: import('hono').MiddlewareHandler = async (c, next) => {
+  const st = await resolveStoreFromCtx(c);
+  const retry = await consumeCartAttempt(st.id, clientIp(c));
+  if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+  await next();
+};
+// Hono's wildcard matches the root too; register once to consume once.
+cart.use('/v1/shop/cart/*', publicCartBudget);
 export function promotionStackErrorJson(c: Context, error: PromotionStackError) {
   return error.code === 'CREDIT_AMOUNT_CHANGED'
     ? errJson(c, 409, 'CREDIT_AMOUNT_CHANGED', error.message)
@@ -209,6 +218,7 @@ export function promotionStackErrorJson(c: Context, error: PromotionStackError) 
 }
 cart.onError((error, c) => {
   if (error instanceof PromotionStackError) return promotionStackErrorJson(c, error);
+  if (error instanceof CartTooLargeError) return errJson(c, 409, 'CART_TOO_LARGE', error.message, { extra: cartTooLargeFields(error) });
   throw error;
 });
 
@@ -222,7 +232,7 @@ cart.openapi(
       body: {
         content: {
           'application/json': {
-            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }),
+            schema: z.object({ items: z.array(EstimateItem).min(1).max(MAX_CART_LINES), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }),
           },
         },
       },
@@ -275,6 +285,9 @@ export const CartConflictOut = z.object({
   revision: z.number().int(),
   cart: CartOut,
 });
+const CartTooLargeOut = apiErrorSchema().extend({
+  status: z.string(), revision: z.number().int(), code: CartConflictCode.optional(),
+});
 /** Initial legacy transfer is absolute, one-shot & transactionally receipted. */
 const LegacyMigrationIn = z.object({
   claimId: z.string().uuid(),
@@ -296,10 +309,6 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
     409: { description: 'Source cart already changed', content: { 'application/json': { schema: apiErrorSchema() } } },
   },
 }), async c => {
-  const ip = clientIp(c);
-  const retry = await cartRetryAfter(ip);
-  if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-  await recordCartAttempt(ip);
   const st = await resolveStoreFromCtx(c);
   const body = c.req.valid('json');
   const authToken = customerToken(c);
@@ -409,16 +418,10 @@ async function variantIdsBySku(tx: Tx, skus: string[]): Promise<Map<string, stri
   return new Map(rows.map((r) => [r.sku, r.id]));
 }
 
-/** Load a cart's lines as priceable items. */
-async function cartItems(tx: Tx, cartId: string): Promise<Array<{ sku: string; quantity: number }>> {
-  const rows = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, cartId)).orderBy(asc(s.cartLine.createdAt), asc(s.cartLine.id));
-  return rows.map((r) => ({ sku: r.sku, quantity: r.quantity }));
-}
-
 /** Build the full cart response (meta + server-priced lines). Exported so
  *  checkout can return the same snapshot on stale-write conflicts. */
-export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string | string[], token?: string | null, shipCountry?: string | null, quoteOptions: { pricingIntent?: 'preview' | 'checkout'; shippingMethodCode?: string; redeemPoints?: number } = {}): Promise<z.infer<typeof CartOut>> {
-  const items = await cartItems(tx, cartRow.id);
+export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string | string[], token?: string | null, shipCountry?: string | null, quoteOptions: { pricingIntent?: 'preview' | 'checkout'; shippingMethodCode?: string; redeemPoints?: number; conflictCode?: CartBoundReason } = {}): Promise<z.infer<typeof CartOut>> {
+  const items = await boundedCartItems(tx, cartRow, quoteOptions.conflictCode);
   const codes = Array.isArray(couponCode) ? couponCode : couponCode !== undefined ? [couponCode] : cartRow.couponCodes;
   const priced = await priceCart(tx, st, items, { couponCodes: codes, token, shipCountry, ...quoteOptions });
   // Terminal carts are historical facts; their credit bearer codes stay private.
@@ -447,7 +450,7 @@ async function cartConflict(c: Context, tx: Tx, st: StoreCtx, row: CartRow, code
   const requestId = (c.var as { requestId?: string } | undefined)?.requestId;
   return {
     error: { code: code.toUpperCase(), message: CONFLICT_COPY[code], ...(requestId ? { requestId } : {}) },
-    code, revision: row.revision, cart: await cartResponse(tx, st, row, undefined, authToken, shipCountry, quoteOptions),
+    code, revision: row.revision, cart: await cartResponse(tx, st, row, undefined, authToken, shipCountry, { ...quoteOptions, conflictCode: code }),
   };
 }
 
@@ -473,25 +476,34 @@ async function cartConflict(c: Context, tx: Tx, st: StoreCtx, row: CartRow, code
  * was concurrently retired (defensive — unreachable while the caller holds
  * the row lock).
  */
+async function writeCartLines(tx: Tx, st: StoreCtx, cartId: string, lines: Array<{ sku: string; quantity: number }>, mode: 'set' | 'increment' | 'merge') {
+  const removed = lines.filter(line => line.quantity <= 0).map(line => line.sku);
+  if (removed.length && mode === 'set') await tx.delete(s.cartLine).where(and(eq(s.cartLine.cartId, cartId), inArray(s.cartLine.sku, removed)));
+  const positive = lines.filter(line => line.quantity > 0);
+  if (!positive.length) return;
+  const vids = await variantIdsBySku(tx, positive.map(line => line.sku));
+  await tx.insert(s.cartLine).values(positive.map(line => ({ storeId: st.id, cartId, ...line, variantId: vids.get(line.sku) ?? null })))
+    .onConflictDoUpdate({ target: [s.cartLine.cartId, s.cartLine.sku], set: {
+      quantity: mode === 'set' ? sql`excluded.quantity` : sql`${s.cartLine.quantity} + excluded.quantity`,
+      // Merge moves quantities only; an existing target keeps its historical
+      // variant association even if this SKU now resolves elsewhere or nowhere.
+      ...(mode === 'merge' ? {} : { variantId: sql`excluded.variant_id` }),
+    } });
+}
+
 async function applyLines(tx: Tx, st: StoreCtx, cartRow: CartRow, lines: Array<{ sku: string; quantity: number }>, opts: { mode?: 'set' | 'increment' } = {}): Promise<CartRow | null> {
   const mode = opts.mode ?? 'set';
-  const vids = await variantIdsBySku(tx, lines.filter((l) => l.quantity > 0).map((l) => l.sku));
-  for (const l of lines) {
-    if (l.quantity <= 0) {
-      if (mode === 'increment') continue; // removes require a base revision — unreachable by contract
-      await tx.delete(s.cartLine).where(and(eq(s.cartLine.cartId, cartRow.id), eq(s.cartLine.sku, l.sku)));
-      continue;
-    }
-    await tx
-      .insert(s.cartLine)
-      .values({ storeId: st.id, cartId: cartRow.id, sku: l.sku, variantId: vids.get(l.sku) ?? null, quantity: l.quantity })
-      .onConflictDoUpdate({
-        target: [s.cartLine.cartId, s.cartLine.sku],
-        set: mode === 'increment'
-          ? { quantity: sql`${s.cartLine.quantity} + ${l.quantity}`, variantId: vids.get(l.sku) ?? null }
-          : { quantity: l.quantity, variantId: vids.get(l.sku) ?? null },
-      });
-  }
+  const normalized = normalizeCartLines(lines, mode);
+  // Exclude final removals in SQL so oversized imported carts can be reduced
+  // without loading their full historical contents. Unknown SKUs count too.
+  const removed = normalized.filter(line => line.quantity <= 0).map(line => line.sku);
+  const remaining = await tx.select({ sku: s.cartLine.sku }).from(s.cartLine)
+    .where(and(eq(s.cartLine.cartId, cartRow.id), removed.length ? notInArray(s.cartLine.sku, removed) : undefined))
+    .limit(MAX_CART_LINES + 1);
+  const projected = new Set(remaining.map(line => line.sku));
+  for (const line of normalized) if (line.quantity > 0) projected.add(line.sku);
+  if (remaining.length > MAX_CART_LINES || projected.size > MAX_CART_LINES) throw new CartTooLargeError(cartRow);
+  await writeCartLines(tx, st, cartRow.id, normalized, mode);
   const now = new Date();
   const [updated] = await tx
     .update(s.cart)
@@ -533,19 +545,13 @@ function mutationBlocker(row: CartRow | undefined, expectedRevision: number | un
 cart.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/cart', summary: 'Create a cart',
-    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodes.optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).max(MAX_CART_LINES).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodes.optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
-    // SEC: generous per-IP throttle — a scripted flood of cart creates writes
-    // an unbounded number of cart rows; legitimate shoppers never approach 60/min.
-    const ip = clientIp(c);
-    const retry = await cartRetryAfter(ip);
-    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-    await recordCartAttempt(ip);
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const authTok = customerToken(c);
@@ -569,7 +575,7 @@ cart.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/cart/{token}', summary: 'Get a cart',
     request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), couponCodes: CouponCodesQuery, pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.coerce.number().int().min(1).optional(), shipCountry: z.string().optional() }) },
-    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
+    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 409: { description: 'Cart exceeds line budget', content: { 'application/json': { schema: CartTooLargeOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -596,11 +602,11 @@ cart.openapi(
 cart.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/cart/{token}/lines', summary: 'Update cart lines',
-    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
+    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).max(MAX_CART_LINES), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Terminal, missing-revision, or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
+      409: { description: 'Terminal, missing-revision, or stale cart', content: { 'application/json': { schema: z.union([CartConflictOut, CartTooLargeOut]) } } },
     },
   }),
   async (c) => {
@@ -644,7 +650,7 @@ cart.openapi(
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Converted or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
+      409: { description: 'Converted or stale cart', content: { 'application/json': { schema: z.union([CartConflictOut, CartTooLargeOut]) } } },
     },
   }),
   async (c) => {
@@ -656,6 +662,7 @@ cart.openapi(
       const block = mutationBlocker(row, expectedRevision, { revisionRequired: true });
       if (block === 'missing') return { code: 404 as const };
       if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block) };
+      await boundedCartItems(tx, row!);
       const norm = normalizeEmail(email);
       const [acct] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, norm)).limit(1);
       const [updated] = await tx
@@ -686,7 +693,7 @@ cart.openapi(
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       401: { description: 'Auth required', content: { 'application/json': { schema: apiErrorSchema() } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Converted or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
+      409: { description: 'Converted or stale cart', content: { 'application/json': { schema: z.union([CartConflictOut, CartTooLargeOut]) } } },
     },
   }),
   async (c) => {
@@ -700,45 +707,43 @@ cart.openapi(
       const [found] = await tx.select({ id: s.cart.id }).from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!found) return { code: 404 as const };
 
-      // Lock the target plus every foldable cart in id order — one lock set,
-      // one acquisition order, no cross-merge deadlock. FOR UPDATE re-reads
-      // the latest committed row, so a cart converted mid-wait is re-filtered.
-      const locked = await tx
-        .select()
-        .from(s.cart)
-        .where(or(
-          eq(s.cart.id, found.id),
-          and(eq(s.cart.customerId, customer.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId)),
-        ))
-        .orderBy(asc(s.cart.id))
-        .for('update');
-      const row = locked.find((r) => r.id === found.id);
+      // Choose at most 201 total candidates, then acquire the same sorted
+      // lock order as every merge. Never silently merge only the first 200.
+      const candidates = await tx.select({ id: s.cart.id }).from(s.cart).where(and(
+        ne(s.cart.id, found.id), eq(s.cart.customerId, customer.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId),
+      )).orderBy(asc(s.cart.id)).limit(MAX_CART_LINES);
+      const chosenIds = [found.id, ...candidates.map(row => row.id)];
+      const locked = await tx.select().from(s.cart).where(inArray(s.cart.id, chosenIds)).orderBy(asc(s.cart.id)).for('update');
+      const row = locked.find(candidate => candidate.id === found.id);
       const block = mutationBlocker(row, expectedRevision, { revisionRequired: true });
       if (block === 'missing') return { code: 404 as const };
       if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, authTok) };
-
-      // Other active carts owned by this customer → fold their lines in (sum
-      // on conflict), then retire them as 'merged'. The fold is a MOVE: the
-      // donor's cart_line rows are deleted and 'merged' is terminal, so the
-      // donor can never be re-edited and re-merged into a later cart to
-      // duplicate quantities (the old retire-as-'abandoned'-with-lines bug).
-      const others = locked.filter((o) => o.id !== row!.id);
-      for (const o of others) {
-        const lines = await cartItems(tx, o.id);
-        for (const l of lines) {
-          await tx
-            .insert(s.cartLine)
-            .values({ storeId: st.id, cartId: row!.id, sku: l.sku, variantId: (await variantIdsBySku(tx, [l.sku])).get(l.sku) ?? null, quantity: l.quantity })
-            .onConflictDoUpdate({ target: [s.cartLine.cartId, s.cartLine.sku], set: { quantity: sql`${s.cartLine.quantity} + ${l.quantity}` } });
+      if (chosenIds.length > MAX_CART_LINES) throw new CartTooLargeError(row!);
+      // FOR UPDATE rechecks current eligibility after any lock wait.
+      const others = locked.filter(other => other.id !== row!.id && other.customerId === customer.id && other.status === 'active' && other.convertedOrderId === null);
+      const targetItems = await boundedCartItems(tx, row!);
+      const union = new Set(targetItems.map(line => line.sku));
+      const donorQuantities = new Map<string, number>();
+      for (const other of others) {
+        let lines;
+        try { lines = await boundedCartItems(tx, other); } catch (error) {
+          if (error instanceof CartTooLargeError) throw new CartTooLargeError(row!);
+          throw error;
         }
-        await tx.delete(s.cartLine).where(eq(s.cartLine.cartId, o.id));
-        // Conditional on still-active + unconverted: a cart racing a checkout
-        // conversion is never flipped back once its order exists. A merged
-        // donor keeps its original expiresAt — the TTL purge reaps the empty
-        // row when it lapses (status 'merged' is purgeable, see
-        // cart-maintenance.ts).
+        for (const line of lines) {
+          union.add(line.sku);
+          if (union.size > MAX_CART_LINES) throw new CartTooLargeError(row!);
+          donorQuantities.set(line.sku, (donorQuantities.get(line.sku) ?? 0) + line.quantity);
+        }
+      }
+      // No quantity, ownership, coupon, revision, or donor retirement changes
+      // happen until every bounded donor and the complete union pass.
+      await writeCartLines(tx, st, row!.id, [...donorQuantities].map(([sku, quantity]) => ({ sku, quantity })), 'merge');
+      const donorIds = others.map(other => other.id);
+      if (donorIds.length) {
+        await tx.delete(s.cartLine).where(inArray(s.cartLine.cartId, donorIds));
         await tx.update(s.cart).set({ status: 'merged', updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })
-          .where(and(eq(s.cart.id, o.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId)));
+          .where(and(inArray(s.cart.id, donorIds), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId)));
       }
 
       const [updated] = await tx.update(s.cart).set({ customerId: customer.id, updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })

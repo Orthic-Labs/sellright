@@ -13,6 +13,7 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 import { createSession } from '../auth/session.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { _resetPaymentPoliciesForTests, registerPaymentPolicy } from '../payments/policy/host.js';
@@ -114,7 +115,9 @@ function post(body: Record<string, unknown>, headers: Record<string, string> = {
 const base = { items: [{ sku: SKU, quantity: 1 }], email: 'buyer@example.com' };
 
 beforeEach(async () => {
-  clearLoginAttempts('unknown', 'checkout:unknown');
+  await rateLimitBackend().clear('checkout-ip', `unknown|${STORE}`);
+  await clearLoginAttempts('unknown', `checkout:${STORE}:guest`);
+  await clearLoginAttempts('unknown', `checkout:${STORE}:${CUSTOMER}`);
   seen.order = undefined; seen.extensions = undefined; seen.customer = undefined;
   replayAllowed = true;
   await wipe();

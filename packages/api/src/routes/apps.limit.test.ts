@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   trialRetryAfter, recordTrialAttempt,
   licenseActionRetryAfter, recordLicenseAction,
-  cartRetryAfter, recordCartAttempt,
+  cartRetryAfter, recordCartAttempt, consumeCartAttempt,
 } from './apps.limit.js';
 
 // Unique IPs per test so the in-memory, per-process buckets never bleed
@@ -61,5 +61,18 @@ describe('cart rate limit (60/min per ip)', () => {
     for (let i = 0; i < 60; i++) await recordCartAttempt(theIp);
     expect(await cartRetryAfter(theIp)).toBeGreaterThan(0);
     expect(await cartRetryAfter(ip())).toBe(0);
+  });
+});
+
+
+describe('atomic public cart budget', () => {
+  it('admits exactly 60 concurrent requests per tenant and trusted IP', async () => {
+    const theIp = ip();
+    const attempts = await Promise.all(Array.from({ length: 80 }, () => consumeCartAttempt('atomic-cart-tenant', theIp)));
+    expect(attempts.filter(retry => retry === 0)).toHaveLength(60);
+    expect(attempts.filter(retry => retry > 0)).toHaveLength(20);
+    expect(await consumeCartAttempt('another-cart-tenant', theIp)).toBe(0);
+    expect(await consumeCartAttempt('atomic-cart-tenant', ip())).toBe(0);
+    expect(await consumeCartAttempt('atomic-cart-tenant', theIp)).toBeGreaterThan(0);
   });
 });

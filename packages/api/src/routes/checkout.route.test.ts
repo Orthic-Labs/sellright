@@ -17,13 +17,15 @@
  *   5. an empty cart (converted/invalid cartToken) returns 409
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
-import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { checkoutIpRetryAfter, clearLoginAttempts } from '../auth/rate-limit.js';
+import { rateLimitBackend } from '../auth/rate-limit-backend.js';
+import * as customerSessions from '../auth/session.js';
 import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
@@ -32,6 +34,10 @@ assertTestDatabase(DB, 'checkout.route.test.ts');
 
 const STORE = 'aaaaaaaa-1111-1111-1111-111111111111';
 const SLUG = 'checkout-route-test-store';
+const OTHER_STORE = 'aaaaaaaa-1111-1111-1111-222222222222';
+const OTHER_SLUG = 'checkout-route-other-store';
+const CUSTOMER_A = 'aaaaaaaa-1111-1111-1111-1111111111c1';
+const CUSTOMER_B = 'aaaaaaaa-1111-1111-1111-1111111111c2';
 const PRODUCT = 'aaaaaaaa-1111-1111-1111-1111111111a1';
 const VARIANT = 'aaaaaaaa-1111-1111-1111-1111111111b1';
 const SKU = 'CKR-SKU-1';
@@ -86,13 +92,17 @@ async function insertPromo(opts: { code: string; usageLimit?: number | null; use
 }
 
 beforeEach(async () => {
-  // The production checkout limiter is intentionally attempt-counted. Tests in
-  // this file share the synthetic `unknown` client IP, so clear that one bucket
-  // between cases rather than weakening or bypassing the limiter in production.
-  clearLoginAttempts('unknown', 'checkout:unknown');
+  // Preserve real attempt-counting while isolating the fixtures' shared IP.
+  for (const storeId of [STORE, OTHER_STORE]) {
+    await rateLimitBackend().clear('checkout-ip', `unknown|${storeId}`);
+    for (const identity of ['guest', CUSTOMER_A, CUSTOMER_B]) {
+      await clearLoginAttempts('unknown', `checkout:${storeId}:${identity}`);
+    }
+  }
   await wipe();
   await seed();
 });
+afterEach(() => { vi.restoreAllMocks(); });
 afterAll(async () => { await wipe(); await pool.end(); });
 
 const hdr = (extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': SLUG, ...extra });
@@ -103,6 +113,92 @@ async function orderByCode(code: string) {
     return o ?? null;
   });
 }
+
+/** Real sessions ensure invalid, revoked & customer identities follow DB truth. */
+async function customerSession(customerId: string): Promise<string> {
+  return withStore(STORE, async (tx) => {
+    await tx.insert(s.customer).values({ id: customerId, storeId: STORE, email: `${customerId}@example.test` }).onConflictDoNothing();
+    return customerSessions.createSession(tx, STORE, customerId);
+  });
+}
+
+function place(headers: Record<string, string> = {}, cartToken?: string) {
+  return app.request('/v1/shop/checkout', {
+    method: 'POST', headers: hdr(headers),
+    body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], ...(cartToken ? { cartToken } : {}) }),
+  });
+}
+
+describe('POST /v1/shop/checkout — stable layered attempt budgets', () => {
+  it.each(['bearer', 'cookie'] as const)('rotating invalid %s values cannot reset the guest budget', async (carrier) => {
+    for (let i = 0; i < 8; i++) {
+      const credential: Record<string, string> = carrier === 'bearer'
+        ? { authorization: `Bearer invalid-${i}` }
+        : { cookie: `sr_cust=invalid-${i}` };
+      const res = await place(credential);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { code: string };
+      expect((await orderByCode(body.code))?.customerId).toBeNull();
+    }
+    const refusedCredentials: Record<string, string>[] = [
+      { authorization: 'Bearer another-invalid-value' },
+      { cookie: 'sr_cust=another-invalid-value' },
+      {},
+    ];
+    for (const headers of refusedCredentials) {
+      const refused = await place(headers);
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+    }
+  });
+
+  it('a revoked previously-valid session shares the exhausted guest budget', async () => {
+    const token = await customerSession(CUSTOMER_A);
+    const signedIn = await place({ authorization: `Bearer ${token}` });
+    expect(signedIn.status).toBe(200);
+    const order = await signedIn.json() as { code: string };
+    expect((await orderByCode(order.code))?.customerId).toBe(CUSTOMER_A);
+    await withStore(STORE, tx => customerSessions.deleteSession(tx, token));
+    for (let i = 0; i < 8; i++) expect((await place({}, 'missing-cart')).status).toBe(409);
+    expect((await place({ authorization: `Bearer ${token}` })).status).toBe(429);
+    expect((await place({ cookie: `sr_cust=${token}` })).status).toBe(429);
+  });
+
+  it('distinct validated customers share a NAT without sharing their fine budget; session rotation does not reset it', async () => {
+    const first = await customerSession(CUSTOMER_A);
+    const rotated = await customerSession(CUSTOMER_A);
+    const other = await customerSession(CUSTOMER_B);
+    for (let i = 0; i < 8; i++) {
+      expect((await place({ authorization: `Bearer ${i % 2 ? first : rotated}` }, 'missing-cart')).status).toBe(409);
+    }
+    expect((await place({ authorization: `Bearer ${rotated}` })).status).toBe(429);
+    const allowed = await place({ cookie: `sr_cust=${other}` });
+    expect(allowed.status).toBe(200);
+    const body = await allowed.json() as { code: string };
+    expect((await orderByCode(body.code))?.customerId).toBe(CUSTOMER_B);
+  });
+
+  it('isolates guest budgets by the resolved store on the same IP', async () => {
+    await withStore(OTHER_STORE, async tx => {
+      await tx.insert(s.store).values({ id: OTHER_STORE, slug: OTHER_SLUG, name: OTHER_SLUG, currency: 'USD' });
+    });
+    for (let i = 0; i < 8; i++) expect((await place({}, 'missing-cart')).status).toBe(409);
+    expect((await place()).status).toBe(429);
+    expect((await place({ 'x-store-slug': OTHER_SLUG }, 'missing-cart')).status).toBe(409);
+  });
+
+  it('atomically caps tenant/IP work at 50 before session lookup, with a separate tenant ceiling', async () => {
+    for (let i = 0; i < 50; i++) expect(await checkoutIpRetryAfter('unknown', STORE)).toBe(0);
+    const resolve = vi.spyOn(customerSessions, 'resolveCustomer');
+    expect((await place({ authorization: 'Bearer invalid-after-coarse-cap' })).status).toBe(429);
+    expect(resolve).not.toHaveBeenCalled();
+    await withStore(OTHER_STORE, async tx => {
+      await tx.insert(s.store).values({ id: OTHER_STORE, slug: OTHER_SLUG, name: OTHER_SLUG, currency: 'USD' });
+    });
+    expect((await place({ 'x-store-slug': OTHER_SLUG, authorization: 'Bearer invalid-other-store' }, 'missing-cart')).status).toBe(409);
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('POST /v1/shop/checkout — server pricing', () => {
   it('ignores a client-supplied unit price and recomputes server-side', async () => {
@@ -172,6 +268,10 @@ describe('POST /v1/shop/checkout — idempotency', () => {
     const secondBody = await second.json() as { code: string };
 
     expect(secondBody.code).toBe(firstBody.code);
+    const changed = await app.request('/v1/shop/checkout', {
+      method: 'POST', headers: hdr({ 'idempotency-key': key }), body: JSON.stringify({ items: [{ sku: SKU, quantity: 2 }] }),
+    });
+    expect(changed.status).toBe(409);
 
     const count = await withStore(STORE, async (tx) => {
       const r = await tx.execute(sql`SELECT count(*)::int n FROM "order" WHERE idempotency_key = ${key}`);

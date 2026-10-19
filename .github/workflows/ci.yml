@@ -1144,7 +1144,7 @@ jobs:
           manifest_path.write_text(json.dumps(manifest))
           PY
           before=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
-          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$corrupt_dir" --yes \
+          if SELLRIGHT_SOURCE="$GITHUB_WORKSPACE" sh deploy/sellright.sh restore --from-source --kit deploy/recovery-kit.json --set "$corrupt_dir" --yes \
               > /tmp/plain-corrupt-restore.log 2>&1; then
             echo "::error::restore accepted a corrupt PostgreSQL archive"
             exit 1
@@ -1165,7 +1165,7 @@ jobs:
             psql -U sellright -d sellright -v ON_ERROR_STOP=1 -c "UPDATE store SET name = 'changed before plain restore' WHERE slug = 'drill'"
           docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
             'printf changed > /app/var/assets/.drill-sentinel; printf changed > /app/var/downloads/.drill-sentinel'
-          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$BACKUP_DIR" --yes
+          SELLRIGHT_SOURCE="$GITHUB_WORKSPACE" sh deploy/sellright.sh restore --from-source --kit deploy/recovery-kit.json --set "$BACKUP_DIR" --yes
           docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
             psql -U sellright -d sellright -Atc "SELECT name FROM store WHERE slug = 'drill'" | grep -qx 'Drill Store'
           docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
@@ -1188,7 +1188,7 @@ jobs:
               f.seek(0)
               f.write(bytes([b[0] ^ 0xFF]))
           PY
-          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$tampered_dir" --yes \
+          if SELLRIGHT_SOURCE="$GITHUB_WORKSPACE" sh deploy/sellright.sh restore --from-source --kit deploy/recovery-kit.json --set "$tampered_dir" --yes \
               > /tmp/tamper-restore.log 2>&1; then
             echo "::error::restore succeeded against a tampered backup — integrity check did not work"
             cat /tmp/tamper-restore.log
@@ -1220,15 +1220,19 @@ jobs:
         env:
           SELLRIGHT_HOME: ${{ github.workspace }}/deploy
         run: |
-          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$OFFSITE_DIR" --yes
+          SELLRIGHT_SOURCE="$GITHUB_WORKSPACE" sh deploy/sellright.sh restore --from-source --kit deploy/recovery-kit.json --set "$OFFSITE_DIR" --yes
 
           # Assets/downloads promotion and the database rename both happen
           # inside `restore` itself, before it starts api back up — check them
           # via a fresh one-off container rather than racing api's own
           # migrate/bootstrap startup sequence.
-          docker compose -p sellright-drill -f deploy/compose.yaml run --rm -T api \
-            sh -c "grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && \
-                   grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel"
+          restored_api=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
+          restored_image=$(docker inspect --format '{{.Image}}' "$restored_api")
+          printf '%s\n' "$restored_image" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          docker run --rm --pull never --network none --volumes-from "${restored_api}:ro" \
+            --entrypoint sh "$restored_image" \
+            -c "grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && \
+                grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel"
 
           # Database was PROMOTED (renamed) — the live 'sellright' database
           # itself must have the restored data now, not a side database.

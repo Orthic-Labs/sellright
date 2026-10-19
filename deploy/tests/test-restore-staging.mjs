@@ -30,6 +30,7 @@ function fixture(injectCopyFailure = false) {
   const dir = path.join(temporary, String(++serial));
   const stage = path.join(dir, 'stage'), live = path.join(dir, 'live');
   fs.mkdirSync(dir);
+  fs.mkdirSync(path.join(live, 'state'), { recursive: true });
   for (const root of ['assets', 'downloads']) {
     fs.mkdirSync(path.join(live, root), { recursive: true });
     fs.writeFileSync(path.join(live, root, 'sentinel'), 'original');
@@ -67,6 +68,20 @@ function fixture(injectCopyFailure = false) {
   return { stage, live, run, success, original, receive };
 }
 try {
+  // Missing API is insufficient: every mounted root must be a real empty
+  // directory. Validate actual filesystem behavior, including dangling links.
+  for (const root of ['assets', 'downloads', 'state']) {
+    const f = fixture();
+    for (const name of ['assets', 'downloads']) fs.unlinkSync(path.join(f.live, name, 'sentinel'));
+    f.success('assert-empty');
+    fs.writeFileSync(path.join(f.live, root, 'unexpected'), 'retain');
+    assert.notEqual(f.run('assert-empty').status, 0, `nonempty ${root} accepted`);
+    fs.unlinkSync(path.join(f.live, root, 'unexpected'));
+    fs.rmdirSync(path.join(f.live, root));
+    assert.notEqual(f.run('assert-empty').status, 0, `missing ${root} accepted`);
+    fs.symlinkSync(path.join(f.live, 'absent'), path.join(f.live, root));
+    assert.notEqual(f.run('assert-empty').status, 0, `symlink ${root} accepted`);
+  }
   for (const manifest of [false, true]) {
     const f = fixture(); await f.receive({}, manifest); f.success('stage'); f.original();
     f.success('snapshot'); f.success('promote');

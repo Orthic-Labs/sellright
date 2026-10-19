@@ -23,7 +23,8 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { normalizeEmail } from '../auth/email.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
-import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
+import { attemptRetryAfter, clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
+import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { enqueuePasswordReset, enqueueEmailAddressChange, enqueueEmailAddressChangedNotice, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -133,9 +134,11 @@ customerTokens.openapi(
       const [row] = await tx.update(s.customerToken).set({ usedAt: new Date() }).where(and(live(), eq(s.customerToken.customerId, probe.customerId)))
         .returning({ id: s.customerToken.id, customerId: s.customerToken.customerId });
       if (!row) return false;
-      // Burn every other outstanding reset token for this customer (a second link must not undo this reset).
+      // Recovery revokes pending identifier changes too. Issuance and consumption
+      // take this same customer lock before touching tokens, so neither stale
+      // password/session proof nor a pre-reset change link can survive recovery.
       await tx.update(s.customerToken).set({ usedAt: new Date() })
-        .where(and(eq(s.customerToken.customerId, row.customerId), eq(s.customerToken.kind, 'password_reset'), isNull(s.customerToken.usedAt)));
+        .where(and(eq(s.customerToken.customerId, row.customerId), inArray(s.customerToken.kind, ['password_reset', EMAIL_CHANGE_KIND]), isNull(s.customerToken.usedAt)));
       await tx.update(s.customer).set({ passwordHash, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       // Revoke all of this customer's sessions in THIS store. (session is RLS-exempt for token lookup, so
       // filter by storeId explicitly.)
@@ -208,17 +211,32 @@ customerTokens.openapi(
     const { newEmail: rawNewEmail, password } = c.req.valid('json');
     const newEmail = normalizeEmail(rawNewEmail);
     const ip = clientIp(c);
+    // Bound unauthenticated session lookups without a caller-selected account
+    // key. The larger IP ceiling allows several customers behind one NAT.
+    const ipRetry = await rateLimitBackend().consume('customer-email-change-ip', `${st.id}:${ip}`, 15 * 60 * 1000, 50);
+    if (ipRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${ipRetry}s`);
+    const token = customerToken(c);
+    const probe = token ? await withStore(st.id, (tx) => resolveCustomer(tx, token)) : null;
+    if (!probe) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    // Reserve atomically BEFORE password work. Rotating destination addresses
+    // cannot reset this validated tenant/customer/IP budget. All rate-limit
+    // calls stay outside withStore: the PostgreSQL backend borrows its own connection.
+    const credentialRetry = await attemptRetryAfter(ip, `emailchange-customer:${st.id}:${probe.id}`);
+    if (credentialRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${credentialRetry}s`);
     const bucket = `emailchange:${newEmail}`;
     const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'same' | 'taken' | 'ok'> => {
-      const token = customerToken(c);
+    // Migrated/OAuth-only accounts must set a password via recovery first.
+    // Verify outside the transaction, then bind that proof to the current hash
+    // and live session under the same customer-first lock used by recovery.
+    const passwordOk = !!probe.passwordHash && await verifyPassword(password, probe.passwordHash);
+    const out = !passwordOk ? 'wrong' : await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'same' | 'taken' | 'ok'> => {
+      const [row] = await tx.select({ passwordHash: s.customer.passwordHash }).from(s.customer)
+        .where(and(eq(s.customer.storeId, st.id), eq(s.customer.id, probe.id))).limit(1).for('update');
+      if (!row) return 'unauth';
       const cust = token ? await resolveCustomer(tx, token) : null;
-      if (!cust) return 'unauth';
-      const [row] = await tx.select({ passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.id, cust.id)).limit(1);
-      // Migrated/OAuth-only accounts have no password to check — they must set
-      // one via forgot-password first (same constraint the source flow imposes).
-      if (!row?.passwordHash || !(await verifyPassword(password, row.passwordHash))) return 'wrong';
+      if (!cust || cust.id !== probe.id) return 'unauth';
+      if (row.passwordHash !== probe.passwordHash) return 'wrong';
       if (normalizeEmail(cust.email) === newEmail) return 'same';
       const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
       if (clash) return 'taken';

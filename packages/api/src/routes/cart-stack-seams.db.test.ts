@@ -1,3 +1,4 @@
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 /** Synthetic disposable DB fixtures; root integration owns execution. */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -23,6 +24,7 @@ const headers = { 'content-type': 'application/json', 'x-store-slug': 'synthetic
 const items = [{ sku: 'SYNTHETIC', quantity: 1 }];
 let sessionToken: string;
 beforeEach(async () => {
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend());
   await pool.query('TRUNCATE store CASCADE');
   sessionToken = await seedImportedCartSeams(STORE, PRODUCT, VARIANT, CUSTOMER);
   invalidateStoreCache();

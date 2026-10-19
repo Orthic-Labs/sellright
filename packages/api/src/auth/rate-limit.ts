@@ -33,6 +33,16 @@ export async function attemptRetryAfter(ip: string, identifier: string): Promise
   return rateLimitBackend().consume(BUCKET, keyFor(ip, identifier), WINDOW_MS, MAX_FAILURES);
 }
 
+// A separate checkout-only NAT-aware ceiling bounds session lookups before
+// the finer per-customer/guest attempt budget. Never shares admin auth policy.
+const CHECKOUT_IP_BUCKET = 'checkout-ip';
+const CHECKOUT_IP_MAX_ATTEMPTS = 50;
+
+/** Consume the tenant/IP checkout ceiling before resolving any session. */
+export async function checkoutIpRetryAfter(ip: string, storeId: string): Promise<number> {
+  return rateLimitBackend().consume(CHECKOUT_IP_BUCKET, keyFor(ip, storeId), WINDOW_MS, CHECKOUT_IP_MAX_ATTEMPTS);
+}
+
 /**
  * Throw-free check used by the existing auth call sites. Login/auth identifiers
  * are check-only and are incremented by recordLoginFailure(). Historical

@@ -9,6 +9,7 @@ import { requireDisposablePostgresUrl } from '../db/test-database-url.js';
 import * as s from '../db/schema.js';
 import { issue } from '../account-credit/service.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 import { recordSettlementOperation } from '../payments/settlement/record.js';
 import { settleOrderReleases } from '../payments/reservation.js';
 import { commitOrderEdit, loadEditContext, previewOrderEdit } from '../orders/order-edit-service.js';
@@ -27,7 +28,8 @@ const app = new OpenAPIHono(); app.route('/', checkout); app.route('/', cart);
 const headers = { 'content-type': 'application/json', 'x-store-slug': SLUG };
 const codes = ['ORDINARY', 'CREDIT'];
 beforeEach(async () => {
-  clearLoginAttempts('unknown', 'checkout:unknown');
+  await rateLimitBackend().clear('checkout-ip', `unknown|${STORE}`);
+  await clearLoginAttempts('unknown', `checkout:${STORE}:guest`);
   await pool.query('TRUNCATE store CASCADE');
   await withStore(STORE, async tx => {
     await tx.insert(s.store).values({ id: STORE, slug: SLUG, name: 'Synthetic stack', currency: 'USD' });

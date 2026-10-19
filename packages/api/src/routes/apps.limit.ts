@@ -53,3 +53,7 @@ export const cartRetryAfter = cart.retryAfter;
 export const recordCartAttempt = cart.record;
 export const storekitVerifyFailureRetryAfter = storekitVerifyFailure.retryAfter;
 export const recordStorekitVerifyFailure = storekitVerifyFailure.record;
+
+/** Public cart work shares one atomic, tenant + trusted-IP budget. Call outside withStore. */
+export const consumeCartAttempt = (storeId: string, ip: string): Promise<number> =>
+  rateLimitBackend().consume('apps-cart-public', JSON.stringify([storeId, ip]), MIN, 60);
