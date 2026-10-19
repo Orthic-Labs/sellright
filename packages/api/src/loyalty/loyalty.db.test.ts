@@ -20,7 +20,7 @@ import { Pool } from 'pg';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
-import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { createSession } from '../auth/session.js';
 import { checkout } from '../routes/checkout.js';
@@ -46,11 +46,6 @@ const CUSTOMER = 'cccccccc-3333-3333-3333-3333333333c1';
 const SKU = 'LOYALTY-1';
 const PRICE = 10_000; // $100.00
 
-const clearLimits = () => {
-  clearLoginAttempts('unknown', 'checkout:unknown');
-  if (token) clearLoginAttempts('unknown', `checkout:${token}`);
-};
-
 const PROGRAM = { enabled: true, earnRatePerDollar: 1, pointsPerDollarOff: 100, minRedeemPoints: 0, maxRedeemPercentOfSubtotal: null, expiryDays: null };
 
 const app = new OpenAPIHono();
@@ -67,7 +62,6 @@ let seq = 0;
 
 async function seed(program: Record<string, unknown> = PROGRAM) {
   await pool.query('TRUNCATE store CASCADE');
-  clearLimits();
   invalidateStoreCache(SLUG);
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, tax_rate, config)
@@ -81,8 +75,7 @@ async function seed(program: Record<string, unknown> = PROGRAM) {
   });
 }
 
-async function placeOrder(body: Record<string, unknown> = {}, auth = true) {
-  clearLimits();
+async function placeOrder(body: Record<string, unknown> = {}, auth = true, expectedStatuses: readonly number[] = [200]) {
   const res = await app.request('/v1/shop/checkout', {
     method: 'POST',
     headers: {
@@ -91,7 +84,9 @@ async function placeOrder(body: Record<string, unknown> = {}, auth = true) {
     },
     body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], ...body }),
   });
-  return { status: res.status, body: await res.json() as Record<string, any> };
+  const responseBody = await res.json() as Record<string, any>;
+  expect(expectedStatuses, JSON.stringify(responseBody)).toContain(res.status);
+  return { status: res.status, body: responseBody };
 }
 
 const orderByCode = (code: string) => withStore(STORE, async (tx) => (await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1))[0]!);
@@ -108,7 +103,12 @@ async function settle(code: string, ref: string) {
   return orderByCode(code);
 }
 
-beforeEach(async () => { await seed(); });
+beforeEach(async () => {
+  // Stable tenant/customer identities share a budget across sessions. Isolate
+  // fixtures between cases, retaining the real atomic budget within each case.
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend());
+  await seed();
+});
 
 describe('earn', () => {
   it('posts earned points once, only when the order reaches Paid', async () => {
@@ -157,10 +157,10 @@ describe('redeem', () => {
 
   it('rejects over-balance, guest and disabled redemptions without creating an order or holding stock', async () => {
     await grant(500);
-    const over = await placeOrder({ redeemPoints: 600 });
+    const over = await placeOrder({ redeemPoints: 600 }, true, [409]);
     expect(over.status).toBe(409);
     expect(over.body.reason).toBe('insufficient_balance');
-    const guest = await placeOrder({ redeemPoints: 100, email: 'guest@example.net' }, false);
+    const guest = await placeOrder({ redeemPoints: 100, email: 'guest@example.net' }, false, [409]);
     expect(guest.body.reason).toBe('not_signed_in');
     const orders = await withStore(STORE, (tx) => tx.select().from(s.order));
     expect(orders).toHaveLength(0);
@@ -168,7 +168,7 @@ describe('redeem', () => {
     expect(stock!.allocated).toBe(0);
     expect((await balance()).available).toBe(500);
     await seed({ ...PROGRAM, enabled: false });
-    expect((await placeOrder({ redeemPoints: 100 })).body.reason).toBe('disabled');
+    expect((await placeOrder({ redeemPoints: 100 }, true, [409])).body.reason).toBe('disabled');
   });
 
   it('a full-cover redemption settles the order and earns nothing on the points-paid part', async () => {
@@ -183,7 +183,7 @@ describe('redeem', () => {
 
   it('two concurrent checkouts cannot double-spend the same points', async () => {
     await grant(1000);
-    const [a, b] = await Promise.all([placeOrder({ redeemPoints: 1000 }), placeOrder({ redeemPoints: 1000 })]);
+    const [a, b] = await Promise.all([placeOrder({ redeemPoints: 1000 }, true, [200, 409]), placeOrder({ redeemPoints: 1000 }, true, [200, 409])]);
     const statuses = [a.status, b.status].sort();
     expect(statuses).toEqual([200, 409]);
     expect([a, b].find((x) => x.status === 409)!.body.reason).toBe('insufficient_balance');
@@ -247,7 +247,7 @@ describe('expiry', () => {
       { storeId: STORE, customerId: CUSTOMER, kind: 'earn', points: 200, createdAt: new Date(Date.now() - 5 * 86_400_000), expiresAt: new Date(Date.now() + 86_400_000), sourceRef: 'earn:new' },
     ]));
     expect(await balance()).toEqual({ balance: 500, pendingExpiry: 300, available: 200 });
-    expect((await placeOrder({ redeemPoints: 300 })).body.reason).toBe('insufficient_balance');
+    expect((await placeOrder({ redeemPoints: 300 }, true, [409])).body.reason).toBe('insufficient_balance');
     // The rejected checkout rolled back entirely — including its write-off.
     expect((await ledger()).filter((x) => x.kind === 'expire')).toHaveLength(0);
     expect((await placeOrder({ redeemPoints: 150 })).status).toBe(200);
@@ -362,7 +362,7 @@ describe('admin', () => {
     const path = `/v1/admin/customers/${CUSTOMER}/loyalty/adjust`;
     const [adj, checkout] = await Promise.all([
       call(t.owner, 'POST', path, { points: -1000, reason: 'claw back' }),
-      placeOrder({ redeemPoints: 1000 }),
+      placeOrder({ redeemPoints: 1000 }, true, [200, 409]),
     ]);
     const adjOk = adj.status === 200;
     const checkoutOk = checkout.status === 200;
