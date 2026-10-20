@@ -17545,6 +17545,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/cart/recover/{cartId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resume an abandoned cart from a signed email link */
+        get: {
+            parameters: {
+                query: {
+                    exp: string;
+                    sig: string;
+                };
+                header?: never;
+                path: {
+                    cartId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Redirect to the storefront recovery page */
+                302: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad signature */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+                /** @description Expired link */
+                410: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/catalog/collections": {
         parameters: {
             query?: never;
