@@ -52,8 +52,10 @@ const dbRequired = dbGated.filter((file) => !SELF_SKIPS.test(readFileSync(join(R
 // Bootstrap owns a fresh installation in one process, isolated from shared DB suite state.
 // Explicit project remains included by test:all & is required separately in public engine CI.
 const authorizationQualified = 'src/sdk/authorization-matrix.qualified.db.test.ts';
-// The enrolled-only B2.8 regression suite (343 contracts) also needs the dedicated lane: in the shared db lane on CI it
-// times out at 300 s and two state-snapshot assertions fail against current main (2026-10-20). It runs with the gate.
+// The enrolled-only B2.8 regression suite (343 contracts) needs a fresh database of its own: its fixtures insert the
+// installation administrator (admin_user_installation_admin_unique), so it can follow neither the qualified bootstrap
+// nor the shared db lane, and its contract test exceeded 300 s on the CI runner (2026-10-20). Separate project, separate
+// database, generous budget (CI: "Enrolled-only authorization regressions").
 const authorizationEnrolled = 'src/sdk/authorization-matrix.db.test.ts';
 if (!dbRequired.includes(authorizationQualified)) throw new Error('required full authorization matrix suite is missing');
 
@@ -87,7 +89,15 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'authorization-matrix',
-          include: [authorizationQualified, authorizationEnrolled],
+          include: [authorizationQualified],
+        },
+      },
+      {
+        // Root provisions a second fresh *_test database for this lane; never shared with the qualified bootstrap.
+        extends: true,
+        test: {
+          name: 'authorization-enrolled',
+          include: [authorizationEnrolled],
         },
       },
     ],

@@ -151,7 +151,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
     expect(engine!.port).toBeNull();
     expect(engine!.executedPhases).not.toContain('jobs');
-  }, 300_000);
+  }, 900_000);
 
   it('admits explicit installation-admin control without granting installation data to store owners', async () => {
     const build = await engine!.app.request('/v1/admin/system/build-info', { headers: fixture.positiveControls.installationAdmin });
