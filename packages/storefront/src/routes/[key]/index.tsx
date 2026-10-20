@@ -3,7 +3,7 @@
 // segment, so it only receives unmatched top-level paths.
 //
 // Brand views: a single-segment content path the brand declares in routes.json (`/slow-fashion/`) renders `route.content` here. A
-// document request for any other path answers as before (onGet/onHead: key file or a plain 404); a client-side navigation to one
+// document request for any other path answers as before (onGet/onHead: key file, else the branded 404 page); a client-side navigation to one
 // (where onGet does not run) renders today's 404 markup, never the content view.
 import { component$ } from '@qwik.dev/core';
 import { useLocation, type DocumentHead, type DocumentHeadValue, type RequestHandler } from '@qwik.dev/router';
@@ -24,13 +24,12 @@ const HAS_SINGLE_SEGMENT_CONTENT = DECLARED_CONTENT.some((d) => d.path.split('/'
 
 const declared = (pathname: string) => (HAS_SINGLE_SEGMENT_CONTENT && hasContentViewFor(pathname) ? matchDeclaredPath(DECLARED_CONTENT, pathname) : null);
 
-/** GET and HEAD: a declared page renders; a key file is served; anything else is a plain 404. */
+/** GET and HEAD: a declared page renders; a key file is served; anything else is a 404 status whose body the default component renders (branded page). */
 const classify: RequestHandler = async ({ params, send, headers, status, url }) => {
 	if (declared(url.pathname)) return;
 	const result = await indexNowKeyFile(params.key);
 	if (!result) {
 		status(404);
-		send(404, '');
 		return;
 	}
 	headers.set('Content-Type', 'text/plain; charset=utf-8');
