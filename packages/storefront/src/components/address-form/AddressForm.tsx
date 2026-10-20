@@ -316,7 +316,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 
 	return (
 		<div class="space-y-4">
-					<div class="grid grid-cols-2 gap-4">
+					<div class="grid grid-cols-1 min-[481px]:grid-cols-2 gap-4">
 						<div>
 							<label for="countryCode" class="sr-only">Country</label>
 							<AddressCountrySelect
@@ -389,7 +389,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 						/>
 					</div>
 
-					<div class="grid grid-cols-2 gap-4">
+					<div class="grid grid-cols-1 min-[481px]:grid-cols-2 gap-4">
 						<div>
 							<label for="city" class="sr-only">City</label>
 							<AddressTextInput

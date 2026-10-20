@@ -104,6 +104,17 @@ describe('addLine — blind append', () => {
     expect((await CartService.refresh()).cart.lines[0]).toMatchObject({ shipDateLabel, shipDate: null, isPreOrder: true });
   });
 
+	it('falls back to the server line image when no enrichment exists, and enrichment wins when present', async () => {
+		const withImage = serverCart({ lines: [{ ...serverCart().lines[0], image: 'store/media/preview/server.webp' }] });
+		setCookie('tok_srv');
+		enqueue(respond(200, withImage));
+		expect((await CartService.refresh()).cart.lines[0].image).toBe('store/media/preview/server.webp');
+		resetService();
+		enqueue(respond(200, serverCart()), respond(200, withImage));
+		const added = await CartService.addLine('SKU1', 1, { image: 'local/enriched.webp' });
+		expect(added.cart.lines[0].image).toBe('local/enriched.webp');
+	});
+
 	it('creates the cart lazily then appends without a revision', async () => {
 		enqueue(
 			respond(200, serverCart()), // POST /cart (ensureCart)
