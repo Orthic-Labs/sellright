@@ -49,8 +49,8 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
       )}
 
       {/* Title with Clean Sign-in Option */}
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-[30px] leading-none md:text-[34px] font-heading font-normal tracking-wide text-[#1A1A1A] flex-1 text-center md:text-left md:flex-none">
+      <div class="flex flex-col items-center gap-2 min-[481px]:flex-row min-[481px]:justify-between mb-4">
+        <h3 class="text-[30px] leading-none md:text-[34px] font-heading font-normal tracking-wide text-[#1A1A1A] w-full text-center min-[481px]:w-auto min-[481px]:flex-1 md:text-left md:flex-none">
           Shipping Details
         </h3>
 
@@ -72,7 +72,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
       <section>
         <div class="space-y-4">
           {/* Email and Phone side-by-side */}
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[481px]:grid-cols-2 gap-4">
             <div class="relative">
               <label for="checkout-email" class="sr-only">Email address</label>
               <input

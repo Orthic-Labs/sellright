@@ -42,7 +42,7 @@ export type PricedCart = {
   pricingIntent: 'preview' | 'checkout'; couponCodes: string[]; quoteHash: string; shippingMethodCode: string | null; pointsDiscount: number;
   coupons: Array<{ code: string; kind?: string; applied: boolean; reason?: string; appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
   currency: string;
-  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null }>;
+  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null; image: string | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
@@ -81,6 +81,10 @@ export async function priceCart(
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
           onHand: s.stock.onHand, allocated: s.stock.allocated,
+          // Display image: first variant asset by position, else the product's featured asset.
+          image: sql<string | null>`coalesce(
+            (select a.path from variant_asset va join asset a on a.id = va.asset_id where va.variant_id = ${s.productVariant.id} order by va.position asc, a.id asc limit 1),
+            (select a.path from product p join asset a on a.id = p.featured_asset_id where p.id = ${s.productVariant.productId}))`,
         })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
@@ -98,7 +102,7 @@ export async function priceCart(
     const availableQuantity = v && isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
     const available = !!v && v.enabled && (availableQuantity === null || availableQuantity >= i.quantity);
     if (!available) unavailable.push(i.sku);
-    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null };
+    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null, image: v?.image ?? null };
   });
 
   const couponCodes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : []));
@@ -180,6 +184,7 @@ const LineOut = z.object({
   sku: z.string(), name: z.string(), unitPrice: z.number().int(), quantity: z.number().int(),
   lineSubtotal: z.number().int(), lineDiscount: z.number().int(), lineTotal: z.number().int(),
   isPreOrder: z.boolean().optional(), shipDate: z.string().nullable().optional(), shipDateLabel: z.string().nullable().optional(),
+  image: z.string().nullable().optional(),
   available: z.boolean(),
   // Live (on_hand - allocated), never cached. null = not stock-limited
   // (digital/license/update_pass/pre-order) rather than "unlimited stock".

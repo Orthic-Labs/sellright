@@ -2,6 +2,12 @@ export const CHECKOUT_STYLES = `
 .checkout-layout{min-height:100vh;background:linear-gradient(to right,#2c2926 42%,var(--color-parchment) 42%)}
 .checkout-columns{align-items:stretch}
 .checkout-left,.checkout-right{min-height:100%}
+/* Desktop: centre the summary inside the dark 42% panel instead of hugging the seam (columns sit in a max-w-7xl container with px-8 and a gap; left col ~ 42% of the space left after the gap). */
+@media (min-width:1024px){
+  .checkout-columns{--co-gap:2rem;--co-left:calc(max(0px,(100vw - 80rem)/2) + 2rem)}
+  .checkout-left{position:relative;left:calc(-1 * max(0px,(2 * var(--co-left) + 0.42 * (min(100vw,80rem) - 4rem - var(--co-gap)) - 42vw) / 2))}
+}
+@media (min-width:1280px){.checkout-columns{--co-gap:3rem}}
 .checkout-cta{display:block;width:100%;background:#141210;color:#FDFAF6;opacity:1;cursor:pointer;height:50px;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;border-radius:3px;border:none;font-weight:500;transition:opacity 0.2s;position:relative}
 .checkout-cta:hover{opacity:0.88}
 .checkout-cta-label{transition:color 0.18s ease}
