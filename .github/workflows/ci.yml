@@ -251,7 +251,8 @@ jobs:
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # unit ≈ 4 min, db ≈ 15 min, qualified matrix ≈ 12 min, enrolled matrix ≈ 13 min, setup ≈ 5 min (2026-10-20).
+    timeout-minutes: 75
     services:
       postgres:
         image: postgres:17-alpine
