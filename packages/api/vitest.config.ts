@@ -52,6 +52,9 @@ const dbRequired = dbGated.filter((file) => !SELF_SKIPS.test(readFileSync(join(R
 // Bootstrap owns a fresh installation in one process, isolated from shared DB suite state.
 // Explicit project remains included by test:all & is required separately in public engine CI.
 const authorizationQualified = 'src/sdk/authorization-matrix.qualified.db.test.ts';
+// The enrolled-only B2.8 regression suite (343 contracts) also needs the dedicated lane: in the shared db lane on CI it
+// times out at 300 s and two state-snapshot assertions fail against current main (2026-10-20). It runs with the gate.
+const authorizationEnrolled = 'src/sdk/authorization-matrix.db.test.ts';
 if (!dbRequired.includes(authorizationQualified)) throw new Error('required full authorization matrix suite is missing');
 
 export default defineConfig({
@@ -76,7 +79,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'db',
-          include: dbGated.filter(file => file !== authorizationQualified),
+          include: dbGated.filter(file => file !== authorizationQualified && file !== authorizationEnrolled),
         },
       },
       {
@@ -84,7 +87,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'authorization-matrix',
-          include: [authorizationQualified],
+          include: [authorizationQualified, authorizationEnrolled],
         },
       },
     ],
