@@ -34,6 +34,7 @@ const JOB_KEYS = {
   'release-stale': NAMESPACE | 1n,
   'auto-deliver': NAMESPACE | 2n,
   'cart-maintenance': NAMESPACE | 3n,
+  'abandoned-cart-recovery': NAMESPACE | 50n,
   webhooks: NAMESPACE | 4n,
   'webhook-reaper': NAMESPACE | 5n,
   emails: NAMESPACE | 6n,
