@@ -42,3 +42,12 @@ describe('renderSpecBlock / enhanceDescription', () => {
     expect(enhanceDescription('Basilisk', '<p>Hello</p>')).toBe('<p>Hello</p>');
   });
 });
+
+describe('stripTags', () => {
+  it('removes nested and split tags until nothing tag-like remains', async () => {
+    const { stripTags } = await import('./product-specs');
+    expect(stripTags('a<scr<x>ipt>b</scr<x>ipt>c')).toBe('abc');
+    expect(stripTags('1 < 2 and <b>bold</b>')).toBe('1  2 and bold');
+    expect(stripTags('<p>Blade: 4mm')).toBe('Blade: 4mm');
+  });
+});
