@@ -28,6 +28,7 @@ import { recoverGatewayAttempts } from './gateway-recovery.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
+import { sendCartRecoveryEmails } from './abandoned-cart-recovery.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
 import { runEffectsPass } from '../payments/settlement/effects.js';
@@ -209,6 +210,14 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     const cl = await cleanupExpiredCarts();
     if (ab.abandoned || cl.deleted) jobLog(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
   });
+  // Abandoned-cart recovery: one reminder email per abandoned cart, CART_RECOVERY_DELAY_HOURS
+  // after abandonment (0 = disabled; per-store opt-out store.config.marketing.cartRecovery=false).
+  if (env.CART_RECOVERY_DELAY_HOURS > 0) {
+    every(state, 15 * 60_000, 'abandoned-cart-recovery', 'abandoned-cart-recovery', async () => {
+      const r = await sendCartRecoveryEmails({ delayHours: env.CART_RECOVERY_DELAY_HOURS });
+      if (r.enqueued) jobLog(`[jobs:cart-recovery] enqueued=${r.enqueued}`);
+    });
+  }
   every(state, 60_000, 'webhooks', 'webhooks', () => deliverWebhooks({ log: jobLog })); // push due webhook deliveries every minute
   // De-fork 2.8: settlement effects left pending (deferred mode, "not ready" retries such as a renewal
   // delivered before its first invoice, reclaimed stale claims). Claims are SKIP LOCKED + token-fenced,

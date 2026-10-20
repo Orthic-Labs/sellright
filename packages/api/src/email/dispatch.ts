@@ -20,6 +20,7 @@
 import { sendEmail } from './mailer.js';
 import {
   orderConfirmation,
+  cartRecovery,
   shippingNotification,
   staffInvite,
   passwordReset,
@@ -50,6 +51,7 @@ import { productPath, seoConfigFromStore } from '../seo/config.js';
 export const EMAIL_KIND = {
   ORDER_CONFIRMATION: 'order_confirmation',
   SHIPPING_NOTIFICATION: 'shipping_notification',
+  CART_RECOVERY: 'cart_recovery',
   PASSWORD_RESET: 'password_reset',
   EMAIL_VERIFY: 'email_verify',
   EMAIL_CHANGE: 'email_change',
@@ -164,6 +166,21 @@ export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: S
     dedupeKey: data.dedupeKey,
     recipient: to,
     canary,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
+export async function enqueueCartRecovery(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  url: string; lines: Array<{ name: string; quantity: number }>; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = cartRecovery(ctx, data);
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.CART_RECOVERY,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
   if (inserted) afterCommit(tx, wakeEmailDelivery);

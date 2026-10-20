@@ -124,6 +124,11 @@ const EnvSchema = z.object({
   CART_TTL_DAYS: z.coerce.number().int().positive().default(1),
   CART_ABANDON_HOURS: z.coerce.number().int().positive().default(4),
   CART_RETENTION_DAYS: z.coerce.number().int().positive().default(1),
+  // Abandoned-cart recovery email (jobs/abandoned-cart-recovery.ts): hours AFTER a
+  // cart is flagged abandoned before its single reminder is enqueued; 0 disables
+  // the job. Must stay below CART_RETENTION_DAYS * 24 or the cart is purged
+  // before it is eligible. Per-store opt-out: store.config.marketing.cartRecovery=false.
+  CART_RECOVERY_DELAY_HOURS: z.coerce.number().int().min(0).default(2),
   // WP3: Stripe. Legacy single-key envs still work; optional test/live envs let
   // one deployment hold both credential sets at once for runtime mode toggles.
   STRIPE_SECRET_KEY: z.string().optional(),

@@ -5,6 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { MiddlewareHandler } from 'hono';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
+import { cartRecover } from './routes/cart-recover.js';
 import { checkout } from './routes/checkout.js';
 import { pay } from './routes/pay.js';
 import { gatewayPayments } from './routes/gateway-payments.js';
@@ -483,6 +484,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // Shop catalog read API (store resolved per-request, RLS-scoped).
   app.route('/', catalog);
   app.route('/', cart);
+  app.route('/', cartRecover);
   app.route('/', checkout);
   app.route('/', pay);
   app.route('/', gatewayPayments);

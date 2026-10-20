@@ -16,6 +16,17 @@ export const orderConfirmation = (store: StoreCtx, data: { code: string; grandTo
      <p><strong>Total: ${(data.grandTotal / 100).toFixed(2)} ${escape(data.currency)}</strong></p>
      <p>Track your order at <a href="${escape(store.storefrontUrl)}/orders/${escape(data.code)}">${escape(store.storefrontUrl)}/orders/${escape(data.code)}</a></p>`);
 
+// Abandoned-cart recovery: one reminder per cart. `url` is the signed recovery
+// link (cart/recovery-link.ts) — the raw cart token never appears in the email.
+export const cartRecovery = (store: StoreCtx, data: { url: string; lines: Array<{ name: string; quantity: number }> }) => {
+  const c = colorsOf(store);
+  return wrap(store, 'You left something in your cart',
+    `<p>You left these items in your cart at ${escape(store.name)}:</p>
+     <table style="width:100%;border-collapse:collapse;margin:12px 0">${data.lines.map((l) => `<tr><td>${escape(l.name)} × ${l.quantity}</td></tr>`).join('')}</table>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${c.button};color:${c.buttonText};text-decoration:none;border-radius:6px">Return to your cart</a></p>
+     <p>This link works for 7 days. Availability and prices are confirmed at checkout. This is a one-time reminder.</p>`);
+};
+
 export const shippingNotification = (store: StoreCtx, data: { code: string; trackingCode: string | null; carrier: string | null }) =>
   wrap(store, `Your order ${data.code} is on the way`,
     `<p>${data.carrier ? `Carrier: <strong>${escape(data.carrier)}</strong><br>` : ''}${data.trackingCode ? `Tracking: <strong>${escape(data.trackingCode)}</strong>` : ''}</p>

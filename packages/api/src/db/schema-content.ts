@@ -163,6 +163,9 @@ export const cart = pgTable('cart', {
   // Monotonic optimistic-concurrency counter (CART-03, migration 0043). Every
   // mutation bumps it; writers passing expectedRevision conflict on staleness.
   revision: integer().notNull().default(0),
+  // Abandoned-cart recovery (migration 0108): when the single reminder email was
+  // enqueued. NULL = never reminded; at most one reminder per cart, ever.
+  recoveryEmailedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: ts(),
 });
