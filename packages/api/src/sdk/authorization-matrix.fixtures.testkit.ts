@@ -1,6 +1,7 @@
 /** Disposable synthetic fixtures shared by core & composed authorization cases. */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readdir, readFile, lstat } from 'node:fs/promises';
+import { readdir, open } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { withStore } from '../db/client.js';
@@ -124,10 +125,12 @@ export async function createAuthorizationFixtures(options: {
 
   async function files(dir: string): Promise<unknown[]> {
     const out: unknown[] = [];
-    for (const name of (await readdir(dir)).sort()) {
-      const file = join(dir, name), st = await lstat(file);
-      if (st.isSymbolicLink()) throw new Error('matrix file snapshot refuses symlink');
-      out.push([name, st.isDirectory() ? await files(file) : digest(await readFile(file))]);
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : 1)) {
+      const file = join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('matrix file snapshot refuses symlink');
+      if (entry.isDirectory()) { out.push([entry.name, await files(file)]); continue; }
+      const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try { out.push([entry.name, digest(await handle.readFile())]); } finally { await handle.close(); }
     }
     return out;
   }

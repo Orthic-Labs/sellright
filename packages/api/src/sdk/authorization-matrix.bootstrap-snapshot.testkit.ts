@@ -1,6 +1,7 @@
 /** Complete pre-enrollment bootstrap journal; source-only, no discarded auth/domain writes. */
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { open, readdir } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 
 type Query = (sql: string, values?: unknown[]) => Promise<{ rows: Record<string, any>[] }>;
@@ -10,10 +11,12 @@ export function createAuthorizationBootstrapSnapshot(options: {
 }): () => Promise<unknown> {
   async function files(dir: string): Promise<unknown[]> {
     const entries: unknown[] = [];
-    for (const name of (await readdir(dir)).sort()) {
-      const path = join(dir, name), stat = await lstat(path);
-      if (stat.isSymbolicLink()) throw new Error('bootstrap snapshot refuses symlink');
-      entries.push([name, stat.isDirectory() ? await files(path) : createHash('sha256').update(await readFile(path)).digest('hex')]);
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : 1)) {
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('bootstrap snapshot refuses symlink');
+      if (entry.isDirectory()) { entries.push([entry.name, await files(path)]); continue; }
+      const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try { entries.push([entry.name, createHash('sha256').update(await handle.readFile()).digest('hex')]); } finally { await handle.close(); }
     }
     return entries;
   }

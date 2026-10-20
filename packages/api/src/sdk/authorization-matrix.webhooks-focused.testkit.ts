@@ -3,7 +3,7 @@
  * Requires same fresh dedicated *_test DB, genuine bootstrap/MFA, adapters & isolation as full gate.
  * Full actual inventory/contract completeness is asserted before any focused route projection.
  * Root provisions DB & grants first, then runs from packages/api with explicit expected DB/URLs:
- * pnpm exec vitest run --config /home/vendure/sites/.work/rightsites-owner-recovery-20261018/security-final-source-validation/webhooks-focused.config.mjs
+ * pnpm exec vitest run --config $HOME/sites/.work/rightsites-owner-recovery-20261018/security-final-source-validation/webhooks-focused.config.mjs
  * Fresh installation is consumed. This result is not the full 345-route/2760-cell gate.
  * No DROP/TRUNCATE/reset, production export, listener, job scheduler, or external provider call.
  */
@@ -42,7 +42,7 @@ const ownerUrl = process.env.DATABASE_URL ?? '', runtimeUrl = process.env.DATABA
 assertTestDatabase(ownerUrl, 'focused webhook authorization gate fixture owner');
 assertTestDatabase(runtimeUrl, 'focused webhook authorization gate serving role');
 const ownerTarget = new URL(ownerUrl), runtimeTarget = new URL(runtimeUrl);
-const nativeQualificationSocket = '/home/vendure/sites/.work/sellright-native-mainaf3-dd-staging-rehearsal-20261019-v1/socket';
+const nativeQualificationSocket = `${process.env.HOME ?? ''}/sites/.work/sellright-native-mainaf3-dd-staging-rehearsal-20261019-v1/socket`;
 for (const target of [ownerTarget, runtimeTarget]) {
   // Isolated CI keeps its loopback TCP URLs. Native qualification admits exactly
   // this root-owned socket on PG55433; no other pg query setting may override target.

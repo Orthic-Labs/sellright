@@ -35,7 +35,7 @@ const ownerUrl = process.env.DATABASE_URL ?? '', runtimeUrl = process.env.DATABA
 assertTestDatabase(ownerUrl, 'full authorization gate fixture owner');
 assertTestDatabase(runtimeUrl, 'full authorization gate serving role');
 const ownerTarget = new URL(ownerUrl), runtimeTarget = new URL(runtimeUrl);
-const nativeQualificationSocket = '/home/vendure/sites/.work/sellright-native-mainaf3-dd-staging-rehearsal-20261019-v1/socket';
+const nativeQualificationSocket = `${process.env.HOME ?? ''}/sites/.work/sellright-native-mainaf3-dd-staging-rehearsal-20261019-v1/socket`;
 for (const target of [ownerTarget, runtimeTarget]) {
   // Isolated CI keeps its loopback TCP URLs. Native qualification admits exactly
   // this root-owned socket on PG55433; no other pg query setting may override target.
