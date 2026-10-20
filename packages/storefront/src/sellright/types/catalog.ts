@@ -218,12 +218,16 @@ export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'product
  *  pre-conversion code displayed) — the live `/v1/shop/catalog/products/{slug}`
  *  endpoint (used on cache miss) has the real, separate fields. */
 export function normalizeManifestProductDetail(raw: RawManifestProductDetail): CatalogProduct {
+  // Featured first, then the gallery. The featured asset is normally ALSO a gallery row (Vendure's convention, kept
+  // 1:1 by the import), so the list is deduped on the resolved path: without this every product with a gallery showed
+  // its featured photo twice (first and again at its gallery position), and ProductContent's preview-URL lookups
+  // assume one entry per photo.
   const images = [
     ...(raw.featuredImage ? [raw.featuredImage.url] : []),
     ...raw.assets.map((a) => a.preview),
   ]
     .map((p) => resolveAssetPath(p))
-    .filter((p): p is string => p != null);
+    .filter((p, i, all): p is string => p != null && all.indexOf(p) === i);
 
   return {
     ...(raw.productId ? { productId: raw.productId } : {}),

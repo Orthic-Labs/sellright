@@ -101,7 +101,8 @@ describe('normalizeManifestProductDetail', () => {
     const out = normalizeManifestProductDetail(raw);
     expect(out.slug).toBe('p1');
     expect(out.tags).toEqual(['Sale']);
-    expect(out.images).toEqual(['/assets/p1-0.jpg', '/assets/p1-0.jpg', '/assets/p1-1.jpg']);
+    // Featured first, and NOT repeated at its gallery position (Vendure keeps the featured asset in the gallery too).
+    expect(out.images).toEqual(['/assets/p1-0.jpg', '/assets/p1-1.jpg']);
     expect(out.variants).toHaveLength(1);
     const v = out.variants[0];
     expect(v.sku).toBe('SKU-1');
@@ -110,6 +111,16 @@ describe('normalizeManifestProductDetail', () => {
     expect(v.inStock).toBe(false); // LOCKED: never ships true from a shell
     expect(v.availableQuantity).toBe(0);
     expect(v.options[0]).toEqual({ id: 'red', code: 'red', name: 'Red', group: { id: 'color', code: 'color', name: 'Color' } });
+  });
+
+  it('keeps a featured image that is not in the gallery, prepended once', () => {
+    const out = normalizeManifestProductDetail({ ...raw, featuredImage: { url: 'hero.jpg' } });
+    expect(out.images).toEqual(['/assets/hero.jpg', '/assets/p1-0.jpg', '/assets/p1-1.jpg']);
+  });
+
+  it('dedupes repeated gallery rows and tolerates no featured image', () => {
+    const out = normalizeManifestProductDetail({ ...raw, featuredImage: undefined, assets: [{ preview: 'a.jpg' }, { preview: 'b.jpg' }, { preview: 'a.jpg' }] });
+    expect(out.images).toEqual(['/assets/a.jpg', '/assets/b.jpg']);
   });
 });
 
