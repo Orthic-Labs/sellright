@@ -1,5 +1,5 @@
 {
-  "count": 345,
+  "count": 346,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -134,6 +134,7 @@
     "GET /v1/shop/cache-version",
     "GET /v1/shop/cart/{token}",
     "GET /v1/shop/cart/{token}/checkout",
+    "GET /v1/shop/cart/recover/{cartId}",
     "GET /v1/shop/catalog/collections",
     "GET /v1/shop/catalog/products",
     "GET /v1/shop/catalog/products/{slug}",
