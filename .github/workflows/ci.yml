@@ -321,14 +321,38 @@ jobs:
 
       # SR-11: both lanes run with the service database — the unit lane must
       # stay green with a DB present (self-skipping suites execute their DB
-      # cases here), and the db lane covers every suite that declares a
-      # *_test-database guard (selected by vitest.config.ts's content scan,
-      # not a hand-maintained file list).
+      # cases here), and the db lane covers shared *_test suites selected by
+      # vitest.config.ts. Fresh-install authorization has its own required lane.
       - name: Run unit lane
         run: pnpm --filter @sellright/api test
 
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
+
+      # B2.8 bootstrap precedes principal enrollment on an untouched installation.
+      # This job owns its ephemeral service: create another DB, never reset shared suite state.
+      - name: Provision fresh full-authorization database
+        env:
+          PGPASSWORD: postgres
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_matrix_test
+          DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_authorization_matrix_test
+        run: |
+          createdb -h 127.0.0.1 -U postgres sellright_authorization_matrix_test
+          pnpm --filter @sellright/api db:migrate:runtime
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d sellright_authorization_matrix_test <<'SQL'
+          GRANT CONNECT ON DATABASE sellright_authorization_matrix_test TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          SQL
+
+      - name: Full 345-route authorization matrix with genuine fresh-install bootstrap
+        timeout-minutes: 12
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_matrix_test
+          DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_authorization_matrix_test
+          AUTHORIZATION_MATRIX_EXPECTED_DATABASE: sellright_authorization_matrix_test
+        run: pnpm --filter @sellright/api exec vitest run --project authorization-matrix
 
       # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
       # connections, preserving intentional row-contention tests.

@@ -44,3 +44,6 @@ packages/api/BUILD-INFO.json
 
 # SDK release artifacts (scripts/build-sdk-artifacts.sh)
 artifacts/
+
+# agent-memory tooling, not source
+**/.claude-flow/

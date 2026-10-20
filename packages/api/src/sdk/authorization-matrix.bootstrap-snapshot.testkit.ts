@@ -1,0 +1,34 @@
+/** Complete pre-enrollment bootstrap journal; source-only, no discarded auth/domain writes. */
+import { createHash } from 'node:crypto';
+import { lstat, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+
+type Query = (sql: string, values?: unknown[]) => Promise<{ rows: Record<string, any>[] }>;
+const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
+export function createAuthorizationBootstrapSnapshot(options: {
+  ownerQuery: Query; runtimeDir: string; providerCalls: readonly unknown[];
+}): () => Promise<unknown> {
+  async function files(dir: string): Promise<unknown[]> {
+    const entries: unknown[] = [];
+    for (const name of (await readdir(dir)).sort()) {
+      const path = join(dir, name), stat = await lstat(path);
+      if (stat.isSymbolicLink()) throw new Error('bootstrap snapshot refuses symlink');
+      entries.push([name, stat.isDirectory() ? await files(path) : createHash('sha256').update(await readFile(path)).digest('hex')]);
+    }
+    return entries;
+  }
+  return async () => {
+    // Harness verifies privileged fixture-owner role so RLS cannot conceal table rows.
+    const tables = (await options.ownerQuery("SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT LIKE 'pg_%' AND schemaname <> 'information_schema' ORDER BY schemaname,tablename")).rows;
+    const args: string[] = [];
+    const arms = tables.map(table => {
+      args.push(table.schemaname, table.tablename);
+      return 'SELECT $' + (args.length - 1) + '::text AS schema,$' + args.length + "::text AS name,COALESCE(jsonb_agg(to_jsonb(t)),'[]'::jsonb) AS entries FROM " + quote(table.schemaname) + '.' + quote(table.tablename) + ' t';
+    });
+    const captured = arms.length ? (await options.ownerQuery(arms.join(' UNION ALL '), args)).rows : [];
+    return {
+      data: captured.map(table => [table.schema, table.name, (table.entries as unknown[]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]),
+      files: await files(options.runtimeDir), providerCalls: structuredClone(options.providerCalls),
+    };
+  };
+}

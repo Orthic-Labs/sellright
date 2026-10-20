@@ -1,0 +1,143 @@
+{
+  "verdict": "reject",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "high",
+      "area": "Indirect price changes",
+      "claim": "Agents can change discount eligibility through allowed product tags and collection membership. Blocking discount endpoints does not enforce the promised prohibition on changing prices: adding a product to a promotion-qualified collection or tag can make an existing discount apply.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:319,325-326 permits tags and collection membership changes. packages/api/src/money/coupon-context.ts:23-33 loads these fields; packages/api/src/money/coupon.ts:57-67,83-100 uses them to authorize discounts. packages/api/src/routes/checkout.ts:373-374 consumes that context.",
+      "fix": "Exclude promotion-relevant tags and membership changes, or enforce a transactional restriction against changing discount eligibility. Test checkout totals before and after attempted agent changes."
+    },
+    {
+      "id": "F2",
+      "severity": "high",
+      "area": "Draft shipping; v2 F3",
+      "claim": "The shipping override remains available indirectly. Omitting shippingMethodCode creates a physical draft with zero shipping. Supplying a method checks only that it is enabled, so an agent can select a free method whose subtotal or country conditions are not satisfied.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:345,648 allows and tests drafts without a shipping method. packages/api/src/routes/admin-order-ops.ts:95-102 defaults shipping to zero and never checks eligibility. packages/api/src/shipping/calculator.ts:44-58 defines eligibility; packages/api/src/routes/checkout.ts:376-399 requires a configured method for physical carts.",
+      "fix": "Require server-authoritative shipping selection and eligibility for agent drafts, including physical versus digital carts. Test omitted methods and ineligible free methods against configured charges."
+    },
+    {
+      "id": "F3",
+      "severity": "high",
+      "area": "Hono body caching and asset uploads",
+      "claim": "Reading every mutation through c.req.json() corrupts binary multipart uploads. Installed Hono 4.13.8 caches text and reparses JSON; it does not cache the identical parsed object as claimed. Multipart bytes decoded as text cannot subsequently be reconstructed losslessly for form parsing.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:402-403,418 reads JSON before every mutation, including assets. packages/api/node_modules/hono/dist/request.js:86-103,117-118 caches text and reconstructs other body formats through Response(body). packages/api/node_modules/hono/dist/validator/validator.js reads form data through c.req.arrayBuffer(). packages/api/src/routes/admin-assets.ts:44-60 parses and decodes the uploaded image.",
+      "fix": "Resolve the capability before consuming its body. Use JSON parsing only for JSON capabilities and preserve multipart bytes. Add a real binary-image upload test that verifies the stored image."
+    },
+    {
+      "id": "F4",
+      "severity": "high",
+      "area": "Sensitive reads; v2 F8",
+      "claim": "The customer prefix admits explicitly excluded loyalty data and additional verification history. It also permits bulk reconstruction of customer PII despite denying customer exports. Order invoices expose billing and shipping addresses. The read policy is not an exact capability boundary.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:306-314,369-370 allows every descendant of /customers and /orders while describing loyalty as denied. packages/api/src/routes/admin-loyalty.ts:101-110 exposes customer balances and ledgers. packages/api/src/routes/sheerid.ts:268-313 exposes verification categories, program information and audit history. packages/api/src/routes/admin-reports.ts:249-305 exposes paginated identities, phone numbers and addresses. packages/api/src/orders/invoice.ts:50-58 includes billTo and shipTo.",
+      "fix": "Inventory and authorize GET/HEAD routes individually. Deny loyalty and verification descendants explicitly, and document or redact the PII available to agents."
+    },
+    {
+      "id": "F5",
+      "severity": "high",
+      "area": "Cross-tenant foreign references",
+      "claim": "Allowed location-stock and transfer handlers accept foreign location IDs without checking ownership. An agent can create an own-store stock_location row referencing another store's location. RLS checks the inserted row's store_id, not the referenced location's tenant. Collection parent and asset references have similar ownership gaps.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:324,331-332. packages/api/src/routes/admin-catalog.ts:294-300,320-325 inserts supplied location IDs without ownership lookup. packages/api/src/db/schema-orders.ts:375-383 uses independent foreign keys. packages/api/drizzle/0019_locations.sql:39,50 checks location existence and row store_id separately. packages/api/src/routes/admin-catalog-collections.ts:85-89 directly persists parentId/imageAssetId; packages/api/src/db/schema-core.ts:272,277 defines single-column foreign keys.",
+      "fix": "Validate every referenced resource within the selected store before writing, or enforce composite tenant foreign keys. Add foreign-location, foreign-parent and foreign-asset tests under a non-BYPASSRLS role."
+    },
+    {
+      "id": "F6",
+      "severity": "high",
+      "area": "DB fixture failure; v2 F9",
+      "claim": "Every proposed DB test still fails in beforeEach. The review fixture omits required author_name and author_email. Correcting the UUID did not make the fixture valid.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:624 inserts product_review without author columns; :633 calls seed before every test. packages/api/src/db/schema-reviews.ts:19-20 defines both columns as NOT NULL without defaults.",
+      "fix": "Provide valid author fields and validate the complete fixture against the schema before using it as boundary evidence."
+    },
+    {
+      "id": "F7",
+      "severity": "medium",
+      "area": "Concurrent bootstrap test; v2 F4",
+      "claim": "Both concurrent bootstraps may correctly return 200, but only the session from the later serialized transaction remains valid. The test selects r1 merely because it returned 200, so its subsequent authenticated mutation can use an already-deleted session and fail nondeterministically.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:547-554 serializes bootstrap and replaces the previous session; :756-765 expects both 200 and selects the first successful response with find(). The unique index limits stored sessions; it does not identify the surviving response.",
+      "fix": "Assert exactly one returned cookie resolves successfully and use that cookie for subsequent checks. Add separate bootstrap-versus-rotate and bootstrap-versus-remove races."
+    },
+    {
+      "id": "F8",
+      "severity": "high",
+      "area": "Boundary test coverage; v2 F10",
+      "claim": "The advertised per-capability success suite is neither complete nor a success test. It supplies only 13 cases for 31 capabilities, accepts 400/404/409/500, matches coverage by path depth, and exempts many operations by substring. Denial tests lack authorized-human controls and use nonexistent resources or routes, so middleware rejection alone can make them pass. Release coverage remains absent.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:636-650,691-703,653-680. The denial table uses /licenses/X/revoke, whereas packages/api/src/routes/admin-licenses.ts:64 defines license minting at POST /v1/admin/licenses. The fixture at plan:616-628 seeds no orders, payments, licenses, locations or assets. Task 9 at :799 references /products/<PA> without an e2e fixture creating that DB-test product. The suite contains seven it() cases, while :791 expects eight.",
+      "fix": "Use an exact capability-key-to-fixture map with required 2xx responses and persisted effects. Seed real protected resources, validate denial requests with human controls, and add release, license, multipart, DELETE, cookie, lifecycle-race and financial-state assertions."
+    },
+    {
+      "id": "F9",
+      "severity": "medium",
+      "area": "Audit durability; v2 F11",
+      "claim": "A response-status audit cannot guarantee that committed agent mutations are recorded. The handler transaction commits before the middleware audit transaction. Audit failure leaves the mutation committed; a handler that commits part of a batch and then throws produces no agent mutation record because its final status is an error.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:425-427 audits only after next() and only for status below 400. packages/api/src/routes/admin.ts:516-562 commits each bulk-fulfill order separately. packages/api/src/routes/admin-catalog-collections.ts:85-93 commits collection changes without a native audit row. packages/api/src/routes/admin-assets.ts:64-66 commits asset creation before the proposed middleware audit.",
+      "fix": "Write actor-attributed mutation audit records in the same transaction as each committed operation. Keep request-outcome auditing separate and test audit failure plus partial-batch failure."
+    },
+    {
+      "id": "F10",
+      "severity": "medium",
+      "area": "Null-body capabilities",
+      "claim": "The sitemap capability is incorrectly classified as having no JSON body. null unconditionally authorizes every supplied field, including indexNow:true, which triggers an additional external submission. Its proposed success request also sends application/json with an empty body, causing downstream JSON validation to return 400.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:339,374,612-613,650. packages/api/src/routes/admin-seo.ts:205 requires the JSON schema containing indexNow; :231-235 submits URLs when true. packages/api/node_modules/hono/dist/validator/validator.js throws 400 when JSON parsing fails.",
+      "fix": "Separate no-body, multipart and JSON capability types. Give sitemap refresh an explicit JSON policy and valid request body. Reject unexpected bodies where the capability genuinely requires none."
+    },
+    {
+      "id": "F11",
+      "severity": "medium",
+      "area": "Hono context typing",
+      "claim": "The proposed ReqCtx.get accepts arbitrary strings, but default OpenAPIHono contexts expose typed get overloads limited to declared variables. adminPrincipal is never declared in ContextVariableMap. This creates a likely structural type incompatibility at existing requireAdmin/requireStore call sites; compilation remains unverified because builds and tests were prohibited.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:405,412,438-443. packages/api/node_modules/@hono/zod-openapi/dist/index.d.cts:176 defaults to Env. packages/api/node_modules/hono/dist/types/context.d.ts:70-81 constrains get/set keys. packages/api/src/lib/request-id.ts:26-29 declares only requestId. Typed variables are documented in [Hono Context](https://hono.dev/docs/api/context#set-get).",
+      "fix": "Declare adminPrincipal in the shared Hono variable map or use a consistently typed environment. Narrow the helper accessor to the actual key instead of requiring an arbitrary-string getter."
+    },
+    {
+      "id": "F12",
+      "severity": "medium",
+      "area": "Matched-route ordering",
+      "claim": "matchedRoutes is available before next(), but its final entry is the last registered matching handler or middleware, not necessarily the handler that executes. A plugin mounted after core routes can append matching wildcard middleware and make every otherwise-allowed agent mutation resolve to a nonexistent wildcard capability. Whether deployed plugins currently do this is unverified.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:416,431 assumes middleware always precedes the final handler. packages/api/node_modules/hono/dist/hono-base.js:284-305 creates the full match before dispatch; request.js:265-266 exposes all matches. packages/api/node_modules/hono/dist/router/trie-router/node.js:155-160 preserves registration scoring. packages/api/src/app.ts:378-403 mounts core handlers before plugin routes at :429-432. See [Hono routing priority](https://hono.dev/docs/api/routing#routing-priority).",
+      "fix": "Associate policy with the actual route registration, or enforce and verify an unambiguous terminal-route selection invariant. Cover trailing wildcard middleware, duplicate routes and plugin mounting."
+    },
+    {
+      "id": "F13",
+      "severity": "medium",
+      "area": "Existing verification integration",
+      "claim": "Adding agent routes changes the checked-in engine route inventory, but the plan omits its golden file. The existing DB gate compares the complete route set exactly, so requiring the same baseline failures cannot accommodate this newly introduced failure.",
+      "evidence": "packages/api/src/sdk/create-app.db.test.ts:236-252 compares routeInventory against packages/api/src/sdk/route-inventory.golden.json. docs/plans/2026-10-10-agent-role.md:577 mounts new routes, but the file map omits the golden; :813 requires failing names to equal the baseline.",
+      "fix": "Add an explicit reviewed route-inventory update and include its file in the execution ceiling."
+    },
+    {
+      "id": "F14",
+      "severity": "high",
+      "area": "Missing implementation specification",
+      "claim": "v3 is not self-contained: agent CRUD, owner-script implementation, most UI/e2e code, docs and rollout are delegated to 'as v2', but no v2 implementation-plan artifact is provided or present beside the plan. The two review JSON files contain findings, not those implementations. Those inherited sections are unverified.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:564,579,581,587,795,799,803,817 references omitted v2 sections. The available agent-role artifacts are the current Markdown plan and the v1/v2 review JSON files.",
+      "fix": "Inline the final implementations or reference an immutable, available v2 artifact. Specify CRUD schemas, expiration validation, script imports/cleanup/output handling, UI types and complete e2e setup."
+    },
+    {
+      "id": "F15",
+      "severity": "medium",
+      "area": "Execution rules; v2 F13",
+      "claim": "The disposition remains unresolved. Claimed repository practice does not authorize new branches, and '6 h' supplies neither elapsed-clock steps nor the required file/line-derived estimate. The existing main-checkout instruction is explicit.",
+      "evidence": "Plan \u00a72: 'Two PRs ... elapsed estimate 6 h ... Short-lived PR branches as this repo practises'. docs/agent-rules.md:22 requires editing the server checkout, committing to main and pushing origin/main. Supplied workspace rules say 'create no branch or worktree without Adrian' and require elapsed spans, named non-typing minutes and file/line ceilings.",
+      "fix": "Use the authorized checkout/current branch and provide the required bounded execution estimate. Remove the unsupported branch exception."
+    },
+    {
+      "id": "F16",
+      "severity": "medium",
+      "area": "Nested collection-rule validation",
+      "claim": "The allowed rules key accepts arbitrary nested values that can break collection reads. For example, rules:{match:'all',conditions:[null]} passes the route schema and parseRules, then throws when matchOne accesses cond.value. Top-level key checking does not make this safe.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:323-324 permits rules. packages/api/src/routes/admin-catalog-collections.ts:30,78 uses z.any(). packages/api/src/catalog/collection-rules.ts:49-54 validates only the outer object and nonempty array; :23-24 dereferences each condition. packages/api/src/routes/catalog.ts:381 parses these rules for storefront use.",
+      "fix": "Validate the complete nested rules schema before persistence and test malformed conditions against both admin and storefront reads."
+    }
+  ],
+  "missing_tasks": [
+    "Replace \u00a76 with verified dispositions: v2 F1 and F2 are addressed in the proposed JSON-field policy; F3 remains partial (F2 above); F4 has a serialized implementation but broken/incomplete race verification (F7); F5 removes the regex inventory but does not prove route-selection invariants (F12); F6's 31 keys exist, but body classification remains wrong (F10); F7 removes variant creation; F8 remains partial (F4); F9 fixes UUIDs but leaves setup failing (F6); F10 remains unresolved (F8); F11 remains partial (F9); F12 removes the nonexistent registry edit; F13 remains unresolved (F15); F14 fixes the numerical baseline instruction but does not inspect public schema/type changes.",
+    "Pin successful tests to these actual registered routes, with /v1/admin as the common prefix: admin-catalog.ts:16,39,64,285,311 \u2014 POST /products, POST /products/{id}/assets, DELETE /products/{id}/assets/{assetId}, PATCH /variants/{id}/location-stock, POST /variants/{id}/transfer; admin-products.ts:113,138,182,221,300 \u2014 PATCH /products/{id}, PATCH /variants/{id}, PATCH /variants/{id}/stock, PATCH /variants/stock/bulk, POST /variants/{id}/stock/adjust; admin-catalog-collections.ts:29,77,122,145 \u2014 POST /collections, PATCH /collections/{id}, POST /collections/{id}/products, DELETE /collections/{id}/products/{productId}; admin-content.ts:37,101,128 \u2014 POST /blog, PATCH /blog/{id}, DELETE /blog/{id}; admin-assets.ts:26,93 \u2014 POST /assets, DELETE /assets/{id}; admin-seo.ts:204 \u2014 POST /seo/sitemaps/refresh; admin-reviews.ts:76-102,107 \u2014 POST /reviews/{id}/reject, DELETE /reviews/{id}, PUT /reviews/{id}/reply; admin-order-ops.ts:56,560,587 \u2014 POST /draft-orders, POST /orders/bulk-soft-delete, POST /orders/bulk-restore; admin.ts:253,276,366,478 \u2014 POST /orders/{code}/notes, POST /orders/{code}/fulfill, POST /orders/{code}/fulfillments, POST /orders/bulk-fulfill; admin-orders.ts:281 \u2014 POST /returns/{id}/reject.",
+    "Define revocation linearization and test requests already authenticated when rotation/removal commits. Plan:228-233 returns a principal from an earlier token read, and :443-444 reuses it without transaction-time revalidation. The stated instantaneous revocation guarantee is unverified for in-flight writes.",
+    "Verify token/store/user binding during browser-session resolution and bootstrap explicitly, rather than relying solely on provisioning invariants. Plan:247-254 does not compare the token's owner/store with the session principal, and :548 selects bootstrap tokens by ID alone.",
+    "Review SDK schema changes separately from top-level export counts: packages/api/src/exports/schema.ts:2 publicly exports the entire schema namespace, so adminApiToken and altered table types become publicly reachable even though exports-contract.test.ts:23-29 counts only barrel names.",
+    "Protect or model session_api_token_unique in schema/migration drift checks. packages/api/scripts/assert-no-partial-index-drop.mjs currently protects only license_activation_token_hash.",
+    "Complete UI integration against the missing v2 source: update exhaustive Role records, suppress agent permission editing, synchronize both removal paths, define revoke-sessions behavior for token holders, and create independent e2e product fixtures."
+  ],
+  "riskiest_unaddressed": "Allowed product tags and collection membership can change existing discount eligibility, while allowed draft orders can bypass shipping charges. Both violate the claimed money boundary without using any forbidden top-level key."
+}

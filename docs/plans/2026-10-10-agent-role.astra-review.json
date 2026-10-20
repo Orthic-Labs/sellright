@@ -1,0 +1,182 @@
+{
+  "verdict": "reject",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "critical",
+      "area": "draft orders",
+      "claim": "D1 admits a payment and licence-issuance path. An agent can submit markPaid:true, record a settled manual payment and issue licences.",
+      "evidence": "packages/api/src/routes/admin-order-ops.ts:63,69,105,123-132; plan D1: \"Yes \u2014 no money is captured.\"",
+      "fix": "Explicitly reject markPaid for agents before any writes; test that rejected requests create no payment, licence or settlement effects."
+    },
+    {
+      "id": "F2",
+      "severity": "critical",
+      "area": "order editing",
+      "claim": "Agents can commit financial order edits, record manual payments and trigger licence issuance. The scanner excludes this route because it contains a conditional refunds guard, although other settlement branches remain reachable.",
+      "evidence": "packages/api/src/routes/admin-order-edit.ts:80-105; packages/api/src/orders/order-edit-service.ts:647-670,723-728; docs/plans/2026-10-10-agent-role.md:411",
+      "fix": "Deny agents access to financial edit commits and verify every settlement branch, including record_payment, leave_credit and zero-balance edits."
+    },
+    {
+      "id": "F3",
+      "severity": "high",
+      "area": "catalog boundary",
+      "claim": "The catalog allowlist permits changing prices, sale prices and licence entitlements. Blocking discount endpoints does not prevent agents changing what customers pay or receive.",
+      "evidence": "packages/api/src/routes/admin-products.ts:140-170; packages/api/src/routes/admin-catalog.ts:107-129; packages/api/src/licensing/issue.ts:22-41; plan Task 3: \"every listed route must be a catalog ... mutation\"",
+      "fix": "Define an explicit agent field allowlist for variant creation and updates; protect pricing, fulfilment type, app/artifact identity, licence terms and entitlement-bearing metadata."
+    },
+    {
+      "id": "F4",
+      "severity": "high",
+      "area": "review boundary",
+      "claim": "Review approval is classified as ordinary work but grants loyalty points. Its generated route is also omitted by the proposed inventory.",
+      "evidence": "packages/api/src/routes/admin-reviews.ts:76-96; packages/api/src/reviews/reviews.ts:204; docs/plans/2026-10-10-agent-role.md:405-407,436",
+      "fix": "Resolve whether reward-bearing approval is permitted; otherwise reject it for agents. Inventory generated routes and test ledger side effects."
+    },
+    {
+      "id": "F5",
+      "severity": "high",
+      "area": "affiliate boundary",
+      "claim": "The discount restriction misses affiliate onboarding, which creates an enabled percentage discount. Other requireWrite-only affiliate routes reassign recipients and rotate their credentials.",
+      "evidence": "packages/api/src/routes/admin-affiliate.ts:62-81,165-177,187-199; docs/plans/2026-10-10-agent-role.md:487",
+      "fix": "Add explicit agent denial to affiliate creation, linking and recipient reassignment; include them in negative authorization tests."
+    },
+    {
+      "id": "F6",
+      "severity": "high",
+      "area": "email settings",
+      "claim": "The unaddressed test-send endpoint uses saved SMTP credentials, sends external mail and changes email verification settings with requireWrite alone.",
+      "evidence": "packages/api/src/routes/admin-email-settings.ts:102-135",
+      "fix": "Require human management authority and test that agents cannot send mail or modify verifiedAt."
+    },
+    {
+      "id": "F7",
+      "severity": "critical",
+      "area": "identity escalation",
+      "claim": "Protecting staff PATCH and permission PUT is insufficient. Staff POST can overwrite an agent grant with manager, and invite acceptance can set its password and overwrite its role. Existing agent browser sessions then inherit those roles; the permission guard checks role, not kind. Staff POST can also attach the identity to another store, which its global browser session exposes.",
+      "evidence": "packages/api/src/routes/admin-settings-advanced.ts:174-186,374-393; packages/api/src/auth/admin-session.ts:79-100; docs/plans/2026-10-10-agent-role.md:379,474-478,633-637",
+      "fix": "Reject agent identities in every human provisioning, invitation, credential and membership path. Enforce kind/role consistency during session resolution and prevent agent sessions acquiring human or additional-store authority."
+    },
+    {
+      "id": "F8",
+      "severity": "high",
+      "area": "boundary inventory",
+      "claim": "The regex inventory cannot establish the claimed complete mutation boundary. It misses indented registrations, generated method/path values, mutations without requireWrite and routes outside admin*.ts; any conditional stronger guard suppresses the entire route. It cannot detect newly dangerous fields on an unchanged route.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:389-412; packages/api/src/routes/admin-catalog-collections.ts:27-35; packages/api/src/routes/admin-marketing.ts:56-77; packages/api/src/routes/admin-reviews.ts:76-89; packages/api/src/routes/admin-push.ts:34-58; packages/api/src/releases/release-registration.ts:32-69",
+      "fix": "Use explicit agent authorization policy plus a complete route inventory that fails on unclassified registrations. Cover conditional guards, aliases, generated routes and payload-dependent effects."
+    },
+    {
+      "id": "F9",
+      "severity": "high",
+      "area": "credential lifecycle",
+      "claim": "Token rotation or expiry leaves derived browser sessions usable for up to 12 hours. Sessions have no originating-token binding, and bootstrap ignores the token's remaining lifetime. Rotation additionally drops expiresAt, creating a non-expiring replacement.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:579-580,619-624,372-375; packages/api/src/auth/admin-session.ts:77-85",
+      "fix": "Bind agent sessions to their source token and store; enforce token revocation/expiry during resolution, cap session expiry, and preserve expiry during rotation unless explicitly changed."
+    },
+    {
+      "id": "F10",
+      "severity": "high",
+      "area": "atomicity and races",
+      "claim": "Creation, rotation and removal split credential changes across independent transactions. Concurrent rotations can mint multiple live tokens; failures can leave orphan seats or committed credentials without audit. Removal calls the global revoke helper from inside a different transaction.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:270-276,341-347,554-560,575-583,598-605",
+      "fix": "Make helpers transaction-aware; serialize lifecycle operations on the agent/store grant and commit credential changes with audit. Coordinate bootstrap with revocation and define handling of already-authorized requests."
+    },
+    {
+      "id": "F11",
+      "severity": "high",
+      "area": "owner script",
+      "claim": "The script incorrectly assumes an owner connection bypasses FORCE RLS. Its unscoped audit insert fails for an ordinary table owner, after creating the identity and grant. Rotation writes no audit row. Actual deployment-role bypass privileges are unverified.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:670-690; packages/api/drizzle/0001_rls_policies.sql:93; packages/api/drizzle/0002_harden_rls_nullif.sql:25; packages/api/src/db/client.ts:108-114",
+      "fix": "Use withStore for tenant audit writes and transactional lifecycle helpers for both create and rotate; verify using a non-bypass role."
+    },
+    {
+      "id": "F12",
+      "severity": "medium",
+      "area": "repository integration",
+      "claim": "The new route directly imports unsafeUnscopedDb, violating the repository's enforced route-import rule.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:506; eslint.config.mjs:31-45; packages/api/src/auth/admin-staff.ts:4-15",
+      "fix": "Move registry operations into auth helpers or use the existing scoped transaction; include lint validation."
+    },
+    {
+      "id": "F13",
+      "severity": "high",
+      "area": "verification wiring",
+      "claim": "Task 3 targets a nonexistent packages/api verify chain. The actual root verify scripts do not invoke assert:locks or the proposed boundary assertion, so the promised CI enforcement is not wired.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:438; packages/api/package.json:59-82; package.json:14-16",
+      "fix": "Add the assertion to the actual root verification chain and include root package.json in the file map."
+    },
+    {
+      "id": "F14",
+      "severity": "high",
+      "area": "test correctness",
+      "claim": "The proposed tests cannot produce their expected results: PATCH /v1/admin/settings does not target the settings handler; bulk-cancel's router is not mounted; gift-card creation requires balance, not amount. These produce routing or validation failures instead of authorization evidence.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:728,789-791,985-986; packages/api/src/routes/admin-settings.ts:190; packages/api/src/routes/admin-order-ops.ts:502; packages/api/src/routes/admin-marketing.ts:469",
+      "fix": "Use /settings/store, mount adminOrderOps and supply valid gift-card bodies. Confirm each negative-test request reaches the intended handler with an authorized human control."
+    },
+    {
+      "id": "F15",
+      "severity": "high",
+      "area": "security test coverage",
+      "claim": "The suite does not prove its stated boundary: it has one store, no cross-tenant attacks, no financial-edit or draft-paid cases, and no release/licence/step-up coverage. The cookie test uses a bare router without production CSRF middleware; the browser E2E never operates the UI as an agent.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:721-728,785-836,974-991; packages/api/src/app.ts:172-185",
+      "fix": "Add a two-store matrix for bearer and cookie credentials, full-app CSRF tests, lifecycle/race tests and an isolated browser session exercising allowed and denied agent operations."
+    },
+    {
+      "id": "F16",
+      "severity": "high",
+      "area": "audit guarantees",
+      "claim": "The promised audit of every action and denied refund is not implemented. Guards only return errors, several allowed writes lack audit inserts, and the proposed audit test passes when no row exists.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:781-782,1030,1051; packages/api/src/routes/admin-helpers.ts:128-150; packages/api/src/routes/admin-assets.ts:63-66; packages/api/src/routes/admin-catalog.ts:48-55",
+      "fix": "Specify and implement agent mutation and denial auditing without recording credentials; require audit-row existence and correlate rows to the exact action and identity."
+    },
+    {
+      "id": "F17",
+      "severity": "medium",
+      "area": "staff integration",
+      "claim": "Adding kind only to listStoreStaff's SELECT leaves its explicit return type unchanged, so i.kind is unavailable to the route. The required auth/admin-staff.ts edit is also absent from the file map.",
+      "evidence": "packages/api/src/auth/admin-staff.ts:68-77; docs/plans/2026-10-10-agent-role.md:634; plan file-map table",
+      "fix": "Update the helper's return contract, route response and file map together."
+    },
+    {
+      "id": "F18",
+      "severity": "medium",
+      "area": "admin UI",
+      "claim": "The disabled agent role select has value='agent' but only human-role options, so it cannot display the correct selection. Agent and staff lists invalidate independently, leaving stale seats after create/remove. AgentAccess also hides list, rotate and removal errors.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:875,895-909,937-939; packages/admin/src/pages/Staff.tsx:61-64,143-150",
+      "fix": "Render an Agent badge or matching disabled option; invalidate both lists after lifecycle changes and display loading and mutation errors."
+    },
+    {
+      "id": "F19",
+      "severity": "medium",
+      "area": "confirmation and E2E",
+      "claim": "The supplied confirmation call uses unsupported body instead of description. After correcting that, the E2E's global last Remove-or-Confirm selector targets a table button after the dialog in DOM order, rather than the dialog confirmation.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:951,990; packages/admin/src/components/ConfirmDialog.tsx:83-100; plan AgentAccess renders {dialog} before the table",
+      "fix": "Use description and an explicit confirmLabel; select the confirmation within getByRole('alertdialog')."
+    },
+    {
+      "id": "F20",
+      "severity": "medium",
+      "area": "token resource controls",
+      "claim": "Browser bootstrap creates an unlimited number of sessions without throttling or a session cap. The advertised five-minute last-used write limit is also non-atomic: concurrent requests can all read an old timestamp and update it.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:310-311,613-624",
+      "fix": "Bound bootstrap by token/identity and rate-limit it; use a conditional timestamp update. Test malformed-token handling and abuse limits without treating 256-bit token guessing as a practical attack."
+    },
+    {
+      "id": "F21",
+      "severity": "medium",
+      "area": "plan execution",
+      "claim": "Execution instructions conflict with workspace policy: they introduce a feature branch and repeatedly use npx. Required elapsed-time, file and line ceilings are missing. The claimed four baseline test failures have no verification receipt in the plan and remain unverified.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:381,1038-1043; docs/agent-rules.md:22; supplied workspace rules: \"create no branch or worktree without Adrian\", \"never npm or npx\", \"Bound every plan with one total-minutes number plus file & line ceilings\"",
+      "fix": "Use the authorized checkout/branch and pnpm exec, add the required bounds, and require exact baseline evidence instead of preauthorizing unspecified failures."
+    }
+  ],
+  "missing_tasks": [
+    "Close financial and entitlement paths before admitting agent to requireWrite (F1-F6).",
+    "Enforce immutable agent identity and store scope across all provisioning and session paths (F7,F9).",
+    "Replace the incomplete inventory and wire the real verification chain (F8,F13).",
+    "Make credential lifecycle and auditing transactional (F10-F11,F16).",
+    "Repair and expand authorization, tenancy, CSRF and browser tests (F14-F15).",
+    "Resolve integration, UI and execution defects (F12,F17-F21)."
+  ],
+  "riskiest_unaddressed": "An agent can create a paid draft and receive licences through an explicitly allowed route; the proposed inventory and tests would not prevent this."
+}
