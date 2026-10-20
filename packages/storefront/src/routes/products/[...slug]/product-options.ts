@@ -1,5 +1,6 @@
 import type { CatalogVariant } from '~/sellright/types/catalog';
 import { effectiveVariantPrice } from '~/sellright/types/catalog';
+import { parseSpecBlock, renderSpecBlock } from '~/utils/product-specs';
 
 // getOptionGroups and findVariant live in platform/controllers/product-model.ts (brand views PR2 §5).
 import { getOptionGroups, findVariant } from '~/platform/controllers/product-model';
@@ -146,5 +147,6 @@ export function enhanceDescription(name: string, html: string): string {
       </div>`;
     return html + specs;
   }
-  return html;
+  const parsed = parseSpecBlock(html);
+  return parsed ? `${parsed.intro}${renderSpecBlock(parsed)}` : html;
 }

@@ -16584,6 +16584,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -16684,6 +16685,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -16791,6 +16793,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -16858,6 +16861,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
@@ -17033,6 +17037,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -17100,6 +17105,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
@@ -17198,6 +17204,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -17274,6 +17281,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
@@ -17388,6 +17396,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
                                 lineSubtotal: number;
@@ -17484,6 +17493,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
@@ -18151,6 +18161,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;
@@ -18199,6 +18210,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
                                     lineSubtotal: number;

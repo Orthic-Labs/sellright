@@ -174,6 +174,10 @@ export default component$<{
 						{shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
 					</dd>
 				</div>
+				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
+					<dt>Total</dt>
+					<dd class="font-medium text-[rgba(253,250,246,0.6)]">{formatPrice(total.value, currencyCode)}</dd>
+				</div>
 				<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} serverPoints={cart.value.pointsToEarn} dark />
 			</dl>
 		);

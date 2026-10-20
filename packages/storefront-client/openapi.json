@@ -1374,6 +1374,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1640,6 +1644,10 @@
                                 "nullable": true
                               },
                               "shipDateLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "image": {
                                 "type": "string",
                                 "nullable": true
                               },
@@ -1967,6 +1975,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2259,6 +2271,10 @@
                             "nullable": true
                           },
                           "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "image": {
                             "type": "string",
                             "nullable": true
                           },
@@ -2561,6 +2577,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2818,6 +2838,10 @@
                                     "nullable": true
                                   },
                                   "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "image": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -3160,6 +3184,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -3417,6 +3445,10 @@
                                     "nullable": true
                                   },
                                   "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "image": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -3702,6 +3734,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -3969,6 +4005,10 @@
                                     "nullable": true
                                   },
                                   "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "image": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -4433,6 +4473,10 @@
                                     "type": "string",
                                     "nullable": true
                                   },
+                                  "image": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
                                   "available": {
                                     "type": "boolean"
                                   },
@@ -4638,6 +4682,10 @@
                                     "nullable": true
                                   },
                                   "shipDateLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "image": {
                                     "type": "string",
                                     "nullable": true
                                   },
