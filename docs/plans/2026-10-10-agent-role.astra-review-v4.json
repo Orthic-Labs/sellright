@@ -1,0 +1,117 @@
+{
+  "verdict": "revise",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "high",
+      "area": "Sensitive reads; v3 F4",
+      "claim": "The customer-read exclusion remains bypassable through global search. Order detail also exposes billing addresses and phone numbers beyond D9's stated email/shipping exception.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:54,327 permits search while excluding customers. packages/api/src/routes/admin-reports.ts:129-146 returns customer identities independently of orders. packages/api/src/routes/admin.ts:194,210 returns customer phone and billingAddress.",
+      "fix": "Remove search from AGENT_READS or redact customer results for agents. Redact additional order PII or explicitly revise the accepted scope. Test customers without orders."
+    },
+    {
+      "id": "F2",
+      "severity": "medium",
+      "area": "Hono route inventory; v3 F12",
+      "claim": "The duplicate-route assertion necessarily rejects ordinary OpenAPI routes: app.routes contains separate entries for validators and the terminal handler sharing the same method/path. matchedRoutes is populated before next(), preserves wildcard registration paths, and includes the terminal handler; filtering wildcard entries handles trailing wildcard middleware, but the proposed inventory does not prove terminal-route uniqueness.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:425,483-492. packages/api/node_modules/@hono/zod-openapi/dist/index.mjs:94-164 registers middleware, validators and handler together. packages/api/node_modules/hono/dist/hono-base.js:55-62,264-271 stores each handler separately; :284-305 computes matches before dispatch. packages/api/node_modules/hono/dist/request.js:265-266 exposes the complete match. Existing packages/api/src/sdk/route-inventory.ts:35-40 deliberately deduplicates entries. Registration-order semantics: [Hono routing](https://hono.dev/docs/api/routing#routing-priority).",
+      "fix": "Validate operation registrations separately from their validator chains. Deduplicate for capability existence checks; detect competing terminal registrations through explicit registration metadata. Cover trailing wildcard middleware and overlapping plugin routes."
+    },
+    {
+      "id": "F3",
+      "severity": "medium",
+      "area": "Promotion tripwire; v3 F1",
+      "claim": "The proposed tripwire fails against v4 itself. It conflates unrelated resource fields and even comments: allowed stock items, blog tags and fulfillment lines all occur in coupon-context.ts.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:344,346-358,489,499. packages/api/src/money/coupon-context.ts:15,24 contains tags, :37 mentions CouponContext.items, and :41-44 contains lines.",
+      "fix": "Check qualified resource fields and actual promotion dependencies. Distinguish product.tags from blog.tags; do not treat comment words or unrelated array names as promotion dependencies."
+    },
+    {
+      "id": "F4",
+      "severity": "medium",
+      "area": "No-body enforcement; v3 F10",
+      "claim": "Content-Length is not proof of body absence. A body without that header passes NONE capabilities. The proposed DELETE body-smuggling test itself supplies no Content-Length and therefore cannot receive the expected policy 403.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:430 defaults missing content-length to zero; :869 sends a body without that header. packages/api/node_modules/hono/dist/hono-base.js:346-355 passes requestInit into Request without adding Content-Length. packages/api/src/routes/admin-reviews.ts:76-95 declares only parameter validation and ignores the body.",
+      "fix": "Inspect actual body bytes with a bounded presence check for NONE capabilities. Test absent, zero and positive Content-Length, plus bodies without the header. Preserve multipart handling."
+    },
+    {
+      "id": "F5",
+      "severity": "medium",
+      "area": "Success fixtures; v3 F8",
+      "claim": "The success suite cannot pass: partial fulfillment sends lines:[], which fails validation. The fixture contains no order lines, and full fulfillment precedes partial fulfillment on the same order.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:741-746,775-776,782,838. packages/api/src/routes/admin.ts:371 requires at least one line; :309-313 fulfills remaining quantities; :415-418 rejects foreign or exhausted lines.",
+      "fix": "Seed real lines and independent orders for full, partial and bulk fulfillment. Assert persisted fulfillment quantities, stock changes and bulk item outcomes."
+    },
+    {
+      "id": "F6",
+      "severity": "medium",
+      "area": "Denial controls; v3 F8",
+      "claim": "The denial test executes successful owner mutations against the same fixtures and then requires table counts to remain unchanged. Variant, collection, promotion, staff and agent creation invalidate that assertion. Both branches of the expected-count ternary add zero.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:791-806,849-857. packages/api/src/routes/admin-catalog.ts:107-142 inserts variants; packages/api/src/routes/admin-settings-advanced.ts:174-186 creates staff; plan:605-611 creates an agent for the owner control.",
+      "fix": "Compare state immediately before and after each agent request. Run successful human controls against separately reset fixtures."
+    },
+    {
+      "id": "F7",
+      "severity": "medium",
+      "area": "Boundary evidence; v3 F8",
+      "claim": "Owner status !=403 accepts validation errors, missing resources and server failures. The license control lacks required fields; the bulk-cancel control targets a paid order that is deliberately skipped. Per-capability persisted effects and release-registration denial remain untested.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:746,799,801,838-843,854-855. packages/api/src/routes/admin-licenses.ts:15-27 requires appKey and reason. packages/api/src/routes/admin-order-ops.ts:524 rejects paid orders within the batch. Plan:785-816 contains no release-registration request.",
+      "fix": "Require valid successful human controls, including successful batch items. Add release registration, persisted effects for every capability, and money/entitlement state snapshots rather than selected table counts alone."
+    },
+    {
+      "id": "F8",
+      "severity": "medium",
+      "area": "Generated API contract",
+      "claim": "Updating the route golden file alone leaves pnpm verify failing. New routes and /me fields change both committed storefront-client contract artifacts, which the plan omits.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:62-82,469,936. package.json:13 runs storefront-client generate:check. packages/storefront-client/scripts/generate.mts:46-55 generates the complete contract; :68-79 compares openapi.json and src/generated/schema.d.ts.",
+      "fix": "Add and regenerate packages/storefront-client/openapi.json and packages/storefront-client/src/generated/schema.d.ts through the existing command. Update the route golden count as well as its five entries, and include generated changes in the budget."
+    },
+    {
+      "id": "F9",
+      "severity": "medium",
+      "area": "Browser e2e",
+      "claim": "The e2e throws before opening Staff because AdminApi.post already returns parsed JSON. Its Description locator also cannot match the existing unassociated label.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:1049 calls .json() on api.post's result; :1069 uses getByLabel('Description'). packages/admin/e2e/support/api.ts:35-45 returns parsed JSON. packages/admin/src/pages/ProductDetail.tsx:153 supplies no htmlFor; packages/admin/src/components/ui-forms.tsx:46-52 renders label and control as siblings.",
+      "fix": "Use api.post<{id:string}> directly, use the existing field() fixture helper, and re-fetch the product to assert the persisted description."
+    },
+    {
+      "id": "F10",
+      "severity": "medium",
+      "area": "Audit durability; v3 F9",
+      "claim": "The revised guarantee still claims transactional entity audits that do not exist. Allowed asset creation/deletion and blog update/deletion can commit without any actor-attributed audit if the best-effort middleware audit fails.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:440 suppresses audit errors; :469 specifies guard swaps only; :1117 claims transactional entity audits. packages/api/src/routes/admin-assets.ts:64-66,101-126 and packages/api/src/routes/admin-content.ts:110-121,136 contain mutations without audit insertion.",
+      "fix": "Add entity audits inside these mutation transactions and verify rollback on audit failure, or explicitly narrow the guarantee to acknowledge unaudited committed mutations."
+    },
+    {
+      "id": "F11",
+      "severity": "medium",
+      "area": "Outbound-effect contract",
+      "claim": "Permitted operations contradict the stated email/IndexNow exclusion. Fulfillment sends shipping notifications; catalog edits emit events that can trigger IndexNow.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:318-319,1114 excludes these effects. packages/api/src/routes/admin.ts:333-344,451-458 enqueues shipping notifications. packages/api/src/routes/admin-products.ts:128 invokes the catalog emitter; packages/api/src/webhooks/catalog.ts:20 emits catalog.product_changed; packages/storefront/src/services/indexnow-webhook.server.ts:40-50 submits IndexNow. Deployed webhook configuration is unverified.",
+      "fix": "Specify bounded shipping notifications and configured catalog hooks as permitted consequences, or suppress them for agents. Test whichever policy is chosen."
+    },
+    {
+      "id": "F12",
+      "severity": "medium",
+      "area": "Execution ceiling; v3 F15",
+      "claim": "The plan exceeds its own file stop-loss before implementation begins: the file map names 43 files, but max_files is 34. Existing principal-test edits, the baseline receipt and missing generated artifacts increase that total. The 420-minute estimate also lacks the required code-rate inputs and named non-typing allocations.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:62-82 lists 43 files including the two .test.ts shorthand entries; :84 caps files at 34; :88 adds a receipt; :264 requires existing test edits. Supplied Workspace Rules require file/line/code-rate inputs and named non-typing minutes.",
+      "fix": "Reconcile scope and ceilings before execution and derive the elapsed schedule from explicit inputs. Default to the current checkout/main; D10's branch alternative requires Adrian's explicit authorization."
+    },
+    {
+      "id": "F13",
+      "severity": "low",
+      "area": "Blog PATCH capability",
+      "claim": "The policy advertises slug as editable, but the handler never updates it. A slug-only patch returns 400.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:347 allows slug. packages/api/src/routes/admin-content.ts:114-118 excludes slug from the update and rejects an empty patch.",
+      "fix": "Remove slug from the PATCH capability unless renaming is separately specified and implemented."
+    }
+  ],
+  "missing_tasks": [
+    "Correct \u00a77 dispositions: v3 F1's original promotion path is removed but its tripwire fails; F2 is addressed; F3's JSON/multipart caching correction is addressed; F4 remains partial; F5's identified foreign-reference paths are removed; F6's author fields and requested fixture table/column/status names match current schemas; F7's surviving-cookie selection is addressed; F8 remains partial; F9 remains unresolved; F10 remains partial; F11's ContextVariableMap augmentation merges with request-id.ts and its narrowed accessor is consistent; F12's wildcard filtering is addressed but its uniqueness assertion fails; F13's golden-file task is present; F14 is inlined; F15 remains partial; F16's collection-rule surface is removed.",
+    "Add bootstrap-versus-rotate and bootstrap-versus-remove races; Task 7 currently races only two bootstraps. Source inspection supports both bootstrap responses being 200 with exactly one surviving session: grant FOR UPDATE OF admin_user_store serializes replacement, and the unique partial index prevents duplicate token sessions. Installed Drizzle supports this lock form and bare FOR UPDATE; runtime behavior remains unverified because tests were prohibited.",
+    "Preserve the source-verified mutation inventory while replacing the broken inventory assertion. Common prefix /v1/admin; files below are packages/api/src/routes/: POST /products (admin-catalog.ts:16); PATCH /products/:id (admin-products.ts:113); PATCH /variants/:id (:138); PATCH /variants/:id/stock (:182); POST /variants/:id/stock/adjust (:300); PATCH /variants/stock/bulk (:221); POST /blog (admin-content.ts:37); PATCH /blog/:id (:101); DELETE /blog/:id (:128); POST /assets (admin-assets.ts:26); DELETE /assets/:id (:93); POST /reviews/:id/reject and DELETE /reviews/:id (admin-reviews.ts:76-90); PUT /reviews/:id/reply (:107); POST /orders/:code/notes (admin.ts:253); POST /orders/:code/fulfill (:276); POST /orders/:code/fulfillments (:366); POST /orders/bulk-fulfill (:478); POST /orders/bulk-soft-delete (admin-order-ops.ts:560); POST /orders/bulk-restore (:587); POST /returns/:id/reject (admin-orders.ts:281). All 21 proposed keys exist.",
+    "Preserve or deliberately narrow the source-verified read inventory. All are GET with prefix /v1/admin; files below are packages/api/src/routes/: /me (admin.ts:89), /dashboard (admin-dashboard.ts:13), /search (admin-reports.ts:129), /orders (admin.ts:104), /orders/:code (:166), /orders/:code/packing-slip (admin-orders.ts:73), /fulfillment/open-orders (admin-order-ops.ts:435), /products (admin-products.ts:14), /products/:id (:49), /products/:id/options (admin-catalog.ts:336), /inventory (:200), /variants/:id/stock/history (admin-products.ts:351), /variants/:id/stock/locations (:380), /variants/:id/movements (admin-catalog.ts:234), /locations (:253), /assets (admin-assets.ts:73), /blog (admin-content.ts:18), /blog/:id (:85), /reviews (admin-reviews.ts:36), /returns (admin-orders.ts:231), /reports/metrics (admin-reports.ts:211), /reports/sales (:60), /reports/top-products (:84), /shipping-methods (admin-settings.ts:387), /import-tracking/recent (admin-order-ops.ts:416). All 25 proposed keys exist.",
+    "Retain SDK schema/type compatibility review independently of export-name counts. Internal auth exports do not automatically enter SDK barrels; the schema namespace exposes the new table. The current exports-contract.test.ts:35-37 pins 174 symbols, not 181. Add generated contract artifacts identified in F8."
+  ],
+  "riskiest_unaddressed": "Allowed search exposes customer identities outside the stated fulfillment exception. No new money, entitlement or cross-tenant bypass was verified in the narrowed write keys. The core token/guard architecture does not require redesign; revise the concrete policy, implementation and verification defects before execution. Compilation, runtime tests and deployed plugin behavior remain unverified."
+}

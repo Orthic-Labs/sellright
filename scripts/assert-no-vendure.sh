@@ -41,6 +41,7 @@ read -r -d '' VENDURE_WORD_ALLOWLIST <<'LIST' || true
 packages/api/src/env.ts
 packages/api/src/email/mailer.test.ts
 packages/api/src/routes/admin-affiliate.public.db.test.ts
+packages/api/src/sdk/authorization-matrix.cart-cases.testkit.ts
 packages/api/src/routes/customer-tokens.ts
 packages/api/src/payments/tenant-resolution.db.test.ts
 packages/api/src/sheerid/service.ts

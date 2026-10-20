@@ -12,7 +12,7 @@ import { poolsInitialised } from '../db/client.js';
  */
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_DIRS = new Set(['scripts', 'import']);
-const SKIP_FILES = /(\.test\.ts|\.d\.ts)$|(^|\/)index\.ts$|(^|\/)assert-|manifest\/generate\.ts$/;
+const SKIP_FILES = /(\.test\.ts|\.testkit\.ts|\.d\.ts)$|(^|\/)index\.ts$|(^|\/)assert-|manifest\/generate\.ts$/;
 
 function walk(dir: string): string[] {
   const out: string[] = [];

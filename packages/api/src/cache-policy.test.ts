@@ -112,7 +112,7 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) { if (name !== 'node_modules') sourceFiles(full, out); continue; }
-    if (name.endsWith('.ts') && !/\.test\.ts$|\.d\.ts$/.test(name)) out.push(relative(__SRC, full));
+    if (name.endsWith('.ts') && !/\.test\.ts$|\.testkit\.ts$|\.d\.ts$/.test(name)) out.push(relative(__SRC, full));
   }
   return out;
 }

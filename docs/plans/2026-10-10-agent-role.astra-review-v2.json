@@ -1,0 +1,126 @@
+{
+  "verdict": "reject",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "critical",
+      "area": "field-policy bypass; v1 F1/F3",
+      "claim": "APPLICATION/JSON and application/problem+json bypass the field policy while downstream Hono validation parses them. An agent can therefore submit markPaid:true or forbidden variant prices and entitlement fields.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:482-485 checks case-sensitive includes('application/json') and otherwise passes undefined; :437-443 accepts uninspected bodies. packages/api/node_modules/hono/dist/validator/validator.js:5,14-18 accepts case-insensitive JSON and +json. packages/api/src/routes/admin-order-ops.ts:116-132 records paid drafts and settlement effects.",
+      "fix": "Use shared JSON recognition and body parsing; fail closed when a field-sensitive body cannot be inspected. Test uppercase and +json content types against real paid-draft and variant mutations."
+    },
+    {
+      "id": "F2",
+      "severity": "high",
+      "area": "product metadata; v1 F3",
+      "claim": "Allowed product updates have no field restriction on metafields. Agents can change softwareAccount, which controls customer account provisioning during settlement.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:397,414-418 allows product PATCH but restricts only variant and draft bodies. packages/api/src/routes/admin-products.ts:114,122-126 accepts and persists product.metafields; packages/api/src/licensing/account-bootstrap.ts:101-110,125-132 uses product metadata to select account provisioning.",
+      "fix": "Restrict product metafields explicitly, preferably through an allowed-field schema. Test product-level softwareAccount changes."
+    },
+    {
+      "id": "F3",
+      "severity": "high",
+      "area": "draft-order pricing",
+      "claim": "Blocking markPaid does not prevent agents overriding shipping charges. An unpaid draft can specify shipping:0 despite a configured shipping rate, changing the amount subsequently payable.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:418 restricts only markPaid. packages/api/src/routes/admin-order-ops.ts:60 accepts custom shipping; :101-102 prioritizes it over the configured calculator; :123 persists the resulting totals.",
+      "fix": "Disallow agent-supplied shipping amounts and define the permitted shipping-method selection/default behavior. Test that agents cannot override configured charges."
+    },
+    {
+      "id": "F4",
+      "severity": "high",
+      "area": "bootstrap atomicity; v1 F9/F10/F20",
+      "claim": "Browser bootstrap still uses separate transactions for token lookup, session deletion and session creation. Concurrent requests can both delete before either inserts, leaving multiple sessions. Bootstrap can also insert after rotation/removal and return success with an unusable session. The TTL floor exceeds token expiry when less than one minute remains.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:742-745 performs separate operations and applies Math.max(60_000,...); :322-325 inserts sessions through the global client. :633-657 locks lifecycle operations, but bootstrap never acquires that lock. :739 uses a limiter whose key includes IP, per packages/api/src/auth/rate-limit.ts:22-32.",
+      "fix": "Make bootstrap transaction-aware, acquire the same lifecycle lock, revalidate token ownership/revocation/expiry, replace the session atomically, and remove the minimum TTL floor. Add a unique partial index for session.api_token_id and concurrent bootstrap/revoke tests."
+    },
+    {
+      "id": "F5",
+      "severity": "high",
+      "area": "boundary inventory; v1 F4/F8",
+      "claim": "The runtime inventory still depends on a source regex that cannot classify generated or indented allowed handlers. The prescribed review guard ternary also contains requireWrite, which the inventory expressly rejects. Editing policy strings cannot make this gate sound.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:573 requires literal method/path on one line; :576 terminates only at an unindented closing line; :586 rejects any requireWrite occurrence; :536 prescribes the mixed review guard. packages/api/src/routes/admin-reviews.ts:76-89 computes method/path; packages/api/src/routes/admin-catalog-collections.ts:27-45 uses indented registrations.",
+      "fix": "Associate authorization metadata with actual registrations, or use analysis that understands generated handlers and conditional branches. Remove substring-based guard certification."
+    },
+    {
+      "id": "F6",
+      "severity": "high",
+      "area": "route accuracy and guard swaps",
+      "claim": "Several capability patterns do not exist, and the guard-swap file list omits admin.ts, which contains the intended notes and fulfillment handlers. Correcting SEO's path alone still leaves its human management guard.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:399-408,536. Actual gallery paths use /assets in packages/api/src/routes/admin-catalog.ts:39,64; collection membership uses POST in admin-catalog-collections.ts:122; SEO uses PATCH /seo/config with requireManage in admin-seo.ts:93-100. Notes and fulfillments retain requireWrite in admin.ts:253-260,366-389.",
+      "fix": "Resolve every method/path and capability decision before execution. Include admin.ts guard swaps explicitly and decide which SEO operations agents may perform."
+    },
+    {
+      "id": "F7",
+      "severity": "medium",
+      "area": "impossible allowed capability",
+      "claim": "Variant creation is allow-listed but cannot succeed under the intended field policy: the route requires price while the policy forbids supplying it.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:398,415; packages/api/src/routes/admin-catalog.ts:107-111,143.",
+      "fix": "Remove variant creation from agent capabilities or specify an authorized server-side price source. Add a successful request test for every advertised mutation."
+    },
+    {
+      "id": "F8",
+      "severity": "medium",
+      "area": "sensitive reads",
+      "claim": "The payment-settings deny prefix is reversed. Agents can read the actual endpoint's credential status and last-four metadata. The allowed store-settings read also returns payment configuration.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:389 denies /settings/payments. packages/api/src/routes/admin-payment-settings.ts:64-70,80-102 serves /payments/settings with only authentication/store checks. packages/api/src/routes/admin-settings.ts:179-180 returns payments and stripeMode.",
+      "fix": "Deny the actual payment-settings path and redact or deny sensitive fields on mixed-purpose reads. Include real GET routes in boundary coverage."
+    },
+    {
+      "id": "F9",
+      "severity": "high",
+      "area": "test fixture; v1 F14/F15",
+      "claim": "Every proposed DB test fails in beforeEach because the seeded product ID contains a nonhexadecimal p.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:842 inserts 'aaaaaaaa-aaaa-aaaa-aaaa-0000000000p1'; :850 runs seed before each test. packages/api/src/db/schema-core.ts:178 defines product.id as uuid.",
+      "fix": "Use a valid UUID and retain actual resource IDs for authorization and side-effect assertions."
+    },
+    {
+      "id": "F10",
+      "severity": "high",
+      "area": "security verification; v1 F15",
+      "claim": "The tests still do not prove the advertised boundary. The allowed test never creates a draft or rejects a review; preview only asserts that a nonexistent order is not 403. Tenant testing changes the store header without attacking foreign resource IDs. Release/licence denials, cookie expiry, lifecycle concurrency and bootstrap limits remain untested. Browser coverage performs no mutation.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:837-845,861-868,873-890,901-941,1052-1062; :1154 nevertheless marks F15 accepted.",
+      "fix": "Seed orders, variants, payments, licences and reviews in both stores. Verify successful allowed writes, valid human controls, denied requests with unchanged side effects, foreign-ID isolation, cookie expiry and lifecycle races. Exercise allowed and denied browser mutations."
+    },
+    {
+      "id": "F11",
+      "severity": "medium",
+      "area": "audit guarantees; v1 F16",
+      "claim": "Allowed mutations remain unaudited despite the self-review's guarantee. Asset upload writes a file and asset without an audit row; gallery attachment also lacks an audit insert. Middleware audits only its own policy refusals, excluding earlier CSRF failures and later handler authorization failures.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:486-494,1131,1155; packages/api/src/routes/admin-assets.ts:54-66; packages/api/src/routes/admin-catalog.ts:48-55; packages/api/src/app.ts:182 rejects CSRF before the proposed middleware.",
+      "fix": "Specify the exact audit guarantee, add actor-attributed records for allowed writes, and cover the promised denial classes. Assert records for each affected operation."
+    },
+    {
+      "id": "F12",
+      "severity": "low",
+      "area": "migration integration instructions",
+      "claim": "Task 1d instructs editing a registry-table list that does not exist. assert-shop-route-isolation.mjs contains a route-filename list; its session reference is only a comment.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:166; packages/api/scripts/assert-shop-route-isolation.mjs:3-6,17-31.",
+      "fix": "Remove the nonexistent registry-list task. Keep the actual assert-force-rls exemption update and distinguish comments from executable enforcement."
+    },
+    {
+      "id": "F13",
+      "severity": "medium",
+      "area": "execution policy; v1 F21",
+      "claim": "The plan still authorizes feature branches and dismisses required time ceilings, contradicting the supplied workspace rules and SellRight's main-checkout instruction. The claimed two-PR line ceiling has no supporting file/line estimate.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:94,1160; docs/agent-rules.md:22; supplied rules: 'create no branch or worktree without Adrian' and 'Bound every plan with one total-minutes number plus file & line ceilings'.",
+      "fix": "Use the authorized checkout/current branch and supply the required elapsed-clock estimate and file/line ceilings. Remove the unsupported exception for short-lived branches."
+    },
+    {
+      "id": "F14",
+      "severity": "low",
+      "area": "SDK verification baseline",
+      "claim": "Task 11 assumes an unchanged 181-symbol export assertion, but the current test pins 174. Its instruction to interpret any failure as a newly leaked export is unsupported.",
+      "evidence": "docs/plans/2026-10-10-agent-role.md:1118; packages/api/src/sdk/exports-contract.test.ts:35-37 pins [174,156,3,15].",
+      "fix": "Record the actual contract baseline and distinguish existing drift from changes introduced here. Check exported type changes separately from top-level symbol counts."
+    }
+  ],
+  "missing_tasks": [
+    "Replace field denylists with explicit allowed-field schemas and fail closed across every supported JSON content type.",
+    "Complete the route/guard capability map before treating the inventory as an executable gate.",
+    "Make browser bootstrap atomic with rotation/removal and prove the single-session invariant.",
+    "Repair fixtures and add successful capability, financial side-effect, tenancy, expiry, concurrency and browser-mutation coverage.",
+    "Correct \u00a76: v1 F1,F3,F4,F8,F9,F10,F14,F15,F16,F20,F21 remain partially addressed or unresolved.",
+    "Add explicit kind checks to requireInstallationAdmin and requireStepUp if retaining the claim that these guards independently refuse agents; packages/api/src/routes/admin-helpers.ts:91-94,116-118 checks only flags/timestamps."
+  ],
+  "riskiest_unaddressed": "An agent can bypass the middleware's body inspection with an accepted JSON content type and create a paid draft or modify prices/entitlements through handlers explicitly changed to admit agents."
+}
