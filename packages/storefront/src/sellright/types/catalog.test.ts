@@ -101,7 +101,7 @@ describe('normalizeManifestProductDetail', () => {
     const out = normalizeManifestProductDetail(raw);
     expect(out.slug).toBe('p1');
     expect(out.tags).toEqual(['Sale']);
-    // Featured first, and NOT repeated at its gallery position (Vendure keeps the featured asset in the gallery too).
+    // Featured first, and NOT repeated at its gallery position (the source catalog keeps the featured asset in the gallery too).
     expect(out.images).toEqual(['/assets/p1-0.jpg', '/assets/p1-1.jpg']);
     expect(out.variants).toHaveLength(1);
     const v = out.variants[0];
