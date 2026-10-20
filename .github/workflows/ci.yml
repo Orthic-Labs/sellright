@@ -251,8 +251,8 @@ jobs:
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
-    # unit ≈ 4 min, db ≈ 15 min, qualified matrix ≈ 12 min, enrolled matrix ≈ 13 min, setup ≈ 5 min (2026-10-20).
-    timeout-minutes: 75
+    # unit ≈ 4 min, db ≈ 16 min, each authorization matrix lane 13–30 min, setup ≈ 5 min (2026-10-20).
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:17-alpine
@@ -348,7 +348,7 @@ jobs:
           SQL
 
       - name: Full 345-route authorization matrix with genuine fresh-install bootstrap
-        timeout-minutes: 25
+        timeout-minutes: 35
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_matrix_test
           DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_authorization_matrix_test
@@ -372,7 +372,7 @@ jobs:
           SQL
 
       - name: Enrolled-only authorization regressions (343 contracts, genuine sessions)
-        timeout-minutes: 25
+        timeout-minutes: 35
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_enrolled_test
           DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_authorization_enrolled_test

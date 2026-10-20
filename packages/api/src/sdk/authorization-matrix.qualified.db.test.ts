@@ -151,5 +151,5 @@ describe('B2.8 FULL qualified authorization matrix — dedicated fresh DB', () =
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
     expect(engine.port).toBeNull(); expect(engine.executedPhases).not.toContain('jobs');
     expect((await ownerQuery('SELECT current_database() AS database')).rows[0]?.database).toBe(expectedDatabase);
-  }, 900_000);
+  }, 1_800_000); // 747 s on a loaded 4-core host, >900 s on the CI runner (2026-10-20)
 });
