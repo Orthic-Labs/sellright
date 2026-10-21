@@ -1,0 +1,118 @@
+{
+  "verdict": "request_changes",
+  "summary": "Read-only review complete. The design has authentication, RLS, throttling and rollout blockers. No edits, builds, tests or network access performed. Exact library versions, comparative library claims and WebAuthn Level 3 conformance remain externally unverified.",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 98,
+      "title": "Credential RLS blocks both customer and admin operations",
+      "detail": "The policy reads app.store_id, but packages/api/src/db/client.ts:199 sets app.current_store. Customer inserts therefore fail and reads return nothing. Independently, store_id NULL never satisfies this policy, so admin credentials remain inaccessible even after correcting the setting. unsafeUnscopedDb uses the same runtime pool (client.ts:155); it does not bypass RLS, and client.ts:120 rejects privileged serving roles.",
+      "fix": "Use nullif(current_setting('app.current_store', true), '')::uuid for customer isolation. Prefer separate global admin and tenant-scoped customer credential tables, or specify a rigorously tested mixed-table policy. Prove admin access and customer isolation using the unprivileged runtime role."
+    },
+    {
+      "severity": "high",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 138,
+      "title": "A stolen customer session can install a permanent login credential",
+      "detail": "Registration requires only an existing customer session. Those sessions default to 30 days and can be renewable (packages/api/src/auth/session.ts:11). An attacker holding one can register their own authenticator and retain access after the victim resets their password: packages/api/src/routes/customer-tokens.ts:128 revokes sessions and pending recovery tokens, but the proposed unchanged recovery flow does not address passkeys. Existing email changes deliberately require current-password proof to prevent session-only takeover (customer-tokens.ts:195).",
+      "fix": "Require fresh authentication through an existing credential or a browser-bound mailbox proof before adding or removing customer passkeys. Bind that proof to the customer, store, session and operation; recheck the live session under the customer lock. Define recovery behavior for maliciously enrolled credentials."
+    },
+    {
+      "severity": "high",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 115,
+      "title": "Challenge consumption lacks a complete acceptance contract",
+      "detail": "The stated UPDATE predicate checks only consumed_at. The design stores kind, rp_id, owner, tenant, session and expiry but does not require all applicable bindings during redemption. This matters especially where admin and shop share an RP ID: a valid signature alone does not authorize a different ceremony or subject. Step-up also must verify credential ownership server-side; allowCredentials is client input. Existing consumeMagicLink checks token, kind, store, unused state and expiry together (packages/api/src/auth/magic-link.ts:71), while federated confirmation checks initiating-browser possession before consumption (routes/auth.ts:412).",
+      "fix": "Specify one verification contract covering server-generated challenge entropy, exact challenge matching, expiry, ceremony kind, RP/origin, tenant, subject, session and UP/UV enforcement. Bind browser login ceremonies to an initiating nonce and require step-up credentials to belong to the current admin. Consume atomically with the authorized effect; add wrong-kind, wrong-session, wrong-browser, missing-UP/UV and concurrent-redemption tests."
+    },
+    {
+      "severity": "high",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 129,
+      "title": "Public admin passkey login cannot pass existing middleware",
+      "detail": "Anonymous requests to both proposed login endpoints are rejected before their handlers: packages/api/src/app.ts:223 has an exact pre-session allowlist, and app.ts:287 separately exempts only existing paths from CSRF. Simply registering routes under the admin router is insufficient. Adding them blindly to PUBLIC in routes/admin-agent-guard.ts:16 would instead bypass the explicitly promised agent denial because PUBLIC returns before principal checks.",
+      "fix": "Include exact admission and pre-auth CSRF integration in the engine change. Specify how stale cookies and supplied agent/service credentials behave, preserve protected registration and step-up routes, and exercise cookie-free login through the complete application middleware."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 154,
+      "title": "The literal passkey account key creates a deployment-wide lockout",
+      "detail": "reserveAdminAuthAttempt(ip, 'passkey') is not merely a per-IP bucket. packages/api/src/auth/rate-limit.ts:91 also consumes an account bucket shared across every IP. Consequently all passkey users share admin:passkey, allowing a small unauthenticated request burst to exhaust the default 20-per-hour account allowance for the whole installation.",
+      "fix": "Use an explicit IP-only admission limiter for subjectless options. On verification, apply a carefully defined credential/owner budget without a shared synthetic account key or an account-existence oracle. Keep password-failure clearing separate from passkey success."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 155,
+      "title": "The proposed shop limiter does not provide the claimed IP budget",
+      "detail": "federatedMailGate is keyed by email and IP-plus-email, not IP alone (packages/api/src/routes/auth.ts:319). It performs a check followed by later recording and only applies to confirmation-mail flows. Discoverable options have no email, and the verify route lists no concrete limiter. Reusing this helper cannot supply the claimed bounded passkey authentication surface; step-up options and verification also lack a specified budget.",
+      "fix": "Define atomic attempt-counted admission for both options and verification before database growth or signature work, with explicit store/IP keys, limits and payload caps. Define authenticated step-up and credential-count limits separately. Test concurrent exhaustion through real handlers."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 116,
+      "title": "Counter checking is not serialized with credential updates",
+      "detail": "A comparison against a previously read counter followed by an unspecified update allows concurrent ceremonies to validate against the same stale value or overwrite a newer counter with an older one. Single-use challenges do not serialize different challenges for one credential. The existing TOTP replay guard explicitly serializes comparison and insertion per admin (packages/api/src/auth/second-factor.ts:81).",
+      "fix": "Specify a per-credential lock or conditional counter update, rechecking credential existence and ownership before committing authentication. Keep challenge consumption, counter advancement and session/step-up effects consistent. Test concurrent assertions, deletion races, zero-only counters and regressions."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 114,
+      "title": "The global challenge table conflicts with enforced RLS inventory",
+      "detail": "passkey_challenge has store_id but no RLS. packages/api/src/db/assert-force-rls.ts:33 discovers every table with that column and rejects non-exempt tables without ENABLE plus FORCE; its exemption set does not include this table. packages/api/src/db/rls-tables.test.ts:38 independently mirrors that classification. Public shop login already has store context, as routes/auth.ts:352 demonstrates, so pre-authentication alone does not justify making all shop challenges global.",
+      "fix": "Choose and document separate global-admin and scoped-shop challenge storage, or justify and register a narrow global exemption with mandatory tenant predicates and isolation tests. Include the Drizzle schema, migration journal and hand-written migration guard updates in the implementation surface."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 148,
+      "title": "Enrolling TOTP first does not preserve a universal recovery fallback",
+      "detail": "Under supported off or privileged policies, an eligible admin can enroll a passkey and then disable TOTP through the unchanged route. packages/api/src/auth/admin-staff.ts:82 permits disable when current policy allows it and deletes recovery codes at line 110. resolveAdmin then computes enrollment restrictions from current policy, not passkey ownership (auth/admin-session.ts:212). The claimed mandatory fallback and assumption that TOTP remains are therefore false outside the all-required configuration.",
+      "fix": "Decide whether TOTP is merely an enrollment prerequisite or must remain enrolled while passkeys exist. Enforce the chosen invariant transactionally during registration verification and TOTP disable, and test all supported policy modes and concurrent changes."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 178,
+      "title": "Eight-principal coverage omits critical passkey authorization states",
+      "detail": "The eight matrix principals are admin, agent and service identities; they include neither anonymous callers nor customer identities (packages/api/src/sdk/authorization-matrix.testkit.ts:5). Existing customer routes use denial cells plus separate genuine customer controls (authorization-matrix.customer-cases.testkit.ts:220 and :269). The proposed coverage does not explicitly prove anonymous login, same-store foreign-customer access denial, enrollment-only behavior, or owner-bound passkey step-up.",
+      "fix": "Specify public versus customer versus admin contracts per route and add supplemental anonymous, customer-A/customer-B, cross-store, enrollment-only and cross-session controls. Obtain credentials and step-up through actual routes, then assert denied requests leave credentials, challenges and sessions unchanged."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 166,
+      "title": "The Google rollout omits configuration required to show the button",
+      "detail": "Client IDs alone do not enable the existing storefront integration. packages/storefront/src/config/google-signin.ts:35 requires VITE_SELLRIGHT_STORE_SLUG, and :55 additionally requires the validated request host in SELLRIGHT_GOOGLE_SIGNIN_HOSTS. Missing either suppresses both the button and its CSP sources. The sign-in loader uses this exact resolver (routes/sign-in/index.tsx:15).",
+      "fix": "Add the store pin and explicit production host list, including each supported bare/www host, to brand rollout acceptance. Apply equivalent store/host gating to Apple configuration and validate the rendered button and CSP together."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 151,
+      "title": "Last-passkey deletion assumes a recovery method that may be disabled",
+      "detail": "Magic-link sign-in is explicitly opt-in (packages/api/src/auth/magic-link.ts:9), and routes/auth.ts:587 returns MAGIC_LINK_DISABLED otherwise. Therefore a passwordless customer without a usable provider cannot necessarily use the stated fallback after deleting or losing their final passkey. Password-reset recovery exists separately, but the design neither names nor verifies it as the fallback.",
+      "fix": "Resolve recovery availability from the actual store policy and account state. Require or explicitly offer a usable recovery path before final-credential removal, including the existing password-reset route where appropriate; test magic-link-disabled and passwordless accounts."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 48,
+      "title": "The proposed cross-surface acceptance test contradicts credential ownership",
+      "detail": "One credential cannot sign into both the admin and customer account under the proposed exclusive-owner CHECK and unique (rp_id, credential_id). The engine also treats these as separate identities and session types: packages/api/src/db/schema-core.ts:180 has distinct adminUserId/customerId fields, with separate creators in auth/admin-session.ts:62 and auth/session.ts:71. Sharing an RP ID does not link those identities.",
+      "fix": "Test separate admin and customer credentials under the shared RP ID, including explicit rejection when either is submitted to the other surface. Test bare/www compatibility for the same identity separately. Remove the implied cross-surface account linking."
+    },
+    {
+      "severity": "medium",
+      "file": "docs/plans/2026-10-21-passkeys-and-federated-signin.md",
+      "line": 51,
+      "title": "Dropping tables is not a safe release rollback",
+      "detail": "Dropping the tables destroys enrolled credentials and leaves an applied migration recorded, so re-upgrading does not recreate them automatically. The runtime migration entrypoint uses Drizzle's journaled migrator (packages/api/src/scripts/migrate.ts:16), and docs/runbooks/migrations.md requires additive schema compatibility for image rollback. Deployed admin/storefront clients and any cleanup job would also still reference the removed surface.",
+      "fix": "Define rollback as coordinated application rollback or feature disable while retaining additive tables and migration history. Defer destructive cleanup. Before Damned cutover, require migration/re-upgrade rehearsal and browser acceptance on the final production RP IDs/origins, including password/TOTP and customer recovery fallbacks."
+    }
+  ]
+}
