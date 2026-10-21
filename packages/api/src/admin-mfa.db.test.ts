@@ -353,10 +353,10 @@ describe.skipIf(!isTestDb)('credential mutation races', () => {
     const { token } = (await login('owner@mfa.test', PW)).body;
     const enrolled = await enrol(token!);
     const barrier = proofBarrier();
-    const original = secondFactor.verifySecondFactor;
-    const spy = vi.spyOn(secondFactor, 'verifySecondFactor').mockImplementationOnce(async (...args) => {
+    const original = secondFactor.verifySecondFactorDetailed; // 0108: the route consumes the receipt-bearing seam
+    const spy = vi.spyOn(secondFactor, 'verifySecondFactorDetailed').mockImplementationOnce(async (...args) => {
       const result = await original(...args);
-      expect(result).toBe(true);
+      expect(result.ok).toBe(true);
       barrier.enter();
       await barrier.released;
       return result;
