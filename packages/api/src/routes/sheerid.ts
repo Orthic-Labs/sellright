@@ -52,7 +52,7 @@ sheeridRoutes.openapi(
     const programId = sheeridProgram(cfg, c.req.valid('json').programId);
     if (!cfg || !programId) throw new HttpError(409, 'SheerID is not configured for this store');
     const out = await withStore(st.id, async (tx) => {
-      const cust = await resolveCustomer(tx, customerToken(c) ?? '');
+      const cust = await resolveCustomer(tx, customerToken(c) ?? '', false, { renew: false });
       if (!cust) return null;
       const { id } = await startVerification(tx, st.id, cust.id, programId);
       const url = new SheerIdClient(cfg).verificationUrl(programId, cust.id);
@@ -76,7 +76,7 @@ sheeridRoutes.openapi(
   async (c) => guard(c, async () => {
     const st = await resolveStoreFromCtx(c);
     const out = await withStore(st.id, async (tx) => {
-      const cust = await resolveCustomer(tx, customerToken(c) ?? '');
+      const cust = await resolveCustomer(tx, customerToken(c) ?? '', false, { renew: false });
       if (!cust) return null;
       // Recompute lazily so an expired row drops out of the response even if
       // the sweep job hasn't run yet.

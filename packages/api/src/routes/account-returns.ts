@@ -46,7 +46,7 @@ const ReturnsOut = z.object({
 });
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
-  return token ? resolveCustomer(tx, token) : null;
+  return token ? resolveCustomer(tx, token, false, { renew: false }) : null; // 0108: never row-lock the session inside a business transaction (design §5)
 }
 
 interface Loaded {

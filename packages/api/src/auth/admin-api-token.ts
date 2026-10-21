@@ -47,6 +47,6 @@ export async function resolveAgentByToken(token: string): Promise<AdminPrincipal
   if (!r || (r.expiresAt && r.expiresAt.getTime() <= Date.now()) || r.kind !== 'agent' || !AGENT_ROLES.has(r.role)) return null;
   await db.update(s.adminApiToken).set({ lastUsedAt: new Date() })
     .where(and(eq(s.adminApiToken.id, r.tokenId), or(isNull(s.adminApiToken.lastUsedAt), lt(s.adminApiToken.lastUsedAt, sql`now() - interval '5 minutes'`))));
-  return { id: r.id, email: r.email, kind: 'agent', auth: 'api_token', apiTokenId: r.tokenId, isInstallationAdmin: false, stepUpAt: null,
+  return { id: r.id, email: r.email, kind: 'agent', auth: 'api_token', apiTokenId: r.tokenId, isInstallationAdmin: false, stepUpAt: null, stepUpEpoch: null, securityEpoch: 0,
     stores: [{ storeId: r.storeId, slug: r.slug, name: r.name, currency: r.currency, taxRate: r.taxRate ?? 0, shippingTaxable: r.shippingTaxable ?? false, role: r.role, permissions: (r.permissions as Record<string, boolean> | null) ?? null }] };
 }

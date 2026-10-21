@@ -6,6 +6,8 @@ import { hashAgentToken, newAgentToken } from '../auth/admin-api-token.js';
 import { openTotpSecret } from '../auth/totp-secret.js';
 import { verifyPassword } from '../auth/password.js';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
+import { adminUserHandle } from '../auth/passkeys-core.js';
+import { adminAuthenticator, adminLoginAssertion, enrolAdminPasskey, passkeyNonceCookie, stepUp, withCookie } from './authorization-matrix.passkey.testkit.js';
 import { type MatrixCase, type MatrixCell, type MatrixPrincipal, type MatrixProof } from './authorization-matrix.testkit.js';
 
 type Identity = { id: string; email: string; password: string; token: string; totpSecret: string | null };
@@ -76,7 +78,7 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
   };
   const success = async (response: Response, proof: MatrixProof) => proof.equal(await json(response), { ok: true }, 'exact success response');
   const add = (key: string, outcomes: Outcomes, prepare: (principal: MatrixPrincipal, allow: boolean) => Promise<Prepared>,
-    options: { contract?: MatrixCase['contract']; group?: string; denial?: 'install' | 'browser' | 'device' | 'policy' | 'write' | 'owner' } = {}) => {
+    options: { contract?: MatrixCase['contract']; group?: string; denial?: 'install' | 'browser' | 'device' | 'policy' | 'write' | 'owner' | 'human' } = {}) => {
     const method = key.split(' ')[0]!;
     const make = (principal: MatrixPrincipal): MatrixCell => {
       const status = outcomes[principal], allow = status === 200;
@@ -98,6 +100,7 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
                 proof.equal(body.error?.code, 'AGENT_NOT_ALLOWED', 'genuine sra agent hits hard boundary');
                 proof.equal(body.error?.message, MESSAGES[options.group], 'exact hard boundary reason'); return;
               }
+              if (options.denial === 'human' && principal === 'agent') { proof.equal(body.error?.message, 'agents cannot perform this action', 'human-only route (GET: the agent deny map does not apply; requireHuman answers)'); return; }
               if (options.denial === 'install') { proof.equal(body.error?.message, 'requires installation administrator', 'ordinary store owner has no install authority'); return; }
               if (options.denial === 'browser') { proof.equal(body.error?.message, 'browser-session requires an agent API token bearer', 'human sessions cannot become token-bound agents'); return; }
               if (options.denial === 'policy') { proof.equal(body.error?.code, 'TOTP_REQUIRED', 'required enrolled factor cannot be disabled'); return; }
@@ -230,6 +233,105 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
       proof.equal((await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id])).length, before + 1, 'exactly one session created', 'state');
     } };
   }, { contract: 'public' });
+
+  // ── passkeys (0108): design §8. Every prerequisite runs through the real routes with the software authenticator. ──
+  const passkeyReady = async (principal: MatrixPrincipal) => { // enrolled identity with a fresh native step-up (epoch-stamped)
+    const target = await fixture.freshIdentity(principal);
+    await stepUp(fixture.request, identityHeaders(target), target.password, factorCode(target));
+    return target;
+  };
+  add('GET /v1/admin/capabilities', PUBLIC, async () => ({ url: '/v1/admin/capabilities', async verify(response: Response, proof: MatrixProof) {
+    proof.equal(await json(response), { passkeys: true }, 'identical capability answer for every caller');
+  } }), { contract: 'public' });
+  add('POST /v1/admin/passkeys/login/options', PUBLIC, async () => ({ url: '/v1/admin/passkeys/login/options', body: {}, async verify(response: Response, proof: MatrixProof) {
+    const body = await json(response);
+    proof.ok(typeof body.options?.challenge === 'string' && body.options.userVerification === 'required' && Array.isArray(body.options.allowCredentials) && body.options.allowCredentials.length === 0, 'discoverable options, identical for every caller');
+    proof.ok(/sr_pk_nonce=/.test(response.headers.get('set-cookie') ?? ''), 'browser-binding nonce cookie set');
+    proof.equal(await global('SELECT kind, admin_user_id FROM admin_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'login', admin_user_id: null }], 'unbound login challenge row', 'state');
+  } }), { contract: 'public' });
+  add('POST /v1/admin/passkeys/login/verify', PUBLIC, async (principal) => {
+    // Like /v1/admin/login: a genuine assertion selects the account; the supplied principal's credentials grant nothing.
+    const target = await passkeyReady('staff');
+    const { id: credentialId, auth } = await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id);
+    const assertion = await adminLoginAssertion(fixture.request, auth, target.id, 1, fixture.storeSlug);
+    const before = (await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id])).length;
+    return { url: '/v1/admin/passkeys/login/verify', body: { response: assertion.response, returnToken: true }, headers: withCookie(fixture.requestHeaders[principal], assertion.cookie),
+      async verify(response: Response, proof: MatrixProof) {
+        const body = await json(response);
+        proof.equal(body.admin, { email: target.email }, 'assertion selects the enrolled human account');
+        proof.equal(body.token, cookiesToken(response), 'explicit API token agrees with secure cookie');
+        proof.equal(await global('SELECT admin_user_id,api_token_id FROM session WHERE token_hash=$1', [digest(body.token)]), [{ admin_user_id: target.id, api_token_id: null }], 'genuine human session persisted', 'state');
+        proof.equal((await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id])).length, before + 1, 'exactly one session created', 'state');
+        proof.equal(await global('SELECT counter::int AS counter FROM admin_passkey_credential WHERE id=$1', [credentialId]), [{ counter: 1 }], 'credential counter advanced by the accepted assertion', 'state');
+      } };
+  }, { contract: 'public' });
+  add('GET /v1/admin/passkeys', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    const enrolled = allow ? await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id) : null;
+    return { url: '/v1/admin/passkeys', ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      proof.equal((await json(response)).items.map((p: any) => p.id), [enrolled!.id], 'lists exactly the enrolled credential, no key material');
+    } };
+  }, { denial: 'human' });
+  add('POST /v1/admin/passkeys/register/options', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    return { url: '/v1/admin/passkeys/register/options', body: {}, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      const body = await json(response);
+      proof.ok(typeof body.options?.challenge === 'string' && body.options.authenticatorSelection?.residentKey === 'required' && body.options.authenticatorSelection?.userVerification === 'required', 'registration options require a discoverable, user-verified credential');
+      proof.equal(await global('SELECT kind, admin_user_id, epoch FROM admin_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'register', admin_user_id: target.id, epoch: 0 }], 'register challenge bound to the admin and its epoch', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('POST /v1/admin/passkeys/register/verify', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    let body: unknown = { response: adminAuthenticator().register({ challenge: 'bWF0cml4LW5vdC1hLXJlYWwtY2hhbGxlbmdl' }), label: 'matrix key' }, headers: Record<string, string> | undefined;
+    if (allow) {
+      const options = await fixture.request('/v1/admin/passkeys/register/options', { method: 'POST', headers: identityHeaders(target), body: '{}' });
+      assert.equal(options.status, 200, 'real register options prerequisite');
+      const { options: o } = await options.json() as { options: { challenge: string } };
+      body = { response: adminAuthenticator().register({ challenge: o.challenge, userHandle: adminUserHandle(target.id) }), label: 'matrix key' };
+      headers = withCookie(identityHeaders(target), passkeyNonceCookie(options));
+    }
+    return { url: '/v1/admin/passkeys/register/verify', body, ...(headers ? { headers } : {}), async verify(response: Response, proof: MatrixProof) {
+      const row = await json(response);
+      proof.equal(row.label, 'matrix key', 'registered credential echoed without key material');
+      proof.equal(await global('SELECT admin_user_id, epoch, label FROM admin_passkey_credential WHERE id=$1', [row.id]), [{ admin_user_id: target.id, epoch: 0, label: 'matrix key' }], 'credential committed for the stepped-up admin under its epoch', 'state');
+      proof.equal(await global('SELECT count(*)::int AS n FROM admin_passkey_challenge WHERE admin_user_id=$1 AND consumed_at IS NULL', [target.id]), [{ n: 0 }], 'register challenge consumed', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('DELETE /v1/admin/passkeys/{id}', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    const enrolled = allow ? await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id) : { id: '00000000-0000-4000-8000-000000000000' };
+    return { url: '/v1/admin/passkeys/' + enrolled.id, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ok: true }, 'exact success response');
+      proof.equal(await global('SELECT id FROM admin_passkey_credential WHERE id=$1', [enrolled.id]), [], 'credential removed', 'state');
+      proof.equal(await global('SELECT count(*)::int AS n FROM session WHERE admin_user_id=$1 AND step_up_at IS NOT NULL', [target.id]), [{ n: 0 }], 'step-up cleared on every session of the admin', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('POST /v1/admin/step-up/passkey/options', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    if (allow) await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id);
+    return { url: '/v1/admin/step-up/passkey/options', body: {}, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      const body = await json(response);
+      proof.ok(typeof body.options?.challenge === 'string' && body.options.allowCredentials?.length === 1, 'step-up options list exactly the admin\'s credential');
+      proof.equal(await global('SELECT kind, admin_user_id, session_hash FROM admin_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'step_up', admin_user_id: target.id, session_hash: digest(target.token) }], 'step-up challenge bound to this session', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('POST /v1/admin/step-up/passkey/verify', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    let body: unknown = { response: adminAuthenticator().authenticate({ challenge: 'bWF0cml4LW5vdC1hLXJlYWwtY2hhbGxlbmdl', counter: 1 }) }, headers: Record<string, string> | undefined;
+    if (allow) {
+      const { auth } = await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id);
+      await global('UPDATE session SET step_up_at=NULL, step_up_epoch=NULL WHERE token_hash=$1', [digest(target.token)]); // the ceremony must earn it anew
+      const options = await fixture.request('/v1/admin/step-up/passkey/options', { method: 'POST', headers: identityHeaders(target), body: '{}' });
+      assert.equal(options.status, 200, 'real passkey step-up options prerequisite');
+      const { options: o } = await options.json() as { options: { challenge: string } };
+      body = { response: auth.authenticate({ challenge: o.challenge, counter: 1, userHandle: adminUserHandle(target.id) }) };
+      headers = withCookie(identityHeaders(target), passkeyNonceCookie(options));
+    }
+    return { url: '/v1/admin/step-up/passkey/verify', body, ...(headers ? { headers } : {}), async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ok: true }, 'exact success response');
+      proof.equal(await global('SELECT (step_up_at IS NOT NULL) AS stepped, step_up_epoch FROM session WHERE token_hash=$1', [digest(target.token)]), [{ stepped: true, step_up_epoch: 0 }], 'this session stepped up under the current epoch', 'state');
+    } };
+  }, { group: 'credentials' });
   add('POST /v1/admin/logout', PUBLIC, async principal => {
     const human = ['owner', 'manager', 'staff', 'read_only', 'foreign_store'].includes(principal);
     const target = human ? await fixture.freshIdentity(principal) : null;

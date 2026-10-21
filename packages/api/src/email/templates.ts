@@ -93,6 +93,15 @@ export const federatedLinkConfirm = (store: StoreCtx, data: { url: string; provi
      <p>Open this link in the same browser where you started signing in. If you're reading this on a different device, open this email in the browser where you started. Starting again sends a new link and replaces this one.</p>
      <p>If you didn't try to sign in with ${escape(data.providerName)}, ignore this email — nothing happens unless the link is confirmed.</p>`);
 
+// Passkeys (0108): mailbox proof for managing passkeys on an account with neither a password nor a passkey
+// (auth/passkeys-shop.ts branch D). Browser-bound exactly like the federated confirmation link.
+export const passkeyManageConfirm = (store: StoreCtx, data: { url: string; ttlMinutes: number }) =>
+  wrap(store, `Confirm passkey changes on ${store.name}`,
+    `<p>Someone signed in to your ${escape(store.name)} account asked to add or remove a passkey. To allow it, confirm from the same browser:</p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Confirm passkey changes</a></p>
+     <p>Open this link in the same browser where you asked, within ${data.ttlMinutes} minutes. It works once.</p>
+     <p>If you didn't ask for this, ignore this email — nothing changes unless the link is confirmed, and you can sign out everywhere from your account page.</p>`);
+
 export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: string; inviterEmail: string }) =>
   wrap(store, `${data.inviterEmail} invited you to ${store.name}`,
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>

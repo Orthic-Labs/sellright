@@ -171,6 +171,9 @@ auth.openapi(
       // This upgrades SellRight's pre-Argon2 scrypt hashes and future lower-cost
       // Argon2 hashes only after the supplied password has been verified.
       if (passwordNeedsRehash(cust.passwordHash)) {
+        // 0108: an in-place rehash keeps the customer's passkeys — the transaction-local flag tells the
+        // customer_security_epoch trigger not to bump the epoch for this representation change (design §4).
+        await tx.execute(sql`SELECT set_config('app.passkey_rehash', '1', true)`);
         await tx.update(s.customer).set({ passwordHash: await hashPassword(password), updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
       }
 
@@ -634,10 +637,15 @@ auth.openapi(
     if (!magicLinkPolicy(st.config).enabled) return errJson(c, 409, 'MAGIC_LINK_DISABLED', 'magic-link sign-in is not enabled for this store');
     const { token: raw } = c.req.valid('json');
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
-      const consumed = await consumeMagicLink(tx, st.id, raw);
-      if (!consumed) return { ok: false };
-      const [cust] = await tx.select().from(s.customer).where(eq(s.customer.id, consumed.customerId)).limit(1);
+      // 0108 (design §5): owner first — find the token's customer without consuming, lock the customer row, then
+      // consume atomically (a concurrent email change/erasure that won the lock already burned the token).
+      const [probe] = await tx.select({ customerId: s.customerToken.customerId }).from(s.customerToken)
+        .where(and(eq(s.customerToken.tokenHash, hashToken(raw)), eq(s.customerToken.kind, 'magic_link'), eq(s.customerToken.storeId, st.id), isNull(s.customerToken.usedAt))).limit(1);
+      if (!probe) return { ok: false };
+      const [cust] = await tx.select().from(s.customer).where(eq(s.customer.id, probe.customerId)).limit(1).for('update');
       if (!cust) return { ok: false };
+      const consumed = await consumeMagicLink(tx, st.id, raw);
+      if (!consumed || consumed.customerId !== cust.id) return { ok: false };
       // A magic-link sign-in proves control of the mailbox — treat it the same
       // as an explicit email-verify token.
       if (!cust.emailVerified) await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));

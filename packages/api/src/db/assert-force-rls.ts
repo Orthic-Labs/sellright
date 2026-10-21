@@ -27,6 +27,8 @@ const EXEMPT = new Set([
   'catalog_manifest_pending',
   // admin_api_token: registry resolved before store context (0094); isolation = token hash ⋈ single grant, tested in routes/admin-agents.db.test.ts
   'admin_api_token',
+  // passkeys (0108): global admin credential/challenge registries, resolved before any store context like admin_recovery_code
+  'admin_passkey_credential', 'admin_passkey_challenge',
 ]);
 
 async function main() {

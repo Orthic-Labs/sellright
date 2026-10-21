@@ -16,12 +16,12 @@ import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
-import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
+import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
-import { verifySecondFactor } from '../auth/second-factor.js';
+import { verifySecondFactorDetailed } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { resolveOrderRecipient } from '../orders/recipient.js';
@@ -66,24 +66,27 @@ admin.openapi(
     // verification, so timing does not reveal which admin e-mails exist.
     const passwordOk = u && u.kind !== 'agent' && u.passwordHash ? await verifyPassword(password, u.passwordHash) : await verifyPasswordAgainstDummy(password);
     if (!u || !passwordOk) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    let receipt: { id: string; usedAt: Date } | undefined;
     if (u.totpSecret) {
       if (!totp) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
-      // P1b: a 6-digit TOTP code or a one-time recovery code (consumed on success).
-      if (!(await verifySecondFactor(u.id, u.totpSecret, totp))) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      // P1b: a 6-digit TOTP code or a one-time recovery code (consumed on success; 0108: its receipt is re-checked
+      // under the owner lock so a code from a replaced set cannot sign in).
+      const factor = await verifySecondFactorDetailed(u.id, u.totpSecret, totp);
+      if (!factor.ok) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      receipt = factor.receipt;
     }
     await clearAdminAuthFailures(ip, email);
     // Upgrade a legacy hash (pre-Argon2id scrypt — e.g. RightSites admins — or outdated Argon2 parameters)
     // now that the plaintext has just been verified. Best-effort: a failure never blocks the sign-in.
     // Conditional on the stored hash still being the one just verified, so a concurrent password change is never undone.
-    let currentHash = u.passwordHash!;
-    if (passwordNeedsRehash(currentHash)) {
-      try {
-        const upgraded = await hashPassword(password);
-        if (await rehashAdminPasswordIfUnchanged(u.id, currentHash, upgraded)) currentHash = upgraded;
-      } catch { /* retried on the next sign-in */ }
+    // 0108: the rehash is applied INSIDE the session transaction, after the credential snapshot (epoch, stored TOTP
+    // version, recovery receipt) is re-checked under the owner lock — a login whose factor was superseded changes nothing.
+    let rehashTo: string | undefined;
+    if (passwordNeedsRehash(u.passwordHash!)) {
+      try { rehashTo = await hashPassword(password); } catch { /* retried on the next sign-in */ }
     }
     // The session is created only if the password verified above is still the account's password (P1b review).
-    const token = await createAdminSessionIfCredential(u.id, currentHash, !!u.totpSecret);
+    const token = await createAdminSessionIfCredential(u.id, u.passwordHash!, !!u.totpSecret, { epoch: u.securityEpoch, totpVersion: u.totpVersion, receipt, rehashTo });
     if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie

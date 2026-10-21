@@ -1,9 +1,13 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { routeLoader$, useNavigate } from '@qwik.dev/router';
+import { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill } from '@simplewebauthn/browser';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
+import { loginWithApple, signInWithApple } from '~/providers/shop/account/apple-auth';
+import { loginWithPasskey } from '~/providers/shop/account/passkeys';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
+import { appleSignInClientIdForHost } from '~/config/apple-signin';
 import { googleSignInClientIdForHost } from '~/config/google-signin';
 import { validatedRequestHost } from '~/utils/trusted-request.server';
 import { SignInError } from './SignInError';
@@ -14,6 +18,13 @@ const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
  *  CSP in entry.express.tsx makes the same per-host decision from the same function). */
 export const useGoogleClientId = routeLoader$(({ request }) =>
 	googleSignInClientIdForHost(
+		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
+	),
+);
+
+/** Empty = Apple sign-in off for THIS request's host (same per-host decision the CSP makes in entry.express.tsx). */
+export const useAppleClientId = routeLoader$(({ request }) =>
+	appleSignInClientIdForHost(
 		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
 	),
 );
@@ -30,9 +41,15 @@ const PRIMARY =
 const INPUT =
 	'mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white';
 
+const PROVIDER_BUTTON =
+	'w-full flex justify-center py-3 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-800 bg-white hover:bg-gray-50 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors cursor-pointer disabled:opacity-60';
+const APPLE_BUTTON =
+	'w-full flex justify-center py-3 px-4 border border-black rounded-md shadow-sm text-sm font-medium text-white bg-black hover:bg-gray-900 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-gray-700 transition-colors cursor-pointer disabled:opacity-60';
+
 export default component$(() => {
 	const navigate = useNavigate();
 	const googleClientId = useGoogleClientId();
+	const appleClientId = useAppleClientId();
 
 	const view = useSignal<View>('signin');
 	const email = useSignal('');
@@ -51,6 +68,12 @@ export default component$(() => {
 	/** Whether this store has passwordless sign-in links switched on (GET /v1/shop/config) — offered only when it has. */
 	const magicLinkEnabled = useSignal(false);
 
+	/** Passkeys: the store has them on (GET /v1/shop/config auth.passkeys) AND this browser can use them. Both must hold. */
+	const passkeysEnabled = useSignal(false);
+	const passkeySupported = useSignal(false);
+	/** Bumped to start a fresh conditional-UI (autofill) ceremony, e.g. after a manual passkey attempt ended. */
+	const autofillAttempt = useSignal(0);
+
 	const resetChallenge = $(() => {
 		turnstileToken.value = '';
 		if (widgetId.value) (window as any).turnstile?.reset(widgetId.value);
@@ -58,10 +81,14 @@ export default component$(() => {
 
 	useVisibleTask$(async () => {
 		try {
-			magicLinkEnabled.value = !!(await getShopConfig()).auth?.magicLink;
+			const auth = (await getShopConfig()).auth as { magicLink?: boolean; passkeys?: boolean } | undefined;
+			magicLinkEnabled.value = !!auth?.magicLink;
+			passkeysEnabled.value = auth?.passkeys === true && browserSupportsWebAuthn();
 		} catch {
 			magicLinkEnabled.value = false; // fail closed: no link option rather than one that errors
+			passkeysEnabled.value = false;
 		}
+		passkeySupported.value = passkeysEnabled.value;
 	});
 
 	/** Google's library failed to load or timed out: say so and offer a retry rather than leave a blank area. */
@@ -73,6 +100,60 @@ export default component$(() => {
 		error.value = '';
 		loading.value = true;
 		const result = await loginWithGoogle(credential);
+		if (result.ok) {
+			navigate('/account');
+			return;
+		}
+		error.value = result.message;
+		loading.value = false;
+	});
+
+	const handlePasskey = $(async () => {
+		if (loading.value) return;
+		error.value = '';
+		loading.value = true;
+		const result = await loginWithPasskey();
+		if (result.ok) {
+			navigate('/account');
+			return;
+		}
+		error.value = result.message;
+		loading.value = false;
+		autofillAttempt.value++;
+	});
+
+	// Conditional UI: the browser offers saved passkeys in the email field's autofill list while the sign-in view is
+	// showing. A cancelled or aborted ceremony stays silent; a real failure is shown.
+	useVisibleTask$(async ({ track }) => {
+		const current = track(() => view.value);
+		track(() => autofillAttempt.value);
+		if (!track(() => passkeysEnabled.value) || current !== 'signin') return;
+		if (!(await browserSupportsWebAuthnAutofill())) return;
+		const result = await loginWithPasskey({ useBrowserAutofill: true });
+		if (result.ok) {
+			navigate('/account');
+			return;
+		}
+		if (!('cancelled' in result)) error.value = result.message;
+	});
+
+	const appleUnavailable = useSignal(false);
+	const handleApple = $(async () => {
+		if (loading.value) return;
+		error.value = '';
+		appleUnavailable.value = false;
+		loading.value = true;
+		const outcome = await signInWithApple(appleClientId.value);
+		if (outcome.status === 'cancelled') {
+			loading.value = false;
+			return;
+		}
+		if (outcome.status === 'unavailable') {
+			appleUnavailable.value = true;
+			loading.value = false;
+			return;
+		}
+		const result = await loginWithApple(outcome.identityToken);
 		if (result.ok) {
 			navigate('/account');
 			return;
@@ -246,7 +327,7 @@ export default component$(() => {
 									<label class="block text-sm font-medium text-gray-700">Email address</label>
 									<input
 										type="email"
-										autoComplete="email"
+										autoComplete={passkeysEnabled.value ? "username webauthn" : "email"}
 										autoFocus
 										value={email.value}
 										onInput$={(_, el) => (email.value = el.value)}
@@ -356,6 +437,34 @@ export default component$(() => {
 												Try again
 											</button>
 										</p>
+									)}
+								</>
+							)}
+							{(passkeySupported.value || appleClientId.value) && (
+								<>
+									{!googleClientId.value && (
+										<div class="flex items-center gap-3">
+											<div class="h-px flex-1 bg-gray-200"></div>
+											<span class="text-xs text-gray-500">or</span>
+											<div class="h-px flex-1 bg-gray-200"></div>
+										</div>
+									)}
+									{passkeySupported.value && (
+										<button type="button" onClick$={handlePasskey} disabled={loading.value} data-testid="passkey-signin-button" class={PROVIDER_BUTTON}>
+											Sign in with a passkey
+										</button>
+									)}
+									{appleClientId.value && (
+										<>
+											<button type="button" onClick$={handleApple} disabled={loading.value} id="apple-signin-button" data-testid="apple-signin-button" class={APPLE_BUTTON}>
+												Sign in with Apple
+											</button>
+											{appleUnavailable.value && (
+												<p class="text-xs text-gray-600 text-center" role="status" data-testid="apple-signin-unavailable">
+													Apple sign-in is unavailable right now. Please try again.
+												</p>
+											)}
+										</>
 									)}
 								</>
 							)}

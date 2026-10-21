@@ -67,6 +67,8 @@ const JOB_KEYS = {
   'pending-effects': NAMESPACE | 40n,
   // PAYMENT-TIMING §5.2 safety net: requested reservation releases and failed R5 projections (jobs/reservation-release-sweep.ts).
   'reservation-release-sweep': NAMESPACE | 41n,
+  // Passkeys (0108): expired ceremony/grant rows (jobs/passkey-prune.ts).
+  'passkey-prune': NAMESPACE | 42n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;

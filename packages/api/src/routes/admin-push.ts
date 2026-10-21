@@ -52,6 +52,10 @@ adminPush.openapi(
     const sessionId = admin.sessionId;
     if (!sessionId) throw new HttpError(403, 'devices register from a signed-in session', 'SESSION_REQUIRED');
     await withStore(st.storeId, async (tx) => {
+      // 0108 (design §5): the owner row first, so this transaction never holds a session lock while waiting for
+      // admin_user (passkey/credential transactions lock admin_user, then the session).
+      const owner = await tx.execute(sql`SELECT 1 FROM admin_user WHERE id = ${admin.id} FOR SHARE`);
+      if (owner.rows.length === 0) throw new HttpError(401, 'account removed');
       // Re-check & lock membership: a registration racing staff removal must not resurrect its device row.
       const member = await tx.execute(sql`SELECT 1 FROM admin_user_store
         WHERE admin_user_id = ${admin.id} AND store_id = ${st.storeId} FOR SHARE`);

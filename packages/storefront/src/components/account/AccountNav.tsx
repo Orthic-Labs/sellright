@@ -45,6 +45,12 @@ const navLinks: Array<{
 		showOnMobile: true,
 	},
 	{
+		title: 'Passkeys',
+		href: '/account/passkeys',
+		icon: LockClosedIcon,
+		showOnMobile: true,
+	},
+	{
 		title: 'Support',
 		href: '/contact',
 		icon: HeartIcon,

@@ -119,7 +119,7 @@ describe('createApp integration: byte-identical to the captured legacy bytes (CO
     vi.doMock('./env.js', () => ({ env: { DEBUG_ERRORS: '0', MAINTENANCE_FLAG_FILE: join(dir!, 'MAINTENANCE') } }));
     vi.doMock('./auth/admin-session.js', async (original) => ({
       ...await original<typeof import('./auth/admin-session.js')>(),
-      resolveAdmin: vi.fn().mockResolvedValue({ id: 'test-admin', email: 'admin@test.invalid', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin: true, stepUpAt: null, stores: [] }),
+      resolveAdmin: vi.fn().mockResolvedValue({ id: 'test-admin', email: 'admin@test.invalid', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin: true, stepUpAt: null, stepUpEpoch: null, securityEpoch: 0, stores: [] }),
     }));
     const adminBoom = vi.fn(() => { throw new Error('secret detail'); });
     const [{ createApp }, plugins, maintenance] = await Promise.all([

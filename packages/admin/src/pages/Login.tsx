@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { api, auth, type LoginResp } from '../api';
 import { useAuth } from '../auth';
 import { Spinner } from '../components/ui';
 import { adminHref } from '../lib/base-path';
+import { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill, capabilities, loginWithPasskey, passkeyErrorMessage } from '../lib/passkeys';
 
 export default function Login() {
   const { me, refresh } = useAuth();
@@ -12,6 +13,41 @@ export default function Login() {
   const [totp, setTotp] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [pk, setPk] = useState(false);
+
+  async function finish(r: LoginResp) {
+    // Same post-login path as the password form (a pending TOTP enrolment is handled by the app shell after load).
+    auth.store = r.stores?.[0]?.slug ?? null;
+    await refresh();
+    location.assign(adminHref('/'));
+  }
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!browserSupportsWebAuthn()) return;
+      const caps = await capabilities();
+      if (!live || !caps.passkeys) return;
+      setPk(true);
+      try {
+        if (!(await browserSupportsWebAuthnAutofill())) return;
+        const r = await loginWithPasskey({ useBrowserAutofill: true });
+        if (live) await finish(r);
+      } catch { /* conditional UI is best-effort; the button and password form remain */ }
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line
+  }, []);
+
+  async function passkeyLogin() {
+    setErr(null); setBusy(true);
+    try { await finish(await loginWithPasskey({ useBrowserAutofill: false })); }
+    catch (e) {
+      setErr(passkeyErrorMessage(e));
+      setBusy(false);
+    }
+  }
 
   if (me) return <Navigate to="/" replace />;
 
@@ -48,7 +84,7 @@ export default function Login() {
           {err && <div className="rounded-lg bg-danger-soft text-danger text-sm px-3 py-2 border border-danger/30">{err}</div>}
           <div>
             <label className="label">Email</label>
-            <input className="input" type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input className="input" type="email" autoComplete="username webauthn" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div>
             <label className="label">Password</label>
@@ -62,6 +98,9 @@ export default function Login() {
           <button className="btn-primary w-full" disabled={busy}>
             {busy ? <Spinner className="text-white" /> : 'Sign in'}
           </button>
+          {pk && (
+            <button type="button" className="btn-secondary w-full" disabled={busy} onClick={passkeyLogin}>Use a passkey</button>
+          )}
         </form>
       </div>
     </div>

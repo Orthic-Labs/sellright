@@ -112,6 +112,7 @@ export async function resolveCustomer(
   tx: Tx,
   token: string,
   forceRenew = false,
+  opts: { renew?: boolean } = {},
 ): Promise<SessionCustomer | null> {
   const rows = await tx
     .select({
@@ -144,7 +145,9 @@ export async function resolveCustomer(
     const next = Date.now() + policy.ttlMs;
     if (next > row.sessionExpiresAt.getTime()) renewedExpiry = new Date(next);
   }
-  if (renewedExpiry) {
+  // 0108: business mutations that lock the customer row resolve with { renew: false } so the session row is never
+  // row-locked (renewal UPDATE) inside a transaction that later takes the customer lock (design §5).
+  if (renewedExpiry && opts.renew !== false) {
     await tx
       .update(s.session)
       .set({ expiresAt: renewedExpiry })

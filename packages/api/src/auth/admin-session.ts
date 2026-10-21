@@ -44,6 +44,11 @@ export interface AdminPrincipal {
    *  enabled) via POST /v1/admin/step-up, or null if never. Per-session, not
    *  per-admin — see requireStepUp() in routes/admin-helpers.ts. */
   stepUpAt: Date | null;
+  /** 0108: the owner's security_epoch this session's step-up was earned under (null = unusable for epoch-aware
+   *  consumers, incl. a step-up written by an older engine). See requireStepUpEpoch() in routes/admin-helpers.ts. */
+  stepUpEpoch: number | null;
+  /** 0108: the admin_user.security_epoch at resolution time (bumped by trigger on logical TOTP changes). */
+  securityEpoch: number;
   stores: AdminStoreAccess[];
   /** The session row this request authenticated with (admin sessions only). */
   sessionId?: string;
@@ -76,12 +81,33 @@ export async function createAdminSession(adminUserId: string): Promise<string> {
  * (changeAdminPassword: UPDATE + revoke in one transaction) therefore either completes first — and this login is
  * refused — or waits for this session and then revokes it. Returns null when the credential changed meanwhile.
  */
-export async function createAdminSessionIfCredential(adminUserId: string, verifiedHash: string, secondFactorVerified: boolean): Promise<string | null> {
+/** 0108: a recovery-code consumption receipt (second-factor.ts). A later regeneration deletes the row, so a proof
+ *  obtained with a code from a replaced set cannot be committed. */
+export type RecoveryReceipt = { id: string; usedAt: Date };
+export async function recoveryReceiptCurrent(tx: Pick<typeof db, 'select'>, receipt: RecoveryReceipt | undefined): Promise<boolean> {
+  if (!receipt) return true;
+  const [row] = await tx.select({ usedAt: s.adminRecoveryCode.usedAt }).from(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.id, receipt.id)).limit(1);
+  return !!row?.usedAt && row.usedAt.getTime() === receipt.usedAt.getTime();
+}
+
+/** Captured BEFORE password/factor verification (design §5): the proof is committed only while the owner row still
+ *  carries exactly this epoch and these credentials. */
+export type CredentialSnapshot = { epoch: number; totpVersion: string | null; receipt?: RecoveryReceipt };
+
+export async function createAdminSessionIfCredential(adminUserId: string, verifiedHash: string, secondFactorVerified: boolean, captured?: CredentialSnapshot & { rehashTo?: string }): Promise<string | null> {
   return db.transaction(async (tx) => {
-    const [row] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('share').limit(1);
+    // Owner first (design §5), FOR UPDATE: the conditional rehash below is a write on this row.
+    const [row] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret, epoch: s.adminUser.securityEpoch }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
     if (!row || row.hash !== verifiedHash) return null;
     // A sign-in that verified no second factor must not succeed if 2FA was enabled meanwhile (enrolment races).
     if (!secondFactorVerified && row.totp !== null) return null;
+    if (captured) {
+      // 0108: the factor that was verified must still be the enrolled one (same epoch, same stored TOTP version) and a
+      // consumed recovery code must still belong to the current set; otherwise the proof is from a superseded epoch.
+      if (row.epoch !== captured.epoch || row.totp !== captured.totpVersion || !(await recoveryReceiptCurrent(tx, captured.receipt))) return null;
+      // Verified rehash, in the same transaction and only after the snapshot check (a rejected stale proof changes nothing).
+      if (captured.rehashTo) await tx.update(s.adminUser).set({ passwordHash: captured.rehashTo }).where(and(eq(s.adminUser.id, adminUserId), eq(s.adminUser.passwordHash, verifiedHash)));
+    }
     const token = randomBytes(32).toString('hex');
     await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + adminSessionTtlMs()), lastSeenAt: new Date() });
     return token;
@@ -91,15 +117,25 @@ export async function createAdminSessionIfCredential(adminUserId: string, verifi
 /** Password change: new hash + sign out every OTHER session, atomically (see createAdminSessionIfCredential). Applies
  *  only if the stored hash is still the one just verified AND the caller's session still exists — a concurrent change
  *  (which revoked this session) wins. Returns null when refused. */
-export async function changeAdminPassword(adminUserId: string, verifiedHash: string, newHash: string, keepToken: string): Promise<number | null> {
+export async function changeAdminPassword(adminUserId: string, verifiedHash: string, newHash: string, keepToken: string, captured?: CredentialSnapshot & { stepUpAt: Date | null; stepUpEpoch: number | null }): Promise<number | null> {
   return db.transaction(async (tx) => {
     // Match factor mutation lock order: admin row, then session row (avoids cross-session deadlocks).
-    const [admin] = await tx.select({ hash: s.adminUser.passwordHash }).from(s.adminUser)
+    const [admin] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret, epoch: s.adminUser.securityEpoch }).from(s.adminUser)
       .where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
     if (!admin || admin.hash !== verifiedHash) return null;
-    const [own] = await tx.select({ id: s.session.id }).from(s.session)
-      .where(and(eq(s.session.tokenHash, hashToken(keepToken)), eq(s.session.adminUserId, adminUserId), sql`${s.session.expiresAt} > clock_timestamp()`)).for('update').limit(1);
+    if (captured && (admin.epoch !== captured.epoch || admin.totp !== captured.totpVersion || !(await recoveryReceiptCurrent(tx, captured.receipt)))) return null;
+    const idle = env.ADMIN_SESSION_IDLE_HOURS;
+    const [own] = await tx.select({ id: s.session.id, stepUpAt: s.session.stepUpAt, stepUpEpoch: s.session.stepUpEpoch }).from(s.session)
+      .where(and(eq(s.session.tokenHash, hashToken(keepToken)), eq(s.session.adminUserId, adminUserId), sql`${s.session.expiresAt} > clock_timestamp()`,
+        sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`)).for('update').limit(1);
     if (!own) return null;
+    // 0108: the step-up this request was admitted with must still be the session's live one, fresh, and earned under
+    // the current epoch (design §5 "admin password change"); a step-up cleared by passkey deletion or a TOTP cycle fails here.
+    if (captured) {
+      const fresh = !!own.stepUpAt && Date.now() - own.stepUpAt.getTime() <= 5 * 60 * 1000;
+      const same = !!captured.stepUpAt && own.stepUpAt?.getTime() === captured.stepUpAt.getTime() && own.stepUpEpoch === captured.stepUpEpoch && own.stepUpEpoch === admin.epoch;
+      if (!fresh || !same) return null;
+    }
     const upd = await tx.update(s.adminUser).set({ passwordHash: newHash })
       .where(and(eq(s.adminUser.id, adminUserId), eq(s.adminUser.passwordHash, verifiedHash)))
       .returning({ id: s.adminUser.id });
@@ -146,6 +182,8 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       totpEnabled: sql<boolean>`(${s.adminUser.totpSecret} is not null)`,
       storeRequireTotp: sql<boolean>`coalesce((${s.store.config} -> 'security' ->> 'requireTotp') = 'true', false)`,
       stepUpAt: s.session.stepUpAt,
+      stepUpEpoch: s.session.stepUpEpoch,
+      securityEpoch: s.adminUser.securityEpoch,
       sessionId: s.session.id,
       lastSeenAt: sql<Date>`coalesce(${s.session.lastSeenAt}, ${s.session.createdAt})`,
       apiTokenId: s.session.apiTokenId,
@@ -208,7 +246,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
   if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
   if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
-  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores, sessionId: first.sessionId };
+  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stepUpEpoch: first.stepUpEpoch ?? null, securityEpoch: first.securityEpoch, stores, sessionId: first.sessionId };
   if (kind === 'human') {
     principal.totpEnabled = first.totpEnabled === true;
     principal.totpRequired = totpRequiredFor(principal);
@@ -218,26 +256,48 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
 
 /** Sign out every OTHER session of this admin (password change). Returns the number revoked. */
 export async function revokeOtherAdminSessions(adminUserId: string, keepToken: string): Promise<number> {
-  const del = await db
-    .delete(s.session)
-    .where(and(eq(s.session.adminUserId, adminUserId), ne(s.session.tokenHash, hashToken(keepToken))))
-    .returning({ id: s.session.id });
-  return del.length;
+  return db.transaction(async (tx) => {
+    // 0108 (design §5): the owner row before any session row — never hold session locks while waiting for admin_user.
+    await tx.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update');
+    const del = await tx.delete(s.session).where(and(eq(s.session.adminUserId, adminUserId), ne(s.session.tokenHash, hashToken(keepToken)))).returning({ id: s.session.id });
+    return del.length;
+  });
 }
 
 /** Records that THIS session (identified by its own bearer token, not the
  *  admin generally) just re-verified the admin's credentials. Called by
  *  POST /v1/admin/step-up on success. */
-export async function markStepUpVerified(token: string): Promise<void> {
-  await db.update(s.session).set({ stepUpAt: new Date() }).where(eq(s.session.tokenHash, hashToken(token)));
+export async function markStepUpVerified(token: string, epoch: number | null = null): Promise<void> {
+  await db.update(s.session).set({ stepUpAt: new Date(), stepUpEpoch: epoch }).where(eq(s.session.tokenHash, hashToken(token)));
+}
+
+/** 0108: the native step-up, owner-first. Verification happened outside; `captured` is the (epoch, hash, totp) snapshot
+ *  read before it. Locks admin_user, requires the snapshot to still be current, locks the live calling session, writes
+ *  step_up_at + step_up_epoch. Returns false when refused (409 CREDENTIAL_CHANGED at the route). */
+export async function markStepUpVerifiedIfCurrent(adminUserId: string, token: string, captured: { epoch: number; passwordHash: string | null; totpVersion: string | null; receipt?: RecoveryReceipt }): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.select({ epoch: s.adminUser.securityEpoch, hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret })
+      .from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
+    if (!row || row.epoch !== captured.epoch || row.hash !== captured.passwordHash || row.totp !== captured.totpVersion) return false;
+    if (!(await recoveryReceiptCurrent(tx, captured.receipt))) return false;
+    const idle = env.ADMIN_SESSION_IDLE_HOURS;
+    const [own] = await tx.select({ id: s.session.id }).from(s.session)
+      .where(and(eq(s.session.tokenHash, hashToken(token)), eq(s.session.adminUserId, adminUserId), sql`${s.session.expiresAt} > clock_timestamp()`,
+        sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`))
+      .for('update').limit(1);
+    if (!own) return false;
+    await tx.update(s.session).set({ stepUpAt: new Date(), stepUpEpoch: captured.epoch }).where(eq(s.session.id, own.id));
+    return true;
+  });
 }
 
 /** Find an admin user by email — global registry lookup on the default db client. */
 export async function findAdminByEmail(email: string) {
   const [u] = await db
-    .select({ id: s.adminUser.id, email: s.adminUser.email, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .select({ id: s.adminUser.id, email: s.adminUser.email, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret, securityEpoch: s.adminUser.securityEpoch })
     .from(s.adminUser)
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
-  return u ? { ...u, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
+  // 0108: `totpVersion` is the stored representation (the snapshot compared under the lock); `totpSecret` the logical one.
+  return u ? { ...u, totpVersion: u.totpSecret, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
 }

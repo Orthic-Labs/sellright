@@ -13,6 +13,7 @@ import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { snapshotGuard } from"./utils/snapshot-guard";
+import { appleClientId, appleIdentityCsp, appleSignInClientIdForHost, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
@@ -69,6 +70,14 @@ if (googleSignInRefusedForMissingPin()) {
 }
 else if (googleClientId() && googleSignInHosts().length === 0) {
 	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but SELLRIGHT_GOOGLE_SIGNIN_HOSTS is empty: Google sign-in is disabled on every host (list the pinned store\'s public hosts, comma-separated).');
+}
+
+// Sign in with Apple: same per-host gating and the same startup diagnostics as Google.
+if (appleSignInRefusedForMissingPin()) {
+	console.error('[apple-signin] VITE_APPLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Apple sign-in is disabled (it is only supported for a deployment pinned to a single store).');
+}
+else if (appleClientId() && appleSignInHosts().length === 0) {
+	console.error('[apple-signin] VITE_APPLE_CLIENT_ID is set but SELLRIGHT_APPLE_SIGNIN_HOSTS is empty: Apple sign-in is disabled on every host (list the pinned store\'s public hosts, comma-separated).');
 }
 
 // Set security headers
@@ -154,6 +163,7 @@ app.use((req, res, next) => {
 		sheerIdEnabled: theme.sheerIdEnabled,
 		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
 		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
+		apple: appleIdentityCsp(appleSignInClientIdForHost(validatedRequestHost(req.headers))),
 		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).
 		analytics: analyticsCsp(BRAND_HEAD.analytics),
 		youtubeEmbed: BRAND_HEAD.embeds?.youtube === true,
