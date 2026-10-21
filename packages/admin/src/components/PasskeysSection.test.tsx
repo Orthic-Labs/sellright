@@ -23,6 +23,11 @@ function setInput(el: HTMLInputElement, value: string) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+/** Two chained queries (capabilities, then the list) settle on their own schedule; poll instead of counting ticks. */
+async function until<T>(probe: () => T | null | undefined | false): Promise<T> {
+  for (let i = 0; i < 200; i++) { const v = probe(); if (v) return v; await flush(); }
+  throw new Error('condition never settled');
+}
 const row = { id: 'p1', label: 'Work laptop', deviceType: 'singleDevice', backedUp: false, createdAt: '2026-10-01T00:00:00Z', lastUsedAt: null };
 
 async function mount() {
@@ -55,18 +60,17 @@ describe('PasskeysSection', () => {
     reg.mockRejectedValueOnce(stepErr).mockResolvedValueOnce({ ...row, id: 'p2' });
     post.mockResolvedValue({ ok: true });
     const { container, done } = await mount();
-    expect(container.textContent).toContain('Work laptop');
+    await until(() => container.textContent?.includes('Work laptop'));
     expect(container.textContent).toContain('This device');
-    act(() => { setInput(container.querySelector('#pk-label') as HTMLInputElement, 'Phone'); });
+    const label = await until(() => container.querySelector('#pk-label') as HTMLInputElement | null);
+    act(() => { setInput(label, 'Phone'); });
     act(() => { button(container, 'Add a passkey').click(); });
-    await flush();
+    await until(() => document.body.querySelector('[role="dialog"]'));
     expect(reg).toHaveBeenCalledWith('Phone');
-    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
     act(() => { setInput(document.body.querySelector('input[type="password"]') as HTMLInputElement, 'pw'); });
     act(() => { (document.body.querySelector('[role="dialog"] form') as HTMLFormElement).requestSubmit(); });
-    await flush(); await flush();
+    await until(() => reg.mock.calls.length === 2);
     expect(post).toHaveBeenCalledWith('/step-up', { password: 'pw', totp: undefined });
-    expect(reg).toHaveBeenCalledTimes(2);
     done();
   });
 
@@ -76,10 +80,10 @@ describe('PasskeysSection', () => {
     const e = new FakeApiError(409, 'raw'); e.code = 'TOTP_REQUIRED_FIRST';
     reg.mockRejectedValue(e);
     const { container, done } = await mount();
-    act(() => { setInput(container.querySelector('#pk-label') as HTMLInputElement, 'X'); });
+    const label = await until(() => container.querySelector('#pk-label') as HTMLInputElement | null);
+    act(() => { setInput(label, 'X'); });
     act(() => { button(container, 'Add a passkey').click(); });
-    await flush();
-    expect(container.textContent).toContain('Set up your authenticator app first');
+    await until(() => container.textContent?.includes('Set up your authenticator app first'));
     done();
   });
 
@@ -88,7 +92,8 @@ describe('PasskeysSection', () => {
     list.mockResolvedValue([row]);
     del.mockResolvedValue(undefined);
     const { container, done } = await mount();
-    act(() => { (container.querySelector('[aria-label="Remove Work laptop"]') as HTMLButtonElement).click(); });
+    const remove = await until(() => container.querySelector('[aria-label="Remove Work laptop"]') as HTMLButtonElement | null);
+    act(() => { remove.click(); });
     expect(del).not.toHaveBeenCalled();
     act(() => { button(document.body as unknown as HTMLElement, 'Remove').click(); });
     await flush();
