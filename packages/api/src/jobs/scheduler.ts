@@ -26,6 +26,7 @@ import { reservationReleaseSweep } from './reservation-release-sweep.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
 import { recoverGatewayAttempts } from './gateway-recovery.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
+import { prunePasskeyChallenges } from './passkey-prune.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
@@ -146,6 +147,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   });
 
   every(state, 60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
+  // passkeys (0108): expired ceremony/grant rows (admin global + every store), an hour after expiry
+  every(state, 10 * 60_000, 'passkey-prune', 'passkey-prune', prunePasskeyChallenges);
   // D7/D8: stuck NMI/Sezzle attempts (processing/unknown/pending) are
   // auto-verified with backoff; unapproved Sezzle sessions expire, approved
   // ones capture (order still payable) or release. Applies by default like

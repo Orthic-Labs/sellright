@@ -35,7 +35,7 @@ const withStoreApp = createStoreAppRunner(appPool, drizzleOpts);
 // admin_api_token: registry resolved before store context (0094); isolation = token hash ⋈ single grant, tested in routes/admin-agents.db.test.ts
 // EXEMPT mirrors assert-force-rls.ts: the session/admin_user_store/store/
 // processed_event/staff_invite tables are intentionally non-RLS'd.
-const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite', 'catalog_manifest_pending', 'admin_api_token']);
+const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite', 'catalog_manifest_pending', 'admin_api_token', 'admin_passkey_credential', 'admin_passkey_challenge']);
 
 // Discover the table list once, from the OWNER pool (pg_catalog is fine to read).
 let tablesNeedingCheck: string[] = [];

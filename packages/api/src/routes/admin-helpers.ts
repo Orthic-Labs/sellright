@@ -127,6 +127,14 @@ export function requireStepUp(admin: AdminPrincipal): void {
   }
 }
 
+/** 0108: step-up that also proves the proof was earned under the CURRENT security epoch (re-read on this request).
+ *  Every step-up consumer uses this; a step-up earned before a TOTP/password change, cleared by the trigger, or written
+ *  by an older engine (step_up_epoch NULL) does not pass. */
+export function requireStepUpEpoch(admin: AdminPrincipal): void {
+  requireStepUp(admin);
+  if (admin.stepUpEpoch === null || admin.stepUpEpoch !== admin.securityEpoch) throw new HttpError(403, STEP_UP_REQUIRED_MESSAGE);
+}
+
 /**
  * Per-action permission gate (composes with roles). owner/manager always pass.
  * Otherwise the action must be explicitly granted via the staff member's

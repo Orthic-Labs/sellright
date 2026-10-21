@@ -73,7 +73,7 @@ loyalty.openapi(
     const token = customerToken(c);
     const program = loyaltySettingsFromConfig(st.config);
     const out = await withStore(st.id, async (tx) => {
-      const cust = token ? await resolveCustomer(tx, token) : null;
+      const cust = token ? await resolveCustomer(tx, token, false, { renew: false }) : null;
       if (!cust) return null;
       if (!cust.emailVerified) return 'unverified' as const;
       const bal = await loyaltyBalance(tx, cust.id);
@@ -120,7 +120,7 @@ loyalty.openapi(
     const { month, day } = c.req.valid('json');
     if (day > daysIn(month)) return errJson(c, 400, 'INVALID_BIRTHDAY', 'that date does not exist');
     const out = await withStore(st.id, async (tx) => {
-      const cust = token ? await resolveCustomer(tx, token) : null;
+      const cust = token ? await resolveCustomer(tx, token, false, { renew: false }) : null;
       if (!cust) return 'unauth' as const;
       if (!cust.emailVerified) return 'unverified' as const;
       // Set once: letting it change would let a shopper move their birthday

@@ -12,6 +12,7 @@ import { PublicLoyaltySettings, publicLoyalty } from './loyalty.js';
 import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../store-publish.js';
 import { storeIdentityFromConfig, StoreIdentitySchema } from './store-identity.js';
 import { magicLinkPolicy } from '../auth/magic-link.js';
+import { passkeysEnabled } from '../auth/passkeys-core.js';
 
 export const shopConfig = new OpenAPIHono();
 
@@ -39,7 +40,7 @@ shopConfig.openapi(
           // storefront show points-to-earn and the redeem control.
           loyalty: PublicLoyaltySettings.nullable(),
           // Which optional sign-in methods this store has switched on (so the storefront only offers what works).
-          auth: z.object({ magicLink: z.boolean() }),
+          auth: z.object({ magicLink: z.boolean(), passkeys: z.boolean() }),
         }) } },
       },
     },
@@ -58,7 +59,7 @@ shopConfig.openapi(
     return c.json({
       gateways: { nmi, sezzle },
       loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
-      auth: { magicLink: magicLinkPolicy(st.config).enabled },
+      auth: { magicLink: magicLinkPolicy(st.config).enabled, passkeys: passkeysEnabled() },
       stripeMode: mode,
       stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
       stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),

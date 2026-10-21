@@ -10,16 +10,16 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env, getEnvSource } from '../env.js';
 import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
-import { markStepUpVerified } from '../auth/admin-session.js';
+import { markStepUpVerifiedIfCurrent } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
-import { verifySecondFactor } from '../auth/second-factor.js';
+import { verifySecondFactorDetailed } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // Recovery exports use the same parsed master key as secret-crypto; optional
 // kit identity comes from that engine's resolved source, including explicit SDK config.
 import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { stripeCreds } from '../payments/stripe.js';
-import { HttpError, J, errBody, guard, requireAdmin, requireHuman, requireInstallationAdmin, requireStepUp, requireStore, requireWrite } from './admin-helpers.js';
+import { HttpError, J, errBody, guard, requireAdmin, requireHuman, requireInstallationAdmin, requireStepUp, requireStepUpEpoch, requireStore, requireWrite } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
 import { CANARY_CHANNELS, CANARY_EMAIL_KINDS, canaryRetryAfter, emitHealthCanary, recordCanaryEmit } from '../canary/health-canary.js';
 
@@ -153,6 +153,7 @@ adminSystem.openapi(
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       401: { description: 'Invalid password or 2FA code', ...errBody },
+      409: { description: 'Credentials changed meanwhile (CREDENTIAL_CHANGED)', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
   }),
@@ -171,13 +172,19 @@ adminSystem.openapi(
       
       throw new HttpError(401, 'invalid password or 2FA code');
     }
-    if (creds.totpSecret && !(await verifySecondFactor(admin.id, creds.totpSecret, totp))) {
-      
-      throw new HttpError(401, 'invalid password or 2FA code');
+    let receipt: { id: string; usedAt: Date } | undefined;
+    if (creds.totpSecret) {
+      const factor = await verifySecondFactorDetailed(admin.id, creds.totpSecret, totp);
+      if (!factor.ok) throw new HttpError(401, 'invalid password or 2FA code');
+      receipt = factor.receipt;
     }
     await clearAdminAuthFailures(ip, admin.email);
 
-    await markStepUpVerified(token);
+    // 0108 (design §5): owner-first commit of the proof — the captured snapshot (epoch, hash, stored TOTP version,
+    // recovery receipt) must still be the owner row's, and the step-up is stamped with that epoch.
+    if (!(await markStepUpVerifiedIfCurrent(admin.id, token, { epoch: creds.securityEpoch, passwordHash: creds.passwordHash, totpVersion: creds.totpVersion, receipt }))) {
+      throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    }
     await auditSystemAction(admin, 'step_up_verify');
     return c.json({ ok: true }, 200);
   }),
@@ -203,7 +210,7 @@ adminSystem.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     requireInstallationAdmin(admin);
-    requireStepUp(admin);
+    requireStepUpEpoch(admin); // 0108: the step-up must be earned under the current security epoch
     const masterKey = env.SELLRIGHT_MASTER_KEY?.trim();
     if (!masterKey) throw new HttpError(503, 'SELLRIGHT_MASTER_KEY is not configured on this server');
 

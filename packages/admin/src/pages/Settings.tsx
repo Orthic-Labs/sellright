@@ -8,6 +8,7 @@ import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
 import ShippingMethods from '../components/ShippingMethods';
 import { useToast } from '../components/Toast';
 import { TwoFactorEnroll } from '../components/TwoFactorEnroll';
+import { PasskeysSection } from '../components/PasskeysSection';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
@@ -244,6 +245,8 @@ export default function SettingsPage() {
                 <button className="btn-ghost" onClick={() => setEnrolling(true)}>Enable 2FA</button>
               )}
             </FormSection>
+
+            <PasskeysSection />
 
             <FormSection title="Password" description="Changing your password signs out every other session.">
               {pwDone && <InlineAlert tone="positive">{pwDone}</InlineAlert>}

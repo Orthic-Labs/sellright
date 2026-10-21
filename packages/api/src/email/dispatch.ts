@@ -25,6 +25,7 @@ import {
   passwordReset,
   emailVerify,
   federatedLinkConfirm,
+  passkeyManageConfirm,
   emailAddressChange,
   emailAddressChangedNotice,
   orderRefundConfirmation,
@@ -56,6 +57,7 @@ export const EMAIL_KIND = {
   EMAIL_CHANGED_NOTICE: 'email_changed_notice',
   MAGIC_LINK: 'magic_link',
   FEDERATED_LINK_CONFIRM: 'federated_link_confirm',
+  PASSKEY_MANAGE: 'passkey_manage',
   ORDER_REFUND_CONFIRMATION: 'order-refund-confirmation',
   ORDER_UPDATED: 'order_updated',
   ORDER_BALANCE_DUE: 'order_balance_due',
@@ -227,6 +229,19 @@ export async function enqueueMagicLink(tx: Tx, storeId: string, store: StoreEmai
   const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.MAGIC_LINK,
     dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
+/** Passkeys (0108): mailbox management proof (auth/passkeys-shop.ts branch D). */
+export async function enqueuePasskeyManageLink(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: { url: string; ttlMinutes: number }): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = passkeyManageConfirm(ctx, data);
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.PASSKEY_MANAGE,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });

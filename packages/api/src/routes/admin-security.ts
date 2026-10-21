@@ -13,12 +13,12 @@ import { newTotpSecret, otpauthUri } from '../auth/totp.js';
 import { AdminFactorMutationError, getAdminCredentialsById, mutateAdminSecondFactor } from '../auth/admin-staff.js';
 import { changeAdminPassword, type AdminPrincipal } from '../auth/admin-session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { remainingRecoveryCodes, verifySecondFactor, verifyTotpOnce } from '../auth/second-factor.js';
+import { remainingRecoveryCodes, verifySecondFactor, verifySecondFactorDetailed, verifyTotpOnce } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireOwner, requireHuman, requireStepUp, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireOwner, requireHuman, requireStepUp, requireStepUpEpoch, guard } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
 
 export const adminSecurity = new OpenAPIHono();
@@ -123,6 +123,7 @@ adminSecurity.openapi(
     } catch (error) {
       if (error instanceof AdminFactorMutationError) {
         if (error.code === 'TOTP_REQUIRED') throw new HttpError(403, '2FA is required by security policy', 'TOTP_REQUIRED');
+        if (error.code === 'PASSKEYS_ENROLLED') throw new HttpError(409, 'remove your passkeys before disabling 2FA — the authenticator and recovery codes stay your fallback while a passkey exists', 'PASSKEYS_ENROLLED');
         await gate.fail('invalid code', 409);
       }
       throw error;
@@ -147,9 +148,10 @@ adminSecurity.openapi(
     if (!creds?.totpSecret) throw new HttpError(409, '2FA is not enabled');
     const gate = await credentialGate(c, admin);
     if (!(await verifyPassword(password, creds.passwordHash))) await gate.fail('invalid password');
-    if (!(await verifySecondFactor(admin.id, creds.totpSecret, code))) await gate.fail('invalid code', 409);
+    const factor = await verifySecondFactorDetailed(admin.id, creds.totpSecret, code);
+    if (!factor.ok) await gate.fail('invalid code', 409);
     await gate.ok();
-    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, action: 'recovery' });
+    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, receipt: factor.receipt, action: 'recovery' });
     if (!changed) throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
     const { recoveryCodes } = changed;
     await audit(c, admin, '2fa_recovery_codes_regenerate');
@@ -171,14 +173,15 @@ adminSecurity.openapi(
   async (c) => guard(c, async () => {
     const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
-    requireStepUp(admin);
+    requireStepUpEpoch(admin); // 0108: earned under the current epoch; re-checked against the locked session row below
     const { currentPassword, newPassword } = c.req.valid('json');
     if (newPassword === currentPassword) throw new HttpError(400, 'the new password must differ from the current one', 'PASSWORD_UNCHANGED', 'newPassword');
     const creds = await getAdminCredentialsById(admin.id);
     const gate = await credentialGate(c, admin);
     if (!(await verifyPassword(currentPassword, creds?.passwordHash ?? null))) await gate.fail('invalid password');
     await gate.ok();
-    const revokedSessions = await changeAdminPassword(admin.id, creds!.passwordHash!, await hashPassword(newPassword), token);
+    const revokedSessions = await changeAdminPassword(admin.id, creds!.passwordHash!, await hashPassword(newPassword), token,
+      { epoch: creds!.securityEpoch, totpVersion: creds!.totpVersion, stepUpAt: admin.stepUpAt, stepUpEpoch: admin.stepUpEpoch });
     if (revokedSessions === null) throw new HttpError(409, 'your password or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
     await audit(c, admin, 'password_change', { revokedSessions });
     return c.json({ ok: true, revokedSessions }, 200);
@@ -211,7 +214,7 @@ adminSecurity.openapi(
     requireHuman(admin);
     const st = requireStore(admin, c);
     requireOwner(st);
-    requireStepUp(admin);
+    requireStepUpEpoch(admin); // 0108
     const { requireTotp } = c.req.valid('json');
     await mutateStoreConfig(st.storeId, (config) => ({
       ...config,

@@ -6,6 +6,7 @@ import { createSession } from '../auth/session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { withStore } from '../db/client.js';
 import { invalidateStoreCache } from '../store-context.js';
+import { customerLoginAssertion, enrolCustomerPasskey, withCookie } from './authorization-matrix.passkey.testkit.js';
 import type { createAuthorizationFixtures } from './authorization-matrix.fixtures.testkit.js';
 import { PRINCIPALS, type MatrixCase, type MatrixCell, type MatrixPrincipal, type MatrixProof, type PreparedMatrixCell } from './authorization-matrix.testkit.js';
 
@@ -136,6 +137,25 @@ export function createPublicAuthCases(fixture: Fixture): MatrixCase[] {
         });
       },
     })),
+    // ── passkeys (0108) ──
+    { key: 'POST /v1/shop/auth/passkey/login/options', contract: 'public', async prepare(principal) {
+      return request('/v1/shop/auth/passkey/login/options', principal, {}, async (response: Response, proof: MatrixProof) => {
+        const body = await response.json() as Json;
+        proof.ok(typeof body.options?.challenge === 'string' && body.options.userVerification === 'required' && body.options.allowCredentials?.length === 0, 'discoverable options, identical for every caller');
+        proof.ok(/sr_pk_nonce=/.test(response.headers.get('set-cookie') ?? ''), 'browser-binding nonce cookie set');
+        proof.equal(await rows('SELECT kind, customer_id FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'login', customer_id: null }], 'unbound store-scoped login challenge row', 'state');
+      });
+    } },
+    { key: 'POST /v1/shop/auth/passkey/login/verify', contract: 'public', async prepare(principal) {
+      const s = await seed();
+      const { id: credentialId, auth } = await enrolCustomerPasskey(fixture.request, s.headers, s.password, fixture.storeId, s.id);
+      const assertion = await customerLoginAssertion(fixture.request, auth, fixture.storeSlug, fixture.storeId, s.id, 1);
+      return { url: '/v1/shop/auth/passkey/login/verify', env: peer(), init: { method: 'POST', headers: withCookie(headers(principal), assertion.cookie), body: JSON.stringify({ response: assertion.response }) },
+        async verify(response: Response, proof: MatrixProof) {
+          await sessionResponse(response, proof, s, true, s.sessionHashes);
+          proof.equal(await rows('SELECT counter::int AS counter FROM customer_passkey_credential WHERE id=$1', [credentialId]), [{ counter: 1 }], 'credential counter advanced by the accepted assertion', 'state');
+        } };
+    } },
     { key: 'POST /v1/shop/auth/reset-password', contract: 'capability', async prepare(principal) {
       const s = await seed(), capability = await issue(s, 'password_reset'), next = 'Reset-password-' + randomUUID();
       return request('/v1/shop/auth/reset-password', principal, { token: capability.raw, password: next }, async (response: Response, proof: MatrixProof) => {

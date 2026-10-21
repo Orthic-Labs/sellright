@@ -138,6 +138,17 @@ export function clearFederatedNonceCookie(c: Ctx): void {
   c.header('Set-Cookie', `${FEDERATED_NONCE_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureFlag(c)}`, { append: true });
 }
 
+// ── Passkey ceremony nonce (auth/passkeys.ts) ───────────────────────────────
+// Set on every options response; the matching verify only succeeds in the browser that holds it (the challenge row
+// stores sha256(nonce)). HttpOnly, Secure (scheme-derived), SameSite=Strict, lives exactly as long as the challenge.
+export const PASSKEY_NONCE_COOKIE = 'sr_pk_nonce';
+export function setPasskeyNonceCookie(c: Ctx, nonce: string, maxAgeSeconds: number): void {
+  c.header('Set-Cookie', `${PASSKEY_NONCE_COOKIE}=${nonce}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Strict${secureFlag(c)}`, { append: true });
+}
+export function clearPasskeyNonceCookie(c: Ctx): void {
+  c.header('Set-Cookie', `${PASSKEY_NONCE_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict${secureFlag(c)}`, { append: true });
+}
+
 /** CSRF check for cookie-authenticated customer mutations (bearer is exempt). */
 export function customerCsrfValid(c: { req: { header: (k: string) => string | undefined } }): boolean {
   if (hasValidBearer(c.req.header('authorization'))) return true;

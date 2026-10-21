@@ -7,6 +7,8 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  customType,
+  index,
   pgTable,
   pgEnum,
   uuid,
@@ -102,6 +104,9 @@ export const adminUser = pgTable('admin_user', {
   // — even as 'owner' — never implies this. Set exactly once, by
   // POST /v1/setup/claim; never toggled by ordinary staff-management routes.
   isInstallationAdmin: boolean().notNull().default(false),
+  // 0108: per-owner security epoch — bumped by trigger admin_user_security_epoch_trg on a logical TOTP change; every
+  // passkey credential/challenge and step-up is stamped with it and valid only while equal (auth/passkeys.ts).
+  securityEpoch: integer().notNull().default(0),
   // One-click install (plan §1.10): set once the installation admin has
   // downloaded the recovery kit via GET /v1/admin/system/recovery-kit. Gates
   // Publish (plan §1.5) alongside payments/email verification.
@@ -177,6 +182,40 @@ export const adminTotpUsedStep = pgTable('admin_totp_used_step', {
   usedAt: ts(),
 }, (t) => [primaryKey({ columns: [t.adminUserId, t.step] })]);
 
+/** bytea column (COSE public keys). */
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType() { return 'bytea'; } });
+
+// Passkeys (0108, docs/plans/2026-10-21-passkeys-and-federated-signin.md). Global registries like admin_recovery_code:
+// RLS-exempt, no store_id, read through unsafeUnscopedDb. `epoch` = admin_user.security_epoch at issuance.
+export const adminPasskeyCredential = pgTable('admin_passkey_credential', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  rpId: text().notNull(),
+  credentialId: text().notNull(),
+  publicKey: bytea().notNull(),
+  counter: bigint({ mode: 'number' }).notNull().default(0),
+  transports: text().array().notNull().default([]),
+  deviceType: text().notNull(),
+  backedUp: boolean().notNull(),
+  aaguid: text(),
+  label: text().notNull(),
+  epoch: integer().notNull(),
+  createdAt: ts(),
+  lastUsedAt: timestamp({ withTimezone: true }),
+}, (t) => [unique('admin_passkey_credential_rp_cred').on(t.rpId, t.credentialId), index('admin_passkey_credential_admin').on(t.adminUserId)]);
+
+export const adminPasskeyChallenge = pgTable('admin_passkey_challenge', {
+  challengeHash: text().primaryKey(),
+  kind: text({ enum: ['register', 'login', 'step_up'] }).notNull(),
+  rpId: text().notNull(),
+  adminUserId: uuid().references(() => adminUser.id, { onDelete: 'cascade' }),
+  sessionHash: text(),
+  nonceHash: text().notNull(),
+  epoch: integer(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  consumedAt: timestamp({ withTimezone: true }),
+}, (t) => [index('admin_passkey_challenge_expires').on(t.expiresAt)]);
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),
@@ -191,6 +230,9 @@ export const session = pgTable('session', {
   // requireStepUp() in routes/admin-helpers.ts. Per-session, not per-admin:
   // stepping up in one browser tab must never grant it to another session.
   stepUpAt: timestamp({ withTimezone: true }),
+  // 0108: the owner's security_epoch when this session last stepped up; NULL (incl. rows written by an older engine) means
+  // the step-up cannot authorize passkey management or any epoch-aware consumer (routes/admin-helpers.ts requireStepUpEpoch).
+  stepUpEpoch: integer(),
   apiTokenId: uuid().references(() => adminApiToken.id, { onDelete: 'cascade' }),
   // 0098: last use of an ADMIN session (touched at most once a minute) for the idle timeout; null = created_at.
   lastSeenAt: timestamp({ withTimezone: true }),
@@ -375,6 +417,8 @@ export const customer = pgTable(
     appleUserId: text(),
     passwordHash: text(), // nullable for OAuth-only
     emailVerified: boolean().notNull().default(false),
+    // 0108: bumped by trigger customer_security_epoch_trg on every password_hash change except the engine's in-place rehash.
+    securityEpoch: integer().notNull().default(0),
     sheeridVerifications: jsonb(),
     activeVerifications: text().array(),
     verificationMetadata: jsonb(),

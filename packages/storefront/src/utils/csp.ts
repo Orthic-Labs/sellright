@@ -17,12 +17,15 @@
  *    canonical store theme enables SheerID (`VITE_SHEERID_ENABLED=1`).
  *  - Google Identity origins (script/style/connect/frame) when Google sign-in
  *    is on; the origin lists come from `config/google-signin.ts` via `google`.
+ *  - Sign in with Apple origins (script/connect/frame) when Apple sign-in is on, gated per request host exactly like
+ *    Google; the lists come from `config/apple-signin.ts` via `apple`.
  *  - Analytics origins (script/connect) when the brand declares `analytics` in head.json;
  *    the lists come from `analyticsCsp()` in `platform/head.tsx` via `analytics`.
  *    Never `unsafe-eval`: no GTM Custom JavaScript variables, no production Preview mode.
  */
 import { YOUTUBE_EMBED_ORIGIN } from '../platform/youtube';
 import type { GoogleIdentityCsp } from '../config/google-signin';
+import type { AppleIdentityCsp } from '../config/apple-signin';
 import { ipCountryFallbackEnabled } from './visitor-country';
 
 export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
@@ -42,6 +45,8 @@ export interface CspOptions {
 	sheerIdEnabled?: boolean;
 	/** Extra Google Identity sources (`googleIdentityCsp(...)`); empty lists add nothing. */
 	google?: GoogleIdentityCsp;
+	/** Extra Sign in with Apple sources (`appleIdentityCsp(...)`); empty lists add nothing. */
+	apple?: AppleIdentityCsp;
 	/** Analytics sources (`analyticsCsp(...)`); undefined adds nothing, so the policy is unchanged without it. */
 	analytics?: { script: string[]; connect: string[] };
 	/** Only the platform's fixed privacy embed origin; head.json embeds.youtube must opt in. */
@@ -50,7 +55,7 @@ export interface CspOptions {
 
 const withSources = (base: string, extra: string[] = []) => [base, ...extra].join(' ');
 
-export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, sheerIdEnabled, google, analytics, youtubeEmbed }: CspOptions): string {
+export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, sheerIdEnabled, google, apple, analytics, youtubeEmbed }: CspOptions): string {
 	const turnstile = (turnstileSiteKey ?? '').trim() ? ` ${TURNSTILE_ORIGIN}` : '';
 	const ipLookup = ipCountryFallbackEnabled(ipCountryFallback) ? ` ${IP_LOOKUP_ORIGIN}` : '';
 	const sheerId = sheerIdEnabled === true ? ` ${SHEERID_ORIGIN}` : '';
@@ -58,12 +63,12 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 	const api = apiOrigin ? ` ${apiOrigin}` : '';
 	return [
 		`default-src 'self'`,
-		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(analytics?.script ?? [])]),
+		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
 		withSources(`style-src 'self' 'unsafe-inline'`, google?.style),
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
-		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(analytics?.connect ?? [])]),
-		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${youtube}${sheerId}`, google?.frame),
+		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(apple?.connect ?? []), ...(analytics?.connect ?? [])]),
+		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${youtube}${sheerId}`, [...(google?.frame ?? []), ...(apple?.frame ?? [])]),
 		`object-src 'none'`,
 		`base-uri 'self'`,
 		`worker-src 'self'`,

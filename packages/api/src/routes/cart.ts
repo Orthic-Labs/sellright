@@ -106,7 +106,7 @@ export async function priceCart(
   });
 
   const couponCodes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : []));
-  const customer = opts.token ? await resolveCustomer(tx, opts.token) : null;
+  const customer = opts.token ? await resolveCustomer(tx, opts.token, false, { renew: false }) : null;
   const activeVerifications = customer?.activeVerifications ?? [];
   const couponFacts = await loadCouponMatchContext(tx, variants.map((v) => v.productId));
   const couponItems = couponItemsFromFacts(
@@ -380,7 +380,7 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
       const [claimed] = await tx.select({ id: s.legacyCartClaim.id }).from(s.legacyCartClaim).where(and(eq(s.legacyCartClaim.cartId, row.id), eq(s.legacyCartClaim.sourceOnly, false)));
       if (claimed) return { conflict: true } as const;
     } else {
-      const customer = authToken ? await resolveCustomer(tx, authToken) : null;
+      const customer = authToken ? await resolveCustomer(tx, authToken, false, { renew: false }) : null;
       [row] = await tx.insert(s.cart).values({ storeId: st.id, token: randomUUID(), customerId: grant?.customerId ?? customer?.id ?? null,
         expiresAt: cartExpiry(new Date(), lifecycle(st).ttlDays) }).returning();
     }
@@ -430,7 +430,7 @@ export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, coupo
   const codes = Array.isArray(couponCode) ? couponCode : couponCode !== undefined ? [couponCode] : cartRow.couponCodes;
   const priced = await priceCart(tx, st, items, { couponCodes: codes, token, shipCountry, ...quoteOptions });
   // Terminal carts are historical facts; their credit bearer codes stay private.
-  const caller = token ? await resolveCustomer(tx, token) : null;
+  const caller = token ? await resolveCustomer(tx, token, false, { renew: false }) : null;
   if (['converted', 'merged'].includes(cartRow.status) || (cartRow.customerId && caller?.id !== cartRow.customerId)) {
     const creditPromotions = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.type, 'account_credit'));
     const privateCodes = new Set(creditPromotions.flatMap(promotion => promotion.code ? [promotion.code.toLowerCase()] : []));
@@ -561,7 +561,7 @@ cart.openapi(
     const body = c.req.valid('json');
     const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
-      const customer = authTok ? await resolveCustomer(tx, authTok) : null;
+      const customer = authTok ? await resolveCustomer(tx, authTok, false, { renew: false }) : null;
       const token = randomUUID();
       const [row] = await tx
         .insert(s.cart)
@@ -707,7 +707,7 @@ cart.openapi(
     const { expectedRevision } = c.req.valid('query');
     const authTok = customerToken(c);
     const res = await withStore(st.id, async (tx) => {
-      const customer = authTok ? await resolveCustomer(tx, authTok) : null;
+      const customer = authTok ? await resolveCustomer(tx, authTok, false, { renew: false }) : null;
       if (!customer) return { code: 401 as const };
       const [found] = await tx.select({ id: s.cart.id }).from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!found) return { code: 404 as const };

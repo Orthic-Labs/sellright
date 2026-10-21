@@ -414,7 +414,7 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
           SQL
 
-      - name: Full 345-route authorization matrix with genuine fresh-install bootstrap
+      - name: Full 365-route authorization matrix with genuine fresh-install bootstrap
         timeout-minutes: 35
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_matrix_test
@@ -438,7 +438,7 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
           SQL
 
-      - name: Enrolled-only authorization regressions (343 contracts, genuine sessions)
+      - name: Enrolled-only authorization regressions (363 contracts, genuine sessions)
         timeout-minutes: 35
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_authorization_enrolled_test

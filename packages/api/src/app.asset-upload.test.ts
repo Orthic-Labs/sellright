@@ -11,7 +11,7 @@ const state = vi.hoisted(() => ({
   rows: [] as unknown[],
   principal: {
     id: 'asset-test-admin', email: 'owner@asset-upload.test', kind: 'human', auth: 'session', apiTokenId: null,
-    isInstallationAdmin: false, stepUpAt: null,
+    isInstallationAdmin: false, stepUpAt: null, stepUpEpoch: null, securityEpoch: 0,
     stores: [{ storeId: 'asset-test-store', slug: 'asset-test', name: 'Asset test', currency: 'USD', taxRate: 0, shippingTaxable: false, role: 'owner', permissions: null }],
   } as AdminPrincipal,
 }));

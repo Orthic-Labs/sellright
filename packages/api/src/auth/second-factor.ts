@@ -75,7 +75,27 @@ async function consumeRecoveryCode(adminId: string, code: string, tx: FactorDb =
  * last step per admin in process memory. Rows older than the ±1-step window are pruned on the way.
  */
 export async function verifyTotpOnce(adminId: string, secretB32: string, code: string): Promise<boolean> {
-  return db.transaction(tx => verifyTotpOnceTx(adminId, secretB32, code, tx));
+  return db.transaction(async (tx) => {
+    // 0108 (design §5): the owner row before the replay advisory lock — the replay-row insert takes an implicit KEY SHARE
+    // on admin_user, which a factor mutation holding admin_user FOR UPDATE + waiting for the advisory lock would invert.
+    const [owner] = await tx.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.id, adminId)).for('share').limit(1);
+    if (!owner) return false;
+    return verifyTotpOnceTx(adminId, secretB32, code, tx);
+  });
+}
+
+/** 0108: like verifySecondFactor, but a consumed recovery code comes back as a receipt (its row id + used_at) that
+ *  the committing transaction re-checks, so a code from a replaced set cannot be committed after a regeneration. */
+export async function verifySecondFactorDetailed(adminId: string, secretB32: string, code: string | undefined): Promise<{ ok: boolean; receipt?: { id: string; usedAt: Date } }> {
+  if (!code) return { ok: false };
+  const c = code.trim();
+  if (/^\d{6}$/.test(c)) return { ok: await verifyTotpOnce(adminId, secretB32, c) };
+  if (normalizeRecoveryCode(c).length !== 16) return { ok: false };
+  const used = await db.update(s.adminRecoveryCode).set({ usedAt: new Date() })
+    .where(and(eq(s.adminRecoveryCode.adminUserId, adminId), eq(s.adminRecoveryCode.codeHash, hashRecoveryCode(c)), isNull(s.adminRecoveryCode.usedAt)))
+    .returning({ id: s.adminRecoveryCode.id, usedAt: s.adminRecoveryCode.usedAt });
+  const row = used[0];
+  return row?.usedAt ? { ok: true, receipt: { id: row.id, usedAt: row.usedAt } } : { ok: false };
 }
 
 async function verifyTotpOnceTx(adminId: string, secretB32: string, code: string, tx: FactorDb): Promise<boolean> {

@@ -4,7 +4,7 @@ import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { verifySecondFactor } from '../auth/second-factor.js';
+import { verifySecondFactor, verifySecondFactorDetailed } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { csrfValid, cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { bearer } from '../auth/session.js';
@@ -529,10 +529,14 @@ adminSettingsAdvanced.openapi(
     if ((await adminKindByEmail(inv.email)) === 'agent') throw new HttpError(400, 'agents cannot accept invites');
     const existing = await findAdminCredentialsByEmail(inv.email);
     let newPasswordHash: string | null = null;
+    // 0108 (design §5): the proof is committed only while the owner row still carries the snapshot captured here.
+    let receipt: { id: string; usedAt: Date } | undefined;
+    let sessionToken: string | null = null;
     if (existing) {
       const me = await sessionHuman(c);
       let proven = false;
       if (me && me.email === inv.email) {
+        sessionToken = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE) ?? null;
         // Session path. The route is CSRF-exempt for brand-new invitees, so a cookie-carried
         // session must double-submit here (bearer clients pass csrfValid by construction).
         if (!csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
@@ -543,8 +547,9 @@ adminSettingsAdvanced.openapi(
         const retry = await reserveAdminAuthAttempt(ip, inv.email);
         if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`, 'RATE_LIMITED');
         const passwordOk = await verifyPassword(b.currentPassword, existing.passwordHash);
-        const totpOk = !existing.totpSecret || (await verifySecondFactor(existing.id, existing.totpSecret, b.totp));
-        if (!passwordOk || !totpOk) {
+        const factor = existing.totpSecret ? await verifySecondFactorDetailed(existing.id, existing.totpSecret, b.totp) : { ok: true as const };
+        receipt = factor.receipt;
+        if (!passwordOk || !factor.ok) {
           
           throw new HttpError(401, 'invalid password or 2FA code', 'INVITE_AUTH_FAILED');
         }
@@ -573,6 +578,18 @@ adminSettingsAdvanced.openapi(
       if (claimed.length === 0) throw new HttpError(409, 'invite is invalid, already used, or expired', 'INVITE_INVALID');
       let uid: string;
       if (existing) {
+        // 0108: owner row FOR UPDATE; the snapshot (epoch, hash, stored TOTP version, recovery receipt) must be unchanged and,
+        // on the session path, the session must still be live — otherwise the invite stays unclaimed (409 CREDENTIAL_CHANGED).
+        const [owner] = await tx.select({ epoch: s.adminUser.securityEpoch, hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, existing.id)).for('update').limit(1);
+        if (!owner || owner.epoch !== existing.securityEpoch || owner.hash !== existing.passwordHash || owner.totp !== existing.totpVersion) throw new HttpError(409, 'your credentials changed meanwhile — sign in again and accept', 'CREDENTIAL_CHANGED');
+        if (receipt) {
+          const [rc] = await tx.select({ usedAt: s.adminRecoveryCode.usedAt }).from(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.id, receipt.id)).limit(1);
+          if (!rc?.usedAt || rc.usedAt.getTime() !== receipt.usedAt.getTime()) throw new HttpError(409, 'your credentials changed meanwhile — sign in again and accept', 'CREDENTIAL_CHANGED');
+        }
+        if (sessionToken) {
+          const [live] = await tx.select({ id: s.session.id }).from(s.session).where(and(eq(s.session.tokenHash, createHash('sha256').update(sessionToken).digest('hex')), eq(s.session.adminUserId, existing.id), sql`${s.session.expiresAt} > clock_timestamp()`)).limit(1);
+          if (!live) throw new HttpError(401, 'session expired — sign in again and accept', 'INVITE_SIGN_IN_REQUIRED');
+        }
         uid = existing.id;
       } else {
         const [u] = await tx
@@ -653,6 +670,8 @@ adminSettingsAdvanced.openapi(
         throw new HttpError(403, 'this person also has access beyond this store — only an installation administrator can sign them out everywhere', 'REVOKE_REQUIRES_INSTALLATION_ADMIN');
       }
       if (memberships.some((x) => x.storeId === st.storeId && x.role === 'owner') && !(admin.kind === 'human' && admin.isInstallationAdmin)) requireOwner(cur);
+      // 0108 (design §5): the target's owner row before its session rows — never hold session locks while waiting for admin_user.
+      await tx.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update');
       const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,

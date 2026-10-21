@@ -27,6 +27,8 @@ import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminSecurity } from './routes/admin-security.js';
+import { adminPasskeys } from './routes/admin-passkeys.js';
+import { shopPasskeys } from './routes/shop-passkeys.js';
 import { adminLoyalty } from './routes/admin-loyalty.js';
 import { reviews } from './routes/reviews.js';
 import { adminReviews } from './routes/admin-reviews.js';
@@ -220,7 +222,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.use('/v1/admin/*', async (c, next) => {
     if (c.req.method === 'OPTIONS') return next();
     const p = c.req.path;
-    const preSession = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
+    const preSession = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept'
+      // Passkeys (0108): pre-session ceremony + capability probe, treated exactly like /v1/admin/login.
+      || p === '/v1/admin/capabilities' || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify';
     // A credential means a parsable Bearer token or the session cookie — not any Authorization header (e.g. Basic).
     const hasCredential = !!bearer(c.req.header('authorization')) || !!cookie(c, SESSION_COOKIE)
       || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
@@ -284,7 +288,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       // Cache purge is machine-only: its handler requires the explicit shared-token header
       // even when a session cookie is present. Keep this exception to the exact POST path.
       const machineCachePurge = m === 'POST' && new URL(c.req.url).pathname === '/v1/admin/cache/purge';
-      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept' || machineCachePurge;
+      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept' || machineCachePurge
+        || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify'; // passkeys (0108): pre-session, no CSRF cookie yet
       if (!exempt && !csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
     }
     await next();
@@ -307,6 +312,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
         p === '/v1/shop/auth/login' ||
         p === '/v1/shop/auth/register' ||
         p === '/v1/shop/auth/google' ||
+        // Passkeys (0108): public ceremony routes, like login.
+        p === '/v1/shop/auth/passkey/login/options' ||
+        p === '/v1/shop/auth/passkey/login/verify' ||
         // Pre-session token endpoints (WP2d) — no customer cookie exists yet.
         p === '/v1/shop/auth/forgot-password' ||
         p === '/v1/shop/auth/reset-password' ||
@@ -488,6 +496,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', gatewayPayments);
   app.route('/', adminGatewayPayments);
   app.route('/', auth);
+  app.route('/', shopPasskeys); // 0108: passkeys (customers): login ceremony, management grants, enrolment
   app.route('/', shopConfig);
   app.route('/', customerTokens);
   app.route('/', account);
@@ -521,6 +530,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminSecurity); // P1b: 2FA enrolment + recovery codes, password change, per-store 2FA requirement
+  app.route('/', adminPasskeys); // 0108: passkeys (admin): capabilities + login ceremony (pre-session), enrolment, step-up
   app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
   app.route('/', adminReviews); // REWARDS-1: review moderation + settings
   app.route('/', adminPaymentSettings); // WS-A: encrypted per-store payment credentials, verify, Stripe webhook auto-create

@@ -82,6 +82,7 @@ const HAND_WRITTEN = [
   '0089_installation_setting.sql',
   '0087_harden_outbox_rls_nullif.sql',
   '0088_defork_instrumentation.sql',
+  '0108_passkeys.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

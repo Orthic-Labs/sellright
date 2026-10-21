@@ -14,7 +14,7 @@
  *     shells, removes the lint suppression entirely, and centralizes the IDOR
  *     and "global tables are global" invariants in one auditable file.
  */
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { createHash } from 'node:crypto';
@@ -40,13 +40,13 @@ export async function getAdminTotpSecret(adminId: string): Promise<string | null
  *  password hash to verify against, and whether TOTP must additionally be
  *  checked (a null/absent totpSecret means 2FA isn't enabled — password
  *  alone is the full step-up, same as login's own rule). */
-export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null; totpVersion: string | null } | null> {
+export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null; totpVersion: string | null ; securityEpoch: number } | null> {
   const [u] = await db
-    .select({ passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .select({ passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret , securityEpoch: s.adminUser.securityEpoch })
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret), totpVersion: u.totpSecret } : null;
+  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret), totpVersion: u.totpSecret, securityEpoch: u.securityEpoch } : null;
 }
 
 /** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). Sealed at rest
@@ -59,18 +59,27 @@ export async function setAdminTotpSecret(adminId: string, secret: string): Promi
  * Factor, recovery-code replacement & session revocation share one transaction, serialized per admin.
  * Slow password/factor proof happens before this call; its results cannot resurrect superseded credentials. */
 export class AdminFactorMutationError extends Error {
-  constructor(readonly code: 'TOTP_REQUIRED' | 'INVALID_FACTOR') { super(code); }
+  constructor(readonly code: 'TOTP_REQUIRED' | 'INVALID_FACTOR' | 'PASSKEYS_ENROLLED') { super(code); }
 }
 export async function mutateAdminSecondFactor(input: {
   adminId: string; token: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null;
+  /** 0108: the security_epoch captured with the credential snapshot; a mutation whose proof predates an epoch change is refused. */
+  securityEpoch?: number;
+  /** 0108: receipt of a recovery code consumed outside this transaction (route-level proof); must still be current. */
+  receipt?: { id: string; usedAt: Date };
   action: 'enable' | 'disable' | 'recovery'; secret?: string; code?: string;
 }): Promise<{ recoveryCodes: string[] } | null> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + input.adminId}, 0))`);
     const [admin] = await tx.select({ passwordHash: s.adminUser.passwordHash, secret: s.adminUser.totpSecret,
-      kind: s.adminUser.kind, isInstallationAdmin: s.adminUser.isInstallationAdmin })
+      kind: s.adminUser.kind, isInstallationAdmin: s.adminUser.isInstallationAdmin, epoch: s.adminUser.securityEpoch })
       .from(s.adminUser).where(eq(s.adminUser.id, input.adminId)).for('update').limit(1);
     if (!admin || admin.passwordHash !== input.passwordHash || admin.secret !== input.totpVersion) return null;
+    if (input.securityEpoch !== undefined && admin.epoch !== input.securityEpoch) return null;
+    if (input.receipt) {
+      const [rc] = await tx.select({ usedAt: s.adminRecoveryCode.usedAt }).from(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.id, input.receipt.id)).limit(1);
+      if (!rc?.usedAt || rc.usedAt.getTime() !== input.receipt.usedAt.getTime()) return null;
+    }
     const tokenHash = createHash('sha256').update(input.token).digest('hex');
     const idle = env.ADMIN_SESSION_IDLE_HOURS;
     const [session] = await tx.select({ id: s.session.id, expiresAt: s.session.expiresAt, lastSeenAt: s.session.lastSeenAt, createdAt: s.session.createdAt }).from(s.session)
@@ -80,6 +89,10 @@ export async function mutateAdminSecondFactor(input: {
       .for('update').limit(1);
     if (!session || session.expiresAt.getTime() <= Date.now() || (idle > 0 && (session.lastSeenAt ?? session.createdAt).getTime() <= Date.now() - idle * 3600000)) return null;
     if (input.action === 'disable') {
+      // 0108 TOTP invariant (design §7): with a passkey enrolled the second factor stays; recovery codes remain the
+      // universal recovery factor. Checked under the admin_user lock the registration path also takes.
+      const [pk] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, input.adminId));
+      if (Number(pk?.n ?? 0) > 0) throw new AdminFactorMutationError('PASSKEYS_ENROLLED');
       // Global credential row precedes membership & store locks. Its FK lock
       // also prevents a new membership from appearing during this decision.
       const memberships = await tx.select().from(s.adminUserStore).where(eq(s.adminUserStore.adminUserId, input.adminId))
@@ -129,13 +142,13 @@ export async function clearAdminTotpSecret(adminId: string): Promise<void> {
  *  staff-invite accept flow: an invite token alone NEVER changes an existing account's
  *  password or role — the existing admin must prove their current password (+ TOTP) or
  *  accept from their own session (P0, security audit 2026-10-15). null when no account. */
-export async function findAdminCredentialsByEmail(email: string): Promise<{ id: string; kind: string; passwordHash: string | null; totpSecret: string | null } | null> {
+export async function findAdminCredentialsByEmail(email: string): Promise<{ id: string; kind: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null; securityEpoch: number } | null> {
   const [u] = await db
-    .select({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .select({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret, securityEpoch: s.adminUser.securityEpoch })
     .from(s.adminUser)
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
-  return u ? { ...u, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
+  return u ? { ...u, totpVersion: u.totpSecret, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
 }
 
 // ── staff (admin_user_store ACL) ──────────────────────────────────────────────
@@ -345,8 +358,12 @@ export async function markInviteAccepted(inviteId: string): Promise<void> {
  *  (use isStaffInStore) — sessions are global and not RLS-gated, so this is
  *  the only thing preventing a manager from kicking a superadmin. */
 export async function revokeAllSessionsForAdmin(adminUserId: string): Promise<number> {
-  const del = await db.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
-  return del.length;
+  return db.transaction(async (tx) => {
+    // 0108 (design §5): owner row first, then the session rows.
+    await tx.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update');
+    const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
+    return del.length;
+  });
 }
 
 // ── recovery kit (plan §1.10) ─────────────────────────────────────────────────

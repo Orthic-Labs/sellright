@@ -10,8 +10,9 @@ import {
   jsonb,
   unique,
   primaryKey,
+  index,
 } from 'drizzle-orm/pg-core';
-import { asset, customer, productVariant, promotion, store, ts } from './schema-core.js';
+import { asset, bytea, customer, productVariant, promotion, store, ts } from './schema-core.js';
 import { order } from './schema-orders.js';
 
 // ── infra (safety rails) ────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ export const customerToken = pgTable('customer_token', {
   customerId: uuid().notNull().references(() => customer.id),
   // Compile-time enum — typos in `kind` fail at the TS layer, not at insert.
   // The DB-level CHECK constraint is added by migration 0023 (defense in depth).
-  kind: text({ enum: ['password_reset', 'email_verify', 'set_password', 'email_change', 'magic_link'] }).notNull(),
+  kind: text({ enum: ['password_reset', 'email_verify', 'set_password', 'email_change', 'magic_link', 'passkey_manage'] }).notNull(),
   tokenHash: text().notNull().unique(),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
   usedAt: timestamp({ withTimezone: true }),
@@ -212,3 +213,38 @@ export const paymentMethod = pgTable('payment_method', {
   createdAt: ts(),
 });
 
+
+// Passkeys (0108): tenant-scoped customer credentials and ceremony rows (forced RLS, withStore only).
+// `epoch` = customer.security_epoch at issuance; kind 'grant' rows are the single-use management authorization.
+export const customerPasskeyCredential = pgTable('customer_passkey_credential', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  customerId: uuid().notNull().references(() => customer.id, { onDelete: 'cascade' }),
+  rpId: text().notNull(),
+  credentialId: text().notNull(),
+  publicKey: bytea().notNull(),
+  counter: bigint({ mode: 'number' }).notNull().default(0),
+  transports: text().array().notNull().default([]),
+  deviceType: text().notNull(),
+  backedUp: boolean().notNull(),
+  aaguid: text(),
+  label: text().notNull(),
+  epoch: integer().notNull(),
+  createdAt: ts(),
+  lastUsedAt: timestamp({ withTimezone: true }),
+}, (t) => [unique('customer_passkey_credential_rp_cred').on(t.storeId, t.rpId, t.credentialId), index('customer_passkey_credential_customer').on(t.storeId, t.customerId)]);
+
+export const customerPasskeyChallenge = pgTable('customer_passkey_challenge', {
+  challengeHash: text().primaryKey(),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  kind: text({ enum: ['register', 'login', 'manage', 'grant'] }).notNull(),
+  rpId: text().notNull(),
+  customerId: uuid().references(() => customer.id, { onDelete: 'cascade' }),
+  sessionHash: text(),
+  nonceHash: text().notNull(),
+  grantSource: text({ enum: ['password', 'passkey', 'mailbox'] }),
+  authorizingCredentialId: uuid().references(() => customerPasskeyCredential.id, { onDelete: 'cascade' }),
+  epoch: integer(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  consumedAt: timestamp({ withTimezone: true }),
+}, (t) => [index('customer_passkey_challenge_expires').on(t.storeId, t.expiresAt)]);

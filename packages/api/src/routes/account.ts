@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { deleteCustomerPasskeysForRecovery } from '../auth/passkeys-shop.js';
 import { withStore, type Tx } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -38,7 +39,7 @@ const AddressDraft = z.object({
 });
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
-  return token ? resolveCustomer(tx, token) : null;
+  return token ? resolveCustomer(tx, token, false, { renew: false }) : null; // 0108: never row-lock the session inside a business transaction (design §5)
 }
 
 export const account = new OpenAPIHono();
@@ -374,27 +375,39 @@ account.openapi(
     responses: {
       200: { description: 'Changed', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       401: { description: 'Unauthenticated or wrong current password', content: { 'application/json': { schema: errSchema } } },
+      409: { description: 'Password changed meanwhile (CREDENTIAL_CHANGED)', content: { 'application/json': { schema: errSchema } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { currentPassword, newPassword } = c.req.valid('json');
-    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'ok'> => {
-      const cust = await me(tx, customerToken(c));
-      if (!cust) return 'unauth';
-      const [row] = await tx.select({ passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.id, cust.id)).limit(1);
-      if (!(await verifyPassword(currentPassword, row?.passwordHash ?? null))) return 'wrong';
-      const hash = await hashPassword(newPassword);
-      await tx.update(s.customer).set({ passwordHash: hash, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
+    // 0108 (design §5): identification and the slow password verification outside the mutation transaction, with a
+    // non-renewing session read; the transaction then locks the customer FIRST, re-reads the session with a plain
+    // SELECT, re-checks the hash snapshot (a reset that committed meanwhile wins), then changes the password, ends
+    // every passkey and pending passkey authorization (§4) and revokes the other sessions — atomically.
+    const tok = customerToken(c);
+    const probe = await withStore(st.id, async (tx) => (tok ? await me(tx, tok) : null));
+    if (!probe) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    const verifiedHash = (await withStore(st.id, async (tx) => (await tx.select({ passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.id, probe.id)).limit(1))[0]?.passwordHash)) ?? null;
+    if (!(await verifyPassword(currentPassword, verifiedHash))) return errJson(c, 401, 'PASSWORD_INCORRECT', 'current password is incorrect');
+    const hash = await hashPassword(newPassword);
+    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'changed' | 'ok'> => {
+      const [locked] = await tx.select({ id: s.customer.id, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.id, probe.id)).limit(1).for('update');
+      if (!locked) return 'unauth';
+      if (locked.passwordHash !== verifiedHash) return 'changed';
+      const [live] = await tx.select({ id: s.session.id }).from(s.session).where(and(
+        eq(s.session.tokenHash, hashToken(tok!)), eq(s.session.customerId, locked.id), eq(s.session.storeId, st.id),
+        sql`${s.session.expiresAt} > clock_timestamp()`, or(sql`${s.session.legacyExpiresAt} IS NULL`, sql`${s.session.legacyExpiresAt} > clock_timestamp()`),
+      )).limit(1);
+      if (!live) return 'unauth';
+      await tx.update(s.customer).set({ passwordHash: hash, updatedAt: new Date() }).where(eq(s.customer.id, locked.id));
+      await deleteCustomerPasskeysForRecovery(tx, st.id, locked.id);
       // Invalidate OTHER sessions for this customer; the current token stays valid.
-      const tok = customerToken(c);
-      const conds = [eq(s.session.customerId, cust.id)];
-      if (tok) conds.push(sql`${s.session.tokenHash} <> ${hashToken(tok)}`);
-      await tx.delete(s.session).where(and(...conds));
+      await tx.delete(s.session).where(and(eq(s.session.customerId, locked.id), sql`${s.session.tokenHash} <> ${hashToken(tok!)}`));
       return 'ok';
     });
     if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
-    if (out === 'wrong') return errJson(c, 401, 'PASSWORD_INCORRECT', 'current password is incorrect');
+    if (out === 'changed') return errJson(c, 409, 'CREDENTIAL_CHANGED', 'your password changed meanwhile — sign in again');
     return c.json({ ok: true }, 200);
   },
 );

@@ -343,6 +343,9 @@ const EnvSchema = z.object({
   // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
   // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
   ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
+  // Passkeys (WebAuthn) for admins and customers (docs/plans/2026-10-21-passkeys-and-federated-signin.md). '0' keeps
+  // every passkey route registered but answering 404 FEATURE_DISABLED, and the capability endpoints report false.
+  PASSKEYS_ENABLED: z.enum(['0', '1']).default('1'),
   // P2: admin session lifetime. Absolute TTL (also the cookie Max-Age) and idle
   // timeout: a session unused for ADMIN_SESSION_IDLE_HOURS is refused (0 disables).
   ADMIN_SESSION_TTL_DAYS: z.coerce.number().positive().default(14),

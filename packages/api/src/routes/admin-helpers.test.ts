@@ -3,7 +3,7 @@ import { HttpError, hasPermission, requireHuman, requireInstallationAdmin, requi
 import type { AdminPrincipal } from '../auth/admin-session.js';
 
 function principal(isInstallationAdmin: boolean, stepUpAt: Date | null = null): AdminPrincipal {
-  return { id: 'admin-1', email: 'a@example.com', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin, stepUpAt, stores: [] };
+  return { id: 'admin-1', stepUpEpoch: null, securityEpoch: 0, email: 'a@example.com', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin, stepUpAt, stores: [] };
 }
 
 describe('requireInstallationAdmin', () => {
@@ -59,7 +59,7 @@ describe('requireStepUp', () => {
 });
 
 describe('agent kind guards', () => {
-  const agent = { id: 'a', email: 'a@agents.invalid', kind: 'agent', auth: 'api_token', apiTokenId: 't', isInstallationAdmin: false, stepUpAt: new Date(), stores: [] } as const;
+  const agent = { id: 'a', email: 'a@agents.invalid', kind: 'agent', auth: 'api_token', apiTokenId: 't', isInstallationAdmin: false, stepUpAt: new Date(), stepUpEpoch: null, securityEpoch: 0, stores: [] } as const;
   it('requireHuman refuses agents', () => { expect(() => requireHuman(agent as never)).toThrow(); });
   it('requireStepUp refuses agents even with a fresh stepUpAt', () => { expect(() => requireStepUp(agent as never)).toThrow(); });
   it('requireInstallationAdmin refuses agents', () => { expect(() => requireInstallationAdmin({ ...agent, isInstallationAdmin: true } as never)).toThrow(); });

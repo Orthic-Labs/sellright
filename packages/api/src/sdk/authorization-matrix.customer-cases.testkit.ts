@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { createSession } from '../auth/session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
+import { customerUserHandle } from '../auth/passkeys-core.js';
+import { customerPasswordGrant, enrolCustomerPasskey, passkeyNonceCookie, shopAuthenticator, withCookie } from './authorization-matrix.passkey.testkit.js';
 import type { createAuthorizationFixtures } from './authorization-matrix.fixtures.testkit.js';
 import { PRINCIPALS, type MatrixCase, type MatrixCell, type MatrixPrincipal, type MatrixProof, type PreparedMatrixCell } from './authorization-matrix.testkit.js';
 
@@ -31,10 +33,14 @@ export interface CustomerCaseOptions {
 }
 type PreparedCustomer = {
   url: string; body?: unknown;
+  /** 0108: a ceremony-bound request also carries the nonce cookie; otherwise the seed's own headers. */
+  headers?: Record<string, string>;
   verify(response: Response, proof: MatrixProof): Promise<void>;
 };
 type Spec = {
   key: string; status: number; concealment?: true;
+  /** 0108: the prerequisite ceremonies spend this seed's session/mailbox budgets, so every cell seeds its own customer. */
+  fresh?: true;
   prepare(seed: CustomerSeed): Promise<PreparedCustomer>;
 };
 const digest = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -126,6 +132,83 @@ function customerSource(fixture: Fixture) {
         proof.equal(await rows('SELECT email,first_name,last_name,phone FROM customer WHERE id=$1', [s.customerId]),
           [{ email: s.email, first_name: patch.firstName, last_name: patch.lastName, phone: patch.phone }],
           'own profile committed', 'state');
+      } };
+    } },
+    // ── passkeys (0108): customer contract — denial cells for every admin/service principal, genuine controls below ──
+    { key: 'POST /v1/shop/auth/passkey/grant/password', fresh: true, status: 200, async prepare(s) {
+      return { url: '/v1/shop/auth/passkey/grant/password', body: { password: s.password }, async verify(response: Response, proof: MatrixProof) {
+        const body = await response.json() as Json;
+        proof.ok(typeof body.grant === 'string' && body.grant.length >= 20, 'opaque management grant');
+        proof.equal(await rows('SELECT kind, grant_source, customer_id, session_hash FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.grant)]), [{ kind: 'grant', grant_source: 'password', customer_id: s.customerId, session_hash: s.sessionHash }], 'grant bound to this customer and session', 'state');
+      } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/manage/options', fresh: true, status: 200, async prepare(s) {
+      await enrolCustomerPasskey(fixture.request, s.headers, s.password, fixture.storeId, s.customerId);
+      return { url: '/v1/shop/auth/passkey/manage/options', body: {}, async verify(response: Response, proof: MatrixProof) {
+        const body = await response.json() as Json;
+        proof.ok(body.options?.allowCredentials?.length === 1, 'manage options list exactly the customer\'s credential');
+        proof.equal(await rows('SELECT kind, customer_id FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'manage', customer_id: s.customerId }], 'manage challenge bound to this customer', 'state');
+      } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/manage/verify', fresh: true, status: 200, async prepare(s) {
+      const { auth } = await enrolCustomerPasskey(fixture.request, s.headers, s.password, fixture.storeId, s.customerId);
+      const options = await fixture.request('/v1/shop/auth/passkey/manage/options', { method: 'POST', headers: s.headers, body: '{}' });
+      const { options: o } = await options.json() as { options: { challenge: string } };
+      return { url: '/v1/shop/auth/passkey/manage/verify', body: { response: auth.authenticate({ challenge: o.challenge, counter: 1, userHandle: customerUserHandle(fixture.storeId, s.customerId) }) }, headers: withCookie(s.headers, passkeyNonceCookie(options)),
+        async verify(response: Response, proof: MatrixProof) {
+          const body = await response.json() as Json;
+          proof.equal(await rows('SELECT kind, grant_source, customer_id FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.grant)]), [{ kind: 'grant', grant_source: 'passkey', customer_id: s.customerId }], 'passkey-sourced grant minted', 'state');
+        } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/grant/request', fresh: true, status: 202, async prepare(s) {
+      await rows('UPDATE customer SET password_hash=NULL WHERE id=$1', [s.customerId]); // mailbox bootstrap: neither password nor passkey
+      return { url: '/v1/shop/auth/passkey/grant/request', body: {}, async verify(response: Response, proof: MatrixProof) {
+        proof.equal(await response.json(), { ok: true }, 'identical accepted answer');
+        proof.equal((await rows("SELECT customer_id, used_at FROM customer_token WHERE customer_id=$1 AND kind='passkey_manage'", [s.customerId])), [{ customer_id: s.customerId, used_at: null }], 'mailbox proof token minted for this customer', 'state');
+      } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/grant/confirm', fresh: true, status: 200, async prepare(s) {
+      await rows('UPDATE customer SET password_hash=NULL WHERE id=$1', [s.customerId]);
+      const req = await fixture.request('/v1/shop/auth/passkey/grant/request', { method: 'POST', headers: s.headers, body: '{}' });
+      const mail = (await rows("SELECT payload FROM email_outbox WHERE store_id=$1 AND kind='passkey_manage' ORDER BY created_at DESC LIMIT 1", [fixture.storeId]))[0]!;
+      const raw = /token=([A-Za-z0-9_-]+)/.exec(String((mail.payload as { text?: string; html?: string }).text ?? (mail.payload as { html?: string }).html))![1]!;
+      return { url: '/v1/shop/auth/passkey/grant/confirm', body: { token: raw }, headers: withCookie(s.headers, passkeyNonceCookie(req)), async verify(response: Response, proof: MatrixProof) {
+        const body = await response.json() as Json;
+        proof.equal(await rows('SELECT kind, grant_source FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.grant)]), [{ kind: 'grant', grant_source: 'mailbox' }], 'mailbox-sourced grant minted', 'state');
+        proof.equal((await rows("SELECT (used_at IS NOT NULL) AS used FROM customer_token WHERE customer_id=$1 AND kind='passkey_manage'", [s.customerId])), [{ used: true }], 'mailbox token consumed', 'state');
+      } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/register/options', fresh: true, status: 200, async prepare(s) {
+      const g = await customerPasswordGrant(fixture.request, s.headers, s.password);
+      return { url: '/v1/shop/auth/passkey/register/options', body: { grant: g.grant }, headers: withCookie(s.headers, g.cookie), async verify(response: Response, proof: MatrixProof) {
+        const body = await response.json() as Json;
+        proof.equal(await rows('SELECT kind, customer_id, epoch FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(body.options.challenge)]), [{ kind: 'register', customer_id: s.customerId, epoch: 0 }], 'register challenge bound to this customer and epoch', 'state');
+        proof.equal(await rows('SELECT (consumed_at IS NOT NULL) AS consumed FROM customer_passkey_challenge WHERE challenge_hash=$1', [digest(g.grant)]), [{ consumed: true }], 'grant consumed exactly once', 'state');
+      } };
+    } },
+    { key: 'POST /v1/shop/auth/passkey/register/verify', fresh: true, status: 200, async prepare(s) {
+      const g = await customerPasswordGrant(fixture.request, s.headers, s.password);
+      const options = await fixture.request('/v1/shop/auth/passkey/register/options', { method: 'POST', headers: withCookie(s.headers, g.cookie), body: JSON.stringify({ grant: g.grant }) });
+      const { options: o } = await options.json() as { options: { challenge: string } };
+      return { url: '/v1/shop/auth/passkey/register/verify', body: { response: shopAuthenticator().register({ challenge: o.challenge, userHandle: customerUserHandle(fixture.storeId, s.customerId) }), label: 'matrix key' }, headers: withCookie(s.headers, passkeyNonceCookie(options)),
+        async verify(response: Response, proof: MatrixProof) {
+          const row = await response.json() as Json;
+          proof.equal(await rows('SELECT customer_id, label, epoch FROM customer_passkey_credential WHERE id=$1', [row.id]), [{ customer_id: s.customerId, label: 'matrix key', epoch: 0 }], 'credential committed for this customer under its epoch', 'state');
+        } };
+    } },
+    { key: 'GET /v1/shop/account/passkeys', fresh: true, status: 200, async prepare(s) {
+      const { id } = await enrolCustomerPasskey(fixture.request, s.headers, s.password, fixture.storeId, s.customerId);
+      return { url: '/v1/shop/account/passkeys', async verify(response: Response, proof: MatrixProof) {
+        proof.equal(((await response.json()) as Json).items.map((p: Json) => p.id), [id], 'lists exactly own credential');
+      } };
+    } },
+    { key: 'DELETE /v1/shop/account/passkeys/{id}', fresh: true, status: 200, async prepare(s) {
+      const { id } = await enrolCustomerPasskey(fixture.request, s.headers, s.password, fixture.storeId, s.customerId);
+      const g = await customerPasswordGrant(fixture.request, s.headers, s.password);
+      return { url: '/v1/shop/account/passkeys/' + id, body: { grant: g.grant }, headers: withCookie(s.headers, g.cookie), async verify(response: Response, proof: MatrixProof) {
+        await ok(response, proof);
+        proof.equal(await rows('SELECT id FROM customer_passkey_credential WHERE id=$1', [id]), [], 'own credential removed', 'state');
+        proof.equal(await rows('SELECT count(*)::int AS n FROM customer_passkey_challenge WHERE customer_id=$1 AND consumed_at IS NULL', [s.customerId]), [{ n: 0 }], 'pending authorization ended', 'state');
       } };
     } },
     { key: 'POST /v1/shop/account/password', status: 200, async prepare(s) {
@@ -229,7 +312,7 @@ export function createCustomerCases(fixture: Fixture, options: CustomerCaseOptio
       // account.ts order-detail handler deliberately conceals missing credentials as 404 NOT_AUTHENTICATED.
       ...(spec.concealment ? { concealment: true as const } : {}),
       async prepare() {
-        const prepared = await spec.prepare(await target());
+        const prepared = await spec.prepare(spec.fresh ? await source.seed() : await target());
         const before = method === 'GET' ? await fixture.snapshot() : undefined;
         return { url: prepared.url, init: { method, headers: fixture.requestHeaders[principal],
           ...(prepared.body === undefined ? {} : { body: JSON.stringify(prepared.body) }) },
@@ -243,7 +326,7 @@ export function createCustomerCases(fixture: Fixture, options: CustomerCaseOptio
     return { key: spec.key, contract: 'customer' as const, cells: Object.fromEntries(PRINCIPALS.map(p => [p, cell(p)])) as Record<MatrixPrincipal, MatrixCell>,
       ...(spec.concealment ? { concealmentControl: async () => {
         const s = await target(), prepared = await spec.prepare(s);
-        return { url: prepared.url, init: { method, headers: s.headers }, verify: prepared.verify };
+        return { url: prepared.url, init: { method, headers: prepared.headers ?? s.headers }, verify: prepared.verify };
       } } : {}) };
   });
   cases.push({ key: 'GET /v1/shop/auth/me', contract: 'customer', cells: Object.fromEntries(PRINCIPALS.map(principal => [principal, {
@@ -272,7 +355,7 @@ export function createCustomerControls(fixture: Fixture, options: CustomerCaseOp
   const controls: CustomerControl[] = source.specs.map(spec => ({
     key: spec.key, status: spec.status, async prepare() {
       const s = await source.seed(), prepared = await spec.prepare(s);
-      return { url: prepared.url, init: { method: spec.key.split(' ')[0], headers: s.headers,
+      return { url: prepared.url, init: { method: spec.key.split(' ')[0], headers: prepared.headers ?? s.headers,
         ...(prepared.body === undefined ? {} : { body: JSON.stringify(prepared.body) }) }, verify: prepared.verify };
     },
   }));

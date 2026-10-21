@@ -14,6 +14,7 @@ import { grantSignupBonus } from '../loyalty/bonus.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { deleteCustomerPasskeysForRecovery } from '../auth/passkeys-shop.js';
 import { withStore } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
 import { type StoreCtx } from '../store-context.js';
@@ -140,6 +141,8 @@ customerTokens.openapi(
       await tx.update(s.customerToken).set({ usedAt: new Date() })
         .where(and(eq(s.customerToken.customerId, row.customerId), inArray(s.customerToken.kind, ['password_reset', EMAIL_CHANGE_KIND]), isNull(s.customerToken.usedAt)));
       await tx.update(s.customer).set({ passwordHash, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
+      // 0108: a mailbox-proven recovery ends every passkey and every pending passkey authorization (design §4).
+      await deleteCustomerPasskeysForRecovery(tx, st.id, row.customerId);
       // Revoke all of this customer's sessions in THIS store. (session is RLS-exempt for token lookup, so
       // filter by storeId explicitly.)
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
@@ -177,8 +180,13 @@ customerTokens.openapi(
       const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
         .where(and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'email_verify'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt))).limit(1);
       if (!row) return false;
+      // 0108 (design §5): owner first — lock the customer, then claim the token conditionally (a concurrent email
+      // change or erasure that won the customer lock already burned it, so the claim finds nothing).
+      await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, row.customerId)).for('update');
+      const claimed = await tx.update(s.customerToken).set({ usedAt: new Date() })
+        .where(and(eq(s.customerToken.id, row.id), isNull(s.customerToken.usedAt), gt(s.customerToken.expiresAt, new Date()))).returning({ id: s.customerToken.id });
+      if (claimed.length !== 1) return false;
       await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
-      await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
       await grantSignupBonus(tx, st.id, row.customerId); // REWARDS-1: no-op unless the rule is on
       return true;
     });

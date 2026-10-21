@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { appleIdentityCsp, appleSignInClientIdForHost } from '../config/apple-signin';
 import { googleIdentityCsp, googleSignInClientIdForHost } from '../config/google-signin';
 import { buildCsp, IP_LOOKUP_ORIGIN, SHEERID_ORIGIN, TURNSTILE_ORIGIN } from './csp';
 import { YOUTUBE_EMBED_ORIGIN } from '../platform/youtube';
@@ -203,5 +204,36 @@ describe('buildCsp — explicit YouTube privacy embed opt-in', () => {
 		expect(buildCsp({ nonce: 'n', youtubeEmbed: false })).toBe(buildCsp({ nonce: 'n' }));
 		expect(buildCsp({ nonce: 'n' })).not.toContain(YOUTUBE_EMBED_ORIGIN);
 		expect(readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8')).toContain('youtubeEmbed: BRAND_HEAD.embeds?.youtube === true');
+	});
+});
+
+describe('buildCsp — Sign in with Apple sources join only when supplied, per directive', () => {
+	it('puts each real Apple source in its own directives and in no other', () => {
+		const apple = appleIdentityCsp('com.example.web');
+		const csp = buildCsp({ nonce: 'n', apple });
+		const lists = { 'script-src': apple.script, 'connect-src': apple.connect, 'frame-src': apple.frame };
+		const sources = [...new Set(Object.values(lists).flat())];
+		expect(sources.length).toBeGreaterThan(0);
+		for (const d of csp.split('; ')) {
+			const name = d.split(' ')[0];
+			const tokens = d.split(' ').slice(1);
+			const allowed: string[] = lists[name as keyof typeof lists] ?? [];
+			for (const sc of sources) expect(tokens.includes(sc), `${sc} in ${name}`).toBe(allowed.includes(sc));
+		}
+	});
+
+	it('adds nothing without apple or with empty lists, and coexists with Google', () => {
+		expect(buildCsp({ nonce: 'n', apple: { script: [], connect: [], frame: [], style: [] } })).toBe(buildCsp({ nonce: 'n' }));
+		const both = buildCsp({ nonce: 'n', google: googleIdentityCsp('x.apps.googleusercontent.com'), apple: appleIdentityCsp('com.example.web') });
+		expect(directive(both, 'script-src')).toContain('https://accounts.google.com/gsi/client');
+		expect(directive(both, 'script-src')).toContain('https://appleid.cdn-apple.com/');
+		expect(directive(both, 'frame-src')).toContain('https://accounts.google.com/gsi/');
+		expect(directive(both, 'frame-src')).toContain('https://appleid.apple.com');
+	});
+
+	it('is decided per request host: the pinned store host gets Apple origins, another host gets none', () => {
+		const cspFor = (host: string) => buildCsp({ nonce: 'n', apple: appleIdentityCsp(appleSignInClientIdForHost(host, 'com.example.web', 'store-a', 'a.example')) });
+		expect(cspFor('a.example')).toContain('https://appleid.apple.com');
+		expect(cspFor('b.example')).toBe(buildCsp({ nonce: 'n' }));
 	});
 });

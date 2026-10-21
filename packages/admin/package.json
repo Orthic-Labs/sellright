@@ -18,6 +18,7 @@
     "test:e2e": "pnpm run e2e:build && playwright test"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "14.0.0",
     "@tanstack/react-query": "^5.104.3",
     "@tiptap/core": "3.32.0",
     "@tiptap/extension-image": "3.32.0",
@@ -35,6 +36,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "@vitejs/plugin-react": "^6.1.2",
     "axe-core": "^4.14.0",
     "esbuild": "0.28.2",
@@ -42,7 +44,6 @@
     "postcss": "^8.5.30",
     "tailwindcss": "^4.3.3",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "@typescript/native": "npm:typescript@^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
   }

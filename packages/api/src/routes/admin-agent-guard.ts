@@ -13,7 +13,9 @@ import { eq } from 'drizzle-orm';
 
 declare module 'hono' { interface ContextVariableMap { adminPrincipal: AdminPrincipal } }
 
-const PUBLIC = new Set(['/v1/admin/login', '/v1/admin/logout']); // NOT staff/accept: it is public for the unauthenticated invitee, but an agent credential on it must still hit the deny set (Astra v5 F4)
+const PUBLIC = new Set(['/v1/admin/login', '/v1/admin/logout',
+  // Passkeys (0108): pre-session routes treated exactly like /v1/admin/login — no principal is resolved, the ceremony decides.
+  '/v1/admin/capabilities', '/v1/admin/passkeys/login/options', '/v1/admin/passkeys/login/verify']); // NOT staff/accept: it is public for the unauthenticated invitee, but an agent credential on it must still hit the deny set (Astra v5 F4)
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** Engine admin routes that accept a non-session credential (or none) and authenticate it themselves. */
 const SERVICE_CREDENTIAL_ROUTES = new Set(['POST /v1/admin/staff/accept', 'POST /v1/admin/cache/purge', 'POST /v1/admin/apps/releases']);

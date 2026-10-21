@@ -40,6 +40,9 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
     'PUT /v1/admin/staff/:adminUserId/permissions', 'POST /v1/admin/staff/:adminUserId/revoke-sessions', 'POST /v1/admin/agents', 'POST /v1/admin/agents/:adminUserId/rotate'),
   // credentials: 2FA, step-up, payment + e-mail secrets (test-send is allowed: it only sends)
   ...D('credentials', 'POST /v1/admin/2fa/setup', 'POST /v1/admin/2fa/enable', 'POST /v1/admin/2fa/disable', 'POST /v1/admin/step-up',
+    // passkeys (0108): enrolment, removal and passkey step-up are credential changes; the public login ceremony is excepted below
+    'POST /v1/admin/passkeys/register/options', 'POST /v1/admin/passkeys/register/verify', 'DELETE /v1/admin/passkeys/:id',
+    'POST /v1/admin/step-up/passkey/options', 'POST /v1/admin/step-up/passkey/verify',
     'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook', 'PUT /v1/admin/email/settings',
     // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Stripe live/test switch
@@ -57,11 +60,13 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
   'POST /v1/admin/cache/purge', // CDN cache purge: harmless, re-fills on the next request
   'POST /v1/admin/reviews/:id/approve', // review approval: reversible (reject later); the loyalty bonus is additive
   'POST /v1/admin/variants/:id/stock/adjust', // stock delta with a reason: ordinary inventory work, reversible
+  'POST /v1/admin/passkeys/login/options', // passkeys (0108): pre-session ceremony, no principal; the guard's PUBLIC set
+  'POST /v1/admin/passkeys/login/verify', // ... same; a supplied agent credential is ignored exactly as on /v1/admin/login
 ]);
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.
  *  Delimiter is `/` OR `-` so `bulk-cancel`, `bulk-purge`, `stripe-mode`, `preview-token` are caught. Used by scripts/assert-agent-boundary.mjs. */
-export const IRREVERSIBLE_PATH = /[/-](cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|adjust|reverse|password)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
+export const IRREVERSIBLE_PATH = /[/-](passkeys|cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|adjust|reverse|password)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
 
 /**
  * Agent policy for routes the ENGINE does not own (P1c, security audit 2026-10-15). SDK `EnginePlugin`s and

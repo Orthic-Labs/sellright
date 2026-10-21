@@ -26,7 +26,7 @@ import { apiErrorSchema, errJson } from '../lib/api-error.js';
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
-  return token ? resolveCustomer(tx, token) : null;
+  return token ? resolveCustomer(tx, token, false, { renew: false }) : null; // 0108: never row-lock the session inside a business transaction (design §5)
 }
 
 export const subscriptions = new OpenAPIHono();
