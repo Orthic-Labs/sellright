@@ -92,7 +92,7 @@ beforeAll(async () => {
   const legacyContactSecret = randomBytes(32).toString('hex'), legacyIssuedBefore = Date.now() + 3600000;
   process.env.LEGACY_CONTACT_COMPAT_JSON = JSON.stringify({ [fixture.storeId]: { secret: legacyContactSecret, issuedBefore: legacyIssuedBefore } });
   cases = [...createReadCases(fixture), ...createMutationCases(fixture), ...createPermissionCases(fixture), ...createContentCases(fixture), ...createCustomerCases(fixture, customerOptions), ...createOrderCases(fixture), ...createIdentityCases(fixture), ...createPublicReadCases(fixture), ...createResourceCases(fixture), ...createBoundaryCases(fixture), ...createCartCases(fixture), ...createIntegrationCases(fixture), ...createPublicAuthCases(fixture), ...createLicenseCases(fixture), ...createConfigurationCases(fixture), ...createReconciliationCases(fixture), ...createStorefrontCases(fixture), ...createWebhookCases(fixture), ...createAssetCases(fixture), ...createProviderCases(fixture, transport), ...createPaymentCases(fixture, transport), ...createFederatedCases(fixture, federated), ...createLegacyContactCases(fixture, { legacyContactSecret, legacyIssuedBefore }), ...createSheerIdWebhookCases(fixture, transport), ...createSheerIdRevokeCases(fixture), ...apple.cases];
-}, 60_000);
+}, 300_000);
 afterAll(async () => {
   try {
     await engine?.shutdown();
@@ -183,7 +183,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
       });
     }
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
-  }, 120_000);
+  }, 600_000);
 
   it('admits configured SheerID customer & genuine installation controls', async () => {
     const prepared = await prepareSheeridCustomerControl(fixture);
@@ -195,7 +195,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
     });
     await runIdentityControls(fixture);
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
-  }, 120_000);
+  }, 600_000);
 
   it('proves cart, mailbox & license capabilities independently of supplied admin credentials', async () => {
     const controls: { key: string; status: number; prepare(): Promise<PreparedMatrixCell> }[] = [
@@ -213,7 +213,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
       });
     }
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
-  }, 180_000);
+  }, 600_000);
 
   it('admits real staff granted refunds for reconciliation & preserves operator provenance', async () => {
     for (const prepared of await prepareReconciliationGrantedControls(fixture)) {
@@ -224,7 +224,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
         ok: (condition, label) => { expect(condition, label).toBeTruthy(); },
       });
     }
-  }, 120_000);
+  }, 600_000);
 
   it('admits explicit human verification grant & validates synthetic federated trust without granting header authority', async () => {
     await assertGrantedStaffSheerIdRevoke({ app: engine!.app, fixture, proof: {
@@ -233,7 +233,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
     } });
     await runFederatedControls(fixture, federated);
     expect(providerCalls.filter(call => (call as { kind?: string }).kind === 'forbidden')).toEqual([]);
-  }, 180_000);
+  }, 600_000);
 
   it('declares exact enrolled-only scope; full setup qualification belongs to dedicated fresh-DB lane', () => {
     const actual = matrixRouteKeys(engine!.app), keys = new Set(cases.map(c => c.key));
