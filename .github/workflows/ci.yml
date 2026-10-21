@@ -251,8 +251,8 @@ jobs:
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
-    # unit ≈ 4 min, db ≈ 16 min, each authorization matrix lane 13–30 min, setup ≈ 5 min (2026-10-20).
-    timeout-minutes: 90
+    # unit ≈ 4 min, db ≈ 16 min, setup ≈ 5 min (2026-10-20); the authorization lanes run in their own job.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:17-alpine
@@ -330,6 +330,62 @@ jobs:
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
 
+      # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
+      # connections, preserving intentional row-contention tests.
+      - name: Single-advisory-connection manifest & refund regressions
+        env:
+          PGPOOL_MAX: 4
+        run: pnpm --filter @sellright/api exec vitest run --project db src/manifest/manifest-pending.db.test.ts src/manifest/catalog.db.test.ts src/orders/order-edit.db.test.ts src/orders/order-edit-lock.db.test.ts src/payments/refunds.stock-hook.test.ts
+
+      - name: Verify database isolation invariants
+        run: pnpm verify:db
+
+  authorization:
+    name: Authorization matrix / PostgreSQL 17
+    runs-on: ubuntu-latest
+    # qualified matrix and enrolled regressions, each 13–30 min on the runner (2026-10-20); parallel to the integration job.
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+      NODE_ENV: test
+      STOREFRONT_URL: https://shop.example.net
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+          # pnpm/setup v3 would otherwise install Node from .nvmrc; setup-node owns Node here.
+          node-version-file: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API migration runtime
+        run: pnpm --filter @sellright/shared build && pnpm --filter @sellright/api build
+
+      - name: Create non-owner RLS test role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sellright_test <<'SQL'
+          CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE sellright_test TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          SQL
+
       # B2.8 bootstrap precedes principal enrollment on an untouched installation.
       # This job owns its ephemeral service: create another DB, never reset shared suite state.
       - name: Provision fresh full-authorization database
@@ -378,15 +434,6 @@ jobs:
           DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_authorization_enrolled_test
         run: pnpm --filter @sellright/api exec vitest run --project authorization-enrolled
 
-      # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
-      # connections, preserving intentional row-contention tests.
-      - name: Single-advisory-connection manifest & refund regressions
-        env:
-          PGPOOL_MAX: 4
-        run: pnpm --filter @sellright/api exec vitest run --project db src/manifest/manifest-pending.db.test.ts src/manifest/catalog.db.test.ts src/orders/order-edit.db.test.ts src/orders/order-edit-lock.db.test.ts src/payments/refunds.stock-hook.test.ts
-
-      - name: Verify database isolation invariants
-        run: pnpm verify:db
 
   packaging:
     name: Production container smoke / Node 24 LTS
@@ -964,7 +1011,7 @@ jobs:
   release:
     name: Build, push and sign images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [verify, database, packaging, e2e-storefront, shellcheck]
+    needs: [verify, database, authorization, packaging, e2e-storefront, shellcheck]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1331,7 +1378,7 @@ jobs:
     # later fail-closed-cosign and forced-failure-testing additions), and
     # "NEW" is this PR's current HEAD — a realistic same-branch upgrade.
     if: github.event_name == 'pull_request'
-    needs: [verify, database, packaging, e2e-storefront, shellcheck]
+    needs: [verify, database, authorization, packaging, e2e-storefront, shellcheck]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
