@@ -59,6 +59,11 @@ measuring this data first.
 
 ## Role settings
 
+> Production on the Hetzner host (2026-10-21): the runtime role is per brand — `rs_app` (rightsites), `rh_app`
+> (rh_sellright), `dd_app` (dd_sellright) — and `sellright_app` is retired (NOLOGIN). Read `sellright_app` below as
+> "the brand's runtime role"; `~/sites/ops/db-roles/brand-role.sh` applies these settings per brand.
+
+
 Run as a Postgres administrator for each database used by the application. The
 15-second idle-in-transaction timeout is safe only after the external-I/O
 transaction-boundary regression test is present and green.
