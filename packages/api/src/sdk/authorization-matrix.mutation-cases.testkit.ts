@@ -335,6 +335,13 @@ export function createMutationCases(fixture: MatrixMutationFixture): MatrixCase[
       proof.equal(await one("select config->>'googleClientId' as client_id from store where id=$1", [fixture.storeId]), { client_id: clientId }, 'Google client config committed', 'state');
     } };
   });
+  add('PATCH /v1/admin/settings/apple', 'credentials', async ({ unique }) => {
+    const servicesId = `com.matrix.${unique.replace(/[^A-Za-z0-9.-]/g, '-')}.web`;
+    return { url: '/v1/admin/settings/apple', body: { servicesId }, async verify(response: Response, proof: MatrixProof) {
+      await okResponse(response, proof);
+      proof.equal(await one("select config->'auth'->>'appleServicesId' as services_id from store where id=$1", [fixture.storeId]), { services_id: servicesId }, 'Apple Services ID committed', 'state');
+    } };
+  });
   add('POST /v1/admin/settings/preview-token', 'credentials', async ({ unique }) => {
     const previous = createHash('sha256').update(unique).digest('hex');
     await query("update store set config=coalesce(config,'{}'::jsonb)||jsonb_build_object('previewTokenHash',$2::text) where id=$1", [fixture.storeId, previous]);
