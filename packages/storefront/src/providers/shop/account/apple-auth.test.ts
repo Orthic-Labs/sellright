@@ -47,6 +47,25 @@ describe('Apple SDK loader', () => {
 		document.head.innerHTML = '';
 	});
 
+	it('preloads the SDK once so the click reuses it, and a failed preload never throws', async () => {
+		const auth = { init: vi.fn(), signIn: vi.fn(async () => ({ authorization: { id_token: 'IDT' } })) };
+		const { preloadAppleSdk, signInWithApple } = await import('./apple-auth');
+		const pre = preloadAppleSdk();
+		expect(scripts()).toHaveLength(1);
+		setApple(auth);
+		scripts()[0].onload?.(new Event('load'));
+		await pre;
+		expect(await signInWithApple('com.example.web')).toEqual({ status: 'token', identityToken: 'IDT' });
+		expect(scripts()).toHaveLength(1);
+	});
+
+	it('a failed preload resolves quietly and the click retries the load', async () => {
+		const { preloadAppleSdk } = await import('./apple-auth');
+		const pre = preloadAppleSdk();
+		scripts()[0].onerror?.(new Event('error'));
+		await expect(pre).resolves.toBeUndefined();
+	});
+
 	it('loads the SDK on demand, initialises it for a popup on this origin, and returns the identity token', async () => {
 		const auth = { init: vi.fn(), signIn: vi.fn(async () => ({ authorization: { id_token: 'IDT' } })) };
 		const { signInWithApple } = await import('./apple-auth');

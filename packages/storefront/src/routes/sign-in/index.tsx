@@ -4,7 +4,7 @@ import { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill } from '@simpl
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
-import { loginWithApple, signInWithApple } from '~/providers/shop/account/apple-auth';
+import { loginWithApple, preloadAppleSdk, signInWithApple } from '~/providers/shop/account/apple-auth';
 import { loginWithPasskey } from '~/providers/shop/account/passkeys';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
 import { socialSignInIdsForHost } from '~/utils/social-sign-in.server';
@@ -137,6 +137,11 @@ export default component$(() => {
 	});
 
 	const appleUnavailable = useSignal(false);
+	// Load Apple's SDK once the Apple button is on screen, so the click can open Apple's popup immediately (Safari blocks
+	// popups opened after an async script download).
+	useVisibleTask$(({ track }) => {
+		if (track(() => appleClientId.value)) void preloadAppleSdk();
+	});
 	const handleApple = $(async () => {
 		if (loading.value) return;
 		error.value = '';

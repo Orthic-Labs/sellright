@@ -80,8 +80,18 @@ function loadSdk(): Promise<AppleAuth> {
 
 export type AppleSignInOutcome = { status: 'token'; identityToken: string } | { status: 'cancelled' } | { status: 'unavailable' };
 
+/** Start loading Apple's SDK as soon as the sign-in page shows the Apple button. Safari only lets the popup open while
+ *  the click is still being handled, so `signIn()` must not wait on a script download after the click. Never throws;
+ *  a failed preload leaves the click to retry the load. */
+export function preloadAppleSdk(): Promise<void> {
+	return loadSdk().then(
+		() => undefined,
+		() => undefined,
+	);
+}
+
 /** Open Apple's popup and resolve its identity token. `cancelled` = the shopper closed the popup; `unavailable` = the SDK
- *  could not load or Apple returned no token. The SDK is loaded on the click, so Apple is contacted only when asked. */
+ *  could not load or Apple returned no token. The SDK is normally preloaded (preloadAppleSdk); otherwise it loads here. */
 export async function signInWithApple(clientId: string): Promise<AppleSignInOutcome> {
 	let auth: AppleAuth;
 	try {
