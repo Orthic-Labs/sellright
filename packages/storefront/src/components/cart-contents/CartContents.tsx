@@ -250,6 +250,7 @@ export default component$(() => {
 				isCheckoutView={isCheckoutView}
 				countryCode={shippingCountry(appState.shippingAddress.countryCode)}
 				discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+				freeShipping={appState.freeShipping ?? null}
 			/>
 		</div>
 	);

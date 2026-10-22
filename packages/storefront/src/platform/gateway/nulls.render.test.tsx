@@ -17,7 +17,7 @@ const Spread = component$(() => {
 });
 const Dynamic = component$(() => {
 	const v = useSignal<string | null>(null);
-	return <G.FreeShippingProgressView currencyCode="USD" subtotalCents={1} lineCount={1} isCheckoutView={false} countryCode={v.value} discountedSubtotalCents={1} />;
+	return <G.FreeShippingProgressView currencyCode="USD" subtotalCents={1} lineCount={1} isCheckoutView={false} countryCode={v.value} discountedSubtotalCents={1} freeShipping={null} />;
 });
 
 const render = async (C: typeof Spread) => (await ssrRenderToDom(<QwikRouterMockProvider><C /></QwikRouterMockProvider>, {})).document.body.innerHTML;

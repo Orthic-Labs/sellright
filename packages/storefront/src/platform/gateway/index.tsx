@@ -264,6 +264,7 @@ export const FREE_SHIPPING_DATA = obj({
 	isCheckoutView: bool,
 	countryCode: nul(str),
 	discountedSubtotalCents: num,
+	freeShipping: nul(obj({ threshold: num, remaining: num })),
 });
 export const FreeShippingProgressView = /*#__PURE__*/ slotGate('cart.free-shipping-progress', { data: FREE_SHIPPING_DATA });
 export const LOYALTY_DATA = obj({ balance: num, minRedeemPoints: num, offer: REDEMPTION, applied: REDEMPTION, discountableCents: num, currencyCode: str });

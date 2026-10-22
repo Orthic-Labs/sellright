@@ -13,7 +13,7 @@ import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidatio
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { formatCents } from '~/hooks/checkout-total';
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
-import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
+import { getShopConfig, getShippingQuote } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
@@ -99,8 +99,9 @@ const CheckoutContent = component$(() => {
 
   useTask$(async ({ track, cleanup }) => {
     const countryCode = track(() => appState.shippingAddress?.countryCode);
-    const subtotal = track(() => localCart.cart.subtotal || 0);
-    const discount = track(() => localCart.cart.discountTotal || 0);
+    // The server quotes from the cart's own items and coupons; re-quote whenever either changes.
+    const items = track(() => localCart.cart.lines.map((l) => ({ sku: l.sku, quantity: l.quantity })));
+    const couponCodes = track(() => [...(localCart.cart.couponCodes ?? [])]);
 
     if (!countryCode) {
       shippingCents.value = null;
@@ -108,16 +109,14 @@ const CheckoutContent = component$(() => {
       return;
     }
 
-    const discountedSubtotal = Math.max(subtotal - discount, 0);
     let cancelled = false;
     cleanup(() => { cancelled = true; });
 
     try {
-      // Both the raw and post-coupon subtotal are sent so a threshold rule
-      // keyed on the discounted basis (e.g. a coupon-driven free-shipping
-      // tier) is decided server-side — never guessed by zeroing the rate here.
-      const methods = await getEligibleShippingMethods(countryCode, subtotal, discountedSubtotal);
+      // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
+      const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
       if (cancelled) return;
+      appState.freeShipping = freeShipping;
       if (!methods.length) {
         shippingCents.value = null;
         shippingMethod.value = null;

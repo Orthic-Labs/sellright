@@ -280,19 +280,34 @@ export const getShopConfig = async (): Promise<ShopConfig> => {
 };
 
 /**
- * Server-priced shipping methods eligible for this destination + subtotal.
- * `discountedSubtotalWithTax` (post-coupon subtotal) is passed alongside the
- * raw `subtotal` so a threshold rule keyed on the discounted basis (e.g. a
- * coupon-driven free-shipping tier) is decided server-side — never guessed
- * client-side by zeroing the rate ourselves.
+ * Shipping methods for this cart and destination, quoted by the server from the cart's own items and coupons
+ * (`POST /v1/shop/shipping-methods`): the API prices the items, applies coupons and tax, and decides eligibility and rate from
+ * the store's configured methods. The storefront sends no subtotals and holds no rates, thresholds or fallbacks. An empty
+ * cart or a missing country has no quote. Used by both the cart drawer and checkout.
  */
+export interface ShippingQuote {
+	methods: ShopShippingMethod[];
+	/** The nearest free-shipping tier the server reports, or null (already free, none reachable, or an older API). */
+	freeShipping: { threshold: number; remaining: number } | null;
+}
+
+export const getShippingQuote = async (
+	countryCode: string,
+	items: readonly { sku: string; quantity: number }[],
+	couponCodes: readonly string[] = [],
+): Promise<ShippingQuote> => {
+	const lines = items.filter((i) => i.sku && i.quantity > 0).map((i) => ({ sku: i.sku, quantity: i.quantity }));
+	if (!countryCode || lines.length === 0) return { methods: [], freeShipping: null };
+	const { data } = await sellright().POST('/v1/shop/shipping-methods', {
+		body: { country: countryCode.toUpperCase(), items: lines, ...(couponCodes.length ? { couponCodes: [...couponCodes] } : {}) },
+	});
+	const quote = nonEmpty(data, 'shipping-methods');
+	return { methods: quote.methods as unknown as ShopShippingMethod[], freeShipping: quote.freeShipping ?? null };
+};
+
+/** The methods alone (see `getShippingQuote`). */
 export const getEligibleShippingMethods = async (
 	countryCode: string,
-	subtotal: number,
-	discountedSubtotalWithTax?: number,
-): Promise<ShopShippingMethod[]> => {
-	const { data } = await sellright().GET('/v1/shop/shipping-methods', {
-		params: { query: { country: countryCode, subtotal, discountedSubtotalWithTax } },
-	});
-	return (nonEmpty(data, 'shipping-methods').methods ?? []) as unknown as ShopShippingMethod[];
-};
+	items: readonly { sku: string; quantity: number }[],
+	couponCodes: readonly string[] = [],
+): Promise<ShopShippingMethod[]> => (await getShippingQuote(countryCode, items, couponCodes)).methods;

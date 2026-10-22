@@ -12,7 +12,7 @@ import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
-import { fetchCartShippingMethod } from './cart-shipping';
+import { fetchCartShipping } from './cart-shipping';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BRAND_COPY, CART_TRUST_STRIP_WRAP } from '~/platform/brand-data';
@@ -131,11 +131,11 @@ export default component$(() => {
 	useTask$(async ({ track, cleanup }) => {
 		const countryCode = track(() => appState.shippingAddress.countryCode);
 		const cartVisible = track(() => appState.showCart);
-		const subTotal = track(() => cartState.cart.subtotal);
-		const discountTotal = track(() => cartState.cart.discountTotal);
-		const orderTotalAfterDiscount = subTotal - (discountTotal || 0);
+		// The quote is the server's, from the cart's own items and coupons; re-quote whenever either changes.
+		const items = track(() => cartState.cart.lines.map((l) => ({ sku: l.sku, quantity: l.quantity })));
+		const couponCodes = track(() => [...(cartState.cart.couponCodes ?? [])]);
 
-		if (!cartVisible || !countryCode || subTotal === 0) {
+		if (!cartVisible || !countryCode || items.length === 0) {
 			shippingState.methods = [];
 			shippingState.selectedMethod = null;
 			return;
@@ -143,8 +143,9 @@ export default component$(() => {
 
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
-		const selectedShippingMethod = await fetchCartShippingMethod(countryCode, orderTotalAfterDiscount);
+		const { method: selectedShippingMethod, freeShipping } = await fetchCartShipping(countryCode, items, couponCodes);
 		if (cancelled) return;
+		appState.freeShipping = freeShipping;
 
 		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
 		shippingState.selectedMethod = selectedShippingMethod;
@@ -158,8 +159,8 @@ export default component$(() => {
 		MIN_CALCULATION_INTERVAL: 200,
 	});
 
-	const calculateShipping = $(async (countryCode: string, orderTotalAfterDiscount: number) => {
-		if (!countryCode || !orderTotalAfterDiscount) return;
+	const calculateShipping = $(async (countryCode: string) => {
+		if (!countryCode || cartState.cart.lines.length === 0) return;
 
 		const now = Date.now();
 		if (calculationState.isCalculating || (now - calculationState.lastCalculationTime < calculationState.MIN_CALCULATION_INTERVAL)) return;
@@ -170,7 +171,12 @@ export default component$(() => {
 		shippingState.error = null;
 
 		try {
-			const selectedShippingMethod = await fetchCartShippingMethod(countryCode, orderTotalAfterDiscount);
+			const { method: selectedShippingMethod, freeShipping } = await fetchCartShipping(
+				countryCode,
+				cartState.cart.lines.map((l) => ({ sku: l.sku, quantity: l.quantity })),
+				cartState.cart.couponCodes ?? [],
+			);
+			appState.freeShipping = freeShipping;
 
 			shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
 			shippingState.selectedMethod = selectedShippingMethod;
@@ -209,11 +215,8 @@ export default component$(() => {
 					appState.shippingAddress.country = country.name;
 				}
 
-				const subtotal = cartState.cart.subtotal;
-				const orderTotalAfterDiscount = subtotal - (cartState.cart.discountTotal || 0);
-
-				if (subtotal > 0) {
-					calculateShipping(finalCountryCode, orderTotalAfterDiscount);
+				if (cartState.cart.lines.length > 0) {
+					calculateShipping(finalCountryCode);
 				}
 			}
 

@@ -6,7 +6,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	srShopConfig,
-	srShippingMethods,
 	srCreateCart,
 	srGetCart,
 	srAddCartLines,
@@ -223,19 +222,6 @@ describe('shop config + shipping', () => {
 		expect(cfg.gateways.nmi?.mode).toBe('test');
 		expect(cfg.gateways.nmi?.environment).toBe('production');
 		expect(cfg.gateways.sezzle).toBe(true);
-	});
-
-	it('shipping methods query carries country + subtotal', async () => {
-		enqueue(respond(200, { methods: [{ code: 'std', name: 'Standard', rate: 799 }] }));
-		const res = await srShippingMethods('US', 5000);
-		expect(lastPath()).toBe('/v1/shop/shipping-methods?country=US&subtotal=5000');
-		expect(res.methods[0].code).toBe('std');
-	});
-
-	it('shipping methods query carries the discounted subtotal when given (discounted_with_tax calculators need it)', async () => {
-		enqueue(respond(200, { methods: [] }));
-		await srShippingMethods('US', 7500, 7500);
-		expect(lastPath()).toBe('/v1/shop/shipping-methods?country=US&subtotal=7500&discountedSubtotalWithTax=7500');
 	});
 });
 

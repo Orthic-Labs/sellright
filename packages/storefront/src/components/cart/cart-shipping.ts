@@ -1,30 +1,39 @@
 import type { EligibleShippingMethods } from '~/types';
-import { srShippingMethods } from '~/utils/sellright';
+import { getShippingQuote } from '~/providers/shop/checkout/checkout';
+
+export interface CartShippingQuote {
+ /** The cheapest eligible method, or null ("Not available"). */
+ method: EligibleShippingMethods | null;
+ /** The server's nearest free-shipping tier, or null. */
+ freeShipping: { threshold: number; remaining: number } | null;
+}
 
 /**
- * Cart-page shipping ESTIMATE. The server is authoritative — this query hits
- * GET /v1/shop/shipping-methods and picks the cheapest eligible method (the
- * same selection the checkout submits as shippingMethodCode). When the server
- * offers no method, or the quote fails, the answer is null and the cart shows
- * "Not available": it never invents a rate, since checkout cannot honour one.
+ * Cart shipping, quoted by the server from the cart's items and coupons (`POST /v1/shop/shipping-methods`), picking the
+ * cheapest eligible method: the same selection checkout submits as shippingMethodCode. The storefront holds no rates,
+ * thresholds or fallbacks. No method, or a failed quote, is a null method, and the cart shows "Not available".
  */
-export const fetchCartShippingMethod = async (
+export const fetchCartShipping = async (
  countryCode: string,
- orderTotalAfterDiscount: number,
-): Promise<EligibleShippingMethods | null> => {
+ items: readonly { sku: string; quantity: number }[],
+ couponCodes: readonly string[] = [],
+): Promise<CartShippingQuote> => {
  try {
-  const { methods } = await srShippingMethods(countryCode, Math.max(orderTotalAfterDiscount, 0), Math.max(orderTotalAfterDiscount, 0));
-  if (!methods.length) return null;
+  const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
+  if (!methods.length) return { method: null, freeShipping };
   const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
   return {
-   id: cheapest.code,
-   name: cheapest.name,
-   description: cheapest.name,
-   price: cheapest.rate,
-   priceWithTax: cheapest.rate,
-  } as EligibleShippingMethods;
+   method: {
+    id: cheapest.code,
+    name: cheapest.name,
+    description: cheapest.name,
+    price: cheapest.rate,
+    priceWithTax: cheapest.rate,
+   } as EligibleShippingMethods,
+   freeShipping,
+  };
  } catch (e) {
   console.warn('[Cart] Server shipping quote failed:', e);
-  return null;
+  return { method: null, freeShipping: null };
  }
 };
