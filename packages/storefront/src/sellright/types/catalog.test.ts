@@ -173,10 +173,11 @@ describe('withUncheckedStock / UNCHECKED_STOCK', () => {
 
 describe('manifestProductMeta', () => {
   it('carries the product id and an approved-review aggregate', () => {
-    expect(manifestProductMeta({ productId: 'p-1', rating: { average: 4.5, count: 3 } })).toEqual({
+    expect(manifestProductMeta({ productId: 'p-1', rating: { average: 4.5, count: 5 } })).toEqual({
       productId: 'p-1',
-      rating: { average: 4.5, count: 3 },
+      rating: { average: 4.5, count: 5 },
     });
+    expect(manifestProductMeta({ rating: { average: 4.5, count: 4 } }).rating).toBeNull();
   });
   it('never invents a rating: absent, zero-count and zero-average all read as null', () => {
     expect(manifestProductMeta({})).toEqual({ productId: null, rating: null });
@@ -188,9 +189,9 @@ describe('manifestProductMeta', () => {
 
 describe('liveProductMeta (no catalog manifest)', () => {
   it('takes the product id from the detail response and the rating from the reviews summary', () => {
-    expect(liveProductMeta({ productId: 'p-1' }, { enabled: true, average: 4.5, count: 3 })).toEqual({
+    expect(liveProductMeta({ productId: 'p-1' }, { enabled: true, average: 4.5, count: 5 })).toEqual({
       productId: 'p-1',
-      rating: { average: 4.5, count: 3 },
+      rating: { average: 4.5, count: 5 },
     });
   });
   it('has a null id against an older API that does not send one', () => {
@@ -205,11 +206,16 @@ describe('liveProductMeta (no catalog manifest)', () => {
     expect(liveProductMeta({ productId: 'p' }, { enabled: true, average: 0, count: 2 }).rating).toBeNull();
     expect(liveProductMeta({ productId: 'p' }, { enabled: false, average: 4, count: 2 }).rating).toBeNull();
   });
-  it('feeds AggregateRating JSON-LD only when count > 0', async () => {
+  it('withholds the rating below the 5-review threshold', () => {
+    expect(liveProductMeta({}, { enabled: true, average: 4.5, count: 4 }).rating).toBeNull();
+    expect(liveProductMeta({}, { enabled: true, average: 4.5, count: 5 }).rating).toEqual({ average: 4.5, count: 5 });
+  });
+  it('feeds AggregateRating JSON-LD only at the threshold', async () => {
     const { withAggregateRating } = await import('~/utils/rewards');
     const base = { '@type': 'Product' };
     expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 0 }).rating)).toEqual(base);
-    expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 2 }).rating)).toHaveProperty('aggregateRating');
+    expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 2 }).rating)).toEqual(base);
+    expect(withAggregateRating(base, liveProductMeta({}, { average: 4, count: 5 }).rating)).toHaveProperty('aggregateRating');
   });
 });
 

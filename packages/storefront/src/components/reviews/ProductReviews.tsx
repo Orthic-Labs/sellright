@@ -4,7 +4,7 @@ import { getProductReviews, submitProductReview } from '~/providers/shop/rewards
 import { SellRightError } from '~/platform/errors';
 import type { ReviewList } from '~/sellright/types/rewards';
 import { theme } from '~/theme/theme.config';
-import { pointsLabel, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';
+import { pointsLabel, reviewsMeetThreshold, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';
 
 const PAGE = 10;
 const BTN =
@@ -95,6 +95,8 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	// failed read). The wrapper always renders so the document-ready task has a node to hang off.
 	// It keeps id="reviews" while the read is pending, so the rating link's #reviews always has a target.
 	if (!d || loadError.value || !d.enabled) return <div id="reviews" data-state={d || loadError.value ? 'off' : 'pending'} />;
+	// Under the threshold the whole block (and so the #reviews anchor the rating link targets) is withheld; the rating link is gated to match.
+	if (!reviewsMeetThreshold(d.count)) return <div data-state="below-threshold" />;
 
 	return (
 		<section class="max-w-[1200px] mx-auto px-4 sm:px-6 pt-10 pb-28 md:pb-16 text-[var(--ink)]" id="reviews" aria-labelledby="reviews-title" data-testid="product-reviews">
