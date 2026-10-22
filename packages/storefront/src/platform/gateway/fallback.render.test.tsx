@@ -177,7 +177,7 @@ describe('gateway default output: each handle renders what L1 rendered before', 
 	it('slot handles with no brand slot and no fallback render nothing', async () => {
 		const identity = { storeName: 'S', legalName: 'S', tagline: '', supportEmail: '', logoText: 'S', logoImageUrl: null, siteOrigin: '', social: {} };
 		const views: JSXOutput[] = [
-			<G.FreeShippingProgressView key="v1" currencyCode="USD" subtotalCents={1000} lineCount={1} isCheckoutView={false} countryCode={null} discountedSubtotalCents={1000} />,
+			<G.FreeShippingProgressView key="v1" currencyCode="USD" subtotalCents={1000} lineCount={1} isCheckoutView={false} countryCode={null} discountedSubtotalCents={1000} freeShipping={null} />,
 			<G.GuaranteeModalView key="v4" productId="1" productName="Tee" />,
 			<G.WaitlistView key="v5" productId="1" productName="Tee" soldOut={true} />,
 			<G.SustainabilityBadgeView key="v6" orderCount={2} statsLoaded={true} />,

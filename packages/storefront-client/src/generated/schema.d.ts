@@ -21957,6 +21957,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            freeShipping: {
+                                remaining: number;
+                                threshold: number;
+                            } | null;
                             methods: {
                                 code: string;
                                 name: string;

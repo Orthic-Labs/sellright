@@ -23,38 +23,23 @@ describe('shippingCountry', () => {
 	});
 });
 
-// A fixture slot rule (neutral, no brand): the props now carry what a country-conditional free-shipping band needs. Domestic
-// destinations are exempt; international orders see progress to a $100 threshold on the DISCOUNTED amount.
+// A fixture slot rule (neutral, no brand): the band reads only the server's free-shipping tier. The storefront and the brand
+// hold no countries or thresholds; the API decides from the store's configured methods.
 type Props = Omit<SlotProps<'cart.free-shipping-progress'>, never>;
-const DOMESTIC = new Set(['US', 'PR']);
-const THRESHOLD = 10000;
-const bandFor = (p: Props): 'hidden' | 'progress' | 'reached' => {
-	if (p.countryCode !== null && DOMESTIC.has(p.countryCode)) return 'hidden';
-	return p.discountedSubtotalCents >= THRESHOLD ? 'reached' : 'progress';
+const bandFor = (p: Props): { show: false } | { show: true; remaining: number; percent: number } => {
+	if (!p.freeShipping || p.freeShipping.remaining <= 0) return { show: false };
+	const { threshold, remaining } = p.freeShipping;
+	return { show: true, remaining, percent: Math.min(100, Math.max(0, ((threshold - remaining) / threshold) * 100)) };
 };
-const props = (over: Partial<Props>): Props => ({ currencyCode: 'USD', subtotalCents: 0, lineCount: 1, isCheckoutView: false, countryCode: null, discountedSubtotalCents: 0, ...over });
+const props = (over: Partial<Props>): Props => ({ currencyCode: 'USD', subtotalCents: 0, lineCount: 1, isCheckoutView: false, countryCode: null, discountedSubtotalCents: 0, freeShipping: null, ...over });
 
-describe('fixture rule over the slot props (country and discount)', () => {
-	it('domestic destinations hide the band, whatever the amount', () => {
-		expect(bandFor(props({ countryCode: 'US', discountedSubtotalCents: 500 }))).toBe('hidden');
-		expect(bandFor(props({ countryCode: 'PR', discountedSubtotalCents: 50000 }))).toBe('hidden');
+describe('fixture rule over the slot props (server free-shipping tier)', () => {
+	it('no tier from the server (already free, none reachable, or not yet quoted) hides the band', () => {
+		expect(bandFor(props({ countryCode: 'US', discountedSubtotalCents: 500 }))).toEqual({ show: false });
+		expect(bandFor(props({ countryCode: 'GB', discountedSubtotalCents: 25000, freeShipping: null }))).toEqual({ show: false });
 	});
 
-	it('international below the threshold shows progress; at or above it the band is reached', () => {
-		expect(bandFor(props({ countryCode: 'GB', discountedSubtotalCents: 9999 }))).toBe('progress');
-		expect(bandFor(props({ countryCode: 'GB', discountedSubtotalCents: 10000 }))).toBe('reached');
-		expect(bandFor(props({ countryCode: 'GB', discountedSubtotalCents: 25000 }))).toBe('reached');
-	});
-
-	it('the threshold uses the discounted amount: a coupon can drop an order below it', () => {
-		const subtotal = 12000;
-		const discount = 3000;
-		expect(bandFor(props({ countryCode: 'DE', subtotalCents: subtotal, discountedSubtotalCents: discountedSubtotalCents(subtotal, discount) }))).toBe('progress');
-		expect(bandFor(props({ countryCode: 'DE', subtotalCents: subtotal, discountedSubtotalCents: discountedSubtotalCents(subtotal, 0) }))).toBe('reached');
-	});
-
-	it('country null (not yet known) then set: the band follows without a reload', () => {
-		expect(bandFor(props({ countryCode: shippingCountry(undefined), discountedSubtotalCents: 500 }))).toBe('progress');
-		expect(bandFor(props({ countryCode: shippingCountry('US'), discountedSubtotalCents: 500 }))).toBe('hidden');
+	it('a tier shows the server remaining and progress, whatever the client amounts say', () => {
+		expect(bandFor(props({ countryCode: 'GB', discountedSubtotalCents: 0, freeShipping: { threshold: 10000, remaining: 2500 } }))).toEqual({ show: true, remaining: 2500, percent: 75 });
 	});
 });

@@ -23,6 +23,8 @@ export type AppState = Live & {
 	availableCountries: Country[];
 	addressBook: ShippingAddress[];
 	isPageTransitionLoading?: boolean;
+	/** The latest server shipping quote's free-shipping tier (see `cart.free-shipping-progress`); null until quoted. */
+	freeShipping?: { threshold: number; remaining: number } | null;
 };
 
 export type ShippingAddress = Live & {
