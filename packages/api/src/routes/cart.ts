@@ -42,7 +42,7 @@ export type PricedCart = {
   pricingIntent: 'preview' | 'checkout'; couponCodes: string[]; quoteHash: string; shippingMethodCode: string | null; pointsDiscount: number;
   coupons: Array<{ code: string; kind?: string; applied: boolean; reason?: string; appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
   currency: string;
-  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null; image: string | null }>;
+  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null; image: string | null; productName: string | null; productSlug: string | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
@@ -80,6 +80,9 @@ export async function priceCart(
           shipDate: s.productVariant.shipDate, shipDateLabel: shippingLabelSql(s.productVariant.metafields),
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
+          // The product a line belongs to, for display ("Product · variant") and the link back to it.
+          productName: sql<string | null>`(select p.name from product p where p.id = ${s.productVariant.productId})`,
+          productSlug: sql<string | null>`(select p.slug from product p where p.id = ${s.productVariant.productId})`,
           onHand: s.stock.onHand, allocated: s.stock.allocated,
           // Display image: first variant asset by position, else the product's featured asset.
           image: sql<string | null>`coalesce(
@@ -102,7 +105,7 @@ export async function priceCart(
     const availableQuantity = v && isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
     const available = !!v && v.enabled && (availableQuantity === null || availableQuantity >= i.quantity);
     if (!available) unavailable.push(i.sku);
-    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null, image: v?.image ?? null };
+    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null, image: v?.image ?? null, productName: v?.productName ?? null, productSlug: v?.productSlug ?? null };
   });
 
   const couponCodes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : []));
@@ -185,6 +188,7 @@ const LineOut = z.object({
   lineSubtotal: z.number().int(), lineDiscount: z.number().int(), lineTotal: z.number().int(),
   isPreOrder: z.boolean().optional(), shipDate: z.string().nullable().optional(), shipDateLabel: z.string().nullable().optional(),
   image: z.string().nullable().optional(),
+  productName: z.string().nullable().optional(), productSlug: z.string().nullable().optional(),
   available: z.boolean(),
   // Live (on_hand - allocated), never cached. null = not stock-limited
   // (digital/license/update_pass/pre-order) rather than "unlimited stock".

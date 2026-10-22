@@ -48,7 +48,7 @@ export async function fillShipping(page: Page, email: string, who = { first: 'Ad
 	}).toPass({ timeout: 30_000 });
 }
 
-export const placeOrderButton = (page: Page) => page.getByRole('button', { name: /place order/i });
+export const placeOrderButton = (page: Page) => page.getByRole('button', { name: /continue to payment|place order/i });
 export const payButton = (page: Page) => page.getByRole('button', { name: /^pay/i });
 
 /** Click PLACE ORDER and capture what POST /v1/shop/checkout answered (the order code + receipt token the UI holds). */

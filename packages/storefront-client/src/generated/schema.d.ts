@@ -18228,6 +18228,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -18329,6 +18331,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -18437,6 +18441,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -18505,6 +18511,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
@@ -18681,6 +18689,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -18749,6 +18759,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
@@ -18848,6 +18860,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -18925,6 +18939,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
@@ -19040,6 +19056,8 @@ export interface paths {
                                 lineSubtotal: number;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
+                                productSlug?: string | null;
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
@@ -19137,6 +19155,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
@@ -19805,6 +19825,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
@@ -19854,6 +19876,8 @@ export interface paths {
                                     lineSubtotal: number;
                                     lineTotal: number;
                                     name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;

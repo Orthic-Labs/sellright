@@ -263,7 +263,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 											<div class="payment-placeholder" style="padding:14px 0;">
 												{props.srState.phase === 'placing'
 													? 'Preparing secure payment...'
-													: 'Click PLACE ORDER to continue to secure payment.'}
+													: 'Your secure payment options appear after you continue.'}
 											</div>
 										)}
 									</>

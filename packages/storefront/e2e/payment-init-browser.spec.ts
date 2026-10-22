@@ -22,7 +22,7 @@ test.beforeEach(() => mock.reset());
 
 const retryAlert = (page: Page) => page.getByTestId('payment-init-failed');
 const expectNoPlaceOrder = async (page: Page) => {
-	await expect(page.getByRole('button', { name: /place order/i, includeHidden: true })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /continue to payment|place order/i, includeHidden: true })).toHaveCount(0);
 };
 const watchCheckoutPosts = (page: Page) => {
 	let count = 0;
