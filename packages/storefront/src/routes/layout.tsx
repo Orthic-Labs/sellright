@@ -33,6 +33,7 @@ import { theme, identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
 import { AnalyticsMount } from '~/platform/controllers/analytics-mount';
 import { BRAND_HEAD } from '~/platform/brand-data';
+import { canRestorePreferredCountry } from '~/components/checkout/checkout-country';
 
 /** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
 const HAS_ANALYTICS = !!BRAND_HEAD.analytics;
@@ -265,7 +266,8 @@ export default component$(() => {
 	// T3: Restore persisted country selection (qidle — lazy, no urgency)
 	useOnDocument('qidle', $(() => {
 		const storedCountry = CountryPreferenceService.getCountry();
-		if (storedCountry) {
+		// A saved or entered address keeps its own country (the checkout may have loaded one before this idle task).
+		if (storedCountry && canRestorePreferredCountry(state.shippingAddress)) {
 			state.shippingAddress.countryCode = storedCountry;
 		}
 	}));
