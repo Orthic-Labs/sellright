@@ -60,7 +60,7 @@ describe('PasskeysSection', () => {
     reg.mockRejectedValueOnce(stepErr).mockResolvedValueOnce({ ...row, id: 'p2' });
     post.mockResolvedValue({ ok: true });
     const { container, done } = await mount();
-    await until(() => container.textContent?.includes('Work laptop'));
+    await until(() => container.querySelector('[aria-label="Remove Work laptop"]'));
     expect(container.textContent).toContain('This device');
     const label = await until(() => container.querySelector('#pk-label') as HTMLInputElement | null);
     act(() => { setInput(label, 'Phone'); });
