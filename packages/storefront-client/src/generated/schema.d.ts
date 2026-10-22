@@ -10514,6 +10514,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/settings/apple": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Sign in with Apple Services ID */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        servicesId: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/admin/settings/google": {
         parameters: {
             query?: never;
@@ -20032,6 +20085,8 @@ export interface paths {
                     content: {
                         "application/json": {
                             auth: {
+                                appleServicesId: string | null;
+                                googleClientId: string | null;
                                 magicLink: boolean;
                                 passkeys: boolean;
                             };

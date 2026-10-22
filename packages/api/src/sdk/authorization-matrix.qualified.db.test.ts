@@ -124,7 +124,7 @@ describe('B2.8 FULL qualified authorization matrix — dedicated fresh DB', () =
     const cases = createQualifiedAuthorizationCases(fixture, adapters, receipt);
     // Actual registered inventory, never a filtered projection; new/missing/skipped cases fail closed.
     assertMatrixComplete(engine.app, cases);
-    expect(matrixRouteKeys(engine.app)).toHaveLength(365);
+    expect(matrixRouteKeys(engine.app)).toHaveLength(366);
     const result = await runAuthorizationMatrix({ app: engine.app, cases, diagnostics: {
       snapshotFor: (principal, method, path, status) => fixture.snapshotFor(principal, method, path, status),
       async assertSafe() {
@@ -136,7 +136,7 @@ describe('B2.8 FULL qualified authorization matrix — dedicated fresh DB', () =
         expect((await ownerQuery('SELECT current_database() AS database')).rows[0]?.database, 'fixture DB remains pinned').toBe(expectedDatabase);
       },
     } });
-    expect(result.routeCount).toBe(365); expect(result.cellCount).toBe(2920);
+    expect(result.routeCount).toBe(366); expect(result.cellCount).toBe(2928);
     expect(result.deniedMutationsUnchanged).toBeGreaterThan(0);
 
     for (const control of createCoreCapabilityControls(fixture, adapters)) {

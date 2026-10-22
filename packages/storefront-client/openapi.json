@@ -8227,11 +8227,21 @@
                         },
                         "passkeys": {
                           "type": "boolean"
+                        },
+                        "googleClientId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "appleServicesId": {
+                          "type": "string",
+                          "nullable": true
                         }
                       },
                       "required": [
                         "magicLink",
-                        "passkeys"
+                        "passkeys",
+                        "googleClientId",
+                        "appleServicesId"
                       ]
                     }
                   },
@@ -22990,6 +23000,61 @@
                 },
                 "required": [
                   "clientId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/settings/apple": {
+      "patch": {
+        "summary": "Set Sign in with Apple Services ID",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "servicesId": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255,
+                    "pattern": "^[A-Za-z0-9.-]*$"
+                  }
+                },
+                "required": [
+                  "servicesId"
                 ]
               }
             }

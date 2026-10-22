@@ -51,13 +51,21 @@ export interface AppleIdentity {
  * The audience list is server-side config ONLY — a client-supplied bundle id
  * is never trusted (anyone could mint a JWT claiming any aud).
  */
+/** The store's Sign in with Apple web Services ID (admin Settings), or null. Public: the storefront's button needs it. */
+export function appleServicesId(config: unknown): string | null {
+  const v = storeAuthConfig(config).appleServicesId;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
 export function appleClientIds(config: unknown): string[] {
   const auth = storeAuthConfig(config);
   const v = auth.appleClientId;
   // `appleClientId: false` is an explicit per-store opt-out — without it a
   // fleet-wide APPLE_CLIENT_IDS default would be undisableable per tenant.
   if (v === false) return [];
-  const fromConfig = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
+  const fromConfig = Array.isArray(v) ? [...v] : typeof v === 'string' ? [v] : [];
+  // The website's Services ID (admin Settings, auth.appleServicesId) is always an accepted audience for this store.
+  if (typeof auth.appleServicesId === 'string' && auth.appleServicesId.trim()) fromConfig.push(auth.appleServicesId);
   const source = fromConfig.length ? fromConfig : (env.APPLE_CLIENT_IDS ?? '').split(',');
   return source.map((x) => String(x).trim()).filter(Boolean);
 }

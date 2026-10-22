@@ -65,8 +65,9 @@ describe('Apple sign-in: resolved per validated request host', () => {
 	it('the entry builds the CSP from the same per-request expression the page uses', () => {
 		const entry = read('src/entry.express.tsx');
 		const page = read('src/routes/sign-in/index.tsx');
-		expect(entry).toContain('apple: appleIdentityCsp(appleSignInClientIdForHost(validatedRequestHost(req.headers)))');
+		expect(entry).toContain('const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers))');
+		expect(entry).toContain('apple: appleIdentityCsp(socialIds.apple)');
 		expect(entry).not.toContain('appleid.apple.com');
-		expect(page).toContain('appleSignInClientIdForHost(');
+		expect(page).toMatch(/useAppleClientId = routeLoader\$[\s\S]*?socialSignInIdsForHost\(/);
 	});
 });

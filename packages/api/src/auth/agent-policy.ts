@@ -45,8 +45,8 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
     'POST /v1/admin/step-up/passkey/options', 'POST /v1/admin/step-up/passkey/verify',
     'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook', 'PUT /v1/admin/email/settings',
-    // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Stripe live/test switch
-    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/payments/stripe-mode',
+    // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Apple Services ID, Stripe live/test switch
+    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/apple', 'PATCH /v1/admin/settings/payments/stripe-mode',
     // webhook endpoints mint a signing secret and choose where store events (order + customer data) are POSTed (P1c)
     'POST /v1/admin/webhooks', 'PATCH /v1/admin/webhooks/:id'),
   // installation / system operations
@@ -66,7 +66,7 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.
  *  Delimiter is `/` OR `-` so `bulk-cancel`, `bulk-purge`, `stripe-mode`, `preview-token` are caught. Used by scripts/assert-agent-boundary.mjs. */
-export const IRREVERSIBLE_PATH = /[/-](passkeys|cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|adjust|reverse|password)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
+export const IRREVERSIBLE_PATH = /[/-](passkeys|cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|apple|adjust|reverse|password)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
 
 /**
  * Agent policy for routes the ENGINE does not own (P1c, security audit 2026-10-15). SDK `EnginePlugin`s and

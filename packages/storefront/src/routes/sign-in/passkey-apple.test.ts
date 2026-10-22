@@ -26,7 +26,7 @@ describe('sign-in page: passkey button gating', () => {
 
 describe('sign-in page: Apple button gating', () => {
 	it('resolves the client id per validated request host and renders the button only when it is non-empty', () => {
-		expect(page).toMatch(/useAppleClientId = routeLoader\$[\s\S]*?appleSignInClientIdForHost\(\s*validatedRequestHost\(/);
+		expect(page).toMatch(/useAppleClientId = routeLoader\$[\s\S]*?socialSignInIdsForHost\(\s*validatedRequestHost\(/);
 		expect(page).toMatch(/appleClientId\.value && \(\s*<>\s*<button[^>]*id="apple-signin-button"/);
 	});
 

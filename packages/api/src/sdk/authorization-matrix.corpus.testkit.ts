@@ -37,7 +37,7 @@ export interface CoreAuthorizationAdapters {
   legacyContact: LegacyContactOptions;
 }
 
-/** Shared DB suites may exercise these 363 contracts, but this subset never passes the full inventory gate. */
+/** Shared DB suites may exercise these 364 contracts, but this subset never passes the full inventory gate. */
 export function createEnrolledAuthorizationCases(f: Fixture, adapters: CoreAuthorizationAdapters): MatrixCase[] {
   const { transport, federated, apple, legacyContact } = adapters;
   const customer = { billingPortal: createProviderBillingPortal(f, transport) };
