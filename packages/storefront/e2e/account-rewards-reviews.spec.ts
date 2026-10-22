@@ -8,7 +8,7 @@ import { mock } from './support/mock';
  * Rewards and reviews, as the shopper and the merchant each see them:
  *  - a signed-in customer pays an order -> /account/rewards shows the balance and the ledger entry for that order;
  *  - the same buyer reviews the product -> the review waits for moderation, is invisible on the PDP, then the admin
- *    approves it -> it shows on the PDP (verified buyer, rating summary, AggregateRating JSON-LD) and the review bonus
+ *    approves it -> it stays hidden on the PDP (under the 5-review threshold: no block, rating link or AggregateRating JSON-LD) and the review bonus
  *    points land on the same rewards page.
  * Review text below is a TEST FIXTURE living only in this suite's throwaway database; nothing here is real customer content.
  */
@@ -63,28 +63,26 @@ test.describe.serial('rewards + reviews', () => {
 		await expect(page.getByTestId('rewards-activity')).toContainText(`+${earned}`);
 	});
 
-	test('review: signed-in buyer submits -> pending (not public) -> admin approves -> visible on the PDP with JSON-LD, bonus points posted', async ({ apiProxyPage: page, api }) => {
+	test('review: signed-in buyer submits -> pending (not public) -> admin approves -> hidden on the PDP below the threshold, bonus points posted', async ({ apiProxyPage: page, api }) => {
 		await signInWithPassword(page, email);
 		await page.goto(`/products/${slug}/`);
-		const reviews = page.getByTestId('product-reviews');
-		await expect(reviews).toBeVisible({ timeout: 15_000 });
-		await expect(reviews).toContainText(/no reviews yet/i);
-
-		await reviews.getByRole('button', { name: /write a review/i }).click();
-		await reviews.getByRole('radio', { name: '5 stars' }).click();
-		await reviews.getByLabel(/title \(optional\)/i).fill('E2E fixture title');
-		await reviews.getByLabel(/your review/i).fill('E2E fixture review text: written by the test suite, not a customer.');
-		await reviews.getByLabel(/display name/i).fill('E2E Reviewer');
-		await reviews.getByRole('button', { name: /submit review/i }).click();
-		await expect(page.getByTestId('review-ack')).toContainText(/approved/i, { timeout: 15_000 });
-		await expect(page.getByTestId('review-ack')).toContainText('40 points');
+		// Below the 5-review threshold the whole reviews block is withheld from the PDP (no form: submit through the API the form uses).
+		await expect(page.getByTestId('product-title').or(page.locator('h1')).first()).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('product-reviews')).toHaveCount(0);
+		const submit = (body: Record<string, unknown>) => page.evaluate(async ([u, b]) => {
+			const r = await fetch(u as string, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'include', body: JSON.stringify(b) });
+			return { status: r.status, json: await r.json().catch(() => null) };
+		}, [`/v1/shop/catalog/products/${slug}/reviews`, body] as const);
+		const sent = await submit({ rating: 5, title: 'E2E fixture title', body: 'E2E fixture review text: written by the test suite, not a customer.', name: 'E2E Reviewer' });
+		expect(sent.status).toBeLessThan(300);
+		expect(sent.json).toMatchObject({ status: 'pending' });
 
 		// Pending: in the merchant's queue, verified-buyer flagged, NOT on the page, no points yet.
 		const queue = await api.get<{ items: Array<{ id: string; status: string; verifiedBuyer: boolean; rating: number; authorName: string; productSlug: string }> }>('/reviews?status=pending');
 		const mine = queue.items.find((r) => r.authorName === 'E2E Reviewer' && r.productSlug === slug)!;
 		expect(mine).toMatchObject({ status: 'pending', verifiedBuyer: true, rating: 5 });
 		await page.reload();
-		await expect(page.getByTestId('product-reviews')).toContainText(/no reviews yet/i, { timeout: 15_000 });
+		await expect(page.getByTestId('product-reviews')).toHaveCount(0);
 		await expect(page.getByTestId('review-item')).toHaveCount(0);
 		expect(await jsonLdAggregate(page)).toBeNull(); // unreviewed: never an empty/zero rating
 		expect(await readRows(api, `SELECT 1 FROM loyalty_ledger l JOIN customer c ON c.id = l.customer_id WHERE c.email = $1 AND l.kind = 'bonus'`, [email])).toHaveLength(0);
@@ -92,18 +90,12 @@ test.describe.serial('rewards + reviews', () => {
 		// Approve: the response reports the bonus; the review is public and the aggregate is exposed to search engines.
 		const approved = await api.post<{ ok: boolean; bonusPoints: number }>(`/reviews/${mine.id}/approve`);
 		expect(approved).toEqual({ ok: true, bonusPoints: 40 });
+		// One approved review is still under the threshold: no block, no rating link, no AggregateRating JSON-LD (the API still reports it).
 		await page.reload();
-		const item = page.getByTestId('review-item');
-		await expect(item).toHaveCount(1, { timeout: 15_000 });
-		await expect(item).toContainText('E2E fixture title');
-		await expect(item).toContainText('E2E Reviewer');
-		await expect(item).toContainText(/verified buyer/i);
-		await expect(page.getByTestId('reviews-summary')).toContainText('5.0');
-		await expect(page.getByTestId('reviews-summary')).toContainText('1 review');
-		expect(await jsonLdAggregate(page)).toMatchObject({ '@type': 'AggregateRating', ratingValue: expect.anything(), reviewCount: expect.anything() });
-		const agg = (await jsonLdAggregate(page))!;
-		expect(Number(agg.ratingValue)).toBe(5);
-		expect(Number(agg.reviewCount)).toBe(1);
+		await expect(page.locator('h1').first()).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('product-reviews')).toHaveCount(0);
+		await expect(page.getByTestId('pdp-rating-link')).toHaveCount(0);
+		expect(await jsonLdAggregate(page)).toBeNull();
 
 		// Bonus points on the ledger and on the rewards page (earn + review bonus), approving twice never pays twice.
 		await api.post(`/reviews/${mine.id}/approve`);
@@ -113,19 +105,14 @@ test.describe.serial('rewards + reviews', () => {
 		expect(orderCode).not.toBe('');
 	});
 
-	test('a second review of the same product by the same buyer is refused; a signed-out visitor is sent to sign in', async ({ apiProxyPage: page }) => {
-		await page.goto(`/products/${slug}/`);
-		await expect(page.getByTestId('product-reviews')).toContainText(/sign in/i, { timeout: 15_000 });
-		await expect(page.getByRole('button', { name: /write a review/i })).toHaveCount(0);
-
+	test('a second review of the same product by the same buyer is refused by the API', async ({ apiProxyPage: page }) => {
 		await signInWithPassword(page, email);
 		await page.goto(`/products/${slug}/`);
-		const reviews = page.getByTestId('product-reviews');
-		await reviews.getByRole('button', { name: /write a review/i }).click();
-		await reviews.getByRole('radio', { name: '4 stars' }).click();
-		await reviews.getByLabel(/your review/i).fill('E2E fixture second review text, which must be refused.');
-		await reviews.getByRole('button', { name: /submit review/i }).click();
-		await expect(reviews.getByRole('alert')).toContainText(/already reviewed/i, { timeout: 15_000 });
+		const res = await page.evaluate(async (u) => {
+			const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'include', body: JSON.stringify({ rating: 4, body: 'E2E fixture second review text, which must be refused.' }) });
+			return { status: r.status, json: await r.json().catch(() => null) };
+		}, `/v1/shop/catalog/products/${slug}/reviews`);
+		expect(res.status).toBe(409);
 	});
 });
 
