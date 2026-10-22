@@ -86,7 +86,8 @@
       "properties": {
         "provider": { "const": "gtm" },
         "containerId": { "type": "string", "pattern": "^GTM-[A-Z0-9]{4,12}$" },
-        "consent": { "enum": ["required", "implied"] }
+        "consent": { "enum": ["required", "implied"] },
+        "adPlatforms": { "type": "array", "items": { "enum": ["openai"] }, "maxItems": 1 }
       },
       "required": ["provider", "containerId", "consent"]
     },

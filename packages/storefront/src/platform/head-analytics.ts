@@ -7,12 +7,19 @@ export interface AnalyticsCsp {
 	connect: string[];
 }
 
-/** CSP additions for the declared analytics (Google's GTM CSP guide, checked 2026-10-12). No `unsafe-eval`. */
+/**
+ * OpenAI Ads Measurement Pixel origins (developers.openai.com/ads/measurement-pixel, checked 2026-10-22). Its image fallback on
+ * bzr.openai.com is already covered by `img-src https:`. Loaded through a GTM template (injectScript), never a Custom HTML tag.
+ */
+export const OPENAI_PIXEL_CSP = { script: ['https://bzrcdn.openai.com'], connect: ['https://bzr.openai.com', 'https://bzrcdn.openai.com'] } as const;
+
+/** CSP additions for the declared analytics (Google's GTM CSP guide, checked 2026-10-12) and any opted-in ad platform. No `unsafe-eval`. */
 export function analyticsCsp(analytics: BrandHeadSpec['analytics'] | undefined): AnalyticsCsp | undefined {
 	if (!analytics) return undefined;
+	const openai = analytics.adPlatforms?.includes('openai') ?? false;
 	return {
-		script: ['https://*.googletagmanager.com'],
-		connect: ['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com'],
+		script: ['https://*.googletagmanager.com', ...(openai ? OPENAI_PIXEL_CSP.script : [])],
+		connect: ['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', ...(openai ? OPENAI_PIXEL_CSP.connect : [])],
 	};
 }
 

@@ -32,7 +32,7 @@ export interface BrandHeadSpec {
 	embeds?: { youtube: true };
 	googleFontsPreconnect?: boolean;
 	verification?: { facebookDomain?: string; pinterest?: string };
-	analytics?: { provider: 'gtm'; containerId: string; consent: 'required' | 'implied' } | null;
+	analytics?: { provider: 'gtm'; containerId: string; consent: 'required' | 'implied'; adPlatforms?: readonly 'openai'[] } | null;
 	serviceWorker?: 'register-ios-privacy' | 'unregister-ios-privacy' | 'none';
 	appleTitle?: 'storeName';
 	/** Open Graph image extras: `alt: false` drops og:image:alt (on by default); width/height add og:image:width/height. */
