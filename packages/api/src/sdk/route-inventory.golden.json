@@ -1,5 +1,5 @@
 {
-  "count": 365,
+  "count": 366,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -181,6 +181,7 @@
     "PATCH /v1/admin/products/{id}",
     "PATCH /v1/admin/promotions/{id}",
     "PATCH /v1/admin/seo/config",
+    "PATCH /v1/admin/settings/apple",
     "PATCH /v1/admin/settings/google",
     "PATCH /v1/admin/settings/identity",
     "PATCH /v1/admin/settings/notifications",
