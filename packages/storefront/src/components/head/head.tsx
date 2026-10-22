@@ -6,6 +6,7 @@ import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { PROVIDER_PREFETCH_ORIGINS } from '~/platform/payments/labels';
 import { brandHeadTags, DEFAULT_SOURCES, resolveHead } from '~/platform/head';
+import { STALE_BUILD_RECOVERY_SOURCE } from '~/platform/stale-build-recovery';
 
 interface HeadProps {
 	nonce?: string;
@@ -215,6 +216,8 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 					<link key={key} {...l} />
 				))}
 
+			{/* Reloads once if a deploy left this page with a missing chunk or an empty loader response (stale-build-recovery.ts). */}
+			<script key="stale-build-recovery" {...(nonce ? { nonce } : {})} dangerouslySetInnerHTML={STALE_BUILD_RECOVERY_SOURCE} />
 			{brandHeadTags(resolved, nonce)}
 
 			{head.styles.map(({ key, style, ...props }) => (
