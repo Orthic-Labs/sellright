@@ -59,6 +59,12 @@ export default function SettingsPage() {
   });
   const [gid, setGid] = useState<string | null>(null);
   const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
+  const [aid, setAid] = useState<string | null>(null);
+  const saveApple = useMutation({
+    mutationFn: () => api.patch('/settings/apple', { servicesId: aid?.trim() || null }),
+    onSuccess: () => { setAid(null); qc.invalidateQueries({ queryKey: sk }); toast.success('Apple sign-in saved'); },
+    onError: (e) => toast.error('Could not save the Apple Services ID', (e as Error).message),
+  });
 
   const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean; required: boolean; recoveryCodesRemaining: number }>('/2fa') });
   const [enrolling, setEnrolling] = useState(false);
@@ -205,13 +211,31 @@ export default function SettingsPage() {
                 <button className="btn-ghost" onClick={() => setGid(null)}>Cancel</button>
                 <button className="btn-primary" disabled={saveGoogle.isPending} onClick={() => saveGoogle.mutate()}>{saveGoogle.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
-              <p className="text-xs text-gray-500">Paste your Google OAuth <b>client ID</b>. Verification happens server-side against this ID.</p>
+              <p className="text-xs text-gray-500">Paste your Google OAuth <b>client ID</b> (a Web application client in Google Cloud, with your storefront address under <i>Authorized JavaScript origins</i>). Verification happens server-side against this ID. The storefront shows the Google button within a minute of saving.</p>
               {gid !== null ? (
                 <Field label="Google client ID" htmlFor="s-gid"><input id="s-gid" className="input font-mono text-xs max-w-lg" value={gid} onChange={(e) => setGid(e.target.value)} placeholder="xxxx.apps.googleusercontent.com" /></Field>
               ) : (
                 <div className="flex items-center justify-between text-sm max-w-lg">
                   <span className="font-mono text-xs text-gray-600">{cfg.googleClientId ? `${String(cfg.googleClientId).slice(0, 28)}…` : <span className="text-gray-400">Not configured</span>}</span>
                   {canManage && <button className="btn-ghost btn-sm" onClick={() => setGid(cfg.googleClientId ?? '')}>{cfg.googleClientId ? 'Change' : 'Set up'}</button>}
+                </div>
+              )}
+            </FormSection>
+          )}
+
+          {section === 'signin' && (
+            <FormSection title="Customer sign-in (Apple)" description="Let customers sign in to the storefront with Apple."
+              actions={aid !== null && <>
+                <button className="btn-ghost" onClick={() => setAid(null)}>Cancel</button>
+                <button className="btn-primary" disabled={saveApple.isPending} onClick={() => saveApple.mutate()}>{saveApple.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
+              </>}>
+              <p className="text-xs text-gray-500">Paste your Sign in with Apple <b>Services ID</b> (Apple Developer, Identifiers, Services IDs). In Apple's configuration for it, add your storefront domain and the return URL <span className="font-mono">{cfg.storefrontUrl ? `${String(cfg.storefrontUrl).replace(/\/+$/, '')}/sign-in/` : 'https://your-store/sign-in/'}</span>. The storefront shows the Apple button within a minute of saving.</p>
+              {aid !== null ? (
+                <Field label="Apple Services ID" htmlFor="s-aid"><input id="s-aid" className="input font-mono text-xs max-w-lg" value={aid} onChange={(e) => setAid(e.target.value)} placeholder="com.example.store.signin" /></Field>
+              ) : (
+                <div className="flex items-center justify-between text-sm max-w-lg">
+                  <span className="font-mono text-xs text-gray-600">{cfg.appleServicesId ? String(cfg.appleServicesId) : <span className="text-gray-400">Not configured</span>}</span>
+                  {canManage && <button className="btn-ghost btn-sm" onClick={() => setAid(cfg.appleServicesId ?? '')}>{cfg.appleServicesId ? 'Change' : 'Set up'}</button>}
                 </div>
               )}
             </FormSection>

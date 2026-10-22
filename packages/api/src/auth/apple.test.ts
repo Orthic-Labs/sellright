@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
-import { _resetAppleJwksCache, appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from './apple.js';
+import { _resetAppleJwksCache, appleAuthoritativeForEmail, appleClientIds, appleServicesId, verifyAppleIdentityToken } from './apple.js';
 import { env } from '../env.js';
 
 const AUD = 'com.example.app';
@@ -145,5 +145,20 @@ describe('appleAuthoritativeForEmail', () => {
     expect(appleAuthoritativeForEmail(a('x@sub.icloud.com'))).toBe(false);
     expect(appleAuthoritativeForEmail(a('x@icloud.com', false))).toBe(false);
     expect(appleAuthoritativeForEmail(a(null))).toBe(false);
+  });
+});
+
+describe('appleServicesId (admin Settings web Services ID)', () => {
+  it('is the trimmed id, or null when unset or blank', () => {
+    expect(appleServicesId({ auth: { appleServicesId: ' com.store.web ' } })).toBe('com.store.web');
+    expect(appleServicesId({ auth: { appleServicesId: '  ' } })).toBeNull();
+    expect(appleServicesId({})).toBeNull();
+  });
+  it('is always an accepted audience, alongside configured client ids', () => {
+    expect(appleClientIds({ auth: { appleServicesId: 'com.store.web' } })).toEqual(['com.store.web']);
+    expect(appleClientIds({ auth: { appleClientId: 'com.store.app', appleServicesId: 'com.store.web' } })).toEqual(['com.store.app', 'com.store.web']);
+  });
+  it('an explicit per-store opt-out still wins', () => {
+    expect(appleClientIds({ auth: { appleClientId: false, appleServicesId: 'com.store.web' } })).toEqual([]);
   });
 });

@@ -63,7 +63,8 @@ describe('Google sign-in switch', () => {
 		const entry = read('src/entry.express.tsx');
 		expect(entry).toContain('buildCsp({');
 		expect(entry).toMatch(/buildCsp\(\{\s*nonce,/);
-		expect(entry).toContain('google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers)))');
+		expect(entry).toContain('const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers))');
+		expect(entry).toContain('google: googleIdentityCsp(socialIds.google)');
 		expect(entry).not.toMatch(/^const googleCsp\b/m); // no process-wide Google CSP
 		expect(entry).not.toContain('accounts.google.com'); // origins live only in config/google-signin.ts
 		expect(entry).toContain('getOrigin: getRouterOrigin'); // CSRF origin from the trusted boundary
@@ -89,8 +90,9 @@ describe('Google sign-in: one configuration source, pinned to one store', () => 
 	it('the button and the CSP read the same function, and the CSP never reads a runtime-only variable', () => {
 		const entry = read('src/entry.express.tsx');
 		const page = read('src/routes/sign-in/index.tsx');
-		expect(entry).toContain('googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers)))');
-		expect(page).toContain('googleSignInClientIdForHost(');
+		expect(entry).toContain('const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers))');
+		expect(entry).toContain('googleIdentityCsp(socialIds.google)');
+		expect(page).toMatch(/useGoogleClientId = routeLoader\$[\s\S]*?socialSignInIdsForHost\(/);
 		expect(page).toContain('validatedRequestHost(');
 		expect(entry).not.toContain('process.env.VITE_GOOGLE_CLIENT_ID');
 	});

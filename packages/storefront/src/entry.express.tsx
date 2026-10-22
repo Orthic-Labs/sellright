@@ -15,8 +15,9 @@ import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { snapshotGuard } from"./utils/snapshot-guard";
-import { appleClientId, appleIdentityCsp, appleSignInClientIdForHost, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
-import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
+import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
+import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
+import { socialSignInIdsForHost } from "./utils/social-sign-in.server";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
 import { theme } from"./theme/theme.config";
@@ -83,7 +84,7 @@ else if (appleClientId() && appleSignInHosts().length === 0) {
 }
 
 // Set security headers
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
 	// Per-request CSP nonce. Threaded to Qwik's SSR render via a custom
 	// x-qwik-nonce request header -> entry.ssr.tsx reads it back off
 	// opts.serverData.requestHeaders -> <Root nonce> + serverData.nonce ->
@@ -157,15 +158,17 @@ app.use((req, res, next) => {
 	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
 	// is enabled; SheerID (script-src + frame-src) uses the same built theme flag as its homepage offer.
 	// Google Identity origins (script/style/connect/frame) join only when Google sign-in is on.
+	const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers)).catch(() => ({ google: '', apple: '' }));
 	const cspDirectives = buildCsp({
 		nonce,
 		apiOrigin,
 		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
 		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
 		sheerIdEnabled: theme.sheerIdEnabled,
-		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
-		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
-		apple: appleIdentityCsp(appleSignInClientIdForHost(validatedRequestHost(req.headers))),
+		// Per request: this store's own sign-in ids from its admin Settings (same helper as the sign-in page), never a
+		// process-wide decision; empty ids add no origins.
+		google: googleIdentityCsp(socialIds.google),
+		apple: appleIdentityCsp(socialIds.apple),
 		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).
 		analytics: analyticsCsp(BRAND_HEAD.analytics),
 		youtubeEmbed: BRAND_HEAD.embeds?.youtube === true,

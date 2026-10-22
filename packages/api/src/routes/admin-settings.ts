@@ -6,6 +6,7 @@ import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
+import { appleServicesId } from '../auth/apple.js';
 import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireHuman, guard } from './admin-helpers.js';
@@ -121,6 +122,7 @@ adminSettings.openapi(
       stripeMode: stripeModeFromConfig(config),
       notifications: (config.notifications as object) ?? {},
       googleClientId: (config.googleClientId as string) ?? null,
+      appleServicesId: appleServicesId(config),
       storefrontUrl: typeof config.storefrontUrl === 'string' ? config.storefrontUrl : null,
     }, 200);
   }),
@@ -281,6 +283,32 @@ adminSettings.openapi(
       actor: admin.email,
       action: 'settings_update',
       detail: (prev, next) => ({ section: 'google', before: { clientId: prev.googleClientId ?? null }, after: { clientId: next.googleClientId ?? null } }),
+    });
+    return c.json({ ok: true }, 200);
+  }),
+);
+
+// ── Sign in with Apple web Services ID (for customer Apple auth on the storefront) ──
+// Public by design (the storefront's Apple button carries it); stored at config.auth.appleServicesId and always accepted
+// as an audience when verifying Apple identity tokens for this store.
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/apple', summary: 'Set Sign in with Apple Services ID',
+    request: { body: { content: J(z.object({ servicesId: z.string().trim().max(255).regex(/^[A-Za-z0-9.-]*$/, 'letters, digits, dots and hyphens').nullable() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { servicesId } = c.req.valid('json');
+    await mutateStoreConfig(st.storeId, (config) => {
+      const auth = { ...((config.auth as Record<string, unknown>) ?? {}) };
+      if (servicesId) auth.appleServicesId = servicesId; else delete auth.appleServicesId;
+      return { ...config, auth };
+    }, {
+      actor: admin.email,
+      action: 'settings_update',
+      detail: (prev, next) => ({ section: 'apple', before: { servicesId: appleServicesId(prev) }, after: { servicesId: appleServicesId(next) } }),
     });
     return c.json({ ok: true }, 200);
   }),

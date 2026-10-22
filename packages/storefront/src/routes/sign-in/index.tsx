@@ -7,8 +7,7 @@ import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/go
 import { loginWithApple, signInWithApple } from '~/providers/shop/account/apple-auth';
 import { loginWithPasskey } from '~/providers/shop/account/passkeys';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
-import { appleSignInClientIdForHost } from '~/config/apple-signin';
-import { googleSignInClientIdForHost } from '~/config/google-signin';
+import { socialSignInIdsForHost } from '~/utils/social-sign-in.server';
 import { validatedRequestHost } from '~/utils/trusted-request.server';
 import { SignInError } from './SignInError';
 export { head } from './seo';
@@ -16,17 +15,17 @@ export { head } from './seo';
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 /** Empty = Google sign-in off for THIS request's host: no button, no Google script, no Google origins in the CSP (the
  *  CSP in entry.express.tsx makes the same per-host decision from the same function). */
-export const useGoogleClientId = routeLoader$(({ request }) =>
-	googleSignInClientIdForHost(
+export const useGoogleClientId = routeLoader$(async ({ request }) =>
+	(await socialSignInIdsForHost(
 		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
-	),
+	)).google,
 );
 
 /** Empty = Apple sign-in off for THIS request's host (same per-host decision the CSP makes in entry.express.tsx). */
-export const useAppleClientId = routeLoader$(({ request }) =>
-	appleSignInClientIdForHost(
+export const useAppleClientId = routeLoader$(async ({ request }) =>
+	(await socialSignInIdsForHost(
 		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
-	),
+	)).apple,
 );
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

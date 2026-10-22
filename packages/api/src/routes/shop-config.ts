@@ -13,6 +13,8 @@ import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../
 import { storeIdentityFromConfig, StoreIdentitySchema } from './store-identity.js';
 import { magicLinkPolicy } from '../auth/magic-link.js';
 import { passkeysEnabled } from '../auth/passkeys-core.js';
+import { appleServicesId } from '../auth/apple.js';
+import { env } from '../env.js';
 
 export const shopConfig = new OpenAPIHono();
 
@@ -40,7 +42,9 @@ shopConfig.openapi(
           // storefront show points-to-earn and the redeem control.
           loyalty: PublicLoyaltySettings.nullable(),
           // Which optional sign-in methods this store has switched on (so the storefront only offers what works).
-          auth: z.object({ magicLink: z.boolean(), passkeys: z.boolean() }),
+          // Public client ids for social sign-in (null = off for this store). Set in admin Settings; the storefront renders
+          // the buttons and opens its CSP only for the ids it receives here.
+          auth: z.object({ magicLink: z.boolean(), passkeys: z.boolean(), googleClientId: z.string().nullable(), appleServicesId: z.string().nullable() }),
         }) } },
       },
     },
@@ -59,7 +63,11 @@ shopConfig.openapi(
     return c.json({
       gateways: { nmi, sezzle },
       loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
-      auth: { magicLink: magicLinkPolicy(st.config).enabled, passkeys: passkeysEnabled() },
+      auth: {
+        magicLink: magicLinkPolicy(st.config).enabled, passkeys: passkeysEnabled(),
+        googleClientId: ((st.config as { googleClientId?: unknown } | null)?.googleClientId as string | undefined)?.trim() || env.GOOGLE_CLIENT_ID?.trim() || null,
+        appleServicesId: appleServicesId(st.config),
+      },
       stripeMode: mode,
       stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
       stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),
