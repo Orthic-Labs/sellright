@@ -10,7 +10,7 @@
 		"qwik": "Qwik core/router/eslint-plugin-qwik aligned on 2.0.0-rc.3 with Vite 8/Rolldown"
 	},
 	"engines": {
-		"node": ">=24.15 <25"
+		"node": ">=24.15 <25 || >=26 <27"
 	},
 	"scripts": {
 		"clean": "node scripts/clean.mjs",

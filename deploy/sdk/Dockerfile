@@ -5,7 +5,7 @@
 #
 # Build (from repo root, after scripts/build-sdk-artifacts.sh):
 #   docker build -f deploy/sdk/Dockerfile -t sellright-composed:<tag> .
-FROM node:24.20.0-bookworm-slim AS runtime
+FROM node:24.22.1-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3300

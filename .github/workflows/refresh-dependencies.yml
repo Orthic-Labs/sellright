@@ -8,7 +8,7 @@ permissions:
 
 env:
   PNPM_VERSION: 11.25.0
-  NODE_VERSION: 24.20.0
+  NODE_VERSION: 24.22.1
 
 jobs:
   refresh:
