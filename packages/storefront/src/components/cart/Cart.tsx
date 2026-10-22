@@ -146,7 +146,7 @@ export default component$(() => {
 		const selectedShippingMethod = await fetchCartShippingMethod(countryCode, orderTotalAfterDiscount);
 		if (cancelled) return;
 
-		shippingState.methods = [selectedShippingMethod];
+		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
 		shippingState.selectedMethod = selectedShippingMethod;
 		shippingState.lastCheckedCountry = countryCode;
 		shippingState.error = null;
@@ -172,7 +172,7 @@ export default component$(() => {
 		try {
 			const selectedShippingMethod = await fetchCartShippingMethod(countryCode, orderTotalAfterDiscount);
 
-			shippingState.methods = [selectedShippingMethod];
+			shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
 			shippingState.selectedMethod = selectedShippingMethod;
 			shippingState.lastCheckedCountry = countryCode;
 		} catch (error: any) {
