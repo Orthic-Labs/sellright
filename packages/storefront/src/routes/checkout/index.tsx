@@ -496,13 +496,6 @@ const CheckoutContent = component$(() => {
       return;
     }
 
-    // Physical carts need a server shipping method (the API refuses the order without one). If none is offered for this
-    // destination, say so plainly instead of sending an order that can only fail.
-    if (!shippingMethod.value) {
-      state.error = "Shipping isn't available to this address right now. Please contact us and we'll sort it out.";
-      return;
-    }
-
     showProcessingModal.value = true;
     isOrderProcessing.value = true;
     state.error = null;
