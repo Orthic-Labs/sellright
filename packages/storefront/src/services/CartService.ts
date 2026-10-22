@@ -18,6 +18,7 @@
  * Cart/CartLine types, and the fail-closed stock rules.
  */
 import { sellright, SellRightError } from '~/sellright/client';
+import { resolveAssetPath } from '~/sellright/types/catalog';
 import { srMe, srErrorStatus, srLegacyCartMigration } from '~/utils/sellright';
 import { CountryPreferenceService } from './CountryPreferenceService';
 import { classifyOrderState } from './order-state';
@@ -299,7 +300,9 @@ export class CartService {
   private static toCartLine = (line: ServerCart['lines'][number]): CartLine => ({
     ...line,
     ...this.enrichment.get(line.sku),
-    image: this.enrichment.get(line.sku)?.image ?? line.image ?? null,
+    // The cart API returns asset paths relative to the asset root (like the catalog); resolve them the same way, or the browser
+    // resolves them against the current page URL and the thumbnail breaks.
+    image: resolveAssetPath(this.enrichment.get(line.sku)?.image ?? line.image ?? null),
     ...(line.isPreOrder === undefined ? {} : { isPreOrder: line.isPreOrder }),
     ...(line.shipDate === undefined ? {} : { shipDate: line.shipDate }),
     ...(line.shipDateLabel === undefined ? {} : { shipDateLabel: line.shipDateLabel }),

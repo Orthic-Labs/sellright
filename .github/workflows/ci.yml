@@ -15,7 +15,9 @@ concurrency:
 
 env:
   PNPM_VERSION: 11.25.0
-  NODE_LTS: 24.20.0
+  NODE_LTS: 24.22.1
+  # Node 26 (LTS from 2026-10-28) is supported alongside 24; its job is advisory until it is added to branch protection.
+  NODE_NEXT: 26.12.1
 
 jobs:
   ios-model-contracts:
@@ -247,6 +249,48 @@ jobs:
             ${{ runner.temp }}/sellright-runtime/frontend-runtime-manifest.json
           if-no-files-found: error
           retention-days: 7
+
+  node-next:
+    name: Core + admin + storefront / Node 26
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/setup@e0ed22ae4d909f13ed5d2688513f73e1875e46db # v3.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+          node-version-file: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_NEXT }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            packages/admin/pnpm-lock.yaml
+
+      - name: Install core workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin
+        run: pnpm --dir packages/admin install --frozen-lockfile
+
+      - name: Production build
+        run: pnpm build
+
+      - name: Verify core and admin
+        run: pnpm verify:static
+
+      - name: Admin tests
+        run: pnpm --dir packages/admin test
+
+      - name: Storefront tests
+        run: pnpm --filter @sellright/storefront test
+
+      - name: Storefront tooling tests
+        run: pnpm --filter @sellright/storefront run test:scripts
 
   database:
     name: PostgreSQL 17 integration

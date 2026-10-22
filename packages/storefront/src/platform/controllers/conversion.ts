@@ -1,8 +1,9 @@
 // Plan v3.1 §3.5 (brand views PR2): the analytics bus subscriber. Every storefront event is tracked through `~/sellright/analytics`
 // (consent-gated); this subscriber pushes it to the tag manager's dataLayer and beacons view_item / add_to_cart / begin_checkout to the
 // event sink (platform/analytics-sink.ts), which sends a GA4 Measurement Protocol copy only when the tag manager did not. `purchase` is
-// pushed to the dataLayer only, never beaconed (the API's conversion plugin owns server purchase). No ad pixels. The bus carries minor
-// units; GA4 gets major units by the currency's own exponent.
+// pushed to the dataLayer only, never beaconed (the API's conversion plugin owns server purchase). Ad pixels exist only as GTM tags a brand
+// opts into (head.json analytics.adPlatforms). The bus carries minor units; GA4 gets major units by the currency's own exponent, and
+// purchase also carries integer minor units (`value_minor`, `price_minor`) for pixels that want them, since GTM may not compute.
 import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
 import { minorUnitDigits } from '~/utils/currency';
 import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent } from '~/sellright/analytics';
@@ -18,13 +19,13 @@ export function conversionPayload(event: AnalyticsEvent, eventId: string, pageLo
 		event.name === 'view_item' || event.name === 'add_to_cart'
 			? [{ item_id: event.sku, item_name: event.productName, price: major(event.price, event.currency), quantity: event.name === 'add_to_cart' ? event.quantity : 1 }]
 			: event.name === 'purchase'
-				? (event.items ?? []).slice(0, 20).map((i) => ({ item_id: i.sku, item_name: i.name, price: major(i.price, event.currency), quantity: i.quantity }))
+				? (event.items ?? []).slice(0, 20).map((i) => ({ item_id: i.sku, item_name: i.name, price: major(i.price, event.currency), price_minor: Math.round(i.price), quantity: i.quantity }))
 				: [];
 	const value = event.name === 'add_to_cart' ? major(event.price * event.quantity, event.currency) : event.name === 'view_item' ? major(event.price, event.currency) : major(event.value, event.currency);
 	const dataLayer = {
 		event: event.name,
 		event_id: eventId,
-		ecommerce: { currency: event.currency, value, ...(event.name === 'purchase' ? { transaction_id: event.orderCode } : {}), items },
+		ecommerce: { currency: event.currency, value, ...(event.name === 'purchase' ? { transaction_id: event.orderCode, value_minor: Math.round(event.value) } : {}), items },
 	};
 	const beacon =
 		event.name === 'purchase'

@@ -31290,10 +31290,27 @@
                           "price"
                         ]
                       }
+                    },
+                    "freeShipping": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "threshold": {
+                          "type": "integer"
+                        },
+                        "remaining": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "threshold",
+                        "remaining"
+                      ]
                     }
                   },
                   "required": [
-                    "methods"
+                    "methods",
+                    "freeShipping"
                   ]
                 }
               }

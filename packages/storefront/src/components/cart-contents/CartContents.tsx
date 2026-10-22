@@ -14,6 +14,7 @@ import { FreeShippingProgressView, QuantityDropdown, TrashIcon, platformAction }
 import { projectQuantityOptions } from '~/platform/controllers/project';
 import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
 import { productPath } from '~/platform/product-path';
+import { resolveAssetPath } from '~/sellright/types/catalog';
 
 
 // Image preloading function for cart product links
@@ -151,7 +152,7 @@ export default component$(() => {
 							<div class={`shrink-0 w-[88px] h-[112px] overflow-hidden ${isCheckoutView ? 'bg-[rgba(253,250,246,0.06)]' : 'bg-[rgba(17,17,17,0.04)]'}`}>
 								<OptimizedImage
 									class="w-full h-full object-center object-cover"
-									src={line.image || '/asset_placeholder.webp'}
+									src={resolveAssetPath(line.image) || '/asset_placeholder.webp'}
 									width={160}
 									height={200}
 									loading="lazy"
@@ -168,7 +169,7 @@ export default component$(() => {
 											<Link
 												href={productPath(productSlug)}
 												data-slug={productSlug}
-								data-preview={line.image || ''}
+								data-preview={resolveAssetPath(line.image) || ''}
 								onClick$={handleLinkClick$}
 											>
 												{productName}
@@ -249,6 +250,7 @@ export default component$(() => {
 				isCheckoutView={isCheckoutView}
 				countryCode={shippingCountry(appState.shippingAddress.countryCode)}
 				discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+				freeShipping={appState.freeShipping ?? null}
 			/>
 		</div>
 	);

@@ -14,7 +14,7 @@
 # time (there is no real request Host yet) and serve it to every visitor of
 # every host this image is later pointed at, see adapters/express/vite.config.mts.
 
-FROM node:24.20.0-bookworm-slim AS build
+FROM node:24.22.1-bookworm-slim AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -45,7 +45,7 @@ RUN pnpm --filter @sellright/shared build \
 # inject-workspace-packages — see packages/api/Dockerfile for the same note).
 RUN pnpm --filter @sellright/storefront deploy --legacy --prod /runtime
 
-FROM node:24.20.0-bookworm-slim AS runtime
+FROM node:24.22.1-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=4100

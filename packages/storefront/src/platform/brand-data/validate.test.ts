@@ -68,6 +68,12 @@ describe('head.json (head sanitisation)', () => {
 		expect(head({ analytics: null })).toEqual([]);
 	});
 
+	it('accepts only known ad platforms as an explicit opt-in', () => {
+		expect(head({ analytics: { provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied', adPlatforms: ['openai'] } })).toEqual([]);
+		expect(head({ analytics: { provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied', adPlatforms: ['meta'] } }).length).toBeGreaterThan(0);
+		expect(head({ analytics: { provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied', adPlatforms: 'openai' } }).length).toBeGreaterThan(0);
+	});
+
 	it('rejects bad srcset counts and widths, and a sizes string with markup', () => {
 		const ok = { paths: ['/'], type: 'image/avif', sizes: '100vw' };
 		expect(head({ imagePreloads: [{ ...ok, srcset: [] }] }).length).toBeGreaterThan(0);

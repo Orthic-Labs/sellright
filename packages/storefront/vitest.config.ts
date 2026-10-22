@@ -20,6 +20,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    // Node 26 defines its own Web Storage globals, which shadow jsdom's localStorage/sessionStorage in test workers.
+    // Disable them so tests see the browser storage they run against; harmless on Node 24.
+    execArgv: ['--no-experimental-webstorage'],
     testTimeout: 15000,
   },
 });

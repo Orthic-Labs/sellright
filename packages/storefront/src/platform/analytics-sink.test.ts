@@ -48,7 +48,10 @@ describe('conversion payload', () => {
 		expect(kwd.dataLayer.ecommerce).toMatchObject({ value: 3, items: [{ price: 1 }] });
 		const p = conversionPayload({ name: 'purchase', orderCode: 'RH1', currency: 'USD', value: 8000, itemCount: 1 }, 'purchase_RH1', 'https://x/', undefined, true);
 		expect(p.beacon).toBeNull();
-		expect(p.dataLayer).toMatchObject({ event: 'purchase', event_id: 'purchase_RH1', ecommerce: { transaction_id: 'RH1', value: 80 } });
+		expect(p.dataLayer).toMatchObject({ event: 'purchase', event_id: 'purchase_RH1', ecommerce: { transaction_id: 'RH1', value: 80, value_minor: 8000 } });
+		const items = conversionPayload({ name: 'purchase', orderCode: 'RH2', currency: 'USD', value: 7500, itemCount: 1, items: [{ sku: 'SKU-1', name: 'Shirt', price: 7500, quantity: 1 }] }, 'purchase_RH2', 'https://x/', undefined, true);
+		expect(items.dataLayer.ecommerce).toMatchObject({ value: 75, value_minor: 7500, items: [{ item_id: 'SKU-1', price: 75, price_minor: 7500, quantity: 1 }] });
+		expect(Number.isInteger((items.dataLayer.ecommerce as { value_minor: number }).value_minor)).toBe(true);
 	});
 });
 

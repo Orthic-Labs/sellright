@@ -287,6 +287,24 @@ describe('verifyGatewayPayment → POST /v1/shop/orders/{code}/gateway-payment/{
 	});
 });
 
+describe('shipping quote is the server\'s, from the cart', () => {
+	it('POSTs the cart items, country and coupons, and sends no subtotal', async () => {
+		enqueue(respond(200, { methods: [{ code: 'free-shipping', name: 'Free Shipping', rate: 0, price: 0 }] }));
+		const methods = await getEligibleShippingMethods('us', [{ sku: 'S1', quantity: 2 }, { sku: 'S2', quantity: 0 }], ['SAVE10']);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toContain('/v1/shop/shipping-methods');
+		expect(calls[0].method).toBe('POST');
+		expect(lastBody()).toEqual({ country: 'US', items: [{ sku: 'S1', quantity: 2 }], couponCodes: ['SAVE10'] });
+		expect(methods.map((m) => m.code)).toEqual(['free-shipping']);
+	});
+
+	it('an empty cart or no country asks the server nothing', async () => {
+		expect(await getEligibleShippingMethods('US', [])).toEqual([]);
+		expect(await getEligibleShippingMethods('', [{ sku: 'S1', quantity: 1 }])).toEqual([]);
+		expect(calls).toHaveLength(0);
+	});
+});
+
 // An HTTP 204 or a JSON `null` body is a FAILED read for every call checkout depends on — never a value to read fields
 // from (a null order used to throw outside the guarded read and strand the payment recovery with controls locked).
 describe('empty response bodies are failed reads', () => {
@@ -294,7 +312,7 @@ describe('empty response bodies are failed reads', () => {
 	const reads: [string, () => Promise<unknown>][] = [
 		['getOrder', () => getOrder('O1', 'rt_1')],
 		['getShopConfig', () => getShopConfig()],
-		['getEligibleShippingMethods', () => getEligibleShippingMethods('US', 100, 100)],
+		['getEligibleShippingMethods', () => getEligibleShippingMethods('US', [{ sku: 'S1', quantity: 1 }])],
 		['createPaymentIntent', () => createPaymentIntent('O1')],
 		['settleZeroDueOrder', () => settleZeroDueOrder('O1')],
 		['startGatewayPayment', () => startGatewayPayment('O1', 'nmi', { token: 't', idempotencyKey: 'k' })],

@@ -32,6 +32,11 @@ export interface SlotPropsMap {
 		countryCode: string | null;
 		/** max(0, subtotal - discountTotal): the amount the threshold applies to (formula of components/cart/Cart.tsx). */
 		discountedSubtotalCents: number;
+		/**
+		 * The server's nearest free-shipping tier for this cart and destination (POST /v1/shop/shipping-methods), or null when
+		 * shipping is already free, no tier is reachable, or no quote has run. A brand's hint reads this; it holds no thresholds.
+		 */
+		freeShipping: { threshold: number; remaining: number } | null;
 	};
 	/**
 	 * Checkout order summary: the points-redemption control. Rendered only when the shopper is signed in and the program is

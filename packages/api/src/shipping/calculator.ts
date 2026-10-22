@@ -79,3 +79,24 @@ export function evaluateShipping(
 ): { eligible: boolean; rate: number } {
   return { eligible: isMethodEligible(calculator, ctx), rate: shippingRate(calculator) };
 }
+
+/**
+ * The nearest free-shipping tier for this cart's destination: the zero-rate method's minimum (cents) and how far the cart is
+ * from it on that method's own subtotal basis, or null when shipping is already free or no free tier is reachable. "Spend X more for free shipping" hints read this, so storefronts
+ * never carry thresholds of their own. Each method is judged on its own subtotal basis.
+ */
+export function freeShippingThreshold(calculators: readonly unknown[], ctx: ShippingContext): { threshold: number; remaining: number } | null {
+  let best: { threshold: number; remaining: number } | null = null;
+  for (const raw of calculators) {
+    const calc = norm(raw);
+    if (shippingRate(calc) !== 0) continue;
+    if (isMethodEligible(calc, ctx)) return null; // already free
+    const basis = calc.subtotalBasis === 'discounted_with_tax' ? ctx.discountedSubtotalWithTax : ctx.subtotal;
+    if (calc.min == null || basis == null || basis >= calc.min) continue; // ineligible for a reason other than the minimum
+    // Would the method be eligible once the basis reaches its minimum? (country, max and requireCountry still apply.)
+    if (!isMethodEligible(calc, { ...ctx, subtotal: calc.min, discountedSubtotalWithTax: calc.min })) continue;
+    const remaining = calc.min - basis;
+    if (best === null || remaining < best.remaining) best = { threshold: calc.min, remaining };
+  }
+  return best;
+}

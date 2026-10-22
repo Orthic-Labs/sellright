@@ -217,6 +217,15 @@ describe('analytics: CSP and the GTM loader', () => {
 		expect(buildCsp({ nonce: 'n', analytics: csp })).not.toContain('unsafe-eval');
 	});
 
+	it('adds the OpenAI pixel origins only when the brand opts in', () => {
+		const csp = analyticsCsp({ provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied', adPlatforms: ['openai'] })!;
+		expect(csp.script).toEqual(['https://*.googletagmanager.com', 'https://bzrcdn.openai.com']);
+		expect(csp.connect).toEqual(['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', 'https://bzr.openai.com', 'https://bzrcdn.openai.com']);
+		const policy = buildCsp({ nonce: 'n', analytics: csp });
+		expect(policy).not.toContain('unsafe-eval');
+		expect(policy.split('; ').find((d) => d.startsWith('script-src'))).not.toContain('unsafe-inline');
+	});
+
 	it('the loader is static: it reads the container id from its own data attribute and embeds none', () => {
 		expect(GTM_LOADER_SOURCE).toContain("getAttribute('data-gtm-id')");
 		expect(GTM_LOADER_SOURCE).toContain('https://www.googletagmanager.com/gtm.js?id=');

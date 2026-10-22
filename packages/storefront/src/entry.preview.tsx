@@ -1,3 +1,5 @@
+// Must stay the first import: removes Node 26's server-side Web Storage globals before any app module evaluates.
+import './utils/no-server-web-storage.server';
 /*
  * WHAT IS THIS FILE?
  *

@@ -108,11 +108,11 @@ describe('addLine — blind append', () => {
 		const withImage = serverCart({ lines: [{ ...serverCart().lines[0], image: 'store/media/preview/server.webp' }] });
 		setCookie('tok_srv');
 		enqueue(respond(200, withImage));
-		expect((await CartService.refresh()).cart.lines[0].image).toBe('store/media/preview/server.webp');
+		expect((await CartService.refresh()).cart.lines[0].image).toBe('/assets/store/media/preview/server.webp');
 		resetService();
 		enqueue(respond(200, serverCart()), respond(200, withImage));
 		const added = await CartService.addLine('SKU1', 1, { image: 'local/enriched.webp' });
-		expect(added.cart.lines[0].image).toBe('local/enriched.webp');
+		expect(added.cart.lines[0].image).toBe('/assets/local/enriched.webp');
 	});
 
 	it('creates the cart lazily then appends without a revision', async () => {
