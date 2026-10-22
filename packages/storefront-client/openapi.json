@@ -1385,6 +1385,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -1655,6 +1663,14 @@
                                 "nullable": true
                               },
                               "image": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "productName": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "productSlug": {
                                 "type": "string",
                                 "nullable": true
                               },
@@ -1986,6 +2002,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2282,6 +2306,14 @@
                             "nullable": true
                           },
                           "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
                             "type": "string",
                             "nullable": true
                           },
@@ -2588,6 +2620,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -2849,6 +2889,14 @@
                                     "nullable": true
                                   },
                                   "image": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productName": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productSlug": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -3195,6 +3243,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -3456,6 +3512,14 @@
                                     "nullable": true
                                   },
                                   "image": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productName": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productSlug": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -3745,6 +3809,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "available": {
                             "type": "boolean"
                           },
@@ -4016,6 +4088,14 @@
                                     "nullable": true
                                   },
                                   "image": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productName": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productSlug": {
                                     "type": "string",
                                     "nullable": true
                                   },
@@ -4484,6 +4564,14 @@
                                     "type": "string",
                                     "nullable": true
                                   },
+                                  "productName": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productSlug": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
                                   "available": {
                                     "type": "boolean"
                                   },
@@ -4693,6 +4781,14 @@
                                     "nullable": true
                                   },
                                   "image": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productName": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "productSlug": {
                                     "type": "string",
                                     "nullable": true
                                   },

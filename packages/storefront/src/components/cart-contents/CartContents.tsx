@@ -131,9 +131,11 @@ export default component$(() => {
 			<ul class={`divide-y w-full ${isCheckoutView ? 'divide-[rgba(var(--color-accent-rgb),0.25)]' : 'divide-[rgba(17,17,17,0.08)]'}`}>
 				{/* Render native cart lines (the server-owned cart) */}
 				{cartState.cart.lines.map((line) => {
-					const productSlug = line.slug || '';
-					const productName = line.name ||
+					// The server names the product a line belongs to (productName/productSlug); the line's own name is the variant.
+					const productSlug = line.productSlug || line.slug || '';
+					const productName = line.productName ||
 						productNameCache.value[productSlug] ||
+						line.name ||
 						productSlug.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
 					const linePrice = line.lineSubtotal;
@@ -144,7 +146,7 @@ export default component$(() => {
 					// fail-closed-safe "uncapped" case — bounded to a sane dropdown size, never treated as literally infinite.
 					const maxQty = remaining === null ? Math.max(line.quantity, 99) : Math.max(remaining, line.quantity);
 					const quantityOpts = projectQuantityOptions(maxQty, expandedDropdowns.value.has(line.sku));
-					const vLabel = line.options ?? variantLabel(line.name, productName);
+					const vLabel = line.options ?? (line.productName ? line.name : variantLabel(line.name, productName));
 
 					return (
 						<li key={line.sku} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">
@@ -157,7 +159,7 @@ export default component$(() => {
 									height={200}
 									loading="lazy"
 									responsive="thumbnail"
-									alt={`Image of: ${line.name}`}
+									alt={line.productName ? `${line.productName}, ${line.name}` : `Image of: ${line.name}`}
 								/>
 							</div>
 

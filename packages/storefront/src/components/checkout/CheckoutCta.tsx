@@ -1,6 +1,7 @@
 import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
 import { policySentence } from '~/theme/theme.config';
+import { checkoutCtaLabel } from './cta-label';
 import { useStoreIdentityLoader } from '~/routes/layout';
 
 interface CheckoutCtaProps {
@@ -37,8 +38,8 @@ export const CheckoutDesktopCta = component$<CheckoutCtaProps>((props) => {
         ) : (
           <span class="checkout-cta-label flex items-center justify-center">
             {props.formattedTotal.value
-              ? `PLACE ORDER \u2014 ${props.formattedTotal.value}`
-              : 'PLACE ORDER'}
+              ? `${checkoutCtaLabel(props.formattedTotal.value)} \u2014 ${props.formattedTotal.value}`
+              : checkoutCtaLabel(null)}
           </span>
         )}
         {!props.checkoutValidation.isAllValid && (
@@ -100,7 +101,7 @@ export const CheckoutMobileCta = component$<CheckoutCtaProps>((props) => (
           Processing...
         </span>
       ) : (
-        'PLACE ORDER'
+        checkoutCtaLabel(props.formattedTotal.value)
       )}
     </button>
   </div>

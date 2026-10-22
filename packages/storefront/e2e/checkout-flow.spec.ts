@@ -111,7 +111,7 @@ test.describe('checkout', () => {
 
 		// Pre-submit: LOCKED rule requires a live stock re-check right before
 		// this click succeeds. Click PLACE ORDER (pre-submit).
-		const placeOrder = page.getByRole('button', { name: /place order/i });
+		const placeOrder = page.getByRole('button', { name: /continue to payment|place order/i });
 		await placeOrder.click();
 
 		// Payment step reached: either a real payment method mounted (radio
