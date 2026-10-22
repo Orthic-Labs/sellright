@@ -69,10 +69,7 @@ test.describe.serial('rewards + reviews', () => {
 		// Below the 5-review threshold the whole reviews block is withheld from the PDP (no form: submit through the API the form uses).
 		await expect(page.getByTestId('product-title').or(page.locator('h1')).first()).toBeVisible({ timeout: 15_000 });
 		await expect(page.getByTestId('product-reviews')).toHaveCount(0);
-		const submit = (body: Record<string, unknown>) => page.evaluate(async ([u, b]) => {
-			const r = await fetch(u as string, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'include', body: JSON.stringify(b) });
-			return { status: r.status, json: await r.json().catch(() => null) };
-		}, [`/v1/shop/catalog/products/${slug}/reviews`, body] as const);
+		const submit = (body: Record<string, unknown>) => postReview(page, slug, body);
 		const sent = await submit({ rating: 5, title: 'E2E fixture title', body: 'E2E fixture review text: written by the test suite, not a customer.', name: 'E2E Reviewer' });
 		expect(sent.status).toBeLessThan(300);
 		expect(sent.json).toMatchObject({ status: 'pending' });
@@ -108,10 +105,7 @@ test.describe.serial('rewards + reviews', () => {
 	test('a second review of the same product by the same buyer is refused by the API', async ({ apiProxyPage: page }) => {
 		await signInWithPassword(page, email);
 		await page.goto(`/products/${slug}/`);
-		const res = await page.evaluate(async (u) => {
-			const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'include', body: JSON.stringify({ rating: 4, body: 'E2E fixture second review text, which must be refused.' }) });
-			return { status: r.status, json: await r.json().catch(() => null) };
-		}, `/v1/shop/catalog/products/${slug}/reviews`);
+		const res = await postReview(page, slug, { rating: 4, body: 'E2E fixture second review text, which must be refused.' });
 		expect(res.status).toBe(409);
 	});
 });
@@ -127,4 +121,13 @@ async function jsonLdAggregate(page: import('@playwright/test').Page): Promise<R
 		} catch { /* not JSON */ }
 	}
 	return null;
+}
+
+/** POST a review the way the storefront client does (same-origin, session cookie, double-submit CSRF token). */
+function postReview(page: import('@playwright/test').Page, slug: string, body: Record<string, unknown>) {
+	return page.evaluate(async ([u, b]) => {
+		const csrf = /(?:^|; )(?:sr_cust_csrf|sr_csrf)=([^;]+)/.exec(document.cookie)?.[1];
+		const r = await fetch(u as string, { method: 'POST', headers: { 'content-type': 'application/json', ...(csrf ? { 'x-csrf-token': decodeURIComponent(csrf) } : {}) }, credentials: 'include', body: JSON.stringify(b) });
+		return { status: r.status, json: await r.json().catch(() => null) };
+	}, [`/v1/shop/catalog/products/${slug}/reviews`, body] as const);
 }
