@@ -53,6 +53,31 @@ describe('conversion payload', () => {
 		expect(items.dataLayer.ecommerce).toMatchObject({ value: 75, value_minor: 7500, items: [{ item_id: 'SKU-1', price: 75, price_minor: 7500, quantity: 1 }] });
 		expect(Number.isInteger((items.dataLayer.ecommerce as { value_minor: number }).value_minor)).toBe(true);
 	});
+
+	it('view_item, add_to_cart and begin_checkout carry integer minor units, the SKU and the event id beside the GA4 fields', () => {
+		const view = conversionPayload({ name: 'view_item', sku: 'RH-TEE-M', productName: 'Tee', price: 7500, currency: 'USD' }, 'view_item_1', 'https://x/', undefined, false);
+		expect(view.dataLayer).toEqual({ event: 'view_item', event_id: 'view_item_1', ecommerce: { currency: 'USD', value: 75, value_minor: 7500, items: [{ item_id: 'RH-TEE-M', sku: 'RH-TEE-M', item_name: 'Tee', price: 75, price_minor: 7500, quantity: 1 }] } });
+		const add = conversionPayload({ name: 'add_to_cart', sku: 'RH-TEE-M', productName: 'Tee', price: 7500, currency: 'USD', quantity: 2 }, 'add_to_cart_1', 'https://x/', undefined, false);
+		expect(add.dataLayer.ecommerce).toEqual({ currency: 'USD', value: 150, value_minor: 15000, items: [{ item_id: 'RH-TEE-M', sku: 'RH-TEE-M', item_name: 'Tee', price: 75, price_minor: 7500, quantity: 2 }] });
+		const begin = conversionPayload(
+			{ name: 'begin_checkout', currency: 'USD', value: 15500, itemCount: 2, items: [{ sku: 'A', name: 'Tee', price: 7500, quantity: 1 }, { sku: 'B', name: 'Long', price: 8000, quantity: 1 }] },
+			'begin_checkout_1', 'https://x/', undefined, false,
+		);
+		expect(begin.dataLayer).toMatchObject({ event: 'begin_checkout', event_id: 'begin_checkout_1', ecommerce: { currency: 'USD', value: 155, value_minor: 15500 } });
+		expect(begin.dataLayer.ecommerce.items).toEqual([
+			{ item_id: 'A', sku: 'A', item_name: 'Tee', price: 75, price_minor: 7500, quantity: 1 },
+			{ item_id: 'B', sku: 'B', item_name: 'Long', price: 80, price_minor: 8000, quantity: 1 },
+		]);
+		for (const p of [view, add, begin]) {
+			const e = p.dataLayer.ecommerce;
+			expect(Number.isInteger(e.value_minor)).toBe(true);
+			for (const i of e.items) expect(Number.isInteger(i.price_minor)).toBe(true);
+			// The sink still accepts the beacon (extra item fields are dropped there, never forwarded).
+			expect(parseSinkEvent(p.beacon?.event, 'x')).toMatchObject({ name: p.dataLayer.event, eventId: p.dataLayer.event_id });
+		}
+		const jpy = conversionPayload({ name: 'view_item', sku: 'S', productName: 'Shirt', price: 1000, currency: 'JPY' }, 'id', 'https://x/', undefined, false);
+		expect(jpy.dataLayer.ecommerce).toMatchObject({ value: 1000, value_minor: 1000 });
+	});
 });
 
 describe('purchase dedup (review round 1)', () => {

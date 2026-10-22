@@ -29,6 +29,7 @@ import { checkoutIpRetryAfter, clientIp, loginRetryAfter } from '../auth/rate-li
 import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptance.js';
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
+import { normalizeAttribution, OrderAttributionIn } from '../orders/attribution.js';
 import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodes, type PricedCart } from './cart.js';
 import { CartTooLargeError, boundedCartItems, cartTooLargeFields } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -291,6 +292,9 @@ checkout.openapi(
               // Payment-policy extension blocks, keyed by policy id (X-57). Each block is validated by its policy's
               // checkoutExtensions schema; an unknown key or an invalid block is a 400. Absent for standalone SellRight.
               extensions: z.record(z.string(), z.unknown()).optional(),
+              // Landing attribution (UTM + oppref) captured by the storefront; stored as metadata.attribution and never part
+              // of the idempotency fingerprint. See orders/attribution.ts.
+              attribution: OrderAttributionIn.optional(),
             }),
           },
         },
@@ -654,6 +658,7 @@ checkout.openapi(
       // order-by-code read on the confirmation page (carried as ?rt=). Never
       // bare-code (P1): the order code is ~enumerable.
       const receiptToken = randomBytes(32).toString('base64url');
+      const attribution = normalizeAttribution(body.attribution);
       const orderMetadata = { ...(linkedVia ? { linked_via: linkedVia } : {}),
         contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
         taxInclusive: st.taxInclusive,
@@ -663,7 +668,8 @@ checkout.openapi(
         // Immutable legal-acceptance receipt (canonical configured values,
         // verified above) for manifest-configured licensed products.
         ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
-        ...(loyaltySnap ? { loyalty: loyaltySnap } : {}) };
+        ...(loyaltySnap ? { loyalty: loyaltySnap } : {}),
+        ...(attribution ? { attribution } : {}) };
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
         idempotencyKey: idemKey, promotionId: promoId, couponCodes, receiptToken,

@@ -357,7 +357,11 @@ const CheckoutContent = component$(() => {
     await resetOrderState();
     if (!current()) return;
     // Plan v3.1 §3.5: begin_checkout once per normal checkout view (consent-gated by the analytics bus; minor units).
-    track({ name: 'begin_checkout', currency: localCart.cart.currency, value: localCart.cart.subtotal, itemCount: localCart.cart.lines.reduce((n, l) => n + l.quantity, 0) });
+    track({
+      name: 'begin_checkout', currency: localCart.cart.currency, value: localCart.cart.subtotal,
+      itemCount: localCart.cart.lines.reduce((n, l) => n + l.quantity, 0),
+      items: localCart.cart.lines.slice(0, 20).map((l) => ({ sku: l.sku, name: l.productName || l.name, price: l.unitPrice, quantity: l.quantity })),
+    });
     await configRead;
     if (!current()) return;
     await loadNormalCheckout(gen);

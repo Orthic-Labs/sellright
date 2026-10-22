@@ -40,4 +40,13 @@ describe('cart-link seed', () => {
 		await runCartSeed(new URLSearchParams('products=A&country=united'), p);
 		expect(log[0]).toBe('country undefined'); // only an ISO-2 code is an override
 	});
+
+	it('every error redirect keeps the landing UTM + oppref parameters (and nothing else)', async () => {
+		const q = '&utm_source=chatgpt&utm_medium=cpc&utm_campaign=rh_us_shirts_202610&utm_content=test&oppref=abc&other=1';
+		const keep = 'utm_source=chatgpt&utm_medium=cpc&utm_campaign=rh_us_shirts_202610&utm_content=test&oppref=abc';
+		expect(await runCartSeed(new URLSearchParams(`products=A:0${q}`), ports({}).p)).toBe(`/checkout/?error=invalid_cart_link&${keep}`);
+		expect(await runCartSeed(new URLSearchParams(`products=A${q}`), ports({ A: { kind: 'error', message: null } }, 0).p)).toBe(`/checkout/?error=no_valid_products&${keep}`);
+		const throwing = { ...ports({}).p, discard: async () => { throw new Error('locks'); } };
+		expect(await runCartSeed(new URLSearchParams(`products=A${q}`), throwing)).toBe(`/checkout/?error=cart_link_failed&${keep}`);
+	});
 });

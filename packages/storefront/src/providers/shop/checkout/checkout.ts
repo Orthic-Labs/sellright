@@ -9,6 +9,7 @@
  * legacy hand-rolled `sr()` helper and never a legacy shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
+import { storedAttribution } from '~/sellright/attribution';
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
 import type { CheckoutSnapshot } from '~/hooks/pre-submit-stock';
 import type { ServerCart } from '~/sellright/types/cart';
@@ -120,6 +121,8 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		throw new QuoteChangedError(snapshot.quote, snapshot.quoteHash);
 	}
 
+	// Landing UTM + oppref (consent-gated, last touch this session); stored on the order, never part of its idempotency fingerprint.
+	const attribution = storedAttribution();
 	const body: CheckoutRequest = {
 		items: form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }],
 		email: form.email,
@@ -133,6 +136,7 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
 		cartToken: snapshot.token,
 		expectedRevision: snapshot.revision,
+		...(attribution ? { attribution } : {}),
 	};
 
 	try {

@@ -4356,6 +4356,43 @@
                     "additionalProperties": {
                       "nullable": true
                     }
+                  },
+                  "attribution": {
+                    "type": "object",
+                    "properties": {
+                      "utm_source": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "utm_medium": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "utm_campaign": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "utm_content": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "utm_term": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "oppref": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Landing-URL attribution (UTM parameters and oppref) to store on the order. Allowlisted keys only; each value at most 256 printable characters."
                   }
                 },
                 "required": [
