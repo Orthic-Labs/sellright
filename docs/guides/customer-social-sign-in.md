@@ -19,7 +19,7 @@ Requires a paid Apple Developer membership (Account Holder or Admin).
 
 1. **Certificates, Identifiers & Profiles → Identifiers → App IDs:** an App ID with *Sign in with Apple* enabled.
 2. **Identifiers → Services IDs:** create one (for example `com.yourstore.web`), enable *Sign in with Apple*, and
-   configure it with the App ID above, your storefront domain, and the return URL `https://<domain>/sign-in/`.
+   configure it with the App ID above, your storefront domain, and the return URL `https://<domain>/sign-in` (no trailing slash; it must match exactly).
 3. **Sign in with Apple for Email Communication:** register your sending domain or address, so receipts reach
    customers who hide their email.
 4. Paste the **Services ID** into admin.

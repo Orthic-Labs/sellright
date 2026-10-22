@@ -229,7 +229,7 @@ export default function SettingsPage() {
                 <button className="btn-ghost" onClick={() => setAid(null)}>Cancel</button>
                 <button className="btn-primary" disabled={saveApple.isPending} onClick={() => saveApple.mutate()}>{saveApple.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
-              <p className="text-xs text-gray-500">Paste your Sign in with Apple <b>Services ID</b> (Apple Developer, Identifiers, Services IDs). In Apple's configuration for it, add your storefront domain and the return URL <span className="font-mono">{cfg.storefrontUrl ? `${String(cfg.storefrontUrl).replace(/\/+$/, '')}/sign-in/` : 'https://your-store/sign-in/'}</span>. The storefront shows the Apple button within a minute of saving.</p>
+              <p className="text-xs text-gray-500">Paste your Sign in with Apple <b>Services ID</b> (Apple Developer, Identifiers, Services IDs). In Apple's configuration for it, add your storefront domain and the return URL <span className="font-mono">{cfg.storefrontUrl ? `${String(cfg.storefrontUrl).replace(/\/+$/, '')}/sign-in` : 'https://your-store/sign-in'}</span>. The storefront shows the Apple button within a minute of saving.</p>
               {aid !== null ? (
                 <Field label="Apple Services ID" htmlFor="s-aid"><input id="s-aid" className="input font-mono text-xs max-w-lg" value={aid} onChange={(e) => setAid(e.target.value)} placeholder="com.example.store.signin" /></Field>
               ) : (
