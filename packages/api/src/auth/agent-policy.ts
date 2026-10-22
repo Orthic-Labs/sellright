@@ -45,8 +45,8 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
     'POST /v1/admin/step-up/passkey/options', 'POST /v1/admin/step-up/passkey/verify',
     'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook', 'PUT /v1/admin/email/settings',
-    // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Stripe live/test switch
-    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/payments/stripe-mode',
+    // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Apple Services ID, Stripe live/test switch
+    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/apple', 'PATCH /v1/admin/settings/payments/stripe-mode',
     // webhook endpoints mint a signing secret and choose where store events (order + customer data) are POSTed (P1c)
     'POST /v1/admin/webhooks', 'PATCH /v1/admin/webhooks/:id'),
   // installation / system operations
