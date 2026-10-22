@@ -32,10 +32,10 @@
   },
   "devDependencies": {
     "@typescript-eslint/parser": "8.71.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "10.13.0",
-    "jscpd": "^5.4.1",
-    "knip": "^6.42.0",
-    "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "@typescript/native": "npm:typescript@^7.0.2"
+    "jscpd": "^5.4.2",
+    "knip": "^6.42.1",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }
