@@ -162,6 +162,27 @@ export function createProviderCases(fixture: Fixture, transport: AuthorizationTr
         proof.equal(audits.map(row => ({ actor: row.actor, data: row.data })), [{ actor: actor(principal), data: { mode: 'test', endpointId: result.endpointId, created: true, recreated: false } }], 'webhook provisioning audit identifies actual operator', 'state');
       } };
     } },
+    { key: 'POST /v1/admin/payments/settings/stripe/{mode}/payment-method-domains', access: 'manage', agentGroup: 'credentials', writeBeforeManage: true, async prepare(principal) {
+      await source.stripe();
+      await source.patchConfig({ storefrontUrl: 'https://shop.matrix.invalid' });
+      transport.freshStripeDomains();
+      const start = transport.calls.length;
+      const auditsBefore = await rows("SELECT id FROM audit_log WHERE store_id=$1 AND action='payment_method_domain_register'", [fixture.storeId]);
+      return { url: '/v1/admin/payments/settings/stripe/test/payment-method-domains', async verify(response: Response, proof: MatrixProof) {
+        const result = await json(response);
+        proof.equal(result.mode, 'test', 'registration bound to requested mode');
+        proof.equal(result.domains.map((d: Json) => ({ ...d, id: undefined })), [{ domain: 'shop.matrix.invalid', id: undefined, outcome: 'created', enabled: true, applePay: 'active', googlePay: 'active' }],
+          'store-owned storefront domain registered once');
+        proof.ok(/^pmd_matrix_\d+$/.test(result.domains[0].id), 'provider-minted domain identity');
+        const calls = captured(start); proof.equal(calls.length, 2, 'domain lookup then create provider calls', 'state');
+        proof.equal({ method: calls[0]!.method, url: calls[0]!.url }, { method: 'GET', url: 'https://api.stripe.com/v1/payment_method_domains?domain_name=shop.matrix.invalid&limit=1' }, 'SDK looks up the exact domain first', 'state');
+        proof.equal({ method: calls[1]!.method, url: calls[1]!.url }, { method: 'POST', url: 'https://api.stripe.com/v1/payment_method_domains' }, 'SDK creates the domain registration', 'state');
+        proof.equal(Object.fromEntries(new URLSearchParams(calls[1]!.body)), { domain_name: 'shop.matrix.invalid', enabled: 'true' }, 'exact registration payload', 'state');
+        const audits = (await rows("SELECT id,actor,data FROM audit_log WHERE store_id=$1 AND action='payment_method_domain_register'", [fixture.storeId])).filter(row => !auditsBefore.some(old => old.id === row.id));
+        proof.equal(audits.map(row => ({ actor: row.actor, data: row.data })), [{ actor: actor(principal), data: { mode: 'test', domains: [{ domain: 'shop.matrix.invalid', outcome: 'created', applePay: 'active', googlePay: 'active' }] } }],
+          'domain registration audit identifies actual operator', 'state');
+      } };
+    } },
     { key: 'POST /v1/admin/email/settings/test-send', access: 'write', async prepare() {
       await source.smtp();
       const before = await config(), to = 'test-' + randomUUID() + '@matrix.invalid', start = transport.calls.length;
