@@ -5,6 +5,8 @@ import { CheckoutEmptyCart } from './CheckoutEmptyCart';
 import { CheckoutMobileCta } from './CheckoutCta';
 import { CheckoutOrderSummary } from './CheckoutOrderSummary';
 import { CheckoutPaymentPanel } from './CheckoutPaymentPanel';
+import { CheckoutPaymentMessaging } from './CheckoutPaymentMessaging';
+import type { PaymentMessagingOptions } from './payment-messaging';
 import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
 import type { ShopConfig } from '~/sellright/types/checkout';
@@ -16,6 +18,8 @@ interface CheckoutPageViewProps {
   checkoutState: any;
   checkoutValidation: any;
   formattedTotal: Signal<string | null>;
+  /** Pay-over-time messaging shown at the top of checkout; null hides it. */
+  paymentMessaging: ReadonlySignal<PaymentMessagingOptions | null>;
   gatewayConfirmTrigger: Signal<number>;
   totalConfirmed: Signal<boolean>;
   hasMixedPreOrder: { value: boolean };
@@ -94,6 +98,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
           }))}
         />
         <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
+          <CheckoutPaymentMessaging options={props.paymentMessaging.value} />
           <div class="checkout-columns lg:flex lg:gap-x-8 xl:gap-x-12">
             <CheckoutOrderSummary
               formattedTotal={props.formattedTotal}

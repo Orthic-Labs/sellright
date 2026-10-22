@@ -4,6 +4,8 @@ import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components/checkout/checkout-country';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { track } from '~/sellright/analytics';
 import { useCart, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
@@ -12,6 +14,7 @@ import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { formatCents } from '~/hooks/checkout-total';
+import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
 import { getShopConfig, getShippingQuote } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
@@ -195,12 +198,22 @@ const CheckoutContent = component$(() => {
 
   // Once the order exists its server-priced grandTotal is the amount that will
   // be charged, so every total on the page shows THAT, never the estimate.
-  const formattedTotal = useComputed$(() => {
+  const chargeTotalCents = useComputed$(() => {
     const orderPlaced = srState.phase === 'paying' && srState.grandTotal > 0;
-    const cents = (orderPlaced ? srState.grandTotal : checkoutTotalCents.value) || 0;
+    return (orderPlaced ? srState.grandTotal : checkoutTotalCents.value) || 0;
+  });
+  const formattedTotal = useComputed$(() => {
+    const cents = chargeTotalCents.value;
     if (cents === 0) return null;
     return formatCents(cents);
   });
+  // Pay-over-time messaging at the top of checkout, for the same amount (see components/checkout/payment-messaging.ts).
+  const paymentMessaging = useComputed$(() => paymentMessagingOptions({
+    gatewayConfigured: shopConfig.value?.stripeConfigured,
+    publishableKey: stripePublishableKey.value,
+    amountCents: chargeTotalCents.value,
+    currency: cartCurrency.value,
+  }));
 
   const applyShopConfig = $((cfg: ShopConfig) => {
     shopConfig.value = cfg;
@@ -313,16 +326,19 @@ const CheckoutContent = component$(() => {
     await loadCartIfNeeded(localCart);
     if (!isCurrentView(paymentInit, gen)) return;
 
-    if (!appState.shippingAddress.countryCode) {
-      const cookieCountry = getCookie(COUNTRY_COOKIE);
-      if (cookieCountry) {
-        appState.shippingAddress.countryCode = cookieCountry;
-      } else {
-        const storedCountry = sessionStorage.getItem('countryCode');
-        if (storedCountry) {
-          appState.shippingAddress.countryCode = storedCountry;
-        }
-      }
+    // Start on the cart's ship country (what the drawer showed and the cart quote priced), never on an empty select;
+    // a saved or entered address keeps its own country. See components/checkout/checkout-country.ts.
+    let sessionCountry: string | null = null;
+    try { sessionCountry = sessionStorage.getItem('countryCode'); } catch { /* storage blocked */ }
+    const startCountry = resolveCheckoutCountry({
+      current: appState.shippingAddress.countryCode,
+      addressEntered: !canRestorePreferredCountry(appState.shippingAddress),
+      cartShipCountry: CountryPreferenceService.getCountry(),
+      cookie: getCookie(COUNTRY_COOKIE),
+      session: sessionCountry,
+    }, appState.availableCountries ?? []);
+    if (startCountry && startCountry !== appState.shippingAddress.countryCode) {
+      appState.shippingAddress.countryCode = startCountry;
     }
 
     isCartEmpty.value = localCart.cart.lines.length === 0;
@@ -699,6 +715,7 @@ const CheckoutContent = component$(() => {
       checkoutState={checkoutState}
       checkoutValidation={checkoutValidation}
       formattedTotal={formattedTotal}
+      paymentMessaging={paymentMessaging}
       hasMixedPreOrder={hasMixedPreOrder}
       isCartEmpty={isCartEmpty}
       isOrderProcessing={isOrderProcessing}
