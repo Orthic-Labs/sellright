@@ -368,10 +368,12 @@ export interface SrShippingMethod {
   rate: number;
 }
 
-export const srShippingMethods = (country?: string, subtotal = 0) => {
+export const srShippingMethods = (country?: string, subtotal = 0, discountedSubtotalWithTax?: number) => {
   const q = new URLSearchParams();
   if (country) q.set('country', country);
   q.set('subtotal', String(subtotal));
+  // Methods whose calculator uses subtotalBasis 'discounted_with_tax' are ineligible without this (the checkout sends it too).
+  if (discountedSubtotalWithTax !== undefined) q.set('discountedSubtotalWithTax', String(Math.max(0, Math.round(discountedSubtotalWithTax))));
   return sr<{ methods: SrShippingMethod[] }>(`/v1/shop/shipping-methods?${q.toString()}`);
 };
 

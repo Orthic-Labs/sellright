@@ -231,6 +231,12 @@ describe('shop config + shipping', () => {
 		expect(lastPath()).toBe('/v1/shop/shipping-methods?country=US&subtotal=5000');
 		expect(res.methods[0].code).toBe('std');
 	});
+
+	it('shipping methods query carries the discounted subtotal when given (discounted_with_tax calculators need it)', async () => {
+		enqueue(respond(200, { methods: [] }));
+		await srShippingMethods('US', 7500, 7500);
+		expect(lastPath()).toBe('/v1/shop/shipping-methods?country=US&subtotal=7500&discountedSubtotalWithTax=7500');
+	});
 });
 
 describe('gateway payment contract', () => {

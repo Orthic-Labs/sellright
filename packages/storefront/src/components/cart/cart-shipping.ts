@@ -13,7 +13,7 @@ export const fetchCartShippingMethod = async (
  orderTotalAfterDiscount: number,
 ): Promise<EligibleShippingMethods | null> => {
  try {
-  const { methods } = await srShippingMethods(countryCode, Math.max(orderTotalAfterDiscount, 0));
+  const { methods } = await srShippingMethods(countryCode, Math.max(orderTotalAfterDiscount, 0), Math.max(orderTotalAfterDiscount, 0));
   if (!methods.length) return null;
   const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
   return {
