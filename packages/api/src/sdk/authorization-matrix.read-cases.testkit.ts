@@ -83,7 +83,7 @@ export function createReadCases(fixture: MatrixReadFixture): MatrixCase[] {
     { path: '/v1/admin/sheerid/verifications', verify: list({ id: 'string', verificationId: 'nullable-string', programId: 'string', category: 'nullable-string', status: 'string', createdAt: 'string' }) },
     { path: '/v1/admin/disputes', verify: list({ id: 'string', provider: 'string', providerRef: 'string', amount: 'nullable-number', currency: 'nullable-string', status: 'string', createdAt: 'string' }) },
     { path: '/v1/admin/me', global: true, verify(body: Json, proof: MatrixProof, principal: MatrixPrincipal) {
-      fields(body, { email: 'string', isInstallationAdmin: 'boolean', stores: 'array', totpEnabled: 'boolean', totpEnrollmentRequired: 'boolean' }, proof);
+      fields(body, { email: 'string', isInstallationAdmin: 'boolean', stores: 'array', totpEnabled: 'boolean', passkeyEnabled: 'boolean', totpEnrollmentRequired: 'boolean' }, proof);
       proof.equal(body.kind, principal === 'agent' ? 'agent' : 'human', 'principal kind');
       proof.equal(body.auth, principal === 'agent' ? 'api_token' : 'session', 'credential kind');
       const stores = rows(body, proof, { storeId: 'string', slug: 'string', role: 'string' }, 'stores');

@@ -10,6 +10,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
+import { totpQrSvg } from '../auth/totp-qr.js';
+import { resolveStore } from '../store-context.js';
+import { storeIdentityFromConfig } from './store-identity.js';
+import { attemptPendingTotpEnrollment, consumePendingTotpEnrollment, setPendingTotpEnrollment, adminPasskeyCount } from '../auth/admin-auth-challenge.js';
 import { AdminFactorMutationError, getAdminCredentialsById, mutateAdminSecondFactor } from '../auth/admin-staff.js';
 import { changeAdminPassword, type AdminPrincipal } from '../auth/admin-session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
@@ -49,51 +53,95 @@ async function audit(c: Context, admin: AdminPrincipal, action: string, data?: R
 adminSecurity.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/2fa', summary: '2FA status for the signed-in admin',
-    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean(), required: z.boolean(), recoveryCodesRemaining: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean(), required: z.boolean(), recoveryCodesRemaining: z.number().int(), passkeys: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const creds = await getAdminCredentialsById(admin.id);
     const enabled = !!creds?.totpSecret;
-    return c.json({ enabled, required: admin.totpRequired === true, recoveryCodesRemaining: enabled ? await remainingRecoveryCodes(admin.id) : 0 }, 200);
+    const passkeys = await adminPasskeyCount(admin.id);
+    return c.json({ enabled, required: admin.totpRequired === true, recoveryCodesRemaining: enabled || passkeys > 0 ? await remainingRecoveryCodes(admin.id) : 0, passkeys }, 200);
   }),
 );
 
+/** Issue #333: within this window enrolment needs only the 6-digit code (no password re-entry). */
+const ENROLL_FRESH_MS = 15 * 60 * 1000;
+const freshForEnrollment = (admin: AdminPrincipal) => admin.kind === 'human' && (
+  // a current-epoch step-up within the window, or
+  (!!admin.stepUpAt && Date.now() - admin.stepUpAt.getTime() <= ENROLL_FRESH_MS && admin.stepUpEpoch !== null && admin.stepUpEpoch === admin.securityEpoch)
+  // the account's FIRST second factor, from a session signed in within the window (that sign-in proved the password).
+  || (!admin.totpEnabled && !admin.passkeyEnabled && !!admin.sessionCreatedAt && Date.now() - admin.sessionCreatedAt.getTime() <= ENROLL_FRESH_MS));
+/** Issuer shown in the authenticator app: the administered store's display name (store identity, as on the sign-in
+ *  screens), for the x-store-slug store the admin belongs to, else their first store. */
+async function issuerFor(c: Context, admin: AdminPrincipal): Promise<string> {
+  const slug = c.req.header('x-store-slug');
+  const st = admin.stores.find((x) => x.slug === slug) ?? admin.stores[0];
+  if (!st) return 'SellRight';
+  try { return storeIdentityFromConfig(await resolveStore(st.slug), true).storeName.trim() || st.name; } catch { return st.name?.trim() || 'SellRight'; }
+}
+
 adminSecurity.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/2fa/setup', summary: 'Start 2FA setup (returns a secret to confirm)',
-    responses: { 200: { description: 'OK', content: J(z.object({ secret: z.string(), otpauthUri: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    method: 'post', path: '/v1/admin/2fa/setup', summary: 'Start 2FA setup: a NEW pending secret for this session on every call (QR + manual key); replaces any earlier pending one',
+    responses: {
+      200: { description: 'OK', content: J(z.object({ secret: z.string(), otpauthUri: z.string(), qrSvg: z.string(), issuer: z.string(), account: z.string(), passwordRequired: z.boolean() })) },
+      401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Already enabled', ...errBody },
+    },
   }),
   async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
+    const { admin, token } = await requireAdmin(c);
     requireHuman(admin); // agents have no 2FA (deny set already blocks the route; belt and braces)
-    const secret = newTotpSecret(); // not persisted until /enable confirms a code
-    return c.json({ secret, otpauthUri: otpauthUri(secret, admin.email) }, 200);
+    const creds = await getAdminCredentialsById(admin.id);
+    if (!creds) throw new HttpError(401, 'not authenticated', 'NOT_AUTHENTICATED');
+    if (creds.totpSecret) throw new HttpError(409, '2FA already enabled — disable it first');
+    // The pending secret lives server-side (sealed), bound to THIS session; it rotates on every visit until confirmed.
+    const secret = newTotpSecret();
+    await setPendingTotpEnrollment(admin.id, token, creds.securityEpoch, secret);
+    const issuer = await issuerFor(c, admin);
+    const uri = otpauthUri(secret, admin.email, issuer);
+    return c.json({ secret, otpauthUri: uri, qrSvg: totpQrSvg(uri), issuer, account: admin.email, passwordRequired: !freshForEnrollment(admin) }, 200);
   }),
 );
 
 adminSecurity.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA (re-proves the current password); returns one-time recovery codes',
-    request: { body: { content: J(z.object({ secret: z.string().min(16).max(64), code: z.string(), password: z.string().min(1) })) } },
+    method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA with the 6-digit code for this session\'s pending secret (the current password only when the session is not freshly signed in); returns one-time recovery codes',
+    request: { body: { content: J(z.object({
+      code: z.string().max(16),
+      password: z.string().min(1).optional(),
+      /** Legacy API clients: confirm a secret they hold themselves (always with the current password). */
+      secret: z.string().min(16).max(64).optional(),
+    })) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ enabled: z.boolean(), recoveryCodes: z.array(z.string()) })) },
-      401: { description: 'Unauthorized / wrong password', ...errBody }, 409: { description: 'Bad code or already enabled', ...errBody }, 429: tooMany,
+      401: { description: 'Unauthorized / wrong or missing password (PASSWORD_REQUIRED)', ...errBody }, 409: { description: 'Bad code, setup expired, or already enabled', ...errBody }, 429: tooMany,
     },
   }),
   async (c) => guard(c, async () => {
     const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
-    const { secret, code, password } = c.req.valid('json');
+    const { secret: clientSecret, code, password } = c.req.valid('json');
     // ra-sec: refuse to overwrite an existing factor. /disable requires the current
     // code, so replacing 2FA always proves possession of the old device.
     const creds = await getAdminCredentialsById(admin.id);
     if (creds?.totpSecret) throw new HttpError(409, '2FA already enabled — disable it first');
+    // A hijacked OLD session cookie alone cannot enrol an attacker's device: outside the fresh sign-in window (and for
+    // the legacy client-held secret) the current password is re-proved in this request.
+    const needPassword = clientSecret !== undefined || !freshForEnrollment(admin);
+    if (needPassword && !password) throw new HttpError(401, 'enter your current password to confirm', 'PASSWORD_REQUIRED');
     const gate = await credentialGate(c, admin);
-    if (!(await verifyPassword(password, creds?.passwordHash ?? null))) await gate.fail('invalid password');
+    if (needPassword && !(await verifyPassword(password!, creds?.passwordHash ?? null))) await gate.fail('invalid password');
+    let secret = clientSecret;
+    let pendingHash: string | undefined;
+    if (!secret) {
+      const pending = await attemptPendingTotpEnrollment(admin.id, token);
+      if (!pending || pending.epoch !== creds?.securityEpoch) throw new HttpError(409, 'this setup expired — start again to get a new code', 'SETUP_EXPIRED');
+      secret = pending.secret; pendingHash = pending.tokenHash;
+    }
     if (!(await verifyTotpOnce(admin.id, secret, code))) await gate.fail('code did not match — check your authenticator app', 409);
-    await gate.ok();
-    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, passwordHash: creds!.passwordHash, totpSecret: null, totpVersion: creds!.totpVersion, action: 'enable', secret });
+    if (needPassword) await gate.ok(); // only a verified PASSWORD resets the password-guessing budgets
+    if (pendingHash && !(await consumePendingTotpEnrollment(pendingHash))) throw new HttpError(409, 'this setup expired — start again to get a new code', 'SETUP_EXPIRED');
+    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, passwordHash: creds!.passwordHash, totpSecret: null, totpVersion: creds!.totpVersion, securityEpoch: creds!.securityEpoch, action: 'enable', secret });
     if (!changed) throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
     const { recoveryCodes } = changed;
     await audit(c, admin, '2fa_enable');

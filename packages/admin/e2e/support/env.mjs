@@ -13,7 +13,9 @@ export const API_PORT = Number(process.env.E2E_API_PORT ?? 3399);
 export const ADMIN_PORT = Number(process.env.E2E_ADMIN_PORT ?? 4399);
 export const SMTP_PORT = Number(process.env.E2E_SMTP_PORT ?? 3398);
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
-export const ADMIN_URL = `http://127.0.0.1:${ADMIN_PORT}`;
+// The admin origin is `localhost` (a secure context with a valid WebAuthn RP ID — an IP address is not one), so the
+// passkey specs run against the real relying party (issue #333). The API stays on 127.0.0.1.
+export const ADMIN_URL = `http://localhost:${ADMIN_PORT}`;
 
 export const DB_NAME = 'sellright_admin_e2e';
 // Maintenance connection (used only to DROP/CREATE the throwaway database).

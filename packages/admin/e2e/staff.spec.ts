@@ -38,7 +38,7 @@ async function signInAs(browser: Browser, email: string) {
 	await page.goto('/login');
 	await field(page, 'Email').fill(email);
 	await field(page, 'Password').fill(PASSWORD);
-	await page.getByRole('button', { name: 'Sign in' }).click();
+	await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 	await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
 	return { context, page };
 }
@@ -156,11 +156,11 @@ test.describe('staff', () => {
 		await field(page, 'Password').fill('short');
 		await field(page, 'Confirm password').fill('short');
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
-		await expect(page.getByText('Password must be at least 8 characters.')).toBeVisible();
+		await expect(page.getByText('Use at least 8 characters.')).toBeVisible();
 		await field(page, 'Password').fill(PASSWORD);
 		await field(page, 'Confirm password').fill(`${PASSWORD}x`);
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
-		await expect(page.getByText('Passwords do not match.')).toBeVisible();
+		await expect(page.getByText('The passwords don’t match.')).toBeVisible();
 		await field(page, 'Confirm password').fill(PASSWORD);
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
@@ -197,9 +197,9 @@ test.describe('staff', () => {
 		await field(page, 'Password').fill('a-brand-new-pass');
 		await field(page, 'Confirm password').fill('a-brand-new-pass');
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
-		await expect(page.getByText('This address already has an account. Enter its current password to accept.')).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Join with your existing account' })).toBeVisible();
 		await field(page, 'Current password').fill(PASSWORD);
-		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await page.getByRole('button', { name: 'Sign in and accept' }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
 		await context.close();
 		// password unchanged: the old one still signs in, the attempted new one does not
@@ -226,10 +226,11 @@ test.describe('staff', () => {
 		await field(page, 'Password').fill('irrelevant-new-pass');
 		await field(page, 'Confirm password').fill('irrelevant-new-pass');
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
-		await expect(page.getByText('This address already has an account. Enter its current password to accept.')).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Join with your existing account' })).toBeVisible();
 		await field(page, 'Current password').fill(PASSWORD);
-		await field(page, '2FA code (if enabled)').fill(totpAt(secret, totpStep() + 1)); // a different step than /2fa/enable used
-		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await page.getByRole('button', { name: 'Sign in and accept' }).click();
+		// #333: the code step follows the verified password; a different step than /2fa/enable used; auto-submits at 6 digits
+		await field(page, 'Authentication code').fill(totpAt(secret, totpStep() + 1));
 		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 		await context.close();
@@ -239,6 +240,6 @@ test.describe('staff', () => {
 
 	test('the accept-invite screen without a token explains how to get one', async ({ page }) => {
 		await page.goto('/accept-invite');
-		await expect(page.getByRole('heading', { name: 'No invite token' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'This invitation link is incomplete' })).toBeVisible();
 	});
 });

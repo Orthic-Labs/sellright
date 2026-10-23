@@ -14183,7 +14183,7 @@
     },
     "/v1/admin/login": {
       "post": {
-        "summary": "Admin login",
+        "summary": "Admin login, step 1 (email + password). An account with a second factor gets a single-use challenge for POST /v1/admin/login/2fa, never a session",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14195,10 +14195,12 @@
                     "format": "email"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                   },
                   "totp": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "returnToken": {
                     "type": "boolean"
@@ -14214,7 +14216,7 @@
         },
         "responses": {
           "200": {
-            "description": "OK or 2FA required",
+            "description": "Signed in, or (twoFactorRequired) the password was right and the code step follows",
             "content": {
               "application/json": {
                 "schema": {
@@ -14225,9 +14227,6 @@
                     },
                     "csrfToken": {
                       "type": "string"
-                    },
-                    "twoFactorRequired": {
-                      "type": "boolean"
                     },
                     "totpEnrollmentRequired": {
                       "type": "boolean"
@@ -14272,6 +14271,26 @@
                           "role"
                         ]
                       }
+                    },
+                    "twoFactorRequired": {
+                      "type": "boolean"
+                    },
+                    "challengeToken": {
+                      "type": "string"
+                    },
+                    "expiresInSeconds": {
+                      "type": "integer"
+                    },
+                    "methods": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "totp",
+                          "passkey",
+                          "recovery_code"
+                        ]
+                      }
                     }
                   }
                 }
@@ -14280,6 +14299,372 @@
           },
           "401": {
             "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/login/2fa": {
+      "post": {
+        "summary": "Admin login, step 2: redeem the step-1 challenge once with a TOTP or recovery code",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "challengeToken": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "returnToken": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "challengeToken",
+                  "code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "csrfToken": {
+                      "type": "string"
+                    },
+                    "totpEnrollmentRequired": {
+                      "type": "boolean"
+                    },
+                    "admin": {
+                      "type": "object",
+                      "properties": {
+                        "email": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "email"
+                      ]
+                    },
+                    "stores": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "storeId": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "storeId",
+                          "slug",
+                          "name",
+                          "currency",
+                          "role"
+                        ]
+                      }
+                    },
+                    "twoFactorRequired": {
+                      "type": "boolean"
+                    },
+                    "challengeToken": {
+                      "type": "string"
+                    },
+                    "expiresInSeconds": {
+                      "type": "integer"
+                    },
+                    "methods": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "totp",
+                          "passkey",
+                          "recovery_code"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/branding": {
+      "get": {
+        "summary": "Pre-session: the store identity shown on the admin sign-in screens (name, logo, theme tokens) for the resolved host",
+        "responses": {
+          "200": {
+            "description": "OK (neutral default for an unknown host or an unpublished store)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "storeName": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "logoUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "theme": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "primary": {
+                          "type": "string"
+                        },
+                        "background": {
+                          "type": "string"
+                        },
+                        "surface": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "textMuted": {
+                          "type": "string"
+                        },
+                        "border": {
+                          "type": "string"
+                        },
+                        "fontDisplay": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "fontBody": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "primary",
+                        "background",
+                        "surface",
+                        "text",
+                        "textMuted",
+                        "border",
+                        "fontDisplay",
+                        "fontBody"
+                      ]
+                    },
+                    "fontFaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "family": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "weight": {
+                            "type": "string"
+                          },
+                          "style": {
+                            "type": "string",
+                            "enum": [
+                              "normal",
+                              "italic"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "family",
+                          "url",
+                          "weight",
+                          "style"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "storeName",
+                    "logoUrl",
+                    "theme",
+                    "fontFaces"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/password/forgot": {
+      "post": {
+        "summary": "Pre-session: e-mail a single-use admin password reset link. Always the same answer, whether or not the address has an account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 320,
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/password/reset": {
+      "post": {
+        "summary": "Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "token",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "RESET_INVALID",
             "content": {
               "application/json": {
                 "schema": {
@@ -14400,6 +14785,9 @@
                     "totpEnabled": {
                       "type": "boolean"
                     },
+                    "passkeyEnabled": {
+                      "type": "boolean"
+                    },
                     "totpEnrollmentRequired": {
                       "type": "boolean"
                     }
@@ -14411,6 +14799,7 @@
                     "auth",
                     "stores",
                     "totpEnabled",
+                    "passkeyEnabled",
                     "totpEnrollmentRequired"
                   ]
                 }
@@ -24445,6 +24834,38 @@
                       }
                     }
                   },
+                  "fontFaces": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "family": {
+                          "type": "string",
+                          "maxLength": 160
+                        },
+                        "url": {
+                          "type": "string",
+                          "pattern": "^\\/[A-Za-z0-9/._-]{1,200}\\.woff2$"
+                        },
+                        "weight": {
+                          "type": "string",
+                          "maxLength": 7
+                        },
+                        "style": {
+                          "type": "string",
+                          "enum": [
+                            "normal",
+                            "italic"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "family",
+                        "url"
+                      ]
+                    },
+                    "maxItems": 12
+                  },
                   "policies": {
                     "type": "object",
                     "properties": {
@@ -24655,12 +25076,16 @@
                     },
                     "recoveryCodesRemaining": {
                       "type": "integer"
+                    },
+                    "passkeys": {
+                      "type": "integer"
                     }
                   },
                   "required": [
                     "enabled",
                     "required",
-                    "recoveryCodesRemaining"
+                    "recoveryCodesRemaining",
+                    "passkeys"
                   ]
                 }
               }
@@ -24681,7 +25106,7 @@
     },
     "/v1/admin/2fa/setup": {
       "post": {
-        "summary": "Start 2FA setup (returns a secret to confirm)",
+        "summary": "Start 2FA setup: a NEW pending secret for this session on every call (QR + manual key); replaces any earlier pending one",
         "responses": {
           "200": {
             "description": "OK",
@@ -24695,11 +25120,27 @@
                     },
                     "otpauthUri": {
                       "type": "string"
+                    },
+                    "qrSvg": {
+                      "type": "string"
+                    },
+                    "issuer": {
+                      "type": "string"
+                    },
+                    "account": {
+                      "type": "string"
+                    },
+                    "passwordRequired": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "secret",
-                    "otpauthUri"
+                    "otpauthUri",
+                    "qrSvg",
+                    "issuer",
+                    "account",
+                    "passwordRequired"
                   ]
                 }
               }
@@ -24714,36 +25155,45 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Already enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/admin/2fa/enable": {
       "post": {
-        "summary": "Confirm + enable 2FA (re-proves the current password); returns one-time recovery codes",
+        "summary": "Confirm + enable 2FA with the 6-digit code for this session's pending secret (the current password only when the session is not freshly signed in); returns one-time recovery codes",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "secret": {
-                    "type": "string",
-                    "minLength": 16,
-                    "maxLength": 64
-                  },
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16
                   },
                   "password": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "secret": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 64
                   }
                 },
                 "required": [
-                  "secret",
-                  "code",
-                  "password"
+                  "code"
                 ]
               }
             }
@@ -24776,7 +25226,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized / wrong password",
+            "description": "Unauthorized / wrong or missing password (PASSWORD_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -24786,7 +25236,7 @@
             }
           },
           "409": {
-            "description": "Bad code or already enabled",
+            "description": "Bad code, setup expired, or already enabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -25512,7 +25962,7 @@
     },
     "/v1/admin/passkeys/register/options": {
       "post": {
-        "summary": "Start adding a passkey (recent step-up under the current security epoch; TOTP must be enrolled)",
+        "summary": "Start adding a passkey (recent step-up under the current security epoch; a passkey is a second factor on its own)",
         "requestBody": {
           "content": {
             "application/json": {
@@ -25579,7 +26029,7 @@
             }
           },
           "409": {
-            "description": "TOTP_REQUIRED_FIRST / TOO_MANY_PASSKEYS",
+            "description": "TOO_MANY_PASSKEYS",
             "content": {
               "application/json": {
                 "schema": {
@@ -25694,7 +26144,7 @@
         },
         "responses": {
           "200": {
-            "description": "OK",
+            "description": "OK (recoveryCodes: shown once, only when this passkey is the account's first second factor)",
             "content": {
               "application/json": {
                 "schema": {
@@ -25718,6 +26168,12 @@
                     "lastUsedAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "recoveryCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   },
                   "required": [
@@ -25830,6 +26286,110 @@
           },
           "403": {
             "description": "step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found / disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "LAST_SECOND_FACTOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Rename one of the signed-in admin's passkeys",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "label"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "deviceType": {
+                      "type": "string"
+                    },
+                    "backedUp": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "lastUsedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "deviceType",
+                    "backedUp",
+                    "createdAt",
+                    "lastUsedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {

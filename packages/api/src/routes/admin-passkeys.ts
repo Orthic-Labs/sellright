@@ -13,10 +13,11 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
 import { resolveAdmin, type AdminPrincipal } from '../auth/admin-session.js';
+import { secondFactorEnrollmentRequired } from '../auth/mfa-policy.js';
 import { PASSKEY_NONCE_COOKIE, clearPasskeyNonceCookie, cookie, newCsrf, setAuthCookies, setPasskeyNonceCookie } from '../auth/cookies.js';
 import { clientIp } from '../auth/rate-limit.js';
 import {
-  adminLoginOptions, adminLoginVerify, adminRegisterOptions, adminRegisterVerify, adminStepUpOptions, adminStepUpVerify, deleteAdminPasskey, listAdminPasskeys, type Refusal,
+  adminLoginOptions, adminLoginVerify, adminRegisterOptions, adminRegisterVerify, adminStepUpOptions, adminStepUpVerify, deleteAdminPasskeyChecked, listAdminPasskeys, renameAdminPasskey, type Refusal,
 } from '../auth/passkeys-admin.js';
 import { CHALLENGE_TTL_SECONDS, CREDENTIAL_ID_MAX, LABEL_MAX, RESPONSE_FIELD_MAX, adminRelyingParty, budgets, passkeysEnabled } from '../auth/passkeys-core.js';
 import { withStore } from '../db/client.js';
@@ -50,7 +51,6 @@ function raise(r: Refusal, generic: 401 | 409): never {
   switch (r.code) {
     case 'RATE_LIMITED': throw new HttpError(429, `too many attempts — try again in ${r.retry ?? 60}s`, 'RATE_LIMITED');
     case 'STEP_UP_REQUIRED': throw new HttpError(403, 'step_up_required');
-    case 'TOTP_REQUIRED_FIRST': throw new HttpError(409, 'set up your authenticator app before adding a passkey', 'TOTP_REQUIRED_FIRST');
     case 'TOO_MANY_PASSKEYS': throw new HttpError(409, 'this account already has the maximum number of passkeys', 'TOO_MANY_PASSKEYS');
     case 'CREDENTIAL_EXISTS': throw new HttpError(409, 'this passkey is already registered', 'CREDENTIAL_EXISTS');
     case 'PASSKEY_INVALID': throw new HttpError(generic, generic === 401 ? 'passkey could not be verified' : 'passkey ceremony could not be completed', generic === 401 ? 'PASSKEY_INVALID' : 'CEREMONY_INVALID');
@@ -109,7 +109,7 @@ adminPasskeys.openapi(
     const csrf = newCsrf();
     setAuthCookies(c, r.token, csrf);
     const admin = await resolveAdmin(r.token);
-    const totpEnrollmentRequired = !!admin && admin.totpRequired === true && !admin.totpEnabled;
+    const totpEnrollmentRequired = secondFactorEnrollmentRequired(admin);
     return c.json({ ...(returnToken === true ? { token: r.token } : {}), csrfToken: csrf, admin: { email: admin?.email ?? '' }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
   }),
 );
@@ -131,15 +131,16 @@ adminPasskeys.openapi(
 
 adminPasskeys.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/passkeys/register/options', summary: 'Start adding a passkey (recent step-up under the current security epoch; TOTP must be enrolled)',
+    method: 'post', path: '/v1/admin/passkeys/register/options', summary: 'Start adding a passkey (recent step-up under the current security epoch; a passkey is a second factor on its own)',
     request: { body: { content: J(z.object({}).passthrough()) } },
-    responses: { 200: { description: 'OK', content: J(Options) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: disabled, 409: { description: 'TOTP_REQUIRED_FIRST / TOO_MANY_PASSKEYS', ...errBody }, 429: tooMany },
+    responses: { 200: { description: 'OK', content: J(Options) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: disabled, 409: { description: 'TOO_MANY_PASSKEYS', ...errBody }, 429: tooMany },
   }),
   async (c) => guard(c, async () => {
     enabledOr404();
     const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
-    requireStepUpEpoch(admin);
+    // The step-up rule is enforced under the owner lock (passkeys-admin.ts lockEnrollSession): a current-epoch step-up,
+    // or — for the account's FIRST second factor only — a session signed in within the fresh-enrolment window (#333).
     const r = await adminRegisterOptions({ rp: adminRelyingParty(), adminId: admin.id, sessionToken: token });
     if (!r.ok) raise(r, 409);
     setPasskeyNonceCookie(c, r.nonce, CHALLENGE_TTL_SECONDS);
@@ -151,7 +152,7 @@ adminPasskeys.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/passkeys/register/verify', summary: 'Finish adding a passkey',
     request: { body: { content: J(z.object({ response: AttestationJSON, label: z.string().trim().min(1).max(LABEL_MAX) })) } },
-    responses: { 200: { description: 'OK', content: J(Summary) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: disabled, 409: { description: 'CEREMONY_INVALID / CREDENTIAL_EXISTS / TOO_MANY_PASSKEYS', ...errBody }, 429: tooMany },
+    responses: { 200: { description: 'OK (recoveryCodes: shown once, only when this passkey is the account\'s first second factor)', content: J(Summary.extend({ recoveryCodes: z.array(z.string()).optional() })) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: disabled, 409: { description: 'CEREMONY_INVALID / CREDENTIAL_EXISTS / TOO_MANY_PASSKEYS', ...errBody }, 429: tooMany },
   }),
   async (c) => guard(c, async () => {
     enabledOr404();
@@ -162,7 +163,7 @@ adminPasskeys.openapi(
     clearPasskeyNonceCookie(c);
     if (!r.ok) raise(r, 409);
     await audit(c, admin, 'passkey_add', { credential: r.passkey.id, label });
-    return c.json(toJson(r.passkey), 200);
+    return c.json({ ...toJson(r.passkey), ...(r.recoveryCodes ? { recoveryCodes: r.recoveryCodes } : {}) }, 200);
   }),
 );
 
@@ -170,7 +171,7 @@ adminPasskeys.openapi(
   createRoute({
     method: 'delete', path: '/v1/admin/passkeys/{id}', summary: 'Remove one of the signed-in admin\'s passkeys (recent step-up; clears step-up on every session)',
     request: { params: z.object({ id: z.string().uuid() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: { description: 'Not found / disabled', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'step_up_required', ...errBody }, 404: { description: 'Not found / disabled', ...errBody }, 409: { description: 'LAST_SECOND_FACTOR', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     enabledOr404();
@@ -178,9 +179,30 @@ adminPasskeys.openapi(
     requireHuman(admin);
     requireStepUpEpoch(admin);
     const { id } = c.req.valid('param');
-    if (!(await deleteAdminPasskey({ adminId: admin.id, id }))) throw new HttpError(404, 'passkey not found');
+    const r = await deleteAdminPasskeyChecked({ adminId: admin.id, id, secondFactorRequired: admin.totpRequired === true });
+    if (r === 'LAST_FACTOR') throw new HttpError(409, 'two-factor authentication is required for your account — add another passkey or set up an authenticator app before removing this one', 'LAST_SECOND_FACTOR');
+    if (!r) throw new HttpError(404, 'passkey not found');
     await audit(c, admin, 'passkey_remove', { credential: id });
     return c.json({ ok: true }, 200);
+  }),
+);
+
+adminPasskeys.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/passkeys/{id}', summary: 'Rename one of the signed-in admin\'s passkeys',
+    request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ label: z.string().trim().min(1).max(LABEL_MAX) })) } },
+    responses: { 200: { description: 'OK', content: J(Summary) }, 401: { description: 'Unauthorized', ...errBody }, 404: { description: 'Not found / disabled', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    enabledOr404();
+    const { admin } = await requireAdmin(c);
+    requireHuman(admin);
+    const { id } = c.req.valid('param');
+    const { label } = c.req.valid('json');
+    const row = await renameAdminPasskey({ adminId: admin.id, id, label });
+    if (!row) throw new HttpError(404, 'passkey not found');
+    await audit(c, admin, 'passkey_rename', { credential: id, label });
+    return c.json(toJson(row), 200);
   }),
 );
 

@@ -5,14 +5,14 @@ import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 class FakeApiError extends Error { code?: string; constructor(public status: number, m: string) { super(m); } }
-const caps = vi.fn(); const list = vi.fn(); const reg = vi.fn(); const del = vi.fn(); const post = vi.fn();
+const caps = vi.fn(); const list = vi.fn(); const reg = vi.fn(); const del = vi.fn(); const post = vi.fn(); const ren = vi.fn();
 vi.mock('../api', () => ({ api: { post: (p: string, b?: unknown) => post(p, b) }, ApiError: FakeApiError }));
 vi.mock('../lib/passkeys', async () => {
   const actual = await vi.importActual<typeof import('../lib/passkeys')>('../lib/passkeys');
   return {
     ...actual,
     browserSupportsWebAuthn: () => true,
-    capabilities: () => caps(), listPasskeys: () => list(), registerPasskey: (l: string) => reg(l), deletePasskey: (id: string) => del(id),
+    capabilities: () => caps(), listPasskeys: () => list(), registerPasskey: (l: string) => reg(l), deletePasskey: (id: string) => del(id), renamePasskey: (id: string, l: string) => ren(id, l),
     stepUpWithPasskey: vi.fn(),
   };
 });
@@ -74,16 +74,43 @@ describe('PasskeysSection', () => {
     done();
   });
 
-  it('shows TOTP_REQUIRED_FIRST message', async () => {
+  it('adding the first passkey without an authenticator shows the one-time recovery codes (#333)', async () => {
     caps.mockResolvedValue({ passkeys: true });
     list.mockResolvedValue([]);
-    const e = new FakeApiError(409, 'raw'); e.code = 'TOTP_REQUIRED_FIRST';
-    reg.mockRejectedValue(e);
+    reg.mockResolvedValue({ ...row, recoveryCodes: ['aaaa-bbbb-cccc-dddd', 'eeee-ffff-gggg-hhhh'] });
     const { container, done } = await mount();
     const label = await until(() => container.querySelector('#pk-label') as HTMLInputElement | null);
-    act(() => { setInput(label, 'X'); });
+    act(() => { setInput(label, 'Laptop'); });
     act(() => { button(container, 'Add a passkey').click(); });
-    await until(() => container.textContent?.includes('Set up your authenticator app first'));
+    await until(() => container.querySelector('[aria-label="Recovery codes"]'));
+    expect([...container.querySelectorAll('[aria-label="Recovery codes"] li')].map((l) => l.textContent)).toEqual(['aaaa-bbbb-cccc-dddd', 'eeee-ffff-gggg-hhhh']);
+    done();
+  });
+
+  it('renames a passkey (#333)', async () => {
+    caps.mockResolvedValue({ passkeys: true });
+    list.mockResolvedValue([row]);
+    ren.mockResolvedValue({ ...row, label: 'Desk' });
+    const { container, done } = await mount();
+    await until(() => container.querySelector('[aria-label="Rename Work laptop"]'));
+    act(() => { (container.querySelector('[aria-label="Rename Work laptop"]') as HTMLButtonElement).click(); });
+    act(() => { setInput(container.querySelector('input[aria-label="Passkey name"]') as HTMLInputElement, 'Desk'); });
+    act(() => { button(container, 'Save').click(); });
+    await until(() => ren.mock.calls.length > 0);
+    expect(ren).toHaveBeenCalledWith('p1', 'Desk');
+    done();
+  });
+
+  it('explains why the last factor cannot be removed while 2FA is required (#333)', async () => {
+    caps.mockResolvedValue({ passkeys: true });
+    list.mockResolvedValue([row]);
+    const e = new FakeApiError(409, 'raw'); e.code = 'LAST_SECOND_FACTOR';
+    del.mockRejectedValue(e);
+    const { container, done } = await mount();
+    await until(() => container.querySelector('[aria-label="Remove Work laptop"]'));
+    act(() => { (container.querySelector('[aria-label="Remove Work laptop"]') as HTMLButtonElement).click(); });
+    act(() => { button(container, 'Remove').click(); });
+    await until(() => container.textContent?.includes('Add another passkey or an authenticator app'));
     done();
   });
 

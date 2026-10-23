@@ -5,6 +5,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { hashAgentToken, newAgentToken } from '../auth/admin-api-token.js';
 import { openTotpSecret } from '../auth/totp-secret.js';
 import { verifyPassword } from '../auth/password.js';
+import { issuePasswordReset } from '../auth/admin-auth-challenge.js';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
 import { adminUserHandle } from '../auth/passkeys-core.js';
 import { adminAuthenticator, adminLoginAssertion, enrolAdminPasskey, passkeyNonceCookie, stepUp, withCookie } from './authorization-matrix.passkey.testkit.js';
@@ -234,6 +235,48 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
     } };
   }, { contract: 'public' });
 
+  // ── issue #333: two-step sign-in, sign-in branding, forgot/reset password ──
+  add('POST /v1/admin/login/2fa', PUBLIC, async () => {
+    // Step 2 redeems a genuine step-1 challenge; the supplied principal's credentials grant nothing.
+    const target = await targetHuman();
+    const step1 = await fixture.request('/v1/admin/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: target.email, password: target.password }) }, peer());
+    assert.equal(step1.status, 200, 'real step-1 prerequisite');
+    const { challengeToken, twoFactorRequired } = await step1.json() as { challengeToken: string; twoFactorRequired: boolean };
+    assert.equal(twoFactorRequired, true, 'enrolled identity gets the code step');
+    const before = (await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id])).length;
+    return { url: '/v1/admin/login/2fa', body: { challengeToken, code: factorCode(target), returnToken: true }, async verify(response: Response, proof: MatrixProof) {
+      const body = await json(response);
+      proof.equal(body.admin, { email: target.email }, 'challenge selects the account that passed step 1');
+      proof.equal(body.token, cookiesToken(response), 'explicit API token agrees with secure cookie');
+      proof.equal((await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id])).length, before + 1, 'exactly one session created', 'state');
+      proof.equal(await global('SELECT consumed_at IS NOT NULL AS used FROM admin_auth_challenge WHERE token_hash=$1', [digest(challengeToken)]), [{ used: true }], 'challenge consumed (single use)', 'state');
+    } };
+  }, { contract: 'public' });
+  add('GET /v1/admin/branding', PUBLIC, async () => ({ url: '/v1/admin/branding', async verify(response: Response, proof: MatrixProof) {
+    const body = await json(response);
+    proof.equal(Object.keys(body).sort(), ['fontFaces', 'logoUrl', 'storeName', 'theme'], 'display facts only, identical for every caller');
+  } }), { contract: 'public' });
+  add('POST /v1/admin/password/forgot', PUBLIC, async () => {
+    const before = await global("SELECT count(*)::int AS n FROM admin_auth_challenge WHERE kind='password_reset'");
+    return { url: '/v1/admin/password/forgot', body: { email: `nobody-${randomUUID()}@matrix.invalid` }, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ok: true }, 'same answer for every address');
+      proof.equal(await global("SELECT count(*)::int AS n FROM admin_auth_challenge WHERE kind='password_reset'"), before, 'an unknown address gets no reset token', 'state');
+    } };
+  }, { contract: 'public' });
+  add('POST /v1/admin/password/reset', PUBLIC, async () => {
+    const target = await targetHuman();
+    const row = await one('SELECT password_hash, security_epoch FROM admin_user WHERE id=$1', [target.id]);
+    const token = await issuePasswordReset(target.id, row.password_hash, row.security_epoch);
+    const next = `matrix-reset-${randomUUID()}`;
+    return { url: '/v1/admin/password/reset', body: { token, password: next }, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ok: true }, 'exact success response');
+      const after = await one('SELECT password_hash, totp_secret IS NOT NULL AS totp FROM admin_user WHERE id=$1', [target.id]);
+      proof.ok(await verifyPassword(next, after.password_hash), 'new password committed for the token\'s account', 'state');
+      proof.equal(after.totp, true, 'second factor untouched', 'state');
+      proof.equal(await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id]), [], 'every session of the account signed out', 'state');
+    } };
+  }, { contract: 'public' });
+
   // ── passkeys (0108): design §8. Every prerequisite runs through the real routes with the software authenticator. ──
   const passkeyReady = async (principal: MatrixPrincipal) => { // enrolled identity with a fresh native step-up (epoch-stamped)
     const target = await fixture.freshIdentity(principal);
@@ -306,6 +349,14 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
       proof.equal(await global('SELECT count(*)::int AS n FROM session WHERE admin_user_id=$1 AND step_up_at IS NOT NULL', [target.id]), [{ n: 0 }], 'step-up cleared on every session of the admin', 'state');
     } };
   }, { group: 'credentials' });
+  add('PATCH /v1/admin/passkeys/{id}', HUMAN, async (principal, allow) => {
+    const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
+    const enrolled = allow ? await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id) : { id: '00000000-0000-4000-8000-000000000000' };
+    return { url: '/v1/admin/passkeys/' + enrolled.id, body: { label: 'Renamed key' }, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      proof.equal((await json(response)).label, 'Renamed key', 'renamed credential echoed without key material');
+      proof.equal(await global('SELECT admin_user_id, label FROM admin_passkey_credential WHERE id=$1', [enrolled.id]), [{ admin_user_id: target.id, label: 'Renamed key' }], 'only the label of the admin\'s own credential changed', 'state');
+    } };
+  }, { group: 'credentials' });
   add('POST /v1/admin/step-up/passkey/options', HUMAN, async (principal, allow) => {
     const target = allow ? await passkeyReady(principal) : fixture.identityFor('owner');
     if (allow) await enrolAdminPasskey(fixture.request, identityHeaders(target), target.id);
@@ -367,12 +418,17 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
     } };
   }, { group: 'credentials' });
   add('POST /v1/admin/2fa/setup', HUMAN, async (principal, allow) => {
-    const target = allow ? await fixture.freshIdentity(principal) : fixture.identityFor('owner');
+    const target = allow ? await fixture.freshIdentity(principal, { enrolled: false }) : fixture.identityFor('owner');
     const before = await one('SELECT totp_secret FROM admin_user WHERE id=$1', [target.id]);
     return { url: '/v1/admin/2fa/setup', ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
       const body = await json(response); proof.ok(/^[A-Z2-7]{32}$/.test(body.secret), 'valid new 160-bit authenticator secret');
-      proof.equal(body.otpauthUri, otpauthUri(body.secret, target.email), 'QR identity binds actual human');
-      proof.equal(await global('SELECT totp_secret FROM admin_user WHERE id=$1', [target.id]), [before], 'setup returns ephemeral secret without replacing existing factor', 'state');
+      proof.ok(typeof body.issuer === 'string' && body.issuer.length > 0, 'issuer is the administered store');
+      proof.equal(body.otpauthUri, otpauthUri(body.secret, target.email, body.issuer), 'QR identity binds actual human');
+      proof.ok(typeof body.qrSvg === 'string' && body.qrSvg.startsWith('<svg'), 'QR rendered by the API itself');
+      proof.equal(await global('SELECT totp_secret FROM admin_user WHERE id=$1', [target.id]), [before], 'setup does not commit a factor', 'state');
+      const pending = await global("SELECT session_hash, secret FROM admin_auth_challenge WHERE admin_user_id=$1 AND kind='totp_enroll' AND consumed_at IS NULL", [target.id]);
+      proof.equal(pending.map((r) => r.session_hash), [digest(target.token)], 'one pending secret, bound to the calling session', 'state');
+      proof.equal(openTotpSecret(target.id, pending[0]?.secret), body.secret, 'pending secret held server-side for confirmation', 'state');
     } };
   }, { group: 'credentials' });
   const verifyRecovery = async (response: Response, proof: MatrixProof, target: Identity, enabled: boolean) => {

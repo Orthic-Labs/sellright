@@ -22,6 +22,7 @@ import {
   orderConfirmation,
   shippingNotification,
   staffInvite,
+  adminPasswordReset,
   passwordReset,
   emailVerify,
   federatedLinkConfirm,
@@ -409,6 +410,12 @@ export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
 }): Promise<{ delivered: boolean; reason?: string }> {
   const ctx = emailCtx(store);
   return sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
+}
+
+/** Issue #333: admin password reset link (fire-and-forget at the route; the outcome is logged, never shown). */
+export async function sendAdminPasswordReset(store: StoreEmailCtx, to: string, data: { url: string; ttlMinutes: number }): Promise<{ delivered: boolean; reason?: string }> {
+  const ctx = emailCtx(store);
+  return sendEmail({ to, from: ctx.fromEmail, ...adminPasswordReset(ctx, data) }, ctx.storeId);
 }
 
 export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {

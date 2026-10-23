@@ -107,6 +107,14 @@ export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: st
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>
      <p><a href="${escape(data.acceptUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Accept invite</a></p>`);
 
+// Issue #333: admin "Forgot password?" link. The reset changes only the password; 2FA still applies at the next sign-in.
+export const adminPasswordReset = (store: StoreCtx, data: { url: string; ttlMinutes: number }) =>
+  wrap(store, `Reset your ${store.name} admin password`,
+    `<p>Someone asked to reset the password for your ${escape(store.name)} admin account.</p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Choose a new password</a></p>
+     <p>The link works once, for ${data.ttlMinutes} minutes. Resetting signs you out everywhere; two-factor authentication stays on.</p>
+     <p>If you didn't ask for this, ignore this email — your password stays the same.</p>`);
+
 // Free-trial license key delivery (licensing/trial.ts). The key is emailed,
 // never returned in the API response, so an unreceived/throwaway address
 // can't mint a working trial (see routes/apps.ts POST /licenses/trial).

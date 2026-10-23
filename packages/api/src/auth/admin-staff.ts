@@ -116,7 +116,11 @@ export async function mutateAdminSecondFactor(input: {
     }
     if (input.action === 'enable') {
       if (input.totpSecret || !input.secret) return null;
-      await tx.update(s.adminUser).set({ totpSecret: sealTotpSecret(input.adminId, input.secret) }).where(eq(s.adminUser.id, input.adminId));
+      const [bumped] = await tx.update(s.adminUser).set({ totpSecret: sealTotpSecret(input.adminId, input.secret) }).where(eq(s.adminUser.id, input.adminId)).returning({ epoch: s.adminUser.securityEpoch });
+      // Issue #333: passkeys can now precede the authenticator app. Adding the app (none was enrolled — checked above)
+      // bumps the epoch; the account's existing passkeys stay valid under it, in the same transaction.
+      // Only rows issued under the epoch being left are carried over; an already-stale row stays dead.
+      if (bumped) await tx.update(s.adminPasskeyCredential).set({ epoch: bumped.epoch }).where(and(eq(s.adminPasskeyCredential.adminUserId, input.adminId), eq(s.adminPasskeyCredential.epoch, admin.epoch)));
       await tx.delete(s.session).where(and(eq(s.session.adminUserId, input.adminId), ne(s.session.id, session.id)));
     } else if (input.action === 'disable') {
       await tx.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, input.adminId));
