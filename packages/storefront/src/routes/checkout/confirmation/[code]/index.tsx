@@ -218,7 +218,7 @@ const ConfirmationPage = component$(() => {
 										<div class="min-w-0">
 											<h3 class="text-sm text-[var(--color-ink)] truncate">{productName}</h3>
 											{variantLabel && (
-												<p class="text-[11px] text-[#7a7873] mt-0.5 capitalize">{variantLabel}</p>
+												<p class="text-[11px] text-[#7a7873] mt-0.5">{variantLabel}</p>
 											)}
 											<p class="text-[11px] text-[#7a7873] mt-0.5">Qty {line.quantity}</p>
 										</div>

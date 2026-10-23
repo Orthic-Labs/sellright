@@ -181,7 +181,7 @@ export default component$(() => {
 										)}
 									</h3>
 									{vLabel && (
-										<p class={`text-[11px] mt-0.5 capitalize tracking-wide ${isCheckoutView ? 'text-[rgba(253,250,246,0.48)]' : 'text-[rgba(26,26,26,0.5)]'}`}>
+										<p class={`text-[11px] mt-0.5 tracking-wide ${isCheckoutView ? 'text-[rgba(253,250,246,0.48)]' : 'text-[rgba(26,26,26,0.5)]'}`}>
 											{vLabel}
 										</p>
 									)}
