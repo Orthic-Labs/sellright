@@ -9978,6 +9978,13 @@
                           "shipDate": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reviewed": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -9988,7 +9995,9 @@
                           "lineTotal",
                           "image",
                           "isPreOrder",
-                          "shipDate"
+                          "shipDate",
+                          "productSlug",
+                          "reviewed"
                         ]
                       }
                     }

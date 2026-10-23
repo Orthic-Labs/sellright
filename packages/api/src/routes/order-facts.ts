@@ -156,6 +156,8 @@ export interface OrderLineFact {
   isPreOrder: boolean;
   shipDate: string | null;
   shipDateLabel: string | null;
+  /** Storefront slug of the line's product (null once the variant is gone) — lets an order page link to the product's review form. */
+  productSlug: string | null;
 }
 
 /** Line snapshot (sku/name/price survive the variant being edited/deleted)
@@ -170,6 +172,7 @@ export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLine
       sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
+      productSlug: s.product.slug,
       shipDateLabel: shippingLabelSql(s.productVariant.metafields),
       image: sql<string | null>`coalesce(
         (select a.path from ${s.variantAsset} va join ${s.asset} a on a.id = va.asset_id where va.variant_id = ${s.orderLine.variantId} order by va.position asc limit 1),
@@ -178,6 +181,7 @@ export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLine
     })
     .from(s.orderLine)
     .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
+    .leftJoin(s.product, eq(s.productVariant.productId, s.product.id))
     .where(eq(s.orderLine.orderId, orderId));
   return rows.map((l) => ({ ...l, isPreOrder: l.isPreOrder ?? false, shipDate: l.shipDate?.toISOString() ?? null }));
 }

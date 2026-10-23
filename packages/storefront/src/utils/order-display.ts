@@ -85,3 +85,12 @@ export function getStatusDisplay(
 			return { label: orderState, color: NEUTRAL };
 	}
 }
+
+/** A fulfilled/delivered order line whose product the customer has not reviewed yet gets a "Write a review" link
+ *  (the API reports `reviewed`; a line whose product is gone has no slug and no link). */
+export const canReviewLine = (
+	order: Pick<AccountOrderDetail, 'state' | 'fulfillments'> & { fulfillmentStatus?: string | null },
+	line: { productSlug?: string | null; reviewed?: boolean },
+): boolean =>
+	!!line.productSlug && !line.reviewed
+	&& ['Delivered', 'Shipped', 'PartiallyShipped'].includes(resolveOrderDisplayState(order.state, order.fulfillments, order.fulfillmentStatus));

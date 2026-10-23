@@ -15849,7 +15849,9 @@ export interface paths {
                                 isPreOrder: boolean;
                                 lineTotal: number;
                                 name: string;
+                                productSlug: string | null;
                                 quantity: number;
+                                reviewed: boolean;
                                 shipDate: string | null;
                                 shipDateLabel?: string | null;
                                 sku: string;

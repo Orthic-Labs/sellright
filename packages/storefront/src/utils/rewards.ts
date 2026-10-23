@@ -113,6 +113,12 @@ export const MIN_REVIEWS_TO_SHOW = 5;
 /** True when `count` approved reviews are enough to show reviews UI / structured data. */
 export const reviewsMeetThreshold = (count: number | null | undefined): boolean => typeof count === 'number' && count >= MIN_REVIEWS_TO_SHOW;
 
+/** Query/hash that opens the write-review form on a product page below the threshold (order pages and emails link here). */
+export const REVIEW_ENTRY_QUERY = 'review=1';
+export const wantsReviewForm = (search: string, hash: string): boolean => new URLSearchParams(search).get('review') === '1' || hash === '#write-review';
+/** Product page path of the write-review entry for `productPath` (e.g. "/products/x/"). */
+export const reviewEntryPath = (productPath: string): string => `${productPath}?${REVIEW_ENTRY_QUERY}`;
+
 /** schema.org AggregateRating, or null under the review threshold (never emit an empty or thin rating). */
 export function aggregateRatingSchema(rating: { average: number; count: number } | null | undefined) {
 	if (!rating || !reviewsMeetThreshold(rating.count) || !(rating.average > 0)) return null;
