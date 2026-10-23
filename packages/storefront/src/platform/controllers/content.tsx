@@ -105,6 +105,8 @@ export function useContactForm() {
 			(window as any).turnstile.render(container, {
 				sitekey: TURNSTILE_SITE_KEY,
 				theme: 'light',
+				// Hidden unless Cloudflare needs the shopper to interact.
+				appearance: 'interaction-only',
 				callback: (token: string) => { turnstileToken.value = token; },
 				'expired-callback': () => { turnstileToken.value = ''; },
 			});

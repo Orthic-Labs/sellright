@@ -28,6 +28,8 @@ export function mountTurnstile(containerId: string, onToken: (token: string) => 
 		widgetId = ts.render(el, {
 			sitekey: TURNSTILE_SITE_KEY,
 			theme: 'light',
+			// Hidden unless Cloudflare needs the shopper to interact.
+			appearance: 'interaction-only',
 			callback: (token: string) => { if (!disposed) onToken(token); },
 			'expired-callback': () => { if (!disposed) onExpire(); },
 			'error-callback': () => { if (!disposed) onExpire(); },
