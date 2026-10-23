@@ -32,11 +32,21 @@ export interface AddToCartEvent {
 	quantity: number;
 }
 
+/** One order or cart line in minor units (unit price), for begin_checkout and purchase. */
+export interface AnalyticsLine {
+	sku: string;
+	name: string;
+	price: number;
+	quantity: number;
+}
+
 export interface BeginCheckoutEvent {
 	name: 'begin_checkout';
 	currency: string;
 	value: number;
 	itemCount: number;
+	/** At most 20 cart lines (minor units). */
+	items?: AnalyticsLine[];
 }
 
 export interface PurchaseEvent {
@@ -46,7 +56,7 @@ export interface PurchaseEvent {
 	value: number;
 	itemCount: number;
 	/** At most 20 order lines (minor units), for the dataLayer purchase. */
-	items?: { sku: string; name: string; price: number; quantity: number }[];
+	items?: AnalyticsLine[];
 }
 
 export type AnalyticsEvent = ViewItemEvent | AddToCartEvent | BeginCheckoutEvent | PurchaseEvent;

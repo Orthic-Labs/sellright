@@ -373,6 +373,16 @@ export default function OrderDetailPage() {
             {o.customer?.phone && <div className="text-sm text-gray-500">{o.customer.phone}</div>}
           </FormSection>
 
+          {o.attribution && (
+            <FormSection title="Attribution" description="Landing link parameters the storefront recorded for this order.">
+              <div className="stack-y-1 text-sm">
+                {Object.entries(o.attribution).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-3 text-gray-600"><span className="shrink-0">{k}</span><span className="min-w-0 break-all text-right">{v}</span></div>
+                ))}
+              </div>
+            </FormSection>
+          )}
+
           <AddressCard code={o.code} kind="shipping" address={o.shippingAddress} canEdit={canEditAddress} hasCustomer={!!o.customer} onSaved={invalidate}
             onCountryChange={(form, saveToAddressBook) => { setPendingAddress({ form, saveToAddressBook }); setEditing(true); }} />
           <AddressCard code={o.code} kind="billing" address={o.billingAddress} canEdit={canEditAddress} hasCustomer={!!o.customer} onSaved={invalidate}

@@ -6,6 +6,8 @@ export type OrderDetailX = Omit<OrderDetail, 'events'> & {
   amountDue?: number | null;
   adjustments?: { id: string; label: string; amount: number }[];
   shippingOverride?: boolean;
+  /** Landing UTM + oppref the storefront sent at checkout (a browser claim, display only). */
+  attribution?: Partial<Record<'utm_source' | 'utm_medium' | 'utm_campaign' | 'utm_content' | 'utm_term' | 'oppref', string>> | null;
   events: (Omit<OrderDetail['events'][number], 'data'> & { data?: { note?: string; reason?: string | null; changes?: string[]; kind?: string } })[];
 };
 
