@@ -16,6 +16,7 @@
  */
 import type { paths } from '../client';
 import { effectiveUnitPriceCents } from '~/utils/effective-price';
+import { reviewsMeetThreshold } from '~/utils/rewards';
 
 type Json<P extends keyof paths, M extends 'get'> =
   paths[P][M] extends { responses: { 200: { content: { 'application/json': infer T } } } } ? T : never;
@@ -192,7 +193,7 @@ export function liveProductMeta(
   product: { productId?: string | null },
   reviews: { enabled?: boolean; average: number; count: number } | null | undefined,
 ): ManifestProductMeta {
-  const usable = !!reviews && reviews.enabled !== false && reviews.count > 0 && reviews.average > 0;
+  const usable = !!reviews && reviews.enabled !== false && reviewsMeetThreshold(reviews.count) && reviews.average > 0;
   return {
     productId: product.productId || null,
     rating: reviews && usable ? { average: reviews.average, count: reviews.count } : null,
@@ -203,7 +204,7 @@ export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'product
   const r = raw.rating;
   return {
     productId: raw.productId ?? null,
-    rating: r && r.count > 0 && r.average > 0 ? { average: r.average, count: r.count } : null,
+    rating: r && reviewsMeetThreshold(r.count) && r.average > 0 ? { average: r.average, count: r.count } : null,
   };
 }
 

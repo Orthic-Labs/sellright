@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	aggregateRatingSchema, daysInMonth, describeActivity, earnPoints, pdpEarnPoints, pointsLabel, pointsValueCents,
-	productMultiplier, reviewErrorMessage, starString, validateReviewDraft, waysToEarn, withAggregateRating,
+	productMultiplier, reviewErrorMessage, reviewsMeetThreshold, starString, validateReviewDraft, waysToEarn, withAggregateRating,
 } from './rewards';
 import type { LoyaltyProgram } from '~/sellright/types/rewards';
 
@@ -83,6 +83,10 @@ describe('AggregateRating schema', () => {
 		expect(aggregateRatingSchema(undefined)).toBeNull();
 		expect(aggregateRatingSchema({ average: 0, count: 0 })).toBeNull();
 		expect(aggregateRatingSchema({ average: 4.5, count: 0 })).toBeNull();
+		expect(aggregateRatingSchema({ average: 4.5, count: 4 })).toBeNull();
+		expect(reviewsMeetThreshold(4)).toBe(false);
+		expect(reviewsMeetThreshold(5)).toBe(true);
+		expect(reviewsMeetThreshold(null)).toBe(false);
 		expect(aggregateRatingSchema({ average: 4.66, count: 12 })).toEqual({
 			'@type': 'AggregateRating', ratingValue: 4.7, reviewCount: 12, bestRating: 5, worstRating: 1,
 		});
@@ -92,9 +96,9 @@ describe('AggregateRating schema', () => {
 describe('withAggregateRating', () => {
 	const product = { '@context': 'https://schema.org', '@type': 'Product', name: 'Widget' };
 	it('adds the aggregate only when there are reviews', () => {
-		expect(withAggregateRating(product, { average: 4, count: 2 })).toEqual({
+		expect(withAggregateRating(product, { average: 4, count: 6 })).toEqual({
 			...product,
-			aggregateRating: { '@type': 'AggregateRating', ratingValue: 4, reviewCount: 2, bestRating: 5, worstRating: 1 },
+			aggregateRating: { '@type': 'AggregateRating', ratingValue: 4, reviewCount: 6, bestRating: 5, worstRating: 1 },
 		});
 		expect(withAggregateRating(product, null)).toBe(product);
 		expect(withAggregateRating(product, { average: 5, count: 0 })).toBe(product);
