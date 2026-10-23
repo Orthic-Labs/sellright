@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	aggregateRatingSchema, daysInMonth, describeActivity, earnPoints, pdpEarnPoints, pointsLabel, pointsValueCents,
-	productMultiplier, reviewErrorMessage, reviewsMeetThreshold, starString, validateReviewDraft, waysToEarn, withAggregateRating,
+	productMultiplier, reviewErrorMessage, reviewsMeetThreshold, wantsReviewForm, reviewEntryPath, starString, validateReviewDraft, waysToEarn, withAggregateRating,
 } from './rewards';
 import type { LoyaltyProgram } from '~/sellright/types/rewards';
 
@@ -125,4 +125,14 @@ describe('review draft + errors', () => {
 		expect(reviewErrorMessage({ status: 500 })).toMatch(/could not submit/);
 		expect(reviewErrorMessage(null)).toMatch(/could not submit/);
 	});
+});
+
+describe('review entry', () => {
+	it('opens on ?review=1 or #write-review only', () => {
+		expect(wantsReviewForm('?review=1', '')).toBe(true);
+		expect(wantsReviewForm('', '#write-review')).toBe(true);
+		expect(wantsReviewForm('?review=0', '#reviews')).toBe(false);
+		expect(wantsReviewForm('', '')).toBe(false);
+	});
+	it('builds the product link', () => expect(reviewEntryPath('/products/x/')).toBe('/products/x/?review=1'));
 });

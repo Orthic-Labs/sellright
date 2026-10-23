@@ -56,7 +56,7 @@ describe('Google sign-in switch', () => {
 		const page = read('src/routes/sign-in/index.tsx');
 		expect(page).toMatch(/googleClientId\.value && \(\s*<>[\s\S]*?id="google-signin-button"/);
 		expect(page).toContain('if (!clientId || current !== \'signin\') return;');
-		expect(page).toMatch(/loginWithGoogle\(credential\);\s*if \(result\.ok\) \{\s*navigate\('\/account'\)/);
+		expect(page).toMatch(/loginWithGoogle\(credential\);\s*if \(result\.ok\) \{\s*navigate\(signInDestination\(\)\)/);
 	});
 
 	it('the CSP is built per request with the nonce and only adds Google sources through the switch', () => {

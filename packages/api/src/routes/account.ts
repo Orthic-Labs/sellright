@@ -11,6 +11,7 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { normalizeEmail } from '../auth/email.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
@@ -272,6 +273,7 @@ account.openapi(
         lines: z.array(z.object({
           sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
           image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
+          productSlug: z.string().nullable(), reviewed: z.boolean(),
         })),
       }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -291,7 +293,14 @@ account.openapi(
         orderProvenanceFilter(cust),
       )).limit(1);
       if (!order) return { kind: 'notfound' as const };
-      const lines = await loadOrderLines(tx, order.id);
+      const baseLines = await loadOrderLines(tx, order.id);
+      // Whether this customer already reviewed each line's product (any status): the review form is refused as a duplicate then.
+      const slugs = [...new Set(baseLines.flatMap((l) => (l.productSlug ? [l.productSlug] : [])))];
+      const reviewedRows = slugs.length ? await tx.select({ slug: s.product.slug }).from(s.productReview)
+        .innerJoin(s.product, eq(s.productReview.productId, s.product.id))
+        .where(and(inArray(s.product.slug, slugs), or(eq(s.productReview.customerId, cust.id), eq(s.productReview.authorEmail, normalizeEmail(cust.email))))) : [];
+      const reviewedSlugs = new Set(reviewedRows.map((r) => r.slug));
+      const lines = baseLines.map((l) => ({ ...l, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) }));
       const payments = await loadOrderPayments(tx, order.id);
       const fulfillments = await loadOrderFulfillments(tx, order.id);
       const promotionCode = await loadOrderPromotionCode(tx, order.promotionId);

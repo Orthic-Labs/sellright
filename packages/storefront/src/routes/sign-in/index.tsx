@@ -6,6 +6,7 @@ import { login, requestMagicLink, requestPasswordReset, resendVerification } fro
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
 import { loginWithApple, preloadAppleSdk, signInWithApple } from '~/providers/shop/account/apple-auth';
 import { loginWithPasskey } from '~/providers/shop/account/passkeys';
+import { signInDestination } from '~/utils/sign-in-next';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
 import { socialSignInIdsForHost } from '~/utils/social-sign-in.server';
 import { validatedRequestHost } from '~/utils/trusted-request.server';
@@ -100,7 +101,7 @@ export default component$(() => {
 		loading.value = true;
 		const result = await loginWithGoogle(credential);
 		if (result.ok) {
-			navigate('/account');
+			navigate(signInDestination());
 			return;
 		}
 		error.value = result.message;
@@ -113,7 +114,7 @@ export default component$(() => {
 		loading.value = true;
 		const result = await loginWithPasskey();
 		if (result.ok) {
-			navigate('/account');
+			navigate(signInDestination());
 			return;
 		}
 		error.value = result.message;
@@ -130,7 +131,7 @@ export default component$(() => {
 		if (!(await browserSupportsWebAuthnAutofill())) return;
 		const result = await loginWithPasskey({ useBrowserAutofill: true });
 		if (result.ok) {
-			navigate('/account');
+			navigate(signInDestination());
 			return;
 		}
 		if (!('cancelled' in result)) error.value = result.message;
@@ -159,7 +160,7 @@ export default component$(() => {
 		}
 		const result = await loginWithApple(outcome.identityToken);
 		if (result.ok) {
-			navigate('/account');
+			navigate(signInDestination());
 			return;
 		}
 		error.value = result.message;
@@ -230,7 +231,7 @@ export default component$(() => {
 			rememberMe: rememberMe.value,
 		});
 		if (result.ok) {
-			navigate('/account');
+			navigate(signInDestination());
 			return;
 		}
 		if (result.code === 'not_verified') {

@@ -7,7 +7,9 @@ import { getOrderByCode } from '~/services/customer';
 import type { AccountOrderDetail } from '~/sellright/types/account';
 import { formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
-import { formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder } from '../order-display';
+import { productPath } from '~/platform/product-path';
+import { reviewEntryPath } from '~/utils/rewards';
+import { canReviewLine, formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder } from '../order-display';
 
 export default component$(() => {
 	const location = useLocation();
@@ -107,6 +109,9 @@ export default component$(() => {
 										<p class="text-xs text-[#645541] font-medium mt-1">
 											{shippingDateText(line) ? `Ships: ${shippingDateText(line)}` : 'Ship date TBA'}
 										</p>
+									)}
+									{canReviewLine(o, line) && line.productSlug && (
+										<a href={reviewEntryPath(productPath(line.productSlug))} class="mt-2 text-sm underline text-[var(--color-accent)]" data-testid="write-review-link">Write a review</a>
 									)}
 								</div>
 							</li>

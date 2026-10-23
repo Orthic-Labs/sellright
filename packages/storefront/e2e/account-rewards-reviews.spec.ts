@@ -105,6 +105,11 @@ test.describe.serial('rewards + reviews', () => {
 	test('a second review of the same product by the same buyer is refused by the API', async ({ apiProxyPage: page }) => {
 		await signInWithPassword(page, email);
 		await page.goto(`/products/${slug}/`);
+		// The review entry (?review=1) shows the write form alone under the threshold; the plain PDP still shows nothing.
+		await page.goto(`/products/${slug}/?review=1`);
+		await expect(page.getByTestId('product-reviews')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('product-reviews').getByRole('button', { name: /write a review/i })).toBeVisible();
+		await expect(page.getByTestId('review-item')).toHaveCount(0);
 		const res = await postReview(page, slug, { rating: 4, body: 'E2E fixture second review text, which must be refused.' });
 		expect(res.status).toBe(409);
 	});

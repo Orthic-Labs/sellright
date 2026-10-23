@@ -59,3 +59,5 @@ export const getTrackingInfo = (fulfillments: AccountOrderDetail['fulfillments']
 /** Whether any line in the order is a pre-order — the native API puts this
  *  flag on each line, not on the order itself (mirrors track-order.service.ts). */
 export const isPreOrder = (lines: { isPreOrder: boolean }[]): boolean => lines.some((l) => l.isPreOrder);
+
+export { canReviewLine } from '~/utils/order-display';

@@ -12,7 +12,7 @@ describe('sign-in page: passkey button gating', () => {
 
 	it('renders the passkey button only when supported, and a success follows the password-login path', () => {
 		expect(page).toMatch(/passkeySupported\.value && \(\s*<button[^>]*data-testid="passkey-signin-button"/);
-		expect(page).toMatch(/loginWithPasskey\(\);\s*if \(result\.ok\) \{\s*navigate\('\/account'\)/);
+		expect(page).toMatch(/loginWithPasskey\(\);\s*if \(result\.ok\) \{\s*navigate\(signInDestination\(\)\)/);
 	});
 
 	it('starts conditional UI only on the sign-in view with autofill support, and tags the email field', () => {
@@ -33,7 +33,7 @@ describe('sign-in page: Apple button gating', () => {
 	it('signs in through the SDK then the API, and a cancelled popup shows nothing', () => {
 		expect(page).toContain('signInWithApple(appleClientId.value)');
 		expect(page).toContain("if (outcome.status === 'cancelled')");
-		expect(page).toMatch(/loginWithApple\(outcome\.identityToken\);\s*if \(result\.ok\) \{\s*navigate\('\/account'\)/);
+		expect(page).toMatch(/loginWithApple\(outcome\.identityToken\);\s*if \(result\.ok\) \{\s*navigate\(signInDestination\(\)\)/);
 	});
 
 	it('leaves the Google block untouched', () => {

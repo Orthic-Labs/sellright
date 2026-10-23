@@ -4,7 +4,8 @@ import { getProductReviews, submitProductReview } from '~/providers/shop/rewards
 import { SellRightError } from '~/platform/errors';
 import type { ReviewList } from '~/sellright/types/rewards';
 import { theme } from '~/theme/theme.config';
-import { pointsLabel, reviewsMeetThreshold, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';
+import { signInHref } from '~/utils/sign-in-next';
+import { pointsLabel, wantsReviewForm, reviewsMeetThreshold, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';
 
 const PAGE = 10;
 const BTN =
@@ -28,6 +29,9 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	const loadError = useSignal(false);
 	/** null until the session check resolves — avoids flashing "Sign in" at signed-in shoppers. */
 	const signedIn = useSignal<boolean | null>(null);
+	/** The shopper arrived through a review entry (?review=1 / #write-review), e.g. from an order page. */
+	const writeOnly = useSignal(false);
+	const returnPath = useSignal('');
 	const loadingMore = useSignal(false);
 	const formOpen = useSignal(false);
 	const rating = useSignal(0);
@@ -41,6 +45,9 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	// document-ready, not on visibility: the block is below the fold, and a read that only starts when it scrolls into view
 	// left "Loading reviews…" on screen (captures, fast scrolls). Only the network read is guarded.
 	useVisibleTask$(async () => {
+		const loc = window.location;
+		writeOnly.value = wantsReviewForm(loc.search, loc.hash);
+		returnPath.value = loc.pathname + (writeOnly.value && !loc.search.includes('review=1') ? '?review=1' : loc.search);
 		const first = await getProductReviews(slug, { limit: PAGE }).catch(() => null);
 		if (first) data.value = first;
 		else loadError.value = true;
@@ -96,13 +103,15 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	// It keeps id="reviews" while the read is pending, so the rating link's #reviews always has a target.
 	if (!d || loadError.value || !d.enabled) return <div id="reviews" data-state={d || loadError.value ? 'off' : 'pending'} />;
 	// Under the threshold the whole block (and so the #reviews anchor the rating link targets) is withheld; the rating link is gated to match.
-	if (!reviewsMeetThreshold(d.count)) return <div data-state="below-threshold" />;
+	// A review entry (?review=1) still shows the write form alone, so products can collect their first reviews.
+	const formOnly = !reviewsMeetThreshold(d.count);
+	if (formOnly && !writeOnly.value) return <div data-state="below-threshold" />;
 
 	return (
-		<section class="max-w-[1200px] mx-auto px-4 sm:px-6 pt-10 pb-28 md:pb-16 text-[var(--ink)]" id="reviews" aria-labelledby="reviews-title" data-testid="product-reviews">
-			<h2 id="reviews-title" class="text-[28px] sm:text-[30px] font-bold tracking-tight" style="font-family:var(--font-heading)">Reviews</h2>
+		<section class="max-w-[1200px] mx-auto px-4 sm:px-6 pt-10 pb-28 md:pb-16 text-[var(--ink)]" id={formOnly ? 'write-review' : 'reviews'} aria-labelledby="reviews-title" data-testid="product-reviews">
+			<h2 id="reviews-title" class="text-[28px] sm:text-[30px] font-bold tracking-tight" style="font-family:var(--font-heading)">{formOnly ? `Review ${productName}` : 'Reviews'}</h2>
 
-			{d.count > 0 && (
+			{!formOnly && d.count > 0 && (
 				<div class="flex flex-wrap items-center gap-x-10 gap-y-5 my-5" data-testid="reviews-summary">
 					<div>
 						<div class="text-5xl font-bold leading-none" style="font-family:var(--font-heading)">{d.average.toFixed(1)}</div>
@@ -122,9 +131,9 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 					</div>
 				</div>
 			)}
-			{d.count === 0 && <p class="mt-4 text-[14px] text-[var(--mid)]">No reviews yet. Be the first to review {productName}.</p>}
+			{!formOnly && d.count === 0 && <p class="mt-4 text-[14px] text-[var(--mid)]">No reviews yet. Be the first to review {productName}.</p>}
 
-			{d.reviews.length > 0 && (
+			{!formOnly && d.reviews.length > 0 && (
 				<div class="border-t border-[var(--rule)]">
 					{d.reviews.map((r) => (
 						<article key={r.id} class="py-5 border-b border-[var(--rule)]" data-testid="review-item">
@@ -145,7 +154,7 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 					))}
 				</div>
 			)}
-			{d.reviews.length < d.count && (
+			{!formOnly && d.reviews.length < d.count && (
 				<div class="mt-4">
 					<button type="button" class={BTN_GHOST} disabled={loadingMore.value} onClick$={more}>
 						{loadingMore.value ? 'Loading…' : 'Show more reviews'}
@@ -166,7 +175,7 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 						<button type="button" class={BTN} onClick$={() => { formOpen.value = true; }}>Write a review</button>
 					)}
 					{signedIn.value === false && (
-						<p class="text-[14px]"><a class="underline" href="/sign-in">Sign in</a> to write a review.</p>
+						<p class="text-[14px]"><a class="underline" href={returnPath.value ? signInHref(returnPath.value) : '/sign-in'}>Sign in</a> to write a review.</p>
 					)}
 					{signedIn.value === true && d.bonusPoints > 0 && !formOpen.value && (
 						<span class="text-[14px] text-[var(--mid)]">Earn {pointsLabel(d.bonusPoints)} when your review is approved.</span>

@@ -331,7 +331,7 @@ export async function enqueueReviewApproved(tx: Tx, storeId: string, store: Stor
   const ctx = emailCtx(store);
   // The store's own product path (seo.productUrlPattern), as the sitemap and JSON-LD use it.
   const path = productPath(seoConfigFromStore({ name: store.name, config: store.config }), data.productSlug);
-  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}${path}#reviews` });
+  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}${path}` });
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.REVIEW_APPROVED,
     dedupeKey: data.dedupeKey,
