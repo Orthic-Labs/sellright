@@ -40,6 +40,8 @@ export interface ExpressCheckoutProps {
 	buttonHeight?: number;
 	/** Apple Pay / Google Pay only, one button, no overflow (a slot with room for one button). Read once at mount. */
 	walletsOnly?: boolean;
+	/** A small heading above the buttons (checkout: "Express checkout"); hidden with the buttons. */
+	label?: string;
 	/** The "Or continue below" line: only where a payment form follows (checkout). */
 	continueHint?: boolean;
 	/** Reports whether this device has an express method (fires once the element is ready, false on a load error). */
@@ -206,6 +208,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		// Kept mounted (not display:none) while hidden so the gateway can still report wallet availability.
 		<div class="checkout-express" data-testid={props.testId ?? 'checkout-express'} aria-hidden={!visible}
 			style={visible ? { marginBottom: props.continueHint ? '16px' : '0' } : { visibility: 'hidden', height: '0', overflow: 'hidden', pointerEvents: 'none' }}>
+			{props.label && <p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.7;margin:0 0 8px;">{props.label}</p>}
 			<div ref={hostRef} />
 			{props.continueHint && <p style="text-align:center;font-size:12px;opacity:0.6;margin-top:8px;">Or continue below to pay another way</p>}
 		</div>

@@ -106,19 +106,6 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
           }))}
         />
         <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
-          <ExpressCheckout
-            gateway={props.expressCheckout.value}
-            cartToken={props.expressCheckout.value?.cartToken ?? null}
-            continueHint
-            country={props.expressCountry}
-            couponCodes={[...(props.localCart.cart.couponCodes ?? [])]}
-            redeemPoints={props.expressRedeemPoints}
-            items={props.localCart.cart.lines.map((l: { sku: string; quantity: number }) => ({ sku: l.sku, quantity: l.quantity }))}
-            cartKey={`${props.localCart.cart.token}:${props.localCart.cart.revision}:${props.localCart.cart.quoteHash ?? ''}`}
-            onPlaceOrder$={props.onExpressPlaceOrder$}
-            onError$={props.onExpressError$}
-          />
-          <CheckoutPaymentMessaging options={props.paymentMessaging.value} />
           <div class="checkout-columns lg:flex lg:gap-x-8 xl:gap-x-12">
             <CheckoutOrderSummary
               formattedTotal={props.formattedTotal}
@@ -130,7 +117,25 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
               onRedeemToggle$={props.onRedeemToggle$}
               shippingCents={props.shippingCents}
             />
-            <CheckoutPaymentPanel {...props} />
+            <CheckoutPaymentPanel {...props}>
+              {/* Express row + pay-later messaging: below the order summary, inside the form column's gutter (#338). */}
+              <div q:slot="lead">
+                <ExpressCheckout
+                  gateway={props.expressCheckout.value}
+                  cartToken={props.expressCheckout.value?.cartToken ?? null}
+                  continueHint
+                  label="Express checkout"
+                  country={props.expressCountry}
+                  couponCodes={[...(props.localCart.cart.couponCodes ?? [])]}
+                  redeemPoints={props.expressRedeemPoints}
+                  items={props.localCart.cart.lines.map((l: { sku: string; quantity: number }) => ({ sku: l.sku, quantity: l.quantity }))}
+                  cartKey={`${props.localCart.cart.token}:${props.localCart.cart.revision}:${props.localCart.cart.quoteHash ?? ''}`}
+                  onPlaceOrder$={props.onExpressPlaceOrder$}
+                  onError$={props.onExpressError$}
+                />
+                <CheckoutPaymentMessaging options={props.paymentMessaging.value} />
+              </div>
+            </CheckoutPaymentPanel>
           </div>
         </div>
         {props.srState.phase !== 'paying' && <CheckoutMobileCta {...props} />}

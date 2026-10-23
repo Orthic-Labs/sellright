@@ -1,4 +1,4 @@
-import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, type QRL, type Signal } from '@qwik.dev/core';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -58,6 +58,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 	return (
 	<div class="checkout-right order-1 lg:order-2 mb-8 lg:mb-0 lg:basis-[58%]">
 		<div class="checkout-right-inner" style="padding:8px 20px 32px;">
+			<Slot name="lead" />
 			<div style="display:flex;align-items:center;gap:0;margin-bottom:24px;padding:4px 0;">
 				<div style="display:flex;align-items:center;gap:8px;">
 					<div style={{
