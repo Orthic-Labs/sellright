@@ -106,6 +106,6 @@ describe('lookupCountryCode — third party only as the fallback', () => {
 	it('addressStorage no longer calls the third party directly', () => {
 		const src = readFileSync(join(process.cwd(), 'src/utils/addressStorage.ts'), 'utf8');
 		expect(src).not.toContain('ipapi.co');
-		expect(src).toContain('lookupCountryCode()');
+		expect(src).toContain('lookupCountryCodeOnce()');
 	});
 });

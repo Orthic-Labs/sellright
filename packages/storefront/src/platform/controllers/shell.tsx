@@ -6,6 +6,7 @@ import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { useCart } from '~/contexts/CartContext';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
 import { logout as logoutAccount } from '~/providers/shop/account/account';
+import { clearStoredAddress } from '~/utils/addressStorage';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { PROVIDER_LABELS } from '~/platform/payments/labels';
@@ -50,6 +51,7 @@ export const BrandHeaderMount = component$(() => {
 		dispatch<ActionResult>(ctl, null, ACTION_RESULTS, async () => {
 			const result = await logoutAccount();
 			if (!result.ok) return { ok: false, reason: 'error' };
+			clearStoredAddress();
 			window.location.reload();
 			return { ok: true };
 		}),
