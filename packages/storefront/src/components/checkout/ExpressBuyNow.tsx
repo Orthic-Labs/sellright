@@ -13,6 +13,8 @@ export interface ExpressBuyNowProps {
 	currency: string;
 	/** Match the brand's ADD TO CART height (40–55px); omitted = the gateway default (44px). */
 	buttonHeight?: number;
+	/** Apple Pay / Google Pay only, as a single button (e.g. beside ADD TO CART in a phone's sticky bar). */
+	walletsOnly?: boolean;
 }
 
 /**
@@ -85,6 +87,7 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 				items={buyNowItems(props.sku) ?? []}
 				cartKey={cartToken.value ?? ''}
 				buttonHeight={props.buttonHeight}
+				walletsOnly={props.walletsOnly}
 				onAvailability$={onAvailability$}
 				onPlaceOrder$={onPlaceOrder$}
 				onError$={onError$}

@@ -68,16 +68,21 @@ export function expressButtonHeight(px: number | null | undefined): number | und
  */
 export const EXPRESS_PAYMENT_METHODS = { applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' } as const;
 
+/** Wallets only (Apple Pay / Google Pay), for a slot with room for exactly one button (e.g. a phone's sticky add-to-cart bar). */
+export const EXPRESS_WALLET_METHODS = { applePay: 'auto', googlePay: 'auto', link: 'never', klarna: 'never', paypal: 'never', amazonPay: 'never' } as const;
+
 /** Express Checkout Element create options. The wallet always collects email, phone and a shipping address (checkout prices
- *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. */
-export function expressElementOptions(o: { buttonHeight?: number | null } = {}) {
+ *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. `walletsOnly` keeps
+ *  just Apple Pay / Google Pay in a single one-button row (no Link or Klarna, no overflow menu). */
+export function expressElementOptions(o: { buttonHeight?: number | null; walletsOnly?: boolean } = {}) {
 	const buttonHeight = expressButtonHeight(o.buttonHeight);
 	return {
 		emailRequired: true,
 		phoneNumberRequired: true,
 		shippingAddressRequired: true,
-		paymentMethods: EXPRESS_PAYMENT_METHODS,
+		paymentMethods: o.walletsOnly ? EXPRESS_WALLET_METHODS : EXPRESS_PAYMENT_METHODS,
 		buttonType: { applePay: 'buy', googlePay: 'buy' },
+		...(o.walletsOnly ? { layout: { maxColumns: 1, maxRows: 1, overflow: 'never' as const } } : {}),
 		...(buttonHeight ? { buttonHeight } : {}),
 	} as const;
 }

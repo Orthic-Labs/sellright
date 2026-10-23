@@ -38,6 +38,8 @@ export interface ExpressCheckoutProps {
 	onError$: QRL<(message: string) => void>;
 	/** Wallet button height in px (40–55, the brand's ADD TO CART); omitted = the gateway default. Read once at mount. */
 	buttonHeight?: number;
+	/** Apple Pay / Google Pay only, one button, no overflow (a slot with room for one button). Read once at mount. */
+	walletsOnly?: boolean;
 	/** The "Or continue below" line: only where a payment form follows (checkout). */
 	continueHint?: boolean;
 	/** Reports whether this device has an express method (fires once the element is ready, false on a load error). */
@@ -113,7 +115,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 			// Deferred intent: the amount here is display only; the intent is minted server-side for the order's amount due.
 			const elements = stripe.elements({ mode: 'payment', amount: baseQuote.value?.grandTotal || 100, currency: options.currency });
 			// Checkout prices tax (and shipping) by the destination, so the wallet always supplies one — as the form does.
-			const ece = elements.create('expressCheckout', expressElementOptions({ buttonHeight: props.buttonHeight }));
+			const ece = elements.create('expressCheckout', expressElementOptions({ buttonHeight: props.buttonHeight, walletsOnly: props.walletsOnly }));
 			element = ece;
 			const fail = (message: string) => { void props.onError$(message); };
 

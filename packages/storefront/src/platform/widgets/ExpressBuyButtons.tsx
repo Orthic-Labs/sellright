@@ -13,8 +13,11 @@ export interface ExpressBuyButtonsProps {
 	quantity?: 1;
 	/** px, 40–55 (clamped); match the ADD TO CART button. Omitted = 44. */
 	buttonHeight?: number;
+	/** Apple Pay / Google Pay only, as one button with no Link, Klarna or overflow: for a slot with room for exactly one
+	 *  button, such as a phone's sticky bar beside ADD TO CART. Omitted = the full express row. Read once at mount. */
+	walletsOnly?: boolean;
 }
 
 export const ExpressBuyButtons = component$<ExpressBuyButtonsProps>((props) => (
-	<ExpressBuyNow sku={props.sku} currency={props.currency} buttonHeight={props.buttonHeight} />
+	<ExpressBuyNow sku={props.sku} currency={props.currency} buttonHeight={props.buttonHeight} walletsOnly={props.walletsOnly} />
 ));

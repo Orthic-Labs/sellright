@@ -151,6 +151,12 @@ describe('expressElementOptions', () => {
 		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' });
 		expect(expressElementOptions({ buttonHeight: 52 })).toMatchObject({ buttonHeight: 52 });
 		expect(expressElementOptions({ buttonHeight: 80 })).toMatchObject({ buttonHeight: 55 });
+		expect(o).not.toHaveProperty('layout');
+	});
+	it('walletsOnly offers just Apple Pay / Google Pay as one button with no overflow', () => {
+		const o = expressElementOptions({ walletsOnly: true, buttonHeight: 48 });
+		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'never', klarna: 'never', paypal: 'never', amazonPay: 'never' });
+		expect(o).toMatchObject({ layout: { maxColumns: 1, maxRows: 1, overflow: 'never' }, buttonHeight: 48, shippingAddressRequired: true });
 	});
 });
 
