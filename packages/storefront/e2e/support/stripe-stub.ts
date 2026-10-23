@@ -6,7 +6,7 @@
  * that reached it. It must be registered AFTER blockExternal: the later page.route matches first (fixtures.ts).
  *
  * The fake exposes the whole surface the Rotten checkout uses (components/payment/StripePaymentElement.tsx there):
- *   stripe.elements({mode,amount,currency,appearance}) · elements.create('payment',{layout}) -> mount / on('ready'|
+ *   stripe.elements({mode,amount,currency,appearance}) · elements.create('payment',{layout,wallets,paymentMethodOrder}) -> mount / on('ready'|
  *   'loaderror'|'change') / destroy · elements.submit() · stripe.confirmPayment({elements, clientSecret, confirmParams})
  * and the surface of the base component (elements({clientSecret}), confirmPayment({elements, confirmParams})): each
  * Elements instance is bound to its clientSecret and confirmPayment resolves the intent through the supplied instance.

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExpressQuote } from '~/sellright/types/checkout';
 import {
+	buyNowItems,
+	expressButtonHeight,
 	expressCheckoutOptions,
+	expressElementOptions,
+	expressGateway,
+	hasExpressMethod,
 	isChargeableQuote,
 	NO_SHIPPING_RATE_ID,
 	runExpressConfirm,
@@ -116,5 +121,53 @@ describe('runExpressConfirm', () => {
 	it('reports a failed wallet confirmation (the order stays payable through the payment form)', async () => {
 		const d = deps({ confirm: vi.fn(async () => 'Payment could not be completed.') });
 		expect(await runExpressConfirm(d, confirmEvent())).toEqual({ ok: false, reason: 'fail', message: 'Payment could not be completed.' });
+	});
+});
+
+describe('expressGateway', () => {
+	it('mounts for a configured gateway and a valid currency, with or without a cart', () => {
+		expect(expressGateway({ gatewayConfigured: true, publishableKey: ' pk_test_x ', currency: 'USD' })).toEqual({ publishableKey: 'pk_test_x', currency: 'usd' });
+		for (const off of [{ gatewayConfigured: false }, { publishableKey: '' }, { publishableKey: null }, { currency: 'US' }, { currency: undefined }]) {
+			expect(expressGateway({ gatewayConfigured: true, publishableKey: 'pk_test_x', currency: 'USD', ...off })).toBeNull();
+		}
+	});
+});
+
+describe('expressButtonHeight', () => {
+	it('clamps to the gateway range and rounds; nothing given keeps the default', () => {
+		expect(expressButtonHeight(48)).toBe(48);
+		expect(expressButtonHeight(47.6)).toBe(48);
+		expect(expressButtonHeight(30)).toBe(40);
+		expect(expressButtonHeight(64)).toBe(55);
+		for (const none of [undefined, null, 0, -4, Number.NaN, Number.POSITIVE_INFINITY]) expect(expressButtonHeight(none)).toBeUndefined();
+	});
+});
+
+describe('expressElementOptions', () => {
+	it('always collects email, phone and a shipping address and uses the Buy call to action', () => {
+		const o = expressElementOptions();
+		expect(o).toMatchObject({ emailRequired: true, phoneNumberRequired: true, shippingAddressRequired: true, buttonType: { applePay: 'buy', googlePay: 'buy' } });
+		expect(o).not.toHaveProperty('buttonHeight');
+		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' });
+		expect(expressElementOptions({ buttonHeight: 52 })).toMatchObject({ buttonHeight: 52 });
+		expect(expressElementOptions({ buttonHeight: 80 })).toMatchObject({ buttonHeight: 55 });
+	});
+});
+
+describe('hasExpressMethod', () => {
+	it('is true only when the gateway reports a method the express row offers', () => {
+		expect(hasExpressMethod(undefined)).toBe(false);
+		expect(hasExpressMethod({ applePay: false, googlePay: false, paypal: true, amazonPay: true })).toBe(false);
+		expect(hasExpressMethod({ applePay: true })).toBe(true);
+		expect(hasExpressMethod({ googlePay: true })).toBe(true);
+		expect(hasExpressMethod({ link: true })).toBe(true);
+		expect(hasExpressMethod({ klarna: true })).toBe(true);
+	});
+});
+
+describe('buyNowItems', () => {
+	it('is exactly one unit of a selected variant, nothing without one', () => {
+		expect(buyNowItems('TEE-M-BLK')).toEqual([{ sku: 'TEE-M-BLK', quantity: 1 }]);
+		for (const none of [null, undefined, '', '  ']) expect(buyNowItems(none)).toBeNull();
 	});
 });

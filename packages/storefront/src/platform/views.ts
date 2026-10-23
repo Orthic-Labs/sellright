@@ -165,6 +165,10 @@ export interface ContactViewProps {
 
 export { ProductReviewsWidget } from '~/platform/widgets/ProductReviewsWidget';
 export { LoyaltyEarnWidget } from '~/platform/widgets/LoyaltyEarnWidget';
+export { ExpressBuyButtons } from '~/platform/widgets/ExpressBuyButtons';
+export type { ExpressBuyButtonsProps } from '~/platform/widgets/ExpressBuyButtons';
+export { PayLaterMessaging } from '~/platform/widgets/PayLaterMessaging';
+export type { PayLaterMessagingProps } from '~/platform/widgets/PayLaterMessaging';
 
 /** `in-stock` only from a live response of the current view; anything else (not read yet, failed, absent) is not purchasable. */
 export type Availability = 'unchecked' | 'loading' | 'in-stock' | 'out-of-stock' | 'error';

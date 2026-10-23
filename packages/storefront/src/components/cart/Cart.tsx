@@ -13,6 +13,7 @@ import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShipping } from './cart-shipping';
+import { CartExpress } from './CartExpress';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BRAND_COPY, CART_TRUST_STRIP_WRAP } from '~/platform/brand-data';
@@ -427,6 +428,9 @@ export default component$(() => {
 										</div>
 									)}
 								</div>
+
+								{/* Express wallets above CHECKOUT: the shopper's own cart, server-quoted (components/cart/CartExpress.tsx). */}
+								<CartExpress />
 
 								<button
 									onClick$={$(async () => {

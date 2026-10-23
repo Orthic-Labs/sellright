@@ -6,9 +6,10 @@ import type { PaymentMessagingOptions } from './payment-messaging';
  * Pay-over-time messaging at the top of checkout: the card gateway's Payment Method Messaging Element. It names only the
  * installment methods enabled on the store's gateway account (the same ones its payment form offers), so nothing here
  * is hard-coded per brand. Client-only (Stripe.js is imperative); stays hidden until the element is ready and while
- * `options` is null (see payment-messaging.ts). Informational only: a load failure hides it and never blocks checkout.
+ * `options` is null (see payment-messaging.ts). Informational only: a load failure (Stripe.js or the element never
+ * becoming ready) keeps it hidden and never blocks checkout. Also mounted on product pages (platform/widgets/PayLaterMessaging).
  */
-export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOptions | null }>((props) => {
+export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOptions | null; testId?: string; marginBottom?: string }>((props) => {
 	const hostRef = useSignal<HTMLElement>();
 	const ready = useSignal(false);
 	const elementRef = useSignal<unknown>(null);
@@ -37,7 +38,9 @@ export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOp
 		} catch (e) {
 			console.warn('[Checkout] payment messaging failed to load:', e);
 		}
-	});
+	// document-ready, not the default intersection trigger: the wrapper is display:none until the element is ready, and a
+	// display:none element never intersects, so a visible-triggered task would never mount it.
+	}, { strategy: 'document-ready' });
 
 	// Follow the charged total (shipping quote, coupons, server order total) without remounting.
 	useVisibleTask$(({ track }) => {
@@ -46,10 +49,10 @@ export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOp
 		const element = track(() => elementRef.value) as StripePaymentMethodMessagingElement | null;
 		if (!element || !currency || amount <= 0) return;
 		element.update({ amount, currency });
-	});
+	}, { strategy: 'document-ready' });
 
 	return (
-		<div class="checkout-payment-messaging" data-testid="checkout-payment-messaging" style={{ display: props.options && ready.value ? 'block' : 'none', marginBottom: '16px' }}>
+		<div class="checkout-payment-messaging" data-testid={props.testId ?? 'checkout-payment-messaging'} style={{ display: props.options && ready.value ? 'block' : 'none', marginBottom: props.marginBottom ?? '16px' }}>
 			<div ref={hostRef} />
 		</div>
 	);

@@ -66,6 +66,12 @@ for (const [viewportName, viewport] of [
 				const before = await stub.calls();
 				expect(before.filter((c) => c.fn === 'confirmPayment')).toEqual([]);
 				expect(before.filter((c) => c.fn === 'elements.create' && c.type === 'payment')).toHaveLength(1);
+				// Every Payment Element mount: open accordion with radios, no wallets (they are express buttons), fixed order.
+				expect(before.find((c) => c.fn === 'elements.create' && c.type === 'payment')?.options).toEqual({
+					layout: { type: 'accordion', defaultCollapsed: false, radios: 'always', spacedAccordionItems: false },
+					wallets: { applePay: 'never', googlePay: 'never' },
+					paymentMethodOrder: ['card', 'affirm', 'klarna', 'afterpay_clearpay', 'cashapp', 'link', 'crypto'],
+				});
 				expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
 				// The shopper's network recovers; retry remounts the element (a fresh create) and the form becomes payable.

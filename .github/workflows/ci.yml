@@ -955,6 +955,8 @@ jobs:
         working-directory: packages/storefront
         env:
           E2E_STRIPE: '1'
+          # Serves the PDP buy-now probe route (src/routes/__express-buy-now-probe) the express spec drives.
+          E2E_PLATFORM_PROBE: '1'
         run: pnpm run test:e2e:run e2e/payment-init-browser.spec.ts e2e/express-checkout.spec.ts
 
       - name: Upload Playwright report on failure

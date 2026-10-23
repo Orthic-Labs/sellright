@@ -25,13 +25,72 @@ export interface ExpressCheckoutOptions {
 	cartToken: string;
 }
 
+/** The gateway account an express element mounts for. A cart (and so a quote) may not exist yet: the element mounts
+ *  first, so the gateway can report which wallets this device has, and the button shows only once a quote exists. */
+export interface ExpressGateway {
+	publishableKey: string;
+	/** Lower-case ISO currency, as the card gateway's Elements expects. */
+	currency: string;
+}
+
+/** Null: no card gateway, or no usable currency. */
+export function expressGateway(i: { gatewayConfigured: boolean | null | undefined; publishableKey: string | null | undefined; currency: string | null | undefined }): ExpressGateway | null {
+	const publishableKey = (i.publishableKey ?? '').trim();
+	if (!i.gatewayConfigured || !publishableKey) return null;
+	const currency = (i.currency ?? '').trim().toLowerCase();
+	if (!/^[a-z]{3}$/.test(currency)) return null;
+	return { publishableKey, currency };
+}
+
 /** Null hides express checkout: no gateway, no cart, an order already in progress. The button itself also stays hidden
  *  until the gateway reports an available wallet (see ExpressCheckout.tsx) — nothing is ever faked. */
 export function expressCheckoutOptions(i: ExpressCheckoutInputs): ExpressCheckoutOptions | null {
-	if (!i.gatewayConfigured || !i.publishableKey || !i.cartToken || i.cartEmpty || !i.noOrderYet) return null;
-	const currency = (i.currency ?? '').trim().toLowerCase();
-	if (!/^[a-z]{3}$/.test(currency)) return null;
-	return { publishableKey: i.publishableKey, currency, cartToken: i.cartToken };
+	if (!i.cartToken || i.cartEmpty || !i.noOrderYet) return null;
+	const gateway = expressGateway(i);
+	return gateway ? { ...gateway, cartToken: i.cartToken } : null;
+}
+
+/** The button heights the card gateway accepts (Express Checkout Element `buttonHeight`, 40–55px; its default is 44). */
+export const EXPRESS_BUTTON_HEIGHT = { min: 40, max: 55 } as const;
+
+/** A brand's ADD TO CART height as the gateway can render it: rounded and clamped to its range; undefined keeps the default. */
+export function expressButtonHeight(px: number | null | undefined): number | undefined {
+	if (typeof px !== 'number' || !Number.isFinite(px) || px <= 0) return undefined;
+	return Math.min(EXPRESS_BUTTON_HEIGHT.max, Math.max(EXPRESS_BUTTON_HEIGHT.min, Math.round(px)));
+}
+
+/**
+ * The express row: Apple Pay, Google Pay, Link and Klarna wherever the gateway account and the device offer them; PayPal
+ * and Amazon Pay never. Klarna in the Express Checkout Element takes the same `shippingAddressRequired`, `shippingRates`,
+ * `shippingaddresschange` / `shippingratechange` and `confirm` flow as the wallets (Stripe documents no per-method
+ * shipping restriction for it); Stripe requires a Klarna payment to confirm at exactly the pre-authorized amount, which
+ * `x-expected-amount` already guarantees for every express payment.
+ */
+export const EXPRESS_PAYMENT_METHODS = { applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' } as const;
+
+/** Express Checkout Element create options. The wallet always collects email, phone and a shipping address (checkout prices
+ *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. */
+export function expressElementOptions(o: { buttonHeight?: number | null } = {}) {
+	const buttonHeight = expressButtonHeight(o.buttonHeight);
+	return {
+		emailRequired: true,
+		phoneNumberRequired: true,
+		shippingAddressRequired: true,
+		paymentMethods: EXPRESS_PAYMENT_METHODS,
+		buttonType: { applePay: 'buy', googlePay: 'buy' },
+		...(buttonHeight ? { buttonHeight } : {}),
+	} as const;
+}
+
+/** The gateway's `ready` report, reduced to: does this device have a payment method the express row shows. */
+export function hasExpressMethod(available: Partial<Record<'applePay' | 'googlePay' | 'link' | 'klarna' | 'paypal' | 'amazonPay', boolean>> | null | undefined): boolean {
+	return !!available && !!(available.applePay || available.googlePay || available.link || available.klarna);
+}
+
+/** PDP buy-now: exactly one unit of the selected variant, or nothing when no complete variant is selected. */
+export function buyNowItems(sku: string | null | undefined): { sku: string; quantity: 1 }[] | null {
+	const s = (sku ?? '').trim();
+	return s ? [{ sku: s, quantity: 1 }] : null;
 }
 
 /** Rate id shown for a cart with nothing to ship (checkout prices it with zero shipping and no method). */
