@@ -56,6 +56,8 @@ targets:
         com.apple.developer.associated-domains:
           - webcredentials:api.spoares.com?mode=developer
           - webcredentials:admin.sellright.cc?mode=developer
+          - webcredentials:api.orthiclabs.com?mode=developer
+          - webcredentials:admin.orthiclabs.com?mode=developer
         # 'development' routes to the APNs SANDBOX host, which is what a
         # Debug/dev-signed build's token is valid for. TestFlight/App Store
         # builds need this flipped to 'production' (see docs/IOS-PUSH-SETUP.md);
