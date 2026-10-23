@@ -951,11 +951,11 @@ jobs:
       # The Stripe-enabled harness (E2E_STRIPE=1 seeds Stripe as the checkout card method) is a different checkout from
       # the default one, so it runs as its own invocation against a freshly recreated database + API. The storefront
       # build from the step above is reused.
-      - name: Run the Stripe payment-init e2e spec (E2E_STRIPE=1)
+      - name: Run the Stripe payment-init + express checkout e2e specs (E2E_STRIPE=1)
         working-directory: packages/storefront
         env:
           E2E_STRIPE: '1'
-        run: pnpm run test:e2e:run e2e/payment-init-browser.spec.ts
+        run: pnpm run test:e2e:run e2e/payment-init-browser.spec.ts e2e/express-checkout.spec.ts
 
       - name: Upload Playwright report on failure
         if: failure()
