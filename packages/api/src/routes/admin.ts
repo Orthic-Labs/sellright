@@ -30,6 +30,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
+import { orderAttribution } from '../orders/attribution.js';
 
 export const admin = new OpenAPIHono();
 
@@ -267,6 +268,8 @@ admin.openapi(
         code: o.code, state: o.state, status: o.status, paymentStatus, fulfillmentStatus, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
+        // Landing attribution the storefront sent at checkout (UTM + oppref), or null. A browser claim, display only.
+        attribution: orderAttribution(o.metadata),
         shippingAddress: o.shippingAddress ?? null, billingAddress: admin.kind === 'agent' ? null : (o.billingAddress ?? null), // D6: billing address stripped for agents
         customer,
         // `id` is the order_line id the refund/return endpoints key their

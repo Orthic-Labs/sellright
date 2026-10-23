@@ -3,29 +3,40 @@
 // event sink (platform/analytics-sink.ts), which sends a GA4 Measurement Protocol copy only when the tag manager did not. `purchase` is
 // pushed to the dataLayer only, never beaconed (the API's conversion plugin owns server purchase). Ad pixels exist only as GTM tags a brand
 // opts into (head.json analytics.adPlatforms). The bus carries minor units; GA4 gets major units by the currency's own exponent, and
-// purchase also carries integer minor units (`value_minor`, `price_minor`) for pixels that want them, since GTM may not compute.
+// every event (view_item, add_to_cart, begin_checkout, purchase) also carries integer minor units (`ecommerce.value_minor`, items[]
+// `price_minor`, `sku`) and a unique top-level `event_id` for pixels that want them, since GTM may not compute.
 import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
 import { minorUnitDigits } from '~/utils/currency';
-import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent } from '~/sellright/analytics';
+import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent, type AnalyticsLine } from '~/sellright/analytics';
 
 export const SINK_PATH = BRAND_ROUTES?.operational?.analyticsPath ?? '/api/analytics/events/';
 
 /** Minor units to major units for the currency's own exponent (JPY 0, USD 2, KWD 3). */
 const major = (minor: number, currency: string) => Math.round(minor) / 10 ** minorUnitDigits(currency);
 
+/** One dataLayer/GA4 item: GA4's fields (major-unit price) plus the SKU and the integer minor-unit unit price. */
+const item = (sku: string, name: string, priceMinor: number, quantity: number, currency: string) => ({
+	item_id: sku,
+	sku,
+	item_name: name,
+	price: major(priceMinor, currency),
+	price_minor: Math.round(priceMinor),
+	quantity,
+});
+
 /** The dataLayer push and (unless purchase) the sink body for one event. Pure. */
 export function conversionPayload(event: AnalyticsEvent, eventId: string, pageLocation: string, clientId: string | undefined, gtagSent: boolean) {
+	const lines = (all: readonly AnalyticsLine[] | undefined) => (all ?? []).slice(0, 20).map((i) => item(i.sku, i.name, i.price, i.quantity, event.currency));
 	const items =
 		event.name === 'view_item' || event.name === 'add_to_cart'
-			? [{ item_id: event.sku, item_name: event.productName, price: major(event.price, event.currency), quantity: event.name === 'add_to_cart' ? event.quantity : 1 }]
-			: event.name === 'purchase'
-				? (event.items ?? []).slice(0, 20).map((i) => ({ item_id: i.sku, item_name: i.name, price: major(i.price, event.currency), price_minor: Math.round(i.price), quantity: i.quantity }))
-				: [];
-	const value = event.name === 'add_to_cart' ? major(event.price * event.quantity, event.currency) : event.name === 'view_item' ? major(event.price, event.currency) : major(event.value, event.currency);
+			? [item(event.sku, event.productName, event.price, event.name === 'add_to_cart' ? event.quantity : 1, event.currency)]
+			: lines(event.items);
+	const valueMinor = Math.round(event.name === 'add_to_cart' ? event.price * event.quantity : event.name === 'view_item' ? event.price : event.value);
+	const value = major(valueMinor, event.currency);
 	const dataLayer = {
 		event: event.name,
 		event_id: eventId,
-		ecommerce: { currency: event.currency, value, ...(event.name === 'purchase' ? { transaction_id: event.orderCode, value_minor: Math.round(event.value) } : {}), items },
+		ecommerce: { currency: event.currency, value, value_minor: valueMinor, ...(event.name === 'purchase' ? { transaction_id: event.orderCode } : {}), items },
 	};
 	const beacon =
 		event.name === 'purchase'

@@ -19991,6 +19991,15 @@ export interface paths {
                 content: {
                     "application/json": {
                         acceptedQuoteHash?: string;
+                        /** @description Landing-URL attribution (UTM parameters and oppref) to store on the order. Allowlisted keys only; each value at most 256 printable characters. */
+                        attribution?: {
+                            oppref?: string;
+                            utm_campaign?: string;
+                            utm_content?: string;
+                            utm_medium?: string;
+                            utm_source?: string;
+                            utm_term?: string;
+                        };
                         billingAddress?: {
                             [key: string]: unknown;
                         };

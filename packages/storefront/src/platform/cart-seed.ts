@@ -4,6 +4,7 @@
 // revalidates live as always.
 import { addResultFrom } from '~/platform/controllers/product-model';
 import type { AddOutcome } from '~/contexts/CartContext';
+import { carryAttributionParams } from '~/sellright/attribution';
 
 export const SEED_SKU = /^[A-Za-z0-9._-]{1,64}$/;
 export const SEED_MAX_SKUS = 10;
@@ -40,8 +41,10 @@ export interface SeedPorts {
 
 const ISO2 = /^[A-Za-z]{2}$/;
 
-/** Runs the seed and returns the checkout URL to go to. Every failure path lands on checkout with an error code, never a broken page. */
+/** Runs the seed and returns the checkout URL to go to. Every failure path lands on checkout with an error code, never a broken page.
+ *  Every path keeps the link's UTM + oppref parameters, so the checkout URL still carries the landing attribution. */
 export async function runCartSeed(search: URLSearchParams, ports: SeedPorts): Promise<string> {
+	const fail = (error: string) => `/checkout/?${carryAttributionParams(search, new URLSearchParams({ error })).toString()}`;
 	const params = new URLSearchParams(search);
 	const productsParam = params.get('products');
 	const countryRaw = params.get('country') ?? params.get('countryCode');
@@ -53,7 +56,7 @@ export async function runCartSeed(search: URLSearchParams, ports: SeedPorts): Pr
 		return qs ? `/checkout/?${qs}` : '/checkout/';
 	}
 	const entries = parseSeedProducts(productsParam);
-	if (!entries || entries.length === 0) return '/checkout/?error=invalid_cart_link';
+	if (!entries || entries.length === 0) return fail('invalid_cart_link');
 	try {
 		await ports.resolveCountry(countryRaw && ISO2.test(countryRaw) ? countryRaw.toUpperCase() : undefined);
 		await ports.discard();
@@ -62,11 +65,11 @@ export async function runCartSeed(search: URLSearchParams, ports: SeedPorts): Pr
 			const result = addResultFrom(await ports.add(sku, quantity), sku, quantity);
 			if (result.status !== 'added') skipped.push(sku);
 		}
-		if (ports.totalQuantity() === 0) return '/checkout/?error=no_valid_products';
+		if (ports.totalQuantity() === 0) return fail('no_valid_products');
 		if (skipped.length) params.set('skipped', skipped.join(','));
 		const qs = params.toString();
 		return qs ? `/checkout/?${qs}` : '/checkout/';
 	} catch {
-		return '/checkout/?error=cart_link_failed';
+		return fail('cart_link_failed');
 	}
 }

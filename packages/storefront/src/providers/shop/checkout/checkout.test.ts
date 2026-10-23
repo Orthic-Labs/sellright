@@ -23,6 +23,8 @@ vi.mock('~/services/CartService', async (importOriginal) => ({
 }));
 
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
+import { __resetAnalyticsForTests, setAnalyticsConsent } from '~/sellright/analytics';
+import { captureAttribution } from '~/sellright/attribution';
 import { isOutOfStockConflict, placeOrder, settleZeroDueOrder, getOrder, getShopConfig, getEligibleShippingMethods, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
 
 // `sellright()` (openapi-fetch + the transport middleware in
@@ -98,6 +100,28 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 		expect(body.email).toBe('a@b.c');
 		expect(res.code).toBe('O1');
 		expect(res.receiptToken).toBe('rt_1');
+	});
+
+	it('sends the stored landing attribution with consent, and none without it', async () => {
+		try {
+			enqueue(respond(200, { code: 'OA', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_a' }));
+			await placeOrder(form, snap, scope);
+			expect(lastBody()).not.toHaveProperty('attribution');
+
+			setAnalyticsConsent(true);
+			captureAttribution('https://shop.test/products/tee/?utm_source=chatgpt&utm_medium=cpc&utm_campaign=rh_us_shirts_202610&utm_content=test&oppref=op1');
+			enqueue(respond(200, { code: 'OB', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_b' }));
+			await placeOrder(form, snap, scope);
+			expect(lastBody().attribution).toEqual({ utm_source: 'chatgpt', utm_medium: 'cpc', utm_campaign: 'rh_us_shirts_202610', utm_content: 'test', oppref: 'op1' });
+
+			setAnalyticsConsent(false);
+			enqueue(respond(200, { code: 'OC', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_c' }));
+			await placeOrder(form, snap, scope);
+			expect(lastBody()).not.toHaveProperty('attribution');
+		} finally {
+			__resetAnalyticsForTests();
+			sessionStorage.clear();
+		}
 	});
 
 	it('sends the bootstrap line and the snapshot token/revision when the form has no items', async () => {

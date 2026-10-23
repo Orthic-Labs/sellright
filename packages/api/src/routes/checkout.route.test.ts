@@ -329,6 +329,50 @@ describe('POST /v1/shop/checkout — empty/invalid cart', () => {
   });
 });
 
+describe('POST /v1/shop/checkout — landing attribution', () => {
+  const post = (extra: Record<string, unknown>, headers: Record<string, string> = {}) => app.request('/v1/shop/checkout', {
+    method: 'POST', headers: hdr(headers), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], ...extra }),
+  });
+
+  it('stores allowlisted UTM + oppref values on order.metadata.attribution (trimmed, empties dropped)', async () => {
+    const res = await post({ attribution: { utm_source: ' chatgpt ', utm_medium: 'cpc', utm_campaign: 'rh_us_shirts_202610', utm_content: 'test', utm_term: '', oppref: 'abc123' } });
+    expect(res.status).toBe(200);
+    const { code } = await res.json() as { code: string };
+    const order = await orderByCode(code);
+    expect((order?.metadata as { attribution?: unknown }).attribution).toEqual({ utm_source: 'chatgpt', utm_medium: 'cpc', utm_campaign: 'rh_us_shirts_202610', utm_content: 'test', oppref: 'abc123' });
+  });
+
+  it('an order without attribution stores none', async () => {
+    const res = await post({});
+    const { code } = await res.json() as { code: string };
+    expect((await orderByCode(code))?.metadata).not.toHaveProperty('attribution');
+  });
+
+  it.each([
+    ['an unknown key', { utm_source: 'x', gclid: 'y' }],
+    ['an over-long value', { utm_campaign: 'c'.repeat(257) }],
+    ['a control character', { oppref: 'a\nb' }],
+    ['a non-string value', { utm_source: 5 }],
+  ])('refuses %s with 400 and creates no order', async (_label, attribution) => {
+    const res = await post({ attribution });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_CHECKOUT_REQUEST');
+    const n = await withStore(STORE, async (tx) => (await tx.execute(sql`SELECT count(*)::int n FROM "order"`)).rows[0] as { n: number });
+    expect(n.n).toBe(0);
+  });
+
+  it('is not part of the idempotency fingerprint: a retry with a different claim replays the same order unchanged', async () => {
+    const key = 'idem-key-attribution-1';
+    const first = await post({ attribution: { utm_source: 'chatgpt' } }, { 'idempotency-key': key });
+    const second = await post({ attribution: { utm_source: 'other' } }, { 'idempotency-key': key });
+    expect(second.status).toBe(200);
+    const a = await first.json() as { code: string };
+    const b = await second.json() as { code: string };
+    expect(b.code).toBe(a.code);
+    expect(((await orderByCode(a.code))?.metadata as { attribution?: unknown }).attribution).toEqual({ utm_source: 'chatgpt' });
+  });
+});
+
 describe('POST /v1/shop/checkout — malformed request uses the structured error envelope', () => {
   // Before this fix, a validation failure fell through to
   // `@hono/zod-openapi`'s default `{ success: false, error: <ZodError> }`
