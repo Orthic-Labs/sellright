@@ -18,6 +18,11 @@
  *   __STRIPE_LOADERROR    message -> mounting a payment element fires 'loaderror' ({ error: { message } }) instead of 'ready'
  *   __STRIPE_SUBMIT_ERROR message -> elements.submit() resolves { error }
  *   __stripeEmit(event, payload)  fire a registered element handler, e.g. ('change', { complete: true })
+ *   __STRIPE_WALLETS      e.g. { applePay: true } -> the express checkout element's 'ready' reports these wallets
+ *                         available (unset: none, as on a device/domain without Apple Pay or Google Pay)
+ *   __stripeEmitFor(type, event, payload)  fire a handler of the element of that type (e.g. 'expressCheckout');
+ *                         resolves with the handlers' (awaited) results
+ * elements.update(opts) is recorded as { fn: 'elements.update', opts } (express checkout's amount follows server quotes).
  */
 import type { Page, Request } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -33,6 +38,8 @@ export const STRIPE_CONFIRM_PATH = '/__e2e/stripe-confirm';
 export function stripeStubScript(): string {
 	return `(() => {
 	const calls = (window.__stripeCalls = []);
+	const byType = {};
+	window.__stripeEmitFor = (type, event, payload) => Promise.all(((byType[type] || {})[event] || []).map((f) => f(payload)));
 	const CONFIRM_PATH = ${JSON.stringify(STRIPE_CONFIRM_PATH)};
 	function Stripe(key, options) {
 		calls.push({ fn: 'Stripe', key, options: options ?? null });
@@ -44,20 +51,27 @@ export function stripeStubScript(): string {
 					__clientSecret: bound,
 					create(type, o) {
 						calls.push({ fn: 'elements.create', type, options: o ?? null });
-						const handlers = {};
+						const handlers = (byType[type] = {});
 						const element = {
 							mount(target) {
 								calls.push({ fn: 'mount', target: String(target) });
 								setTimeout(() => {
 									if (window.__STRIPE_LOADERROR) (handlers.loaderror || []).forEach((f) => f({ elementType: 'payment', error: { type: 'api_connection_error', message: String(window.__STRIPE_LOADERROR) } }));
-									else (handlers.ready || []).forEach((f) => f({}));
+									else (handlers.ready || []).forEach((f) => f(type === 'expressCheckout'
+										? { elementType: 'expressCheckout', availablePaymentMethods: window.__STRIPE_WALLETS
+											? Object.assign({ applePay: false, googlePay: false, link: false, paypal: false, amazonPay: false, klarna: false }, window.__STRIPE_WALLETS)
+											: undefined }
+										: {}));
 								}, 0);
 							},
 							on(event, cb) { (handlers[event] ||= []).push(cb); },
 							destroy() { calls.push({ fn: 'destroy' }); },
 						};
-						window.__stripeEmit = (event, payload) => (handlers[event] || []).forEach((f) => f(payload));
+						if (type !== 'expressCheckout') window.__stripeEmit = (event, payload) => (handlers[event] || []).forEach((f) => f(payload));
 						return element;
+					},
+					update(o) {
+						calls.push({ fn: 'elements.update', opts: o ?? null });
 					},
 					submit() {
 						calls.push({ fn: 'elements.submit' });

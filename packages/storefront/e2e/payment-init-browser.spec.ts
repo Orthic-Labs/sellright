@@ -65,7 +65,7 @@ for (const [viewportName, viewport] of [
 				expect(checkoutPosts(), 'init failure creates no additional order').toBe(1);
 				const before = await stub.calls();
 				expect(before.filter((c) => c.fn === 'confirmPayment')).toEqual([]);
-				expect(before.filter((c) => c.fn === 'elements.create')).toHaveLength(1);
+				expect(before.filter((c) => c.fn === 'elements.create' && c.type === 'payment')).toHaveLength(1);
 				expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
 				// The shopper's network recovers; retry remounts the element (a fresh create) and the form becomes payable.
@@ -76,7 +76,7 @@ for (const [viewportName, viewport] of [
 				await expectNoPlaceOrder(page);
 				expect(checkoutPosts(), 'retry keeps the original order').toBe(1);
 				await expect(page.getByText(/loading secure payment/i)).toHaveCount(0);
-				expect((await stub.calls()).filter((c) => c.fn === 'elements.create')).toHaveLength(2);
+				expect((await stub.calls()).filter((c) => c.fn === 'elements.create' && c.type === 'payment')).toHaveLength(2);
 
 				// Same order, same PaymentIntent: the retry minted nothing new, and both mounts were created with that intent's client secret and PAY confirms.
 				const intents = (await mock.stripeIntents()).filter((i) => i.metadata.orderCode === placed.code);
@@ -84,7 +84,8 @@ for (const [viewportName, viewport] of [
 				await clickPay(page);
 				await expect.poll(async () => (await stub.calls()).filter((c) => c.fn === 'confirmPayment')).toHaveLength(1);
 				const calls = await stub.calls();
-				const secrets = calls.filter((c) => c.fn === 'elements').map((c) => (c.opts as { clientSecret: string }).clientSecret);
+				// Only the Payment Element's instances: express checkout's deferred-intent Elements ({ mode }) carries no client secret.
+				const secrets = calls.filter((c) => c.fn === 'elements' && (c.opts as { clientSecret?: string } | null)?.clientSecret).map((c) => (c.opts as { clientSecret: string }).clientSecret);
 				expect(secrets, 'both mounts (the failed one and the retry) used the order intent\'s client secret').toEqual([intents[0]!.client_secret, intents[0]!.client_secret]);
 				// The confirm resolved the order's intent through the Elements instance, and the mock's intent really settled.
 				expect(calls.filter((c) => c.fn === 'confirmPayment')).toEqual([expect.objectContaining({ hasElements: true, clientSecret: intents[0]!.client_secret })]);

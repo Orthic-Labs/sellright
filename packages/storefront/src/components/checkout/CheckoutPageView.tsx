@@ -7,6 +7,8 @@ import { CheckoutOrderSummary } from './CheckoutOrderSummary';
 import { CheckoutPaymentPanel } from './CheckoutPaymentPanel';
 import { CheckoutPaymentMessaging } from './CheckoutPaymentMessaging';
 import type { PaymentMessagingOptions } from './payment-messaging';
+import { ExpressCheckout } from './ExpressCheckout';
+import type { ExpressCheckoutOptions, ExpressOrderForm, ExpressOrderResult } from './express-checkout';
 import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
 import type { ShopConfig } from '~/sellright/types/checkout';
@@ -20,6 +22,12 @@ interface CheckoutPageViewProps {
   formattedTotal: Signal<string | null>;
   /** Pay-over-time messaging shown at the top of checkout; null hides it. */
   paymentMessaging: ReadonlySignal<PaymentMessagingOptions | null>;
+  /** Apple Pay / Google Pay at the top of checkout; null hides it. */
+  expressCheckout: ReadonlySignal<ExpressCheckoutOptions | null>;
+  expressCountry: string;
+  expressRedeemPoints: number;
+  onExpressPlaceOrder$: QRL<(form: ExpressOrderForm, expectedAmount: number) => Promise<ExpressOrderResult>>;
+  onExpressError$: QRL<(message: string) => void>;
   gatewayConfirmTrigger: Signal<number>;
   totalConfirmed: Signal<boolean>;
   hasMixedPreOrder: { value: boolean };
@@ -98,6 +106,16 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
           }))}
         />
         <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
+          <ExpressCheckout
+            options={props.expressCheckout.value}
+            country={props.expressCountry}
+            couponCodes={[...(props.localCart.cart.couponCodes ?? [])]}
+            redeemPoints={props.expressRedeemPoints}
+            items={props.localCart.cart.lines.map((l: { sku: string; quantity: number }) => ({ sku: l.sku, quantity: l.quantity }))}
+            cartKey={`${props.localCart.cart.token}:${props.localCart.cart.revision}:${props.localCart.cart.quoteHash ?? ''}`}
+            onPlaceOrder$={props.onExpressPlaceOrder$}
+            onError$={props.onExpressError$}
+          />
           <CheckoutPaymentMessaging options={props.paymentMessaging.value} />
           <div class="checkout-columns lg:flex lg:gap-x-8 xl:gap-x-12">
             <CheckoutOrderSummary

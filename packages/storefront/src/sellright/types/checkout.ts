@@ -33,6 +33,11 @@ export type PayResponse = PayOp['responses'][200]['content']['application/json']
 type PaymentIntentOp = paths['/v1/shop/orders/{code}/payment-intent']['post'];
 export type PaymentIntentResponse = PaymentIntentOp['responses'][200]['content']['application/json'];
 
+// ── POST /v1/shop/cart/{token}/express-quote — wallet (express checkout) quote ─
+type ExpressQuoteOp = paths['/v1/shop/cart/{token}/express-quote']['post'];
+export type ExpressQuoteRequest = NonNullable<ExpressQuoteOp['requestBody']>['content']['application/json'];
+export type ExpressQuote = ExpressQuoteOp['responses'][200]['content']['application/json'];
+
 // ── POST /v1/shop/orders/{code}/gateway-payment — start an NMI/Sezzle attempt ─
 type GatewayPaymentOp = paths['/v1/shop/orders/{code}/gateway-payment']['post'];
 export type GatewayPaymentRequest = NonNullable<GatewayPaymentOp['requestBody']>['content']['application/json'];
