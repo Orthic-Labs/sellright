@@ -18,6 +18,7 @@ function address(value: unknown) {
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
 import type { ImportContext } from './context.js';
+import { bumpOrderNumberPastExisting } from '../orders/order-number.js';
 
 /** Source simple-array identity uses lowercase equality, without trimming. */
 export function importedCouponCodes(value: unknown, canonicalCodes: ReadonlyMap<string, string> = new Map()): {
@@ -309,6 +310,9 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     }
 
     for (const part of chunk(orderRows, 500)) await tx.insert(s.order).values(part);
+    // #309: imported orders keep their codes; the store's counter moves past the highest imported code that
+    // matches its order-number format, so the next native order never collides with history.
+    await bumpOrderNumberPastExisting(tx, ctx.storeId);
     for (const part of chunk(lineRows, 1000)) await tx.insert(s.orderLine).values(part);
     for (const part of chunk(adjustmentRows, 1000)) await tx.insert(s.orderAdjustment).values(part);
 

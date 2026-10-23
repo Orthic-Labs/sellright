@@ -16,6 +16,7 @@ import { formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { INSTALLMENT_PROVIDER, continueToLabel } from '~/platform/payments/labels';
+import { displayOrderCode } from '~/utils/order-code';
 
 /**
  * Order-balance pay page. The "balance due" email (sent after an admin edited
@@ -44,7 +45,7 @@ export const head = ({ params, resolveValue }: { params: { code: string }; resol
 	const identity = resolveValue(useStoreIdentityLoader).identity;
 	return createSEOHead({
 		title: 'Pay Order Balance',
-		description: `Pay the balance on your ${identity.storeName} order${params?.code ? ' #' + params.code : ''}.`,
+		description: `Pay the balance on your ${identity.storeName} order${params?.code ? ' ' + displayOrderCode(params.code) : ''}.`,
 		noindex: true,
 		identity,
 	});
@@ -287,7 +288,7 @@ export default component$(() => {
 							{view === 'settled' ? 'Balance paid, thank you' : 'Nothing left to pay'}
 						</h1>
 						<p class="text-[var(--color-ink-soft)] text-[14px] mb-8">
-							Order <span class="font-medium text-[var(--color-ink)]">#{order.code}</span>{' '}
+							Order <span class="font-medium text-[var(--color-ink)]">{displayOrderCode(order.code)}</span>{' '}
 							{view === 'settled'
 								? 'is now paid in full. We will email you if anything else changes.'
 								: 'is paid in full. There is no outstanding balance.'}
@@ -301,7 +302,7 @@ export default component$(() => {
 				{view === 'due' && order && due != null && (
 					<div data-testid="balance-state-due">
 						<div class="text-center mb-10">
-							<p class={`${LABEL} mb-3`}>Order #{order.code}</p>
+							<p class={`${LABEL} mb-3`}>Order {displayOrderCode(order.code)}</p>
 							<h1 class="font-display text-4xl sm:text-5xl text-[var(--color-ink)] mb-3" style="line-height: 1.05">Pay your balance</h1>
 							<p class="text-[var(--color-ink-soft)] text-[14px] max-w-md mx-auto">
 								Your order was updated and the new total is higher than what you paid. Pay the difference below.

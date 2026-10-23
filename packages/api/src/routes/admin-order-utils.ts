@@ -1,7 +1,4 @@
-import { randomUUID } from 'node:crypto';
 import { selectUnitPrice, DEFAULT_VARIANT_PRICE_RULE, type VariantPriceRule } from '../money/pricing.js';
-
-export const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
 export function inferCarrier(t: string): string | null {
   const x = t.replace(/\s/g, '').toUpperCase();

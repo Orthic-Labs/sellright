@@ -90,7 +90,7 @@ export default function CustomerDetailPage() {
                 <thead><tr><th className="th">Order</th><th className="th">Date</th><th className="th">Status</th><th className="th text-right">Total</th></tr></thead>
                 <tbody>
                   {c.orders.map((o) => (
-                    <tr key={o.code} className="row-link border-t border-gray-100 first:border-0" onClick={() => nav(`/orders/${o.code}`)}>
+                    <tr key={o.code} className="row-link border-t border-gray-100 first:border-0" onClick={() => nav(`/orders/${encodeURIComponent(o.code)}`)}>
                       <td className="td font-medium">{o.code}</td>
                       <td className="td text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</td>
                       <td className="td"><StatusBadge value={o.state} /></td>

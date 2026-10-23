@@ -26,7 +26,8 @@ import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { resolveOrderRecipient } from '../orders/recipient.js';
-import { csvCell, orderCode, unitPrice } from './admin-order-utils.js';
+import { csvCell, unitPrice } from './admin-order-utils.js';
+import { withOrderNumber } from '../orders/order-number.js';
 import { env } from '../env.js';
 import { autoDeliverStore } from '../jobs/auto-deliver.js';
 import { fulfillmentStatusSql } from '../orders/status-sql.js';
@@ -107,7 +108,7 @@ adminOrderOps.openapi(
       const draftShipping = body.shipping ?? (draftMethod ? shippingRate(draftMethod.calculator as Parameters<typeof shippingRate>[0]) : 0);
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: draftShipping, taxRate, taxInclusive: storeRow.taxInclusive, shippingTaxable: storeRow.shippingTaxable });
       const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
-      const orderId = newOrderId; const code = orderCode();
+      const orderId = newOrderId;
       const paid = body.markPaid;
       const paidAt = paid ? new Date() : null;
       // Chokepoint operation `order_paid_transition` (order.id): an order created directly in
@@ -119,21 +120,25 @@ adminOrderOps.openapi(
       // reserved for the order's real Paid transition, which a later settlement of this draft must still get.
       // PAYMENT-TIMING §4.6: the placement hook for an admin manual tender (provider 'manual'). A veto refuses the
       // whole request before any row is written. Admin orders hold no reservations (the route takes no upgrade input).
-      if (paid) {
-        await checkPlacement(tx, st.storeId, { id: orderId, storeId: st.storeId, code, state: 'Paid', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} }, 'manual')
-          .catch((e: unknown) => { if (e instanceof PaymentPolicyVetoError) throw new HttpError(409, e.veto.message); throw e; });
-      }
-      const draft: Omit<SettlementOperation, 'kind'> = {
-        storeId: st.storeId, operationId: orderId, orderId, effectMode: 'deferred' as const,
-        mutations: [
-          { type: 'order_insert', rows: [{ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paidAt, shippingAddress: body.shippingAddress ?? null, shippingMethodCode: draftMethod?.code ?? null, shippingMethodName: draftMethod?.name ?? null }] },
-          ...(paid ? [{ type: 'payment_insert' as const, rows: [{ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled' as const, metadata: { manual: true, by: admin.email } }] }] : []),
-        ],
-        effects: paid ? paidOrderEffects({ orderId, customerId, paidAt: paidAt ?? new Date(), variant: 'settle', only: 'license_issue' }) : [],
-      };
-      const settled = paid
-        ? await recordSettlementOperation(tx, { ...draft, kind: 'order_paid_transition' })
-        : await recordSettlementOperation(tx, { ...draft, kind: 'admin_draft_create' });
+      // #309: the store's next sequential code, taken in this transaction; everything that carries the code (placement
+      // hook, order + manual payment rows) runs inside withOrderNumber so a code conflict retries with the next number.
+      const { code, result: settled } = await withOrderNumber(tx, st.storeId, async (code) => {
+        if (paid) {
+          await checkPlacement(tx, st.storeId, { id: orderId, storeId: st.storeId, code, state: 'Paid', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} }, 'manual')
+            .catch((e: unknown) => { if (e instanceof PaymentPolicyVetoError) throw new HttpError(409, e.veto.message); throw e; });
+        }
+        const draft: Omit<SettlementOperation, 'kind'> = {
+          storeId: st.storeId, operationId: orderId, orderId, effectMode: 'deferred' as const,
+          mutations: [
+            { type: 'order_insert', rows: [{ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paidAt, shippingAddress: body.shippingAddress ?? null, shippingMethodCode: draftMethod?.code ?? null, shippingMethodName: draftMethod?.name ?? null }] },
+            ...(paid ? [{ type: 'payment_insert' as const, rows: [{ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled' as const, metadata: { manual: true, by: admin.email } }] }] : []),
+          ],
+          effects: paid ? paidOrderEffects({ orderId, customerId, paidAt: paidAt ?? new Date(), variant: 'settle', only: 'license_issue' }) : [],
+        };
+        return paid
+          ? await recordSettlementOperation(tx, { ...draft, kind: 'order_paid_transition' })
+          : await recordSettlementOperation(tx, { ...draft, kind: 'admin_draft_create' });
+      });
       await tx.insert(s.orderLine).values(priced.map((p, idx) => ({ storeId: st.storeId, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name, quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal })));
       await executeEffectsNow(tx, settled.effectIds);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: orderId, action: 'draft_create', toState: paid ? 'Paid' : 'PendingPayment' });

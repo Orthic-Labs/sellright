@@ -11,6 +11,7 @@ import {
   getTrackingUrl,
   hasPreOrderItems,
 } from './order-details-utils';
+import { displayOrderCode } from '~/utils/order-code';
 
 interface OrderDetailsProps {
   order: TrackedOrder;
@@ -25,7 +26,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
       {/* Order Header - Compact with total in header */}
       <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between pb-4 border-b border-[#E5E0D8] gap-3">
         <div class="flex flex-col gap-1">
-          <h2 class="text-3xl font-heading font-normal text-[#141210]">Order #{order.code}</h2>
+          <h2 class="text-3xl font-heading font-normal text-[#141210]">Order {displayOrderCode(order.code)}</h2>
           {/* Order Status moved to center-left */}
           <div class="mt-2">
             <div class={`inline-flex items-center gap-2 px-3 py-1.5 ${orderStatus.bgColor} rounded-[3px] text-sm font-medium ${orderStatus.color}`}>

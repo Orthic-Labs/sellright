@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { withOrderNumber } from '../orders/order-number.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, asc, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
@@ -72,8 +73,6 @@ class CreditPaymentUnavailableError extends Error {
 class QuoteChangedError extends Error {
   constructor(readonly quote: PricedCart, readonly revision?: number) { super('Quote changed'); }
 }
-
-const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
 /**
  * CART-01: stable fingerprint of the semantic checkout payload, persisted on
@@ -653,7 +652,6 @@ checkout.openapi(
       let loyaltySnap = loyaltySnapshotFor(totals);
 
       const orderId = newOrderId;
-      const code = orderCode();
       // High-entropy receipt token (32 bytes, base64url) → scopes the public
       // order-by-code read on the confirmation page (carried as ?rt=). Never
       // bare-code (P1): the order code is ~enumerable.
@@ -670,7 +668,8 @@ checkout.openapi(
         ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
         ...(loyaltySnap ? { loyalty: loyaltySnap } : {}),
         ...(attribution ? { attribution } : {}) };
-      await tx.insert(s.order).values({
+      // #309: the store's next sequential code, taken in this transaction (orders/order-number.ts).
+      const { code } = await withOrderNumber(tx, st.id, (code) => tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
         idempotencyKey: idemKey, promotionId: promoId, couponCodes, receiptToken,
         shippingMethodCode: shippingMethodChosen?.code ?? null, shippingMethodName: shippingMethodChosen?.name ?? null,
@@ -687,7 +686,7 @@ checkout.openapi(
         // order-list endpoint reads this to suppress email_match-linked orders
         // until the customer verifies the email.
         metadata: orderMetadata,
-      });
+      }));
       const lineIds = priced.map(() => randomUUID());
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({

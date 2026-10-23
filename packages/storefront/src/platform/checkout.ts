@@ -4,6 +4,7 @@ import type { DocumentHead, RequestHandler } from '@qwik.dev/router';
 import { theme } from '~/theme/theme.config';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { displayOrderCode } from '~/utils/order-code';
 
 export const head = (): DocumentHead => {
   return createSEOHead({
@@ -34,7 +35,7 @@ export const confirmationHead = ({ params, resolveValue }: { params: { code: str
   const identity = resolveValue(useStoreIdentityLoader).identity;
   return createSEOHead({
     title: 'Order Confirmation',
-    description: `Thank you for your order${params?.code ? ' #' + params.code : ''} at ${identity.storeName}. View your order summary and details.`,
+    description: `Thank you for your order${params?.code ? ' ' + displayOrderCode(params.code) : ''} at ${identity.storeName}. View your order summary and details.`,
     noindex: true,
     identity,
   });
