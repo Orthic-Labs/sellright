@@ -107,9 +107,15 @@ export const daysInMonth = (month: number): number => [31, 29, 31, 30, 31, 30, 3
 
 // ── reviews ────────────────────────────────────────────────────────────────
 
-/** schema.org AggregateRating, or null when there are no reviews (never emit an empty rating). */
+/** Platform default: a product's reviews block, rating link and AggregateRating stay hidden below this many approved reviews. */
+export const MIN_REVIEWS_TO_SHOW = 5;
+
+/** True when `count` approved reviews are enough to show reviews UI / structured data. */
+export const reviewsMeetThreshold = (count: number | null | undefined): boolean => typeof count === 'number' && count >= MIN_REVIEWS_TO_SHOW;
+
+/** schema.org AggregateRating, or null under the review threshold (never emit an empty or thin rating). */
 export function aggregateRatingSchema(rating: { average: number; count: number } | null | undefined) {
-	if (!rating || !(rating.count > 0) || !(rating.average > 0)) return null;
+	if (!rating || !reviewsMeetThreshold(rating.count) || !(rating.average > 0)) return null;
 	return {
 		'@type': 'AggregateRating' as const,
 		ratingValue: Number(rating.average.toFixed(1)),
