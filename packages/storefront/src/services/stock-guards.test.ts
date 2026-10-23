@@ -5,7 +5,7 @@
  * observes API-side requests. Observation only — nothing here changes how stock is fetched. Plan A9 scenarios 12, 14, 17.
  * Comments are stripped before matching, so prose that names a forbidden thing ("no cache, no TTL") never trips a guard.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -39,8 +39,9 @@ const section = (source: string, from: string, to?: string): string => {
 const all = sourceFiles().map((f) => ({ rel: relative(SRC, f), code: stripComments(readFileSync(f, 'utf8')) }));
 
 describe('locked stock rules — static guards (scenario 14)', () => {
-	it('ProductCacheService has no stock method or field', () => {
-		expect(read('services/ProductCacheService.ts')).not.toMatch(/stock/i);
+	it('no client product cache module exists (ProductCacheService was removed: nothing wrote to it)', () => {
+		expect(existsSync(join(SRC, 'services/ProductCacheService.ts'))).toBe(false);
+		expect(all.filter((f) => /ProductCacheService|productCache\b/.test(f.code)).map((f) => f.rel)).toEqual([]);
 	});
 	it('no STOCK_CACHE_DURATION and no lastStockRefresh anywhere in src', () => {
 		const hits = all.filter((f) => /STOCK_CACHE_DURATION|lastStockRefresh/.test(f.code)).map((f) => f.rel);

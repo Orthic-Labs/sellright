@@ -4,15 +4,15 @@
  *
  * Native SellRight client only — `getMe`/`getAddresses` (services/customer.ts)
  * and the native `Address` type (sellright/types/account.ts), zero legacy
- * shapes. Country persistence is CountryPreferenceService (localStorage),
- * carried over from the retired LocalCartService with identical semantics.
+ * shapes. Country persistence is CountryPreferenceService (localStorage): geolocate once, cache the result, and let
+ * the shopper's own choice override it.
  */
 
 import { getMe, getAddresses } from '~/services/customer';
 import type { Address } from '~/sellright/types/account';
 import { $ } from '@qwik.dev/core';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { lookupCountryCode } from '~/utils/visitor-country';
+import { lookupCountryCodeOnce } from '~/utils/visitor-country';
 
 export interface StoredAddressInfo {
   countryCode: string;
@@ -91,9 +91,22 @@ export function isStoredCountryFromCustomer(): boolean {
   return CountryPreferenceService.hasExplicitCountrySelection();
 }
 
-/** Clear stored address data (useful for logout). */
+/** Logout: back to the default country state (not explicit, not geolocated), so the next visit geolocates once. */
 export function clearStoredAddress(): void {
-  CountryPreferenceService.setCountryFromGeolocation('US');
+  CountryPreferenceService.reset();
+}
+
+/**
+ * Geolocate once, then cache. Returns the stored country when it is already known (an explicit choice or a cached
+ * geolocation result) without any lookup. Otherwise looks the visitor up (one request per page load) and caches a real
+ * answer as `geo`; that write is a no-op if the shopper chose a country while the lookup was in flight. A failed lookup
+ * is not cached, so a later page load tries again; until then the US placeholder applies.
+ */
+export async function resolveVisitorCountry(): Promise<string> {
+  if (!CountryPreferenceService.needsGeolocation()) return CountryPreferenceService.getCountry();
+  const countryCode = await lookupCountryCodeOnce();
+  if (countryCode) CountryPreferenceService.setCountryFromGeolocation(countryCode);
+  return CountryPreferenceService.getCountry();
 }
 
 /**
@@ -113,8 +126,8 @@ export const loadCountryFromStorage = $(async (appState: any) => {
 });
 
 /**
- * Load country on demand when user shows purchase intent (add to cart).
- * This handles geolocation and saves the preference for future use.
+ * Load country on demand when the shopper shows purchase intent (add to cart). Geolocates only while the stored
+ * preference is still the default; an explicit choice or a cached geolocation result is used as is.
  */
 export const loadCountryOnDemand = $(async (appState: any) => {
 	// Write the country only when it actually changes. The lookup can answer while the shopper is typing in an address
@@ -123,28 +136,8 @@ export const loadCountryOnDemand = $(async (appState: any) => {
 	const setCountry = (code: string) => {
 		if (appState.shippingAddress.countryCode !== code) appState.shippingAddress.countryCode = code;
 	};
-	const persistedCountry = CountryPreferenceService.getCountry();
-	const hasExplicitCountry = CountryPreferenceService.hasExplicitCountrySelection();
-
-	// Only run geolocation if country is default US and user never explicitly set
-	if ((persistedCountry && persistedCountry !== 'US') || hasExplicitCountry) {
-		setCountry(persistedCountry);
-		return;
-	}
-
-	setCountry(persistedCountry || 'US');
-
-	// Attempt geolocation only when still in default mode
-	const countryCode = await lookupCountryCode();
-	if (countryCode) {
-		CountryPreferenceService.setCountryFromGeolocation(countryCode);
-		setCountry(countryCode);
-		return;
-	}
-
-	// Fallback to US if geolocation fails
-	setCountry('US');
-	CountryPreferenceService.setCountryFromGeolocation('US');
+	setCountry(CountryPreferenceService.getCountry());
+	setCountry(await resolveVisitorCountry());
 });
 
 export const getOrResolveCountryCode = $(async (appState: any, countryOverride?: string) => {
@@ -154,19 +147,7 @@ export const getOrResolveCountryCode = $(async (appState: any, countryOverride?:
 		appState.shippingAddress.countryCode = override;
 		return override;
 	}
-	const stored = CountryPreferenceService.getCountry();
-	if (stored) {
-		appState.shippingAddress.countryCode = stored;
-		return stored;
-	}
-	const geolocated = await lookupCountryCode();
-	if (geolocated) {
-		CountryPreferenceService.setCountryFromGeolocation(geolocated);
-		appState.shippingAddress.countryCode = geolocated;
-		return geolocated;
-	}
-	const cc = 'US';
-	CountryPreferenceService.setCountryFromGeolocation(cc);
-	appState.shippingAddress.countryCode = cc;
-	return cc;
+	const countryCode = await resolveVisitorCountry();
+	appState.shippingAddress.countryCode = countryCode;
+	return countryCode;
 });

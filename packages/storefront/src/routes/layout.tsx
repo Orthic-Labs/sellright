@@ -26,7 +26,6 @@ import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CACHE_POLICY_VERSION, resolveRouteCacheProfile } from '~/config/route-cache-policy';
-import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
 import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
 import { theme, identityFromStaticTheme } from '~/theme/theme.config';
@@ -197,68 +196,6 @@ export default component$(() => {
 	// Initialize cross-tab storage listener (T4: idle, no UVT needed)
 	useOnDocument('qidle', $(() => {
 		LocalAddressService.setupCrossTabSync();
-	}));
-
-	// Cache invalidation: SSE with polling fallback (SSE fails over Cloudflare HTTP/2)
-	// Deferred until after window load + idle — must stay off the LCP critical path
-	useOnDocument('qidle', $(() => {
-		const startCacheSync = () => {
-		const baseUrl = import.meta.env.DEV ? DEV_API : window.location.origin;
-
-		const clearCaches = () => {
-			import('~/services/ProductCacheService').then(({ productCache }) => productCache.clear());
-		};
-
-		let useFallbackPolling = false;
-		let lastPollVersion = '';
-
-		// Fallback: poll /api/cache-version every 60s
-		const startPolling = () => {
-			if (useFallbackPolling) return;
-			useFallbackPolling = true;
-			const poll = () => {
-				fetch(`${baseUrl}/api/cache-version`).then(r => r.ok ? r.text() : '').then(v => {
-					if (lastPollVersion && v && v !== lastPollVersion) clearCaches();
-					if (v) lastPollVersion = v;
-				}).catch(() => {});
-			};
-			poll();
-			setInterval(poll, 60_000);
-		};
-
-		// Try SSE first
-		try {
-			const es = new EventSource(`${baseUrl}/api/cache-events`);
-			let connected = false;
-			es.onopen = () => { connected = true; };
-			es.onmessage = (event) => {
-				try {
-					const data = JSON.parse(event.data);
-					if (data.type === 'product-updated' || data.type === 'stock-changed') clearCaches();
-				} catch (_) { /* ignore */ }
-			};
-			es.onerror = () => {
-				es.close();
-				if (!connected) startPolling();
-			};
-		} catch (_) {
-			startPolling();
-		}
-		};
-
-		// Defer past LCP: wait for window load, then requestIdleCallback (2s timeout fallback)
-		const schedule = () => {
-			if ('requestIdleCallback' in window) {
-				(window as any).requestIdleCallback(startCacheSync, { timeout: 2000 });
-			} else {
-				setTimeout(startCacheSync, 1500);
-			}
-		};
-		if (document.readyState === 'complete') {
-			schedule();
-		} else {
-			window.addEventListener('load', schedule, { once: true });
-		}
 	}));
 
 	useContextProvider(APP_STATE, state);

@@ -64,6 +64,15 @@ describe('legacy browser snapshot', () => {
     expect(CountryPreferenceService.getCountry()).toBe('CA');
     expect(CountryPreferenceService.hasExplicitCountrySelection()).toBe(true);
   });
+  it('migrates a non-explicit blob country as a cached geolocation result', () => {
+    localStorage.setItem('vendure_local_cart', JSON.stringify({ countryCode: 'NL', countryExplicitlySet: false }));
+    expect(CountryPreferenceService.getSource()).toBe('geo');
+  });
+  it('logout reset is not undone by a leftover blob', () => {
+    localStorage.setItem('vendure_local_cart', raw);
+    CountryPreferenceService.reset();
+    expect(CountryPreferenceService.getSource()).toBe('default');
+  });
   it('retains blob & stable claim across lost response, then removes after receipt', async () => {
     localStorage.setItem('vendure_local_cart', raw);
     let attempts = 0;
@@ -155,5 +164,32 @@ describe('ordinary native bootstrap', () => {
     mockTransfer(() => response(200, { receipt: CLAIM, cart: null, couponCode: null, countryCode: null, unresolved: [] }));
     await expect(CartService.bootstrap()).rejects.toThrow('no confirmed receipt');
     expect(localStorage.getItem('vendure_local_cart')).toBe(raw);
+  });
+
+  describe('country intent from the receipt (explicit when the snapshot said so, geolocated otherwise)', () => {
+    const receipt = (countryCode: string) => () => response(200, { receipt: CLAIM, cart, couponCode: null, countryCode, unresolved: [] });
+    it('an explicit snapshot country is saved as the shopper\'s explicit choice', async () => {
+      localStorage.setItem('vendure_local_cart', raw);
+      mockTransfer(receipt('CA'));
+      await CartService.bootstrap();
+      expect(CountryPreferenceService.getCountry()).toBe('CA');
+      expect(CountryPreferenceService.getSource()).toBe('explicit');
+    });
+    it('a non-explicit snapshot country is cached as a geolocation result (no further lookup)', async () => {
+      localStorage.setItem('vendure_local_cart', JSON.stringify({ ...JSON.parse(raw), countryCode: 'DE', countryExplicitlySet: false }));
+      mockTransfer(receipt('DE'));
+      await CartService.bootstrap();
+      expect(CountryPreferenceService.getCountry()).toBe('DE');
+      expect(CountryPreferenceService.getSource()).toBe('geo');
+      expect(CountryPreferenceService.needsGeolocation()).toBe(false);
+    });
+    it('a non-explicit snapshot country never overwrites an explicit choice already saved', async () => {
+      CountryPreferenceService.setCountry('GB');
+      localStorage.setItem('vendure_local_cart', JSON.stringify({ ...JSON.parse(raw), countryCode: 'DE', countryExplicitlySet: false }));
+      mockTransfer(receipt('DE'));
+      await CartService.bootstrap();
+      expect(CountryPreferenceService.getCountry()).toBe('GB');
+      expect(CountryPreferenceService.getSource()).toBe('explicit');
+    });
   });
 });

@@ -4,6 +4,7 @@ import { ShoppingBagIcon, MapPinIcon, LockClosedIcon, HomeIcon, GiftIcon, HeartI
 import { loadLoyaltyProgram } from '~/components/loyalty/loyalty-program';
 import { logout } from '~/providers/shop/account/account';
 import { LocalAddressService } from '~/services/LocalAddressService';
+import { clearStoredAddress } from '~/utils/addressStorage';
 
 const navLinks: Array<{
 	title: string;
@@ -76,6 +77,7 @@ export const AccountNav = component$(() => {
 			console.error('Sign out failed:', result.error);
 		}
 		LocalAddressService.clearAddresses();
+		clearStoredAddress();
 		window.location.reload();
 	});
 

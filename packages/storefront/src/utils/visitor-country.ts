@@ -53,3 +53,19 @@ export async function lookupCountryCode(): Promise<string | null> {
 	}
 	return null;
 }
+
+let pendingLookup: Promise<string | null> | null = null;
+
+/**
+ * `lookupCountryCode`, at most once per page load: concurrent and repeated purchase-intent calls share one request.
+ * A failed lookup is not cached across page loads (the caller persists only a real answer), so the next page retries.
+ */
+export function lookupCountryCodeOnce(): Promise<string | null> {
+	pendingLookup ??= lookupCountryCode();
+	return pendingLookup;
+}
+
+/** Test seam: forget the page-load lookup. */
+export function resetCountryLookupForTests(): void {
+	pendingLookup = null;
+}
