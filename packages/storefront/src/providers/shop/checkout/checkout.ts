@@ -16,6 +16,8 @@ import type {
 	CheckoutRequest,
 	CheckoutResponse,
 	CheckoutConflictBody,
+	ExpressQuote,
+	ExpressQuoteRequest,
 	PayResponse,
 	PaymentIntentResponse,
 	GatewayAttempt,
@@ -181,11 +183,16 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 /** Mint (or reuse) the order's Stripe PaymentIntent → client_secret. Only
  *  called when POST /checkout leaves the order PendingPayment with a
  *  non-zero total. */
-export const createPaymentIntent = async (code: string, receiptToken?: string): Promise<PaymentIntentResponse> => {
+export const createPaymentIntent = async (code: string, receiptToken?: string, expectedAmount?: number): Promise<PaymentIntentResponse> => {
 	// The API requires order ownership: the receipt token from POST /checkout
-	// (or the signed-in owner's session cookie).
+	// (or the signed-in owner's session cookie). `expectedAmount` (express checkout) is the total the wallet sheet
+	// showed: the API mints nothing (409 AMOUNT_MISMATCH) when the amount due differs — it never charges this value.
+	const header = {
+		...(receiptToken ? { 'x-receipt-token': receiptToken } : {}),
+		...(expectedAmount !== undefined ? { 'x-expected-amount': String(expectedAmount) } : {}),
+	};
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/payment-intent', {
-		params: { path: { code }, header: receiptToken ? { 'x-receipt-token': receiptToken } : {} },
+		params: { path: { code }, header },
 	});
 	return nonEmpty(data, 'payment-intent') as PaymentIntentResponse;
 };
@@ -311,3 +318,14 @@ export const getEligibleShippingMethods = async (
 	items: readonly { sku: string; quantity: number }[],
 	couponCodes: readonly string[] = [],
 ): Promise<ShopShippingMethod[]> => (await getShippingQuote(countryCode, items, couponCodes)).methods;
+
+/**
+ * Express checkout (Apple Pay / Google Pay): the server-priced total for the destination country a wallet reports,
+ * before the order exists (`POST /v1/shop/cart/{token}/express-quote`). The API reads the cart's own lines, live stock,
+ * the eligible shipping methods and destination tax; `cart.grandTotal` is what the wallet shows and `cart.quoteHash`
+ * is the consent the order POST re-verifies. A 409 (out of stock, no shipping to that country) throws.
+ */
+export const getExpressQuote = async (token: string, body: ExpressQuoteRequest): Promise<ExpressQuote> => {
+	const { data } = await sellright().POST('/v1/shop/cart/{token}/express-quote', { params: { path: { token } }, body });
+	return nonEmpty(data, 'express-quote') as ExpressQuote;
+};

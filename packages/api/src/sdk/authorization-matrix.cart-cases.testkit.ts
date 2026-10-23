@@ -138,6 +138,22 @@ function source(fixture: Fixture) {
           'durable migration receipt committed without granting customer identity', 'state');
       } };
     } },
+    { key: 'POST /v1/shop/cart/{token}/express-quote', contract: 'capability', async prepare(s) {
+      const code = 'express-' + randomUUID();
+      await rows('UPDATE shipping_method SET enabled=false WHERE store_id=$1', [fixture.storeId]);
+      await rows('INSERT INTO shipping_method(store_id,code,name,calculator,enabled) VALUES($1,$2,$3,$4::jsonb,true)',
+        [fixture.storeId, code, 'Matrix wallet shipping', JSON.stringify({ flat: 400, countries: ['US'], taxRate: 0, taxInclusive: false })]);
+      const before = await fixture.snapshot();
+      return { url: '/v1/shop/cart/' + s.token + '/express-quote', body: { country: 'US' }, async verify(response: Response, proof: MatrixProof) {
+        const body = await json(response);
+        proof.equal({ requiresShipping: body.requiresShipping, shippingMethodCode: body.shippingMethodCode, methods: body.methods },
+          { requiresShipping: true, shippingMethodCode: code, methods: [{ code, name: 'Matrix wallet shipping', rate: 400 }] }, 'server-selected eligible wallet shipping');
+        proof.equal({ token: body.cart.token, revision: body.cart.revision, shippingTotal: body.cart.shippingTotal, grandTotal: body.cart.grandTotal },
+          { token: s.token, revision: 0, shippingTotal: 400, grandTotal: 2900 }, 'opaque capability quotes its own cart lines server-side');
+        proof.ok(/^[0-9a-f]{64}$/.test(body.cart.quoteHash), 'server quote identity for checkout consent');
+        proof.equal(await fixture.snapshot(), before, 'express quote changes no DB/files/provider state', 'state');
+      } };
+    } },
     { key: 'GET /v1/shop/cart/{token}/checkout', contract: 'capability', async prepare(s) {
       const orderId = randomUUID(), code = 'CART-RECOVERY-' + randomUUID(), receiptToken = randomBytes(32).toString('base64url');
       await rows('INSERT INTO "order"(id,store_id,code,state,currency,subtotal,grand_total,receipt_token) VALUES($1,$2,$3,$4,$5,2500,2500,$6)',

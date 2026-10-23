@@ -241,12 +241,18 @@ pay.openapi(
     method: 'post',
     path: '/v1/shop/orders/{code}/payment-intent',
     summary: 'Create a Stripe PaymentIntent for an order',
-    request: { params: z.object({ code: z.string() }), headers: z.object({ 'x-receipt-token': z.string().optional() }) },
+    request: { params: z.object({ code: z.string() }), headers: z.object({
+      'x-receipt-token': z.string().optional(),
+      // Express checkout (wallet sheet): the amount the shopper authorized in the wallet. Never charged — the intent is
+      // always minted for the server's amount due — but when present and different, nothing is minted (409
+      // AMOUNT_MISMATCH), so a wallet can never confirm a total the shopper did not see.
+      'x-expected-amount': z.string().regex(/^\d{1,12}$/).optional(),
+    }) },
     responses: {
       200: { description: 'Intent', content: { 'application/json': { schema: z.object({ clientSecret: z.string(), intentId: z.string() }) } } },
       400: { description: 'Already covered', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Not payable', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
+      409: { description: 'Not payable, or the amount due differs from x-expected-amount', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string(), amountDue: z.number().int().optional() }) } } },
       503: { description: 'Stripe not configured', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
@@ -260,6 +266,8 @@ pay.openapi(
     // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
     if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
     const receipt = c.req.header('x-receipt-token');
+    const expectedHeader = c.req.header('x-expected-amount');
+    const expectedAmount = expectedHeader && /^\d{1,12}$/.test(expectedHeader) ? Number(expectedHeader) : undefined;
     const session = customerToken(c);
     // Serialize with an order-edit commit (same pay:{store}:{code} lock): the
     // amount read and the remote intent mint must not straddle a repricing.
@@ -291,6 +299,9 @@ pay.openapi(
       if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
       const { order, amountDue, balanceTenders, editTender } = prepared;
       if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+      if (expectedAmount !== undefined && amountDue !== expectedAmount) {
+        return errJson(c, 409, 'AMOUNT_MISMATCH', 'the amount due differs from the authorized amount', { extra: { state: order.state, amountDue } });
+      }
       if (amountDue <= 0) {
         // A Paid order with nothing owed is simply not payable (no balance); an
         // unpaid order already covered by other tenders keeps the 400.
