@@ -58,7 +58,7 @@ export const submitOrderFlow = async <F>(deps: PlaceOrderFlowDeps<F>, form: F, c
 		flags.processingModal.value = false;
 		flags.orderProcessing.value = false;
 		const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
-		deps.navigate(`/checkout/confirmation/${srState.code}${rt}`);
+		deps.navigate(`/checkout/confirmation/${encodeURIComponent(srState.code)}${rt}`);
 		return;
 	}
 	if (phase === 'paying') {

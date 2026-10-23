@@ -28,7 +28,7 @@ export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
         if (url.pathname.startsWith('/order-status')) {
                 const orderCode = url.searchParams.get('orderCode');
                 if (orderCode) {
-                        throw redirect(301, `/track-order?orderCode=${orderCode}`);
+                        throw redirect(301, `/track-order?orderCode=${encodeURIComponent(orderCode)}`);
                 }
                 throw redirect(301, '/track-order');
         }
@@ -39,9 +39,9 @@ export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
                 const email = url.searchParams.get('email');
                 
                 if (orderCode && email) {
-                        throw redirect(301, `/track-order?orderCode=${orderCode}&email=${encodeURIComponent(email)}`);
+                        throw redirect(301, `/track-order?orderCode=${encodeURIComponent(orderCode)}&email=${encodeURIComponent(email)}`);
                 } else if (orderCode) {
-                        throw redirect(301, `/track-order?orderCode=${orderCode}`);
+                        throw redirect(301, `/track-order?orderCode=${encodeURIComponent(orderCode)}`);
                 }
                 throw redirect(301, '/track-order');
         }

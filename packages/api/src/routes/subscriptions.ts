@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
+import { withOrderNumber } from '../orders/order-number.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
@@ -22,8 +23,6 @@ import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { env } from '../env.js';
 import { J, Page, errBody, requireAdmin, requireStore, guard } from './admin-helpers.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-
-const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
   return token ? resolveCustomer(tx, token, false, { renew: false }) : null; // 0108: never row-lock the session inside a business transaction (design §5)
@@ -69,12 +68,11 @@ subscriptions.openapi(
       if (!v || !v.stripePriceId) return { kind: 'badVariant' };
       const unitPrice = v.salePrice != null ? v.salePrice : v.price;
       const orderId = randomUUID();
-      const code = orderCode();
-      await tx.insert(s.order).values({
+      const { code } = await withOrderNumber(tx, st.id, (code) => tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId: cust.id, state: 'PendingPayment',
         currency: st.currency, subtotal: unitPrice, grandTotal: unitPrice,
         metadata: { subscription: true },
-      });
+      }));
       await tx.insert(s.orderLine).values({
         storeId: st.id, orderId, variantId: v.id, variantSku: v.sku, variantName: v.name,
         quantity: 1, unitPrice, lineSubtotal: unitPrice, lineDiscount: 0, lineTax: 0, lineTotal: unitPrice,

@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { withStore } from '../db/client.js';
+import { withStore, type Tx } from '../db/client.js';
+import { formatOrderCode, highestMatchingCode, orderNumberingError, readOrderNumbering, MAX_AFFIX_LENGTH, MAX_MIN_DIGITS, MAX_ORDER_NUMBER, type OrderNumbering } from '../orders/order-number.js';
 import * as s from '../db/schema.js';
 import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
@@ -335,6 +336,78 @@ adminSettings.openapi(
       },
     });
     return c.json({ ok: true }, 200);
+  }),
+);
+
+// ── order numbers (#309) ─────────────────────────────────────────────────────
+// Per-store sequential order codes: prefix + zero-padded number + suffix. Lives in order_number_sequence (the row the
+// order-insert transaction increments), not store.config. Reversible configuration, so agents may change it.
+const OrderNumberingOut = z.object({
+  prefix: z.string(), suffix: z.string(), minDigits: z.number().int(), nextNumber: z.number().int(),
+  /** The code the next order will get. */
+  preview: z.string(),
+  /** The highest existing code matching this format, if any; nextNumber is always above its number. */
+  highestExisting: z.string().nullable(),
+});
+async function orderNumberingView(tx: Tx, storeId: string, v: OrderNumbering) {
+  const highest = await highestMatchingCode(tx, storeId, v);
+  return { prefix: v.prefix, suffix: v.suffix, minDigits: v.minDigits, nextNumber: v.nextNumber, preview: formatOrderCode(v, v.nextNumber), highestExisting: highest?.code ?? null };
+}
+
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/settings/order-numbering', summary: 'Order number format and the next code',
+    responses: { 200: { description: 'OK', content: J(OrderNumberingOut) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const out = await withStore(st.storeId, async (tx) => orderNumberingView(tx, st.storeId, await readOrderNumbering(tx, st.storeId)));
+    return c.json(out, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/order-numbering', summary: 'Set the order number format / next number',
+    request: { body: { content: J(z.object({
+      prefix: z.string().max(MAX_AFFIX_LENGTH).optional(),
+      suffix: z.string().max(MAX_AFFIX_LENGTH).optional(),
+      minDigits: z.number().int().min(0).max(MAX_MIN_DIGITS).optional(),
+      nextNumber: z.number().int().min(1).max(MAX_ORDER_NUMBER).optional(),
+    }).strict()) } },
+    responses: {
+      200: { description: 'OK', content: J(OrderNumberingOut) },
+      400: { description: 'Invalid format', ...errBody },
+      401: { description: 'Unauthorized', ...errBody },
+      409: { description: 'Would reuse an existing order code', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const b = c.req.valid('json');
+    const out = await withStore(st.storeId, async (tx) => {
+      // Lock the counter row (created with the default when missing) so no order takes a number mid-change.
+      await tx.execute(sql`INSERT INTO order_number_sequence (store_id) VALUES (${st.storeId}) ON CONFLICT (store_id) DO NOTHING`);
+      const before = await readOrderNumbering(tx, st.storeId, { forUpdate: true });
+      const next: OrderNumbering = { ...before, ...Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined)) };
+      const invalid = orderNumberingError(next);
+      if (invalid) throw new HttpError(400, invalid);
+      const highest = await highestMatchingCode(tx, st.storeId, next);
+      if (highest && highest.number >= next.nextNumber) {
+        throw new HttpError(409, `Order ${highest.code} already exists in this format; the next number must be at least ${highest.number + 1}`,
+          'ORDER_NUMBER_COLLISION', 'nextNumber', { highestExisting: highest.code, minimumNextNumber: highest.number + 1 });
+      }
+      await tx.execute(sql`UPDATE order_number_sequence SET prefix = ${next.prefix}, suffix = ${next.suffix}, min_digits = ${next.minDigits},
+        next_number = ${next.nextNumber}, updated_at = now() WHERE store_id = ${st.storeId}`);
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId, actor: admin.email, entity: 'store', entityId: st.storeId, action: 'settings_update',
+        data: { section: 'order_numbering', before, after: next },
+      });
+      return orderNumberingView(tx, st.storeId, next);
+    });
+    return c.json(out, 200);
   }),
 );
 

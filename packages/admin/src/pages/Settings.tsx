@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Store, CreditCard, Truck, Receipt, LogIn, ShieldCheck, UsersRound, UserCircle, Plus, Trash2 } from 'lucide-react';
+import { Store, CreditCard, Truck, Receipt, Hash, LogIn, ShieldCheck, UsersRound, UserCircle, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
@@ -9,6 +9,7 @@ import ShippingMethods from '../components/ShippingMethods';
 import { useToast } from '../components/Toast';
 import { TwoFactorEnroll } from '../components/TwoFactorEnroll';
 import { PasskeysSection } from '../components/PasskeysSection';
+import { OrderNumbering } from '../components/OrderNumbering';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
@@ -17,13 +18,14 @@ function paymentEnabled(v: unknown): boolean {
   return v === true || (!!v && typeof v === 'object' && (v as { enabled?: unknown }).enabled === true);
 }
 
-type SectionId = 'store' | 'payments' | 'shipping' | 'taxes' | 'signin' | 'security' | 'team' | 'account';
+type SectionId = 'store' | 'payments' | 'shipping' | 'taxes' | 'orders' | 'signin' | 'security' | 'team' | 'account';
 const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof Store }[] }[] = [
   { group: 'Store', items: [
     { id: 'store', label: 'Store profile', icon: Store },
     { id: 'payments', label: 'Payments', icon: CreditCard },
     { id: 'shipping', label: 'Shipping', icon: Truck },
     { id: 'taxes', label: 'Taxes', icon: Receipt },
+    { id: 'orders', label: 'Order numbers', icon: Hash },
     { id: 'signin', label: 'Customer sign-in', icon: LogIn },
   ]},
   { group: 'Account & access', items: [
@@ -187,6 +189,8 @@ export default function SettingsPage() {
           )}
 
           {section === 'shipping' && <ShippingMethods canManage={canManage} />}
+
+          {section === 'orders' && <OrderNumbering canManage={canManage} />}
 
           {section === 'taxes' && (
             <FormSection title="Taxes" description="A single base tax rate applied to orders."

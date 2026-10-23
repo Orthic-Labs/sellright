@@ -696,6 +696,33 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(await targetRows(storeId, 'store')).toEqual([]);
   });
 
+  it('moves a configured order-number counter past the highest imported matching code (#309)', async () => {
+    await resetSource('rh', 'n' + randomUUID().slice(0, 8));
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    // A store configured before its history arrives: prefix 'ORD-', counter still at 1 (would reuse ORD-1, ORD-2).
+    const client = await targetPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_store', $1, true)`, [storeId]);
+      await client.query(`INSERT INTO store (id, slug, name, currency) VALUES ($1, $2, 'Imported Store', 'USD')`, [storeId, f.config.slug]);
+      await client.query(`INSERT INTO order_number_sequence (store_id, prefix, next_number) VALUES ($1, 'ORD-', 1)`, [storeId]);
+      await client.query('COMMIT');
+    } finally { client.release(); }
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect((await targetOne(storeId, 'order_number_sequence')).next_number).toBe('1'); // dry run rolled back
+    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect(applied.counts.order).toBe(2);
+    expect((await targetRows(storeId, 'order', 'ORDER BY code')).map(o => o.code)).toEqual(['ORD-1', 'ORD-2']); // codes kept
+    expect(await targetOne(storeId, 'order_number_sequence')).toMatchObject({ prefix: 'ORD-', next_number: '3' });
+    // Restore removes the imported tenant data and leaves the forward-only counter configuration in place.
+    const restored = await restoreMigration({ targetUrl: TARGET_URL, manifest: JSON.parse(await readFile(f.applyManifestPath, 'utf8')), apply: true });
+    expect(restored.restored).toBe(true);
+    expect(await targetRows(storeId, 'order')).toEqual([]);
+    expect(await targetOne(storeId, 'order_number_sequence')).toMatchObject({ prefix: 'ORD-', next_number: '3' });
+  });
+
   it('retains exact source edit-basis records without changing imported financial projections', async () => {
     await resetSource('rh', 'basis-' + randomUUID().slice(0, 8));
     // Historical shipping was fully discounted; retaining LIST must not turn

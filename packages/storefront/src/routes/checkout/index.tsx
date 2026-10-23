@@ -695,7 +695,7 @@ const CheckoutContent = component$(() => {
       if (!current()) return;
       if (outcome.kind === 'settled') {
         const rt = outcome.receiptToken ? `?rt=${encodeURIComponent(outcome.receiptToken)}` : '';
-        navigate(`/checkout/confirmation/${outcome.code}${rt}`);
+        navigate(`/checkout/confirmation/${encodeURIComponent(outcome.code)}${rt}`);
         return;
       }
       if (outcome.kind === 'payable') {
@@ -761,7 +761,7 @@ const CheckoutContent = component$(() => {
   const onGatewaySuccess$ = $(async () => {
     isOrderProcessing.value = false;
     const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
-    navigate(`/checkout/confirmation/${srState.code}${rt}`);
+    navigate(`/checkout/confirmation/${encodeURIComponent(srState.code)}${rt}`);
   });
 
   return (

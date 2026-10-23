@@ -7,6 +7,7 @@ import { OrderCardView, ShoppingBagIcon, hasView } from '~/platform/gateway';
 import { formatDate, getStatusDisplay, getStatusIcon } from './order-display';
 import { OrdersSkeleton } from './OrdersSkeleton';
 import { projectOrder } from '~/platform/controllers/project';
+import { displayOrderCode } from '~/utils/order-code';
 export { head } from './seo';
 
 const PAGE_SIZE = 20;
@@ -65,11 +66,11 @@ export default component$(() => {
 							<div class="space-y-4">
 								{orders.value.map((order) => {
 									const status = getStatusDisplay(order.state, undefined, order.fulfillmentStatus);
-									if (hasOrderCard) return <OrderCardView key={order.code} order={projectOrder(order)} href={`/account/orders/${order.code}`} />;
+									if (hasOrderCard) return <OrderCardView key={order.code} order={projectOrder(order)} href={`/account/orders/${encodeURIComponent(order.code)}`} />;
 									return (
 										<a
 											key={order.code}
-											href={`/account/orders/${order.code}`}
+											href={`/account/orders/${encodeURIComponent(order.code)}`}
 											class="block bg-white rounded-[3px] border border-[#E5E0D8] hover:border-[#D8D1C7] transition-colors duration-300 overflow-hidden p-4 sm:p-6 no-underline"
 										>
 											<div class="flex items-start justify-between gap-4">
@@ -77,7 +78,7 @@ export default component$(() => {
 													{getStatusIcon(order.state, undefined, order.fulfillmentStatus)}
 													<div class="min-w-0">
 														<h3 class="text-base sm:text-lg font-semibold text-gray-900 truncate">
-															Order #{order.code}
+															Order {displayOrderCode(order.code)}
 														</h3>
 														<p class="text-xs sm:text-sm text-gray-500">
 															{order.placedAt ? `Placed on ${formatDate(order.placedAt)}` : 'Not yet placed'}

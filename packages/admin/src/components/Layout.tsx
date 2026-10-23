@@ -139,7 +139,7 @@ function GlobalSearch() {
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1.5 w-80 right-0 card p-1 max-h-96 overflow-auto text-sm animate-fade-in" role="listbox">
             {!has && <div className="px-3 py-2 text-gray-400">No matches</div>}
-            {data?.orders.map((o) => <button key={o.code} className="menu-item" onClick={() => go(`/orders/${o.code}`)}><ShoppingBag size={14} className="text-gray-400" /><span className="font-mono">{o.code}</span> <span className="text-gray-400 truncate">{o.email ?? ''}</span></button>)}
+            {data?.orders.map((o) => <button key={o.code} className="menu-item" onClick={() => go(`/orders/${encodeURIComponent(o.code)}`)}><ShoppingBag size={14} className="text-gray-400" /><span className="font-mono">{o.code}</span> <span className="text-gray-400 truncate">{o.email ?? ''}</span></button>)}
             {data?.products.map((p) => <button key={p.id} className="menu-item" onClick={() => go(`/products/${p.id}`)}><Package size={14} className="text-gray-400" /><span className="truncate">{p.name}</span></button>)}
             {data?.customers.map((c) => <button key={c.id} className="menu-item" onClick={() => go(`/customers/${c.id}`)}><Users size={14} className="text-gray-400" /><span className="truncate">{c.email}</span></button>)}
           </div>
