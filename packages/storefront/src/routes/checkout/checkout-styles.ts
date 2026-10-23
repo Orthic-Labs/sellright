@@ -32,10 +32,13 @@ export const CHECKOUT_STYLES = `
 .sticky-cta-bar{
   display:none;
 }
-@media (max-width:767px){
+/* Stacked columns (below lg, where .checkout-columns is not flex): no 42% desktop band; the summary is its own dark card (#339). */
+@media (max-width:1023px){
   .checkout-layout{background:var(--color-parchment)}
   .checkout-left{background:#2c2926}
   .checkout-right{background:transparent}
+}
+@media (max-width:767px){
   .checkout-right-inner{padding-bottom:90px!important}
   .checkout-cta-inline{display:none}
   .checkout-below-cta{display:none}
