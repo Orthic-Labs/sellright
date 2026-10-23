@@ -166,7 +166,7 @@ export default component$(() => {
 							{/* Product Details */}
 							<div class="flex flex-col justify-between min-w-0">
 								<div class="min-w-0">
-									<h3 class={`text-[15px] font-normal leading-snug truncate font-heading ${isCheckoutView ? 'text-[#FDFAF6]' : 'text-[#1A1A1A]'}`}>
+									<h3 class={`text-[15px] font-normal leading-snug line-clamp-2 [overflow-wrap:anywhere] font-heading ${isCheckoutView ? 'text-[#FDFAF6]' : 'text-[#1A1A1A]'}`}>
 										{productSlug ? (
 											<Link
 												href={productPath(productSlug)}
