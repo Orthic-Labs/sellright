@@ -107,7 +107,9 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
         />
         <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
           <ExpressCheckout
-            options={props.expressCheckout.value}
+            gateway={props.expressCheckout.value}
+            cartToken={props.expressCheckout.value?.cartToken ?? null}
+            continueHint
             country={props.expressCountry}
             couponCodes={[...(props.localCart.cart.couponCodes ?? [])]}
             redeemPoints={props.expressRedeemPoints}

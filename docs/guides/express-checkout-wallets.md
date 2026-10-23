@@ -3,6 +3,26 @@
 Checkout shows Apple Pay / Google Pay buttons at the top (Stripe Express Checkout Element) for any store whose Stripe
 card gateway is configured. The feature is generic: no per-brand code or flag.
 
+## Where the buttons show
+
+- **Checkout** (top of the page, with the "Or continue below" line): the shopper's cart.
+- **Cart drawer** (platform `components/cart/Cart.tsx`, above CHECKOUT, every brand): the shopper's cart, same flow.
+- **Product page**, where a brand view places `ExpressBuyButtons` from `~/platform/views` under ADD TO CART:
+
+  ```tsx
+  <ExpressBuyButtons sku={props.selection.variantSku} currency={props.product.currencyCode} buttonHeight={48} />
+  ```
+
+  `sku` null (no complete option selection) renders no button and never opens a sheet. `buttonHeight` (40–55px,
+  clamped) should match ADD TO CART. Buy-now charges exactly one unit of that variant through its own single-line
+  server cart: `POST /v1/shop/cart { items: [{ sku, quantity: 1 }] }` sent without credentials, so it belongs to no
+  customer and no login merge can fold it into the shopper's cart. Its token lives only in the component (never the
+  `sr_cart` cookie); the shopper's cart is never read or changed. A new variant gets a new buy-now cart; unused ones
+  expire with the cart TTL. Confirmation, purchase analytics and the cart-retire check (which only retires the cookie's
+  cart) are unchanged.
+
+Every button uses the "Buy" call to action (`buttonType: { applePay: 'buy', googlePay: 'buy' }`).
+
 ## When the buttons show
 
 All of these must hold, otherwise nothing renders:
@@ -39,8 +59,9 @@ legacy `/.well-known/apple-developer-merchantid-domain-association` file is not 
    methods (none → 409 `SHIPPING_UNAVAILABLE`), destination tax, coupons, points. Its `cart.quoteHash` is the same hash
    `GET /v1/shop/cart/{token}` returns for that context. Called on page load, on every `shippingaddresschange` and
    `shippingratechange`; the wallet amount is set only from these responses.
-2. On wallet confirm the storefront runs PLACE ORDER's own flow: live cart read under the cart lock (fails closed on any
-   unavailable line), `POST /v1/shop/checkout` with `acceptedQuoteHash` = the wallet quote's hash (the server reprices and
+2. On wallet confirm the storefront runs PLACE ORDER's own flow (checkout: `submitOrderFlow`; drawer and buy-now:
+   `components/checkout/express-order.ts`): live cart read (the shopper's cart under the cart lock; a buy-now cart by its
+   own token) that fails closed on any unavailable line, `POST /v1/shop/checkout` with `acceptedQuoteHash` = the wallet quote's hash (the server reprices and
    409s `QUOTE_CHANGED` on any difference; no order, no stock taken).
 3. `POST /v1/shop/orders/{code}/payment-intent` carries `x-expected-amount` = the wallet total. The intent is always
    minted for the server's amount due; a different amount due mints nothing (409 `AMOUNT_MISMATCH`).
