@@ -1,4 +1,4 @@
-# Express checkout: Apple Pay and Google Pay
+# Express checkout: Apple Pay, Google Pay, Link and Klarna
 
 Checkout shows Apple Pay / Google Pay buttons at the top (Stripe Express Checkout Element) for any store whose Stripe
 card gateway is configured. The feature is generic: no per-brand code or flag.
@@ -21,6 +21,12 @@ card gateway is configured. The feature is generic: no per-brand code or flag.
   expire with the cart TTL. Confirmation, purchase analytics and the cart-retire check (which only retires the cookie's
   cart) are unchanged.
 
+The express row offers Apple Pay, Google Pay, Link and Klarna (`paymentMethods` `auto`; PayPal and Amazon Pay `never`)
+on every instance. Klarna in the Express Checkout Element uses the same shipping address / shipping rate events and
+confirm flow as the wallets (Stripe documents no per-method shipping restriction), and Stripe declines a Klarna payment
+confirmed at a different amount than pre-authorized, which `x-expected-amount` rules out. Link and Klarna must be
+enabled in the Stripe dashboard; Klarna also needs the domain registered.
+
 Every button uses the "Buy" call to action (`buttonType: { applePay: 'buy', googlePay: 'buy' }`).
 
 ## When the buttons show
@@ -30,7 +36,7 @@ All of these must hold, otherwise nothing renders:
 - `/v1/shop/config` reports Stripe usable for the store's current mode (mode-matched secret + publishable key).
 - The cart is non-empty and no order exists yet for this checkout view.
 - The API returns an express quote for the page's destination country (shipping available, every line in stock).
-- Stripe reports Apple Pay or Google Pay available on this device, browser and **domain**. Apple Pay needs the domain
+- Stripe reports Apple Pay, Google Pay, Link or Klarna available on this device, browser and **domain**. Apple Pay needs the domain
   registered (below); Google Pay needs it for Elements as well.
 
 ## Per-store setup (ops)

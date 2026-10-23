@@ -148,6 +148,7 @@ describe('expressElementOptions', () => {
 		const o = expressElementOptions();
 		expect(o).toMatchObject({ emailRequired: true, phoneNumberRequired: true, shippingAddressRequired: true, buttonType: { applePay: 'buy', googlePay: 'buy' } });
 		expect(o).not.toHaveProperty('buttonHeight');
+		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' });
 		expect(expressElementOptions({ buttonHeight: 52 })).toMatchObject({ buttonHeight: 52 });
 		expect(expressElementOptions({ buttonHeight: 80 })).toMatchObject({ buttonHeight: 55 });
 	});
@@ -159,6 +160,8 @@ describe('hasExpressMethod', () => {
 		expect(hasExpressMethod({ applePay: false, googlePay: false, paypal: true, amazonPay: true })).toBe(false);
 		expect(hasExpressMethod({ applePay: true })).toBe(true);
 		expect(hasExpressMethod({ googlePay: true })).toBe(true);
+		expect(hasExpressMethod({ link: true })).toBe(true);
+		expect(hasExpressMethod({ klarna: true })).toBe(true);
 	});
 });
 

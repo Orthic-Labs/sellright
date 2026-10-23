@@ -59,6 +59,15 @@ export function expressButtonHeight(px: number | null | undefined): number | und
 	return Math.min(EXPRESS_BUTTON_HEIGHT.max, Math.max(EXPRESS_BUTTON_HEIGHT.min, Math.round(px)));
 }
 
+/**
+ * The express row: Apple Pay, Google Pay, Link and Klarna wherever the gateway account and the device offer them; PayPal
+ * and Amazon Pay never. Klarna in the Express Checkout Element takes the same `shippingAddressRequired`, `shippingRates`,
+ * `shippingaddresschange` / `shippingratechange` and `confirm` flow as the wallets (Stripe documents no per-method
+ * shipping restriction for it); Stripe requires a Klarna payment to confirm at exactly the pre-authorized amount, which
+ * `x-expected-amount` already guarantees for every express payment.
+ */
+export const EXPRESS_PAYMENT_METHODS = { applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' } as const;
+
 /** Express Checkout Element create options. The wallet always collects email, phone and a shipping address (checkout prices
  *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. */
 export function expressElementOptions(o: { buttonHeight?: number | null } = {}) {
@@ -67,7 +76,7 @@ export function expressElementOptions(o: { buttonHeight?: number | null } = {}) 
 		emailRequired: true,
 		phoneNumberRequired: true,
 		shippingAddressRequired: true,
-		paymentMethods: { applePay: 'auto', googlePay: 'auto', link: 'never', paypal: 'never', amazonPay: 'never', klarna: 'never' },
+		paymentMethods: EXPRESS_PAYMENT_METHODS,
 		buttonType: { applePay: 'buy', googlePay: 'buy' },
 		...(buttonHeight ? { buttonHeight } : {}),
 	} as const;
@@ -75,7 +84,7 @@ export function expressElementOptions(o: { buttonHeight?: number | null } = {}) 
 
 /** The gateway's `ready` report, reduced to: does this device have a payment method the express row shows. */
 export function hasExpressMethod(available: Partial<Record<'applePay' | 'googlePay' | 'link' | 'klarna' | 'paypal' | 'amazonPay', boolean>> | null | undefined): boolean {
-	return !!available && !!(available.applePay || available.googlePay);
+	return !!available && !!(available.applePay || available.googlePay || available.link || available.klarna);
 }
 
 /** PDP buy-now: exactly one unit of the selected variant, or nothing when no complete variant is selected. */

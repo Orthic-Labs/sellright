@@ -78,6 +78,15 @@ test.describe('express checkout (wallet)', () => {
 		await expect(express(page)).toBeHidden();
 	});
 
+	test('Link or Klarna alone on this device shows the express row', async ({ apiProxyPage: page }) => {
+		const stub = await installStripeStub(page);
+		await page.addInitScript(() => { (window as unknown as { __STRIPE_WALLETS: object }).__STRIPE_WALLETS = { klarna: true, link: true }; });
+		await addToCart(page, PRODUCT.mug.slug);
+		await goToCheckout(page);
+		await expect(express(page)).toHaveAttribute('aria-hidden', 'false', { timeout: 15_000 });
+		stub.assertReached();
+	});
+
 	test('wallet total comes from server quotes; confirm creates one order at that total and confirms its intent', async ({ apiProxyPage: page, api }) => {
 		let checkoutPosts = 0;
 		page.on('request', (r) => { if (new URL(r.url()).pathname === '/v1/shop/checkout' && r.method() === 'POST') checkoutPosts++; });
@@ -91,7 +100,7 @@ test.describe('express checkout (wallet)', () => {
 		const elementsCall = (await stub.calls()).find((c) => c.fn === 'elements' && (c.opts as { mode?: string } | null)?.mode === 'payment');
 		expect(elementsCall, 'deferred-intent Elements for the wallet').toBeTruthy();
 		expect((await stub.calls()).find((c) => c.fn === 'elements.create' && c.type === 'expressCheckout')?.options)
-			.toMatchObject({ emailRequired: true, phoneNumberRequired: true, shippingAddressRequired: true, paymentMethods: { applePay: 'auto', googlePay: 'auto', link: 'never', paypal: 'never' }, buttonType: { applePay: 'buy', googlePay: 'buy' } });
+			.toMatchObject({ emailRequired: true, phoneNumberRequired: true, shippingAddressRequired: true, paymentMethods: { applePay: 'auto', googlePay: 'auto', link: 'auto', klarna: 'auto', paypal: 'never', amazonPay: 'never' }, buttonType: { applePay: 'buy', googlePay: 'buy' } });
 		await expect(express(page).getByText(/or continue below/i), 'the continue line belongs to checkout').toBeVisible();
 
 		// Sheet opens with the pre-quoted rates; the wallet's address then gets its own server quote.
