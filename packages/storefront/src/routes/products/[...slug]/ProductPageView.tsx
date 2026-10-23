@@ -9,7 +9,7 @@ import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
 import { LoyaltyPdpEarn } from '~/components/loyalty/LoyaltyPdpEarn';
 import { ProductReviews } from '~/components/reviews/ProductReviews';
-import { starString } from '~/utils/rewards';
+import { reviewsMeetThreshold, starString } from '~/utils/rewards';
 import { productPageContent } from '~/platform/brand-data';
 import { useRelatedProducts } from '~/platform/product-related';
 import { PRODUCT_UUID } from '~/platform/controllers/restock-form';
@@ -155,7 +155,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         <div class="sr-info-col">
           {isPreOrder.value && <div class="sr-kicker">New Release</div>}
           <h1 class="sr-title">{titleCase(product.name)}</h1>
-          {rating && rating.count > 0 && (
+          {rating && reviewsMeetThreshold(rating.count) && (
             <a
               href="#reviews"
               class="inline-flex items-center gap-2 -mt-3 mb-3 text-[13px] no-underline"
