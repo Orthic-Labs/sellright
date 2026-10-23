@@ -28,7 +28,7 @@ export async function recoverCheckoutPaymentError(options: RecoverCheckoutPaymen
       if (!isCurrent()) return;
       if (sr?.state === 'Paid') {
         const rt = order.receiptToken ? `?rt=${encodeURIComponent(order.receiptToken)}` : '';
-        navigate(`/checkout/confirmation/${sr.code}${rt}`);
+        navigate(`/checkout/confirmation/${encodeURIComponent(sr.code)}${rt}`);
         return;
       }
     } catch (e) {

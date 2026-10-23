@@ -73,9 +73,11 @@ export async function runMigration(input: {
     await target.query("SELECT set_config('app.current_store', $1, true)", [config.storeId]);
     await target.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['migration:' + config.storeId]);
     const beforeStore = (await target.query('SELECT * FROM store WHERE id=$1 FOR UPDATE', [config.storeId])).rows;
+    // order_number_sequence is store configuration (#309: format + counter, which only ever moves forward), not
+    // imported tenant data: a configured store may be imported into, and restore leaves the counter where it is.
     const scopedTables = (await target.query<{ table_name: string }>(`
       SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='store_id'
-        AND table_name NOT IN ('admin_user_store','staff_invite','processed_event') ORDER BY table_name
+        AND table_name NOT IN ('admin_user_store','staff_invite','processed_event','order_number_sequence') ORDER BY table_name
     `)).rows.map(row => row.table_name);
     for (const table of scopedTables) {
       if (!/^[a-z_]+$/.test(table)) throw new Error('Unexpected tenant table name');

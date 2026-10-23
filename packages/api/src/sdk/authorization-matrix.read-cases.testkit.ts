@@ -160,6 +160,10 @@ export function createReadCases(fixture: MatrixReadFixture): MatrixCase[] {
       proof.equal(body.slug, fixture.storeSlug, 'settings selected store');
       fields(body, { name: 'string', currency: 'string', taxRate: 'number', taxInclusive: 'boolean', shippingTaxable: 'boolean', stripeMode: 'string' }, proof);
     } },
+    { path: '/v1/admin/settings/order-numbering', verify(body: Json, proof: MatrixProof) {
+      fields(body, { prefix: 'string', suffix: 'string', minDigits: 'number', nextNumber: 'number', preview: 'string' }, proof);
+      proof.ok(body.highestExisting === null || typeof body.highestExisting === 'string', 'highestExisting is null or a code');
+    } },
     { path: '/v1/admin/settings/identity', verify(body: Json, proof: MatrixProof) { fields(body, { identity: 'object', published: 'boolean', hasPreviewToken: 'boolean' }, proof); } },
     { path: '/v1/admin/settings/security', verify(body: Json, proof: MatrixProof) {
       fields(body, { requireTotp: 'boolean' }, proof);

@@ -8,6 +8,7 @@ import { OptimizedImage } from '~/components/ui/LazyImage';
 import { trackPurchaseOnce } from '~/platform/controllers/conversion';
 import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
 import { APP_STATE } from '~/constants';
+import { displayOrderCode } from '~/utils/order-code';
 
 export { confirmationHead as head } from '~/platform/checkout';
 
@@ -121,7 +122,7 @@ const ConfirmationPage = component$(() => {
 							: 'The payment for this order was declined. No charge was made — you can try again.'}
 					</p>
 					<p class="text-xs text-[#5b5a56] mb-8">
-						Order code <span class="font-medium text-[var(--color-ink)]">#{code}</span>
+						Order code <span class="font-medium text-[var(--color-ink)]">{displayOrderCode(code)}</span>
 					</p>
 					<div class="flex flex-wrap gap-6 justify-center text-xs tracking-[0.14em] uppercase">
 						<Link href="/contact" class="text-[var(--color-ink)] border-b border-[var(--color-ink)] pb-0.5 hover:opacity-70 transition-opacity">
@@ -155,7 +156,7 @@ const ConfirmationPage = component$(() => {
 							Thank you{fullName ? `, ${fullName.split(' ')[0]}` : ''}
 						</h1>
 						<p class="text-[#5b5a56] text-sm mb-1">
-							Your order <span class="font-medium text-[var(--color-ink)]">#{order.code}</span> is confirmed
+							Your order <span class="font-medium text-[var(--color-ink)]">{displayOrderCode(order.code)}</span> is confirmed
 						</p>
 						{contactEmail && (
 							<p class="text-[#7a7873] text-xs">

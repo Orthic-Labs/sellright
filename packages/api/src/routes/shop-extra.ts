@@ -1,6 +1,6 @@
 import { shippingLabelSql } from '../lib/shipping-label.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, sql, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -19,6 +19,7 @@ import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
 import { loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
+import { orderCodeCandidates } from '../orders/order-number.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -49,7 +50,10 @@ shopExtra.openapi(
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const out = await withStore(st.id, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      // #309: accept '#1001' for '1001' and the reverse, and lower-case input; exact match wins.
+      const candidates = orderCodeCandidates(code);
+      const found = await tx.select().from(s.order).where(inArray(s.order.code, candidates));
+      const o = candidates.map((k) => found.find((r) => r.code === k)).find(Boolean);
       if (!o) return null;
       // email must match the order's customer or the checkout contact snapshot.
       let ok = (o.metadata as { contact?: { email?: string } } | null)?.contact?.email?.toLowerCase() === email.toLowerCase();

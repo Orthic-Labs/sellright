@@ -159,7 +159,7 @@ export default function Dashboard() {
             </tr></thead>
             <tbody>
               {data.recentOrders.map((o) => (
-                <tr key={o.code} className="row-link" onClick={() => location.assign(adminHref(`/orders/${o.code}`))}>
+                <tr key={o.code} className="row-link" onClick={() => location.assign(adminHref(`/orders/${encodeURIComponent(o.code)}`))}>
                   <td className="td font-medium">{o.code}</td>
                   <td className="td text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</td>
                   <td className="td text-gray-600 truncate">{o.email ?? '—'}</td>

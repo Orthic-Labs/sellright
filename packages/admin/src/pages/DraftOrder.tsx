@@ -20,7 +20,7 @@ export default function DraftOrder() {
       const valid = items.filter((i) => i.sku.trim() && i.quantity > 0);
       if (!valid.length) throw new Error('Add at least one item');
       const r = await api.post<{ code: string }>('/draft-orders', { items: valid, email: email || undefined, markPaid });
-      nav(`/orders/${r.code}`);
+      nav(`/orders/${encodeURIComponent(r.code)}`);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Failed'); setBusy(false);
     }

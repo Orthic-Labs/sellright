@@ -110,6 +110,21 @@ export const order = pgTable(
   ],
 );
 
+// Order numbering (migration 0109, issue #309): one row per store holding the code format and the next number.
+// orders/order-number.ts is the only writer; it takes the number in the order-insert transaction
+// (INSERT … ON CONFLICT DO UPDATE SET next_number = next_number + 1 RETURNING). No row = the default format.
+export const orderNumberSequence = pgTable('order_number_sequence', {
+  storeId: uuid().primaryKey().references(() => store.id, { onDelete: 'cascade' }),
+  prefix: text().notNull().default(''),
+  suffix: text().notNull().default(''),
+  minDigits: integer().notNull().default(0),
+  nextNumber: bigint({ mode: 'number' }).notNull().default(1001),
+  updatedAt: ts(),
+}, (t) => [
+  check('order_number_sequence_min_digits', sql`${t.minDigits} between 0 and 12`),
+  check('order_number_sequence_next_number', sql`${t.nextNumber} >= 1`),
+]);
+
 // Order editing (migration 0084). A +/- labelled amount applied to an order's
 // grand total (untaxed). Replaced as a set by each committed edit; the full
 // before/after history lives in `order_edit`. Cascades with the order.

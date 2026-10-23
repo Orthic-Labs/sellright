@@ -165,7 +165,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 						const { error } = await stripe.confirmPayment({ elements, clientSecret, confirmParams: { return_url: returnUrl } });
 						return error ? (error.message || 'Payment could not be completed.') : null;
 					},
-					returnUrl: (code, rt) => `${location.origin}/checkout/confirmation/${code}${rt ? `?rt=${encodeURIComponent(rt)}` : ''}`,
+					returnUrl: (code, rt) => `${location.origin}/checkout/confirmation/${encodeURIComponent(code)}${rt ? `?rt=${encodeURIComponent(rt)}` : ''}`,
 				}, ev);
 				if (!outcome.ok) {
 					ev.paymentFailed({ reason: outcome.reason, message: outcome.message });

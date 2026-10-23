@@ -192,7 +192,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													onInitError$={props.onPaymentInitError$}
 													publishableKey={props.stripePublishableKey.value}
 													clientSecret={props.srState.clientSecret}
-													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${props.srState.code}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
+													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${encodeURIComponent(props.srState.code)}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
 													confirmTrigger={props.stripeConfirmTrigger}
 													onError$={props.onPaymentError$}
 													onProcessingChange$={props.onPaymentProcessingChange$}

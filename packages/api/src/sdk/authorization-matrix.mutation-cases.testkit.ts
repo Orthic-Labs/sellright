@@ -328,6 +328,15 @@ export function createMutationCases(fixture: MatrixMutationFixture): MatrixCase[
       proof.equal(await one("select config->'published' as published from store where id=$1", [fixture.storeId]), { published: false }, 'unpublished config committed', 'state');
     } };
   });
+  add('PATCH /v1/admin/settings/order-numbering', 'manage', async () => {
+    const nextNumber = 700000 + Math.floor(Math.random() * 100000);
+    const body = { prefix: 'MX-', suffix: '', minDigits: 7, nextNumber };
+    return { url: '/v1/admin/settings/order-numbering', body, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ...body, preview: `MX-0${nextNumber}`, highestExisting: null }, 'exact order-numbering response');
+      proof.equal(await one('select prefix,suffix,min_digits,next_number::int as next_number from order_number_sequence where store_id=$1', [fixture.storeId]),
+        { prefix: 'MX-', suffix: '', min_digits: 7, next_number: nextNumber }, 'order-numbering config committed', 'state');
+    } };
+  });
   add('PATCH /v1/admin/settings/google', 'credentials', async ({ unique }) => {
     const clientId = `matrix-${unique}.apps.googleusercontent.com`;
     return { url: '/v1/admin/settings/google', body: { clientId }, async verify(response: Response, proof: MatrixProof) {

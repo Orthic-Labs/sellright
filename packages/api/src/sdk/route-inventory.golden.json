@@ -1,5 +1,5 @@
 {
-  "count": 368,
+  "count": 370,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -92,6 +92,7 @@
     "GET /v1/admin/seo/config",
     "GET /v1/admin/seo/sitemaps",
     "GET /v1/admin/settings/identity",
+    "GET /v1/admin/settings/order-numbering",
     "GET /v1/admin/settings/security",
     "GET /v1/admin/settings/store",
     "GET /v1/admin/sheerid/config",
@@ -185,6 +186,7 @@
     "PATCH /v1/admin/settings/google",
     "PATCH /v1/admin/settings/identity",
     "PATCH /v1/admin/settings/notifications",
+    "PATCH /v1/admin/settings/order-numbering",
     "PATCH /v1/admin/settings/payments",
     "PATCH /v1/admin/settings/payments/stripe-mode",
     "PATCH /v1/admin/settings/publish",

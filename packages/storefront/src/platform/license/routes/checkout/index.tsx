@@ -241,7 +241,7 @@ export default component$(() => {
       const receipt = state.receiptToken ? `?rt=${encodeURIComponent(state.receiptToken)}` : '';
       await confirmCheckoutPayment(runtime, `${window.location.origin}/checkout/confirmation/${encodeURIComponent(state.orderCode)}/${receipt}`,
         intentId => payOrder(state.orderCode, intentId, state.receiptToken || undefined));
-      await nav(`/checkout/confirmation/${state.orderCode}${receipt}`);
+      await nav(`/checkout/confirmation/${encodeURIComponent(state.orderCode)}${receipt}`);
     } catch (error) {
       state.error = `${error instanceof Error ? error.message : 'Payment could not be completed. Please try again.'} Order ${state.orderCode}.`;
     } finally { state.paying = false; }

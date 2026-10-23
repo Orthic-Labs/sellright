@@ -46,7 +46,7 @@ export const runResumeFlow = async (deps: ResumeFlowDeps, methodOverride?: Payme
 		const view = await deps.resumeConverted(token, anyGatewayConfigured ? (methodOverride ?? deps.selectedMethod()) : null, probe, current);
 		if (view === 'settled' && current()) {
 			const rt = deps.srState.receiptToken ? `?rt=${encodeURIComponent(deps.srState.receiptToken)}` : '';
-			deps.navigate(`/checkout/confirmation/${deps.srState.code}${rt}`);
+			deps.navigate(`/checkout/confirmation/${encodeURIComponent(deps.srState.code)}${rt}`);
 		}
 	} finally {
 		// Only the current resume releases the controls; a superseding handler owns them.

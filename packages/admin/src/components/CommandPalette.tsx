@@ -196,7 +196,7 @@ export function CommandPalette() {
       if (c.action) c.action();
       close();
     } else if (sel.kind === 'order') {
-      nav(`/orders/${sel.code}`); remember(`go:orders`); recordEvent('palette-search', `order:${sel.code}`); close();
+      nav(`/orders/${encodeURIComponent(sel.code)}`); remember(`go:orders`); recordEvent('palette-search', `order:${sel.code}`); close();
     } else if (sel.kind === 'product') {
       nav(`/products/${sel.id}`); remember(`go:products`); recordEvent('palette-search', `product:${sel.id}`); close();
     } else if (sel.kind === 'customer') {

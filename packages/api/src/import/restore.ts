@@ -143,7 +143,7 @@ export async function restoreMigration(input: { targetUrl: string; manifest: unk
     const normalize = (rows: unknown[]) => [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)));
     const scoped = (await client.query<{ table_name: string }>(`SELECT table_name FROM information_schema.columns
       WHERE table_schema='public' AND column_name='store_id'
-      AND table_name NOT IN ('admin_user_store','staff_invite','processed_event')`)).rows;
+      AND table_name NOT IN ('admin_user_store','staff_invite','processed_event','order_number_sequence')`)).rows;
     for (const row of scoped) {
       if (!/^[a-z_]+$/.test(row.table_name)) throw new Error('Unexpected tenant table');
       const data = (await client.query('SELECT * FROM "' + row.table_name + '" WHERE store_id=$1', [manifest.storeId])).rows;

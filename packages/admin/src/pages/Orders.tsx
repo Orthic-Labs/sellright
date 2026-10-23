@@ -269,7 +269,7 @@ export default function Orders() {
         columns={columns}
         rows={data?.items}
         rowKey={(o) => o.code}
-        onRowClick={(o) => nav(`/orders/${o.code}`)}
+        onRowClick={(o) => nav(`/orders/${encodeURIComponent(o.code)}`)}
         // SR-14: 6 columns incl. the selection checkbox need ~40rem before
         // emails/codes stay legible; below that the card scrolls horizontally.
         minWidth="46rem"
