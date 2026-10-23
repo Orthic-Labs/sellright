@@ -48,6 +48,8 @@ export interface AuthorizationTransport {
   calls: unknown[];
   /** Per-cell isolated remote fixture. Captures remain append-only for denial snapshots. */
   freshStripeWebhooks(): void;
+  /** Per-cell isolated PaymentMethodDomain registry (express checkout wallet domains). */
+  freshStripeDomains(): void;
   restore(): void;
 }
 
@@ -62,6 +64,10 @@ export function installAuthorizationTransport(calls: unknown[], options: Authori
   const paymentIntents = new Map<string, MatrixPaymentIntent>();
   const sheerId = new Map<string, MatrixSheerIdVerification>();
   const endpoints: Array<{ id: string; url: string; metadata: Record<string, string> }> = [];
+  let domainId = 0;
+  const paymentDomains: Array<{ id: string; domain_name: string; enabled: boolean }> = [];
+  const domainObject = (d: { id: string; domain_name: string; enabled: boolean }) => ({ object: 'payment_method_domain', livemode: false, created: 1, ...d,
+    apple_pay: { status: 'active' }, google_pay: { status: 'active' }, link: { status: 'active' }, paypal: { status: 'inactive' }, amazon_pay: { status: 'inactive' }, klarna: { status: 'inactive' } });
   const forbidden = (method: string, url: string): never => {
     calls.push({ kind: 'forbidden', method, url } satisfies MatrixTransportCall);
     throw new Error('authorization transport forbids ' + method + ' ' + url);
@@ -166,6 +172,18 @@ export function installAuthorizationTransport(calls: unknown[], options: Authori
         if (index >= 0) endpoints.splice(index, 1);
         return { id, object: 'webhook_endpoint', deleted: true };
       }
+      if (method === 'GET' && url.pathname === '/v1/payment_method_domains') {
+        const name = url.searchParams.get('domain_name');
+        return { object: 'list', data: paymentDomains.filter(d => d.domain_name === name).map(domainObject), has_more: false, url: '/v1/payment_method_domains' };
+      }
+      if (method === 'POST' && url.pathname === '/v1/payment_method_domains') {
+        const form = new URLSearchParams(body);
+        const domain = { id: 'pmd_matrix_' + ++domainId, domain_name: form.get('domain_name')!, enabled: form.get('enabled') !== 'false' };
+        paymentDomains.push(domain);
+        const response = domainObject(domain);
+        (calls.at(-1) as MatrixTransportCall).response = structuredClone(response);
+        return response;
+      }
       if (method === 'POST' && url.pathname === '/v1/billing_portal/sessions') return { id: 'bps_matrix', object: 'billing_portal.session', url: MATRIX_PROVIDER.portalUrl };
       return forbidden(method, url.toString());
     }
@@ -255,7 +273,7 @@ export function installAuthorizationTransport(calls: unknown[], options: Authori
       assert.ok(input.clientId && input.clientSecret && input.accessToken);
       sheerId.set(input.verificationId, structuredClone(input));
     },
-    freshStripeWebhooks() { endpoints.splice(0); }, restore() {
+    freshStripeWebhooks() { endpoints.splice(0); }, freshStripeDomains() { paymentDomains.splice(0); }, restore() {
     for (const restore of restorers.reverse()) restore();
     syncBuiltinESMExports();
   } };

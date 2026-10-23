@@ -1,5 +1,5 @@
 {
-  "count": 366,
+  "count": 368,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -269,6 +269,7 @@
     "POST /v1/admin/payment-reconciliation/orders/{code}/stripe-reconcile",
     "POST /v1/admin/payment-reconciliation/reservations/{id}/override-release",
     "POST /v1/admin/payments/settings/{provider}/{mode}/verify",
+    "POST /v1/admin/payments/settings/stripe/{mode}/payment-method-domains",
     "POST /v1/admin/payments/settings/stripe/{mode}/webhook",
     "POST /v1/admin/products",
     "POST /v1/admin/products/{id}/assets",
@@ -331,6 +332,7 @@
     "POST /v1/shop/auth/verify-email",
     "POST /v1/shop/auth/verify-email-change",
     "POST /v1/shop/cart",
+    "POST /v1/shop/cart/{token}/express-quote",
     "POST /v1/shop/cart/{token}/merge",
     "POST /v1/shop/cart/estimate",
     "POST /v1/shop/cart/legacy-migration",

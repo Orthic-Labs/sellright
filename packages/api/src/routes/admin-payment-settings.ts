@@ -21,6 +21,7 @@ import { newStripeClient } from '../payments/stripe-client.js';
 import { configuredGatewayAccount, resolveSezzleField, sezzleSecretModes } from '../payments/gateway-account.js';
 import { verifyNmiKey, verifySezzleKeys, verifyStripeKey } from '../payments/settings-verify.js';
 import { ensureStripeWebhook, type StripeWebhookClient } from '../payments/stripe-webhook-provision.js';
+import { ensurePaymentMethodDomains, storePaymentDomains, type StripePaymentMethodDomainClient } from '../payments/stripe-payment-method-domains.js';
 import { mutateStoreConfig } from './admin-settings.js';
 
 /** `payments.<provider>` may still be a legacy boolean toggle. Spreading
@@ -295,6 +296,59 @@ adminPaymentSettings.openapi(
       return { endpointId: outcome.endpointId, created: outcome.created, recreated: outcome.recreated };
     });
     return c.json(result, 200);
+  }),
+);
+
+const WalletStatus = z.enum(['active', 'inactive', 'unknown']);
+const DomainsResponse = z.object({
+  mode: z.enum(['test', 'live']),
+  domains: z.array(z.object({
+    domain: z.string(), id: z.string().nullable(), outcome: z.enum(['created', 'updated', 'unchanged', 'failed']),
+    enabled: z.boolean(), applePay: WalletStatus, googlePay: WalletStatus, error: z.string().optional(),
+  })),
+});
+
+// Express checkout (Apple Pay / Google Pay): idempotently register every storefront domain of this store (config
+// storefrontUrl + hostnames, see storePaymentDomains) as a Stripe PaymentMethodDomain on the store's own Stripe account
+// for this mode. Re-running is safe: existing registrations are reused, re-enabled or re-validated, never duplicated.
+// No file needs hosting — Stripe performs Apple Pay merchant validation itself. The Stripe calls run OUTSIDE any DB
+// transaction; the key read and the audit row each use their own short one.
+adminPaymentSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/payments/settings/stripe/{mode}/payment-method-domains', summary: 'Idempotently register this store\'s storefront domains with Stripe for Apple Pay / Google Pay',
+    request: { params: z.object({ mode: z.enum(['test', 'live']) }) },
+    responses: { 200: { description: 'OK', content: J(DomainsResponse) }, 400: { description: 'Bad request', ...errBody }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st); requireManage(st);
+    const mode = c.req.param('mode') as 'test' | 'live';
+
+    const { secretKey, domains } = await withStore(st.storeId, async (tx) => {
+      const key = await resolveField(tx, scopeFor(st.storeId, 'stripe', mode, 'secretKey'), envValueForStripe(mode, 'secretKey'));
+      const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      return { secretKey: key.value, domains: storePaymentDomains(row?.config) };
+    });
+    if (!secretKey) throw new HttpError(400, 'No Stripe secret key configured for this mode yet');
+    if (!domains.length) throw new HttpError(400, 'No storefront domain configured for this store (set the storefront URL or hostnames first)');
+
+    const stripe = newStripeClient(secretKey);
+    const client: StripePaymentMethodDomainClient = {
+      paymentMethodDomains: {
+        list: (p) => stripe.paymentMethodDomains.list(p) as unknown as ReturnType<StripePaymentMethodDomainClient['paymentMethodDomains']['list']>,
+        create: (p) => stripe.paymentMethodDomains.create(p) as unknown as ReturnType<StripePaymentMethodDomainClient['paymentMethodDomains']['create']>,
+        update: (id, p) => stripe.paymentMethodDomains.update(id, p) as unknown as ReturnType<StripePaymentMethodDomainClient['paymentMethodDomains']['update']>,
+        validate: (id) => stripe.paymentMethodDomains.validate(id) as unknown as ReturnType<StripePaymentMethodDomainClient['paymentMethodDomains']['validate']>,
+      },
+    };
+    const results = await ensurePaymentMethodDomains(client, domains);
+
+    await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({
+      storeId: st.storeId, actor: admin.email, entity: 'payment_method_domain', entityId: `stripe:${mode}`,
+      action: 'payment_method_domain_register',
+      data: { mode, domains: results.map((r) => ({ domain: r.domain, outcome: r.outcome, applePay: r.applePay, googlePay: r.googlePay })) },
+    }));
+    return c.json({ mode, domains: results }, 200);
   }),
 );
 

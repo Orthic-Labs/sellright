@@ -8257,6 +8257,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/payments/settings/stripe/{mode}/payment-method-domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Idempotently register this store's storefront domains with Stripe for Apple Pay / Google Pay */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    mode: "test" | "live";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            domains: {
+                                /** @enum {string} */
+                                applePay: "active" | "inactive" | "unknown";
+                                domain: string;
+                                enabled: boolean;
+                                error?: string;
+                                /** @enum {string} */
+                                googlePay: "active" | "inactive" | "unknown";
+                                id: string | null;
+                                /** @enum {string} */
+                                outcome: "created" | "updated" | "unchanged" | "failed";
+                            }[];
+                            /** @enum {string} */
+                            mode: "test" | "live";
+                        };
+                    };
+                };
+                /** @description Bad request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/payments/settings/stripe/{mode}/webhook": {
         parameters: {
             query?: never;
@@ -18664,6 +18744,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/cart/{token}/express-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Quote a cart for a wallet-supplied destination (express checkout) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        country: string;
+                        couponCodes?: string[];
+                        redeemPoints?: number;
+                        shippingMethodCode?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Server-priced express quote */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            cart: {
+                                coupon: {
+                                    applied: boolean;
+                                    code: string;
+                                    reason?: string;
+                                } | null;
+                                couponCodes: string[];
+                                coupons: {
+                                    applied: boolean;
+                                    appliedAmount: number;
+                                    availableAmount?: number;
+                                    code: string;
+                                    kind?: string;
+                                    reason?: string;
+                                    remainingAmount?: number;
+                                }[];
+                                currency: string;
+                                customerId: string | null;
+                                discountTotal: number;
+                                email: string | null;
+                                grandTotal: number;
+                                lines: {
+                                    available: boolean;
+                                    availableQuantity: number | null;
+                                    image?: string | null;
+                                    isPreOrder?: boolean;
+                                    lineDiscount: number;
+                                    lineSubtotal: number;
+                                    lineTotal: number;
+                                    name: string;
+                                    productName?: string | null;
+                                    productSlug?: string | null;
+                                    quantity: number;
+                                    shipDate?: string | null;
+                                    shipDateLabel?: string | null;
+                                    sku: string;
+                                    unitPrice: number;
+                                }[];
+                                pointsDiscount: number;
+                                pointsToEarn?: number;
+                                /** @enum {string} */
+                                pricingIntent: "preview" | "checkout";
+                                quoteHash: string;
+                                revision: number;
+                                shippingMethodCode: string | null;
+                                shippingTotal: number;
+                                status: string;
+                                subtotal: number;
+                                taxTotal: number;
+                                token: string;
+                                unavailable: string[];
+                            };
+                            methods: {
+                                code: string;
+                                name: string;
+                                rate: number;
+                            }[];
+                            requiresShipping: boolean;
+                            shippingMethodCode: string | null;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Cart not checkoutable / out of stock / shipping unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"] & {
+                            reason?: string;
+                            skus?: string[];
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/cart/{token}/lines": {
         parameters: {
             query?: never;
@@ -21065,6 +21273,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: {
+                    "x-expected-amount"?: string;
                     "x-receipt-token"?: string;
                 };
                 path: {
@@ -21106,13 +21315,14 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Not payable */
+                /** @description Not payable, or the amount due differs from x-expected-amount */
                 409: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": components["schemas"]["ApiError"] & {
+                            amountDue?: number;
                             state: string;
                         };
                     };
@@ -22377,7 +22587,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "FEATURE_DISABLED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOO_MANY_PASSKEYS" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "FEATURE_DISABLED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOO_MANY_PASSKEYS" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

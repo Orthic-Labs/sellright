@@ -9,7 +9,7 @@ import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { resolvePromotionStack } from '../money/promotion-resolver.js';
 import { canonicalCouponCodes, PromotionStackError } from '../money/promotion-stack.js';
-import { shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
+import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
 import { loyaltyBalance } from '../loyalty/ledger.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
@@ -600,6 +600,78 @@ cart.openapi(
     return c.json(out, 200);
   },
 );
+
+// POST /v1/shop/cart/{token}/express-quote — the server-authoritative total for a wallet-supplied destination
+// (Apple Pay / Google Pay express checkout) BEFORE the order exists. A wallet reports only a redacted address
+// (country, region, city, postal code) until the shopper authorizes, so the quote is decided by the country — the
+// same basis POST /v1/shop/checkout prices tax and shipping on. One read-only transaction: the cart's own lines (never
+// a client list), live stock (an unavailable line fails closed), the eligible shipping methods (same rule as POST
+// /v1/shop/shipping-methods), and the cart repriced for the selected method exactly as GET /v1/shop/cart/{token}
+// prices it — so its quoteHash is the `acceptedQuoteHash` POST /v1/shop/checkout re-verifies at order creation.
+// The storefront feeds `cart.grandTotal` to the wallet; it is never trusted back.
+const ExpressQuoteIn = z.object({
+  country: z.string().regex(/^[A-Za-z]{2}$/).transform((v) => v.toUpperCase()),
+  shippingMethodCode: z.string().min(1).max(255).optional(),
+  couponCodes: CouponCodes.optional(),
+  redeemPoints: z.number().int().min(1).max(1_000_000_000).optional(),
+});
+const ExpressQuoteOut = z.object({
+  /** False for a cart with no physical line: no shipping method applies (zero shipping, like checkout). */
+  requiresShipping: z.boolean(),
+  /** The method the quote is priced with: the requested one when eligible, else the cheapest eligible. */
+  shippingMethodCode: z.string().nullable(),
+  methods: z.array(z.object({ code: z.string(), name: z.string(), rate: z.number().int() })),
+  cart: CartOut,
+});
+cart.openapi(createRoute({
+  method: 'post', path: '/v1/shop/cart/{token}/express-quote', summary: 'Quote a cart for a wallet-supplied destination (express checkout)',
+  request: { params: z.object({ token: z.string().min(1) }), body: { content: { 'application/json': { schema: ExpressQuoteIn } } } },
+  responses: {
+    200: { description: 'Server-priced express quote', content: { 'application/json': { schema: ExpressQuoteOut } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+    409: { description: 'Cart not checkoutable / out of stock / shipping unavailable', content: { 'application/json': { schema: apiErrorSchema().extend({ skus: z.array(z.string()).optional(), reason: z.string().optional() }) } } },
+  },
+}), async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const st = await resolveStoreFromCtx(c);
+  const { token } = c.req.valid('param');
+  const body = c.req.valid('json') as z.infer<typeof ExpressQuoteIn>;
+  const authTok = customerToken(c);
+  type Out = { notFound: true } | { cartInvalid: true } | { blocked: string[] } | { shipping: string } | z.infer<typeof ExpressQuoteOut>;
+  const out = await withStore(st.id, async (tx): Promise<Out> => {
+    const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
+    if (!row) return { notFound: true };
+    if (row.status !== 'active' && row.status !== 'abandoned') return { cartInvalid: true };
+    const items = await boundedCartItems(tx, row);
+    if (!items.length) return { cartInvalid: true };
+    const couponCodes = body.couponCodes ?? row.couponCodes;
+    // Live stock + discounted merchandise for method eligibility (the shipping-methods quote's own basis).
+    const base = await priceCart(tx, st, items, { couponCodes, shipCountry: body.country, pricingIntent: 'checkout', token: authTok });
+    if (base.unavailable.length) return { blocked: base.unavailable };
+    const kinds = await tx.select({ fulfillmentType: s.productVariant.fulfillmentType }).from(s.productVariant)
+      .where(and(inArray(s.productVariant.sku, items.map((i) => i.sku)), isNull(s.productVariant.deletedAt)));
+    const requiresShipping = kinds.some((k) => (k.fulfillmentType ?? 'physical') === 'physical');
+    let methods: Array<{ code: string; name: string; rate: number }> = [];
+    let selected: string | undefined;
+    if (requiresShipping) {
+      const ctx = { country: body.country, subtotal: base.subtotal, discountedSubtotalWithTax: base.grandTotal };
+      const enabled = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+      methods = enabled.filter((m) => isMethodEligible(m.calculator, ctx))
+        .map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator as ShippingCalculator) }))
+        .sort((a, b) => a.rate - b.rate || a.code.localeCompare(b.code));
+      if (!methods.length) return { shipping: enabled.length ? 'not_eligible' : 'not_configured' };
+      selected = methods.find((m) => m.code === body.shippingMethodCode)?.code ?? methods[0]!.code;
+    }
+    const quoted = await cartResponse(tx, st, row, couponCodes, authTok, body.country, { pricingIntent: 'checkout', shippingMethodCode: selected, redeemPoints: body.redeemPoints });
+    if (quoted.unavailable.length) return { blocked: quoted.unavailable };
+    return { requiresShipping, shippingMethodCode: selected ?? null, methods, cart: quoted };
+  });
+  if ('notFound' in out) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
+  if ('cartInvalid' in out) return errJson(c, 409, 'CART_INVALID', 'cart is empty, invalid, or already checked out');
+  if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
+  if ('shipping' in out) return errJson(c, 409, 'SHIPPING_UNAVAILABLE', 'shipping unavailable', { extra: { reason: out.shipping } });
+  return c.json(out, 200);
+});
 
 // PATCH /v1/shop/cart/{token}/lines — upsert/remove lines (quantity 0 removes).
 // CART-02/03: the cart row is taken FOR UPDATE so line edits serialize against

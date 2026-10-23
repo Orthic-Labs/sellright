@@ -1,4 +1,4 @@
-/** Enrolled-only 364-route regression scope. Full 366-route B2.8 gate lives in dedicated authorization-matrix project. */
+/** Enrolled-only 366-route regression scope. Full 368-route B2.8 gate lives in dedicated authorization-matrix project. */
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -125,7 +125,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
     }
   });
 
-  it('runs 364 enrolled contracts with genuine sessions, bound agent & unchanged denied effects', async () => {
+  it('runs 366 enrolled contracts with genuine sessions, bound agent & unchanged denied effects', async () => {
     const actual = matrixRouteKeys(engine!.app), keys = new Set(cases.map(c => c.key));
     for (const key of keys) expect(actual).toContain(key);
     // Deliberate enrolled-only projection. Dedicated authorization-matrix project alone qualifies full actual inventory.
@@ -237,7 +237,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
 
   it('declares exact enrolled-only scope; full setup qualification belongs to dedicated fresh-DB lane', () => {
     const actual = matrixRouteKeys(engine!.app), keys = new Set(cases.map(c => c.key));
-    expect(cases).toHaveLength(364);
+    expect(cases).toHaveLength(366);
     expect(actual.filter(key => !keys.has(key))).toEqual(['GET /v1/setup/status', 'POST /v1/setup/claim']);
     const normalize = (path: string) => path.split('/').map(segment => segment.replace(/^:([A-Za-z0-9_]+)(?:\{[^}]*\})?/, '{$1}')).join('/');
     assertMatrixComplete({

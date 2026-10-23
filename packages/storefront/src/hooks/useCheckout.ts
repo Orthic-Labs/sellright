@@ -46,9 +46,9 @@ export type ResumeOutcome = ResumeView | 'superseded';
  * the order and returns its client_secret; NMI/Sezzle need nothing up front (their components call the gateway API
  * themselves), so they return ''.
  */
-const initPayment = async (code: string, receiptToken: string, method: PaymentMethod | null): Promise<string> => {
+const initPayment = async (code: string, receiptToken: string, method: PaymentMethod | null, expectedAmount?: number): Promise<string> => {
 	if (method !== 'stripe') return '';
-	const pi = await srCreatePI(code, receiptToken || undefined);
+	const pi = await srCreatePI(code, receiptToken || undefined, expectedAmount);
 	if (!pi.clientSecret) throw new Error('Could not start the payment.');
 	return pi.clientSecret;
 };
@@ -98,7 +98,7 @@ export const useCheckout = () => {
 	 * so the caller can mount the right payment UI ('paying') or navigate
 	 * straight to confirmation ('paid').
 	 */
-	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod | null = 'stripe', shownTotalCents = 0): Promise<CheckoutPhase> => {
+	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod | null = 'stripe', shownTotalCents = 0, expectedAmount?: number): Promise<CheckoutPhase> => {
 		state.phase = 'placing';
 		state.error = null;
 		state.stockConflict = false;
@@ -136,7 +136,8 @@ export const useCheckout = () => {
 			// Card path — mint the PaymentIntent and hand the client_secret to the Stripe Payment Element (mounted by
 			// the caller). nmi/sezzle: nothing to mint up front — the NMI/Sezzle component calls startGatewayPayment
 			// itself once mounted.
-			state.clientSecret = await initPayment(created.code, state.receiptToken, method);
+			// Express checkout passes the wallet's total: the intent is minted only when the order's amount due equals it.
+			state.clientSecret = await initPayment(created.code, state.receiptToken, method, expectedAmount);
 			state.phase = 'paying';
 			return 'paying';
 		} catch (error) {

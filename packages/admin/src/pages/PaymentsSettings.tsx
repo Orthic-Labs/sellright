@@ -51,6 +51,19 @@ export default function PaymentsSettingsPage() {
     onError: (e) => toast.error('Webhook setup failed', (e as Error).message),
   });
 
+  // Apple Pay / Google Pay (express checkout): register this store's storefront domains with Stripe. Idempotent.
+  type DomainResult = { domain: string; outcome: 'created' | 'updated' | 'unchanged' | 'failed'; applePay: string; googlePay: string; error?: string };
+  const registerDomains = useMutation({
+    mutationFn: (mode: 'test' | 'live') => api.post<{ mode: string; domains: DomainResult[] }>(`/payments/settings/stripe/${mode}/payment-method-domains`, {}),
+    onSuccess: (r) => {
+      const failed = r.domains.filter((d) => d.outcome === 'failed');
+      const summary = r.domains.map((d) => `${d.domain}: ${d.outcome === 'failed' ? `failed (${d.error ?? 'error'})` : `Apple Pay ${d.applePay}, Google Pay ${d.googlePay}`}`).join('; ');
+      if (failed.length) toast.error('Some wallet domains failed', summary);
+      else toast.success('Wallet domains registered', summary);
+    },
+    onError: (e) => toast.error('Wallet domain registration failed', (e as Error).message),
+  });
+
   if (isLoading) return <Loading />;
   if (error) return <ErrorState title="Couldn't load payment settings" message={(error as Error).message} onRetry={() => qc.invalidateQueries({ queryKey: key })} />;
   if (!data) return null;
@@ -70,6 +83,11 @@ export default function PaymentsSettingsPage() {
                   {p.id === 'stripe' && (mode === 'test' || mode === 'live') && (
                     <button type="button" className="btn-secondary text-xs" onClick={() => createWebhook.mutate(mode as 'test' | 'live')} disabled={createWebhook.isPending}>
                       {createWebhook.isPending ? <Spinner /> : 'Create/refresh webhook'}
+                    </button>
+                  )}
+                  {p.id === 'stripe' && (mode === 'test' || mode === 'live') && (
+                    <button type="button" className="btn-secondary text-xs" title="Register this store's storefront domains with Stripe so Apple Pay and Google Pay can show at checkout" onClick={() => registerDomains.mutate(mode as 'test' | 'live')} disabled={registerDomains.isPending}>
+                      {registerDomains.isPending ? <Spinner /> : 'Register Apple Pay / Google Pay domains'}
                     </button>
                   )}
                   <button type="button" className="btn-secondary text-xs" onClick={() => verify.mutate({ provider: p.id, mode })} disabled={verify.isPending}>

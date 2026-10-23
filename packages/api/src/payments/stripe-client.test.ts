@@ -48,7 +48,7 @@ describe('Stripe request API version', () => {
   it('every production Stripe client site goes through the helper (no inline apiVersion either)', () => {
     const sources = Object.fromEntries(['payments/stripe.ts', 'routes/admin-payment-settings.ts'].map((f) => [f, readFileSync(join(SRC, f), 'utf8')]));
     expect(sources['payments/stripe.ts']!.match(/newStripeClient\(/g)).toHaveLength(2); // resolveStripeClient + webhook verifier
-    expect(sources['routes/admin-payment-settings.ts']!.match(/newStripeClient\(/g)).toHaveLength(2); // key verify + webhook provision
+    expect(sources['routes/admin-payment-settings.ts']!.match(/newStripeClient\(/g)).toHaveLength(3); // key verify + webhook provision + wallet domain registration
     for (const src of Object.values(sources)) expect(src).not.toMatch(/apiVersion/);
   });
 });

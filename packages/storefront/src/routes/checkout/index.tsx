@@ -15,6 +15,7 @@ import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidatio
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { formatCents } from '~/hooks/checkout-total';
 import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
+import { expressCheckoutOptions, type ExpressOrderForm, type ExpressOrderResult } from '~/components/checkout/express-checkout';
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
 import { getShopConfig, getShippingQuote } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
@@ -213,6 +214,17 @@ const CheckoutContent = component$(() => {
     publishableKey: stripePublishableKey.value,
     amountCents: chargeTotalCents.value,
     currency: cartCurrency.value,
+  }));
+
+  // Express checkout (Apple Pay / Google Pay) at the top of checkout: only while no order exists for this view, the store's
+  // card gateway is configured and a cart exists (see components/checkout/express-checkout.ts).
+  const expressCheckout = useComputed$(() => expressCheckoutOptions({
+    gatewayConfigured: shopConfig.value?.stripeConfigured,
+    publishableKey: stripePublishableKey.value,
+    currency: cartCurrency.value,
+    cartToken: localCart.cart.token,
+    cartEmpty: localCart.cart.lines.length === 0,
+    noOrderYet: !srState.code && srState.resume === 'none' && (srState.phase === 'idle' || srState.phase === 'error') && !isOrderProcessing.value,
   }));
 
   const applyShopConfig = $((cfg: ShopConfig) => {
@@ -612,6 +624,60 @@ const CheckoutContent = component$(() => {
     }
   });
 
+  // Express checkout confirm: the wallet's authorized details go through PLACE ORDER's own path (submitOrderFlow: shop
+  // config, live stock read under the cart lock, POST /checkout with the wallet quote's hash as consent, converted-cart and
+  // existing-order recovery), with the payment intent minted only for the wallet's exact total. Ok only when the order is
+  // ready to pay at that total; the component then confirms the wallet payment, which redirects to confirmation.
+  const expressPlaceOrder$ = $(async (form: ExpressOrderForm, expectedAmount: number): Promise<ExpressOrderResult> => {
+    if (srState.phase === 'paying' || isOrderProcessing.value || state.loading || checkoutState.isLoading) {
+      return { ok: false, message: 'Checkout is busy. Please try again.' };
+    }
+    showProcessingModal.value = true;
+    isOrderProcessing.value = true;
+    state.error = null;
+    const gen = paymentInit.gen;
+    const current = () => isCurrentView(paymentInit, gen);
+    try {
+      paymentMethod.value = 'stripe';
+      await submitOrderFlow(
+        {
+          srState,
+          state,
+          flags: { processingModal: showProcessingModal, orderProcessing: isOrderProcessing, totalConfirmed },
+          selectedMethod: () => 'stripe',
+          shownCents: () => expectedAmount,
+          ensureShopConfig: () => ensureShopConfig(),
+          placeOrder: (f, method, shown) => placeOrderNative(f, method, shown, expectedAmount),
+          beginResume: () => beginResume(),
+          refreshStock: () => refreshCartStock(localCart),
+          navigate: (path) => navigate(path),
+          hasCartToken: () => !!CartService.token(),
+          onPaying: () => { /* the wallet sheet confirms in place; the payment panel stays the fallback */ },
+        },
+        form,
+        current,
+      );
+      if (!current()) return { ok: false, message: 'Checkout changed. Please try again.' };
+      // Re-read after the await (the flow moved the phase on).
+      const phaseNow: string = srState.phase;
+      if (phaseNow === 'paying' && srState.clientSecret && srState.code && srState.grandTotal === expectedAmount) {
+        return { ok: true, clientSecret: srState.clientSecret, code: srState.code, receiptToken: srState.receiptToken };
+      }
+      return { ok: false, message: srState.error || "We couldn't start your payment. Please try again." };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
+      if (current()) state.error = message;
+      return { ok: false, message };
+    } finally {
+      showProcessingModal.value = false;
+      isOrderProcessing.value = false;
+    }
+  });
+
+  const onExpressError$ = $((message: string) => {
+    state.error = message;
+  });
+
   // Resume view: classify the order afresh and update the resume view — a decline keeps the controls and shows an
   // error, a cancelled / unknown / unreadable order removes them, a settled one goes to confirmation.
   const recoverResumePaymentError = $(async () => {
@@ -720,6 +786,11 @@ const CheckoutContent = component$(() => {
       checkoutValidation={checkoutValidation}
       formattedTotal={formattedTotal}
       paymentMessaging={paymentMessaging}
+      expressCheckout={expressCheckout}
+      expressCountry={appState.shippingAddress?.countryCode || ''}
+      expressRedeemPoints={redeemPoints.value}
+      onExpressPlaceOrder$={expressPlaceOrder$}
+      onExpressError$={onExpressError$}
       hasMixedPreOrder={hasMixedPreOrder}
       isCartEmpty={isCartEmpty}
       isOrderProcessing={isOrderProcessing}
