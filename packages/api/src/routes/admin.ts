@@ -16,12 +16,21 @@ import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
-import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
+import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
+import { adminAuthFacts, adminMailStore, adminPasskeyCount, attemptLoginChallenge, consumeChallenge, credentialDigest, issueLoginChallenge, issuePasswordReset, LOGIN_CHALLENGE_TTL_SECONDS, PASSWORD_RESET_TTL_SECONDS, peekLoginChallenge, peekPasswordReset, redeemPasswordReset } from '../auth/admin-auth-challenge.js';
+import { sendAdminPasswordReset } from '../email/dispatch.js';
+import { resolveStoreFromCtx } from './store-context.js';
+import { storeIdentityFromConfig } from './store-identity.js';
+import { isStorePublished } from '../store-publish.js';
+import { adminPublicUrl } from '../env.js';
+import { log } from '../lib/logger.js';
+import { secondFactorEnrollmentRequired } from '../auth/mfa-policy.js';
+import type { Context } from 'hono';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
-import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, reserveAdminSecondStepAttempt, reserveAdminResetRequest, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
-import { verifySecondFactorDetailed } from '../auth/second-factor.js';
+import { verifyLoginFactor } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { resolveOrderRecipient } from '../orders/recipient.js';
@@ -37,14 +46,44 @@ export const admin = new OpenAPIHono();
 const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.string(), currency: z.string(), role: z.string() });
 
 // ── auth: login / logout / me ─────────────────────────────────────────────
+const LoginOk = z.object({
+  token: z.string().optional(), csrfToken: z.string().optional(), totpEnrollmentRequired: z.boolean().optional(),
+  admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional(),
+  // Issue #333 step 1 for an account with a second factor: no session, a short-lived single-use challenge instead.
+  twoFactorRequired: z.boolean().optional(), challengeToken: z.string().optional(), expiresInSeconds: z.number().int().optional(),
+  methods: z.array(z.enum(['totp', 'passkey', 'recovery_code'])).optional(),
+});
+const BAD_LOGIN = 'invalid email or password';
+/** 429 with a Retry-After header and `retryAfterSeconds` in the body, so the sign-in screen can count down. */
+function rateLimited(c: Context, retry: number, what: 'attempts' | 'requests'): HttpError {
+  c.header('Retry-After', String(retry));
+  return new HttpError(429, `too many ${what} — try again in ${retry}s`, 'RATE_LIMITED', undefined, { retryAfterSeconds: retry });
+}
+const BAD_LOGIN_WITH_CODE = 'invalid email, password, or 2FA code';
+const CHALLENGE_DEAD = 'your sign-in expired — enter your password again';
+
+/** Shared success tail of every sign-in: httpOnly session cookie + CSRF cookie, the account's stores. */
+async function signedIn(c: Context, token: string, email: string, returnToken: boolean | undefined) {
+  const csrf = newCsrf();
+  setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
+  const principal = await resolveAdmin(token);
+  // P1b / #333: when policy requires a second factor and none is enrolled, the session can only enrol (admin-agent-guard).
+  const totpEnrollmentRequired = secondFactorEnrollmentRequired(principal);
+  // P2: the session token is in the httpOnly cookie; it is only echoed in the body for an explicit API client
+  // (`returnToken: true`), so page script (or an XSS) in a cookie client never sees it.
+  return c.json({ ...(returnToken === true ? { token } : {}), csrfToken: csrf, admin: { email }, stores: principal?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
+}
+
 admin.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/login', summary: 'Admin login',
-    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional(),
+    method: 'post', path: '/v1/admin/login', summary: 'Admin login, step 1 (email + password). An account with a second factor gets a single-use challenge for POST /v1/admin/login/2fa, never a session',
+    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string().max(1024),
+      // Single-request form for API clients: the code travels with the password (no challenge is issued).
+      totp: z.string().max(64).optional(),
       // P2: explicit API clients ask for the bearer token in the body; browser (cookie) clients never get it.
       returnToken: z.boolean().optional() })) } },
     responses: {
-      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), totpEnrollmentRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
+      200: { description: 'Signed in, or (twoFactorRequired) the password was right and the code step follows', content: J(LoginOk) },
       401: { description: 'Invalid', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
@@ -53,50 +92,189 @@ admin.openapi(
     const { email: rawEmail, password, totp, returnToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
+    const bad = totp ? BAD_LOGIN_WITH_CODE : BAD_LOGIN; // depends only on the request shape, never on the account
     // P1a: (ip, account) + per-account (all IPs) + per-IP (all accounts) budgets.
     const retry = await reserveAdminAuthAttempt(ip, email);
-    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
+    if (retry > 0) throw rateLimited(c, retry, 'attempts');
     const u = await findAdminByEmail(email);
-    // WP1.5: do NOT confirm password validity to unauthenticated callers. The
-    // previous shape returned {twoFactorRequired:true} for valid password +
-    // missing TOTP, which let an attacker enumerate "valid password" + "2FA
-    // enabled" via the response. The fix: treat a 2FA-enabled account with a
-    // missing TOTP as a single incomplete login attempt (401, generic message).
-    // The UI must always send both password and TOTP together.
     // P1a: an unknown address (or an agent identity) still pays one full Argon2id
-    // verification, so timing does not reveal which admin e-mails exist.
+    // verification, so timing does not reveal which admin e-mails exist. Unknown e-mail and wrong password answer the
+    // same generic 401.
     const passwordOk = u && u.kind !== 'agent' && u.passwordHash ? await verifyPassword(password, u.passwordHash) : await verifyPasswordAgainstDummy(password);
-    if (!u || !passwordOk) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    if (!u || !passwordOk) { throw new HttpError(401, bad, 'INVALID_CREDENTIALS'); }
+    // Issue #333 (supersedes WP1.5's single-request rule for browsers): the second step is revealed only AFTER the
+    // password verified, so it tells nothing to anyone without the password; both steps spend the same budgets, and the
+    // password-guessing budgets are cleared only when the whole sign-in succeeds.
+    const passkeys = await adminPasskeyCount(u.id);
+    const hasSecondFactor = !!u.totpSecret || passkeys > 0;
+    if (hasSecondFactor && !totp) {
+      let verifiedHash = u.passwordHash!;
+      if (passwordNeedsRehash(verifiedHash)) {
+        // Best-effort, conditional on the hash still being the one just verified; the challenge binds the result.
+        try { const next = await hashPassword(password); if (await rehashAdminPasswordIfUnchanged(u.id, verifiedHash, next)) verifiedHash = next; } catch { /* next sign-in */ }
+      }
+      const challengeToken = await issueLoginChallenge(u.id, verifiedHash, u.securityEpoch);
+      const methods = [...(u.totpSecret ? ['totp' as const] : []), ...(passkeys > 0 ? ['passkey' as const] : []), 'recovery_code' as const];
+      return c.json({ twoFactorRequired: true, challengeToken, expiresInSeconds: LOGIN_CHALLENGE_TTL_SECONDS, methods }, 200);
+    }
     let receipt: { id: string; usedAt: Date } | undefined;
-    if (u.totpSecret) {
-      if (!totp) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    if (hasSecondFactor) {
       // P1b: a 6-digit TOTP code or a one-time recovery code (consumed on success; 0108: its receipt is re-checked
       // under the owner lock so a code from a replaced set cannot sign in).
-      const factor = await verifySecondFactorDetailed(u.id, u.totpSecret, totp);
-      if (!factor.ok) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      const factor = await verifyLoginFactor(u.id, u.totpSecret, totp);
+      if (!factor.ok) { throw new HttpError(401, bad, 'INVALID_CREDENTIALS'); }
       receipt = factor.receipt;
     }
     await clearAdminAuthFailures(ip, email);
     // Upgrade a legacy hash (pre-Argon2id scrypt — e.g. RightSites admins — or outdated Argon2 parameters)
     // now that the plaintext has just been verified. Best-effort: a failure never blocks the sign-in.
-    // Conditional on the stored hash still being the one just verified, so a concurrent password change is never undone.
-    // 0108: the rehash is applied INSIDE the session transaction, after the credential snapshot (epoch, stored TOTP
-    // version, recovery receipt) is re-checked under the owner lock — a login whose factor was superseded changes nothing.
+    // 0108: the rehash is applied INSIDE the session transaction, after the credential snapshot is re-checked.
     let rehashTo: string | undefined;
     if (passwordNeedsRehash(u.passwordHash!)) {
       try { rehashTo = await hashPassword(password); } catch { /* retried on the next sign-in */ }
     }
     // The session is created only if the password verified above is still the account's password (P1b review).
-    const token = await createAdminSessionIfCredential(u.id, u.passwordHash!, !!u.totpSecret, { epoch: u.securityEpoch, totpVersion: u.totpVersion, receipt, rehashTo });
-    if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
-    const csrf = newCsrf();
-    setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
-    const admin = await resolveAdmin(token);
-    // P1b: when policy requires TOTP and none is enrolled, the session can only enrol (admin-agent-guard).
-    const totpEnrollmentRequired = !!admin && admin.totpRequired === true && !admin.totpEnabled;
-    // P2: the session token is in the httpOnly cookie; it is only echoed in the body for an explicit API client
-    // (`returnToken: true`), so page script (or an XSS) in a cookie client never sees it.
-    return c.json({ ...(returnToken === true ? { token } : {}), csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
+    const token = await createAdminSessionIfCredential(u.id, u.passwordHash!, hasSecondFactor, { epoch: u.securityEpoch, totpVersion: u.totpVersion, receipt, rehashTo });
+    if (!token) throw new HttpError(401, bad, 'INVALID_CREDENTIALS');
+    return signedIn(c, token, u.email, returnToken);
+  }),
+);
+
+admin.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/login/2fa', summary: 'Admin login, step 2: redeem the step-1 challenge once with a TOTP or recovery code',
+    request: { body: { content: J(z.object({ challengeToken: z.string().min(16).max(128), code: z.string().min(1).max(64), returnToken: z.boolean().optional() })) } },
+    responses: {
+      200: { description: 'Signed in', content: J(LoginOk) },
+      401: { description: 'INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password)', ...errBody },
+      429: { description: 'Too many attempts', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { challengeToken, code, returnToken } = c.req.valid('json');
+    const ip = clientIp(c);
+    const peek = await peekLoginChallenge(challengeToken);
+    const owner = peek ? await adminAuthFacts(peek.adminUserId) : null;
+    // Same three admin budgets as step 1 (a dead token spends only the per-IP budget).
+    const retry = await reserveAdminSecondStepAttempt(ip, owner?.email ?? null);
+    if (retry > 0) throw rateLimited(c, retry, 'attempts');
+    const row = owner ? await attemptLoginChallenge(challengeToken) : null;
+    if (!row || !owner || owner.id !== row.adminUserId || owner.kind !== 'human') throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    // The password verified in step 1 and the factor set must still be the account's (any change kills the challenge).
+    if (credentialDigest(owner.id, owner.passwordHash) !== row.credentialDigest || owner.securityEpoch !== row.epoch) {
+      await consumeChallenge('login_2fa', challengeToken);
+      throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    }
+    const factor = await verifyLoginFactor(owner.id, owner.totpSecret, code);
+    if (!factor.ok) throw new HttpError(401, 'that code didn\'t work — check your authenticator app and try again', 'INVALID_CODE');
+    if (!(await consumeChallenge('login_2fa', challengeToken))) throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    const token = await createAdminSessionIfCredential(owner.id, owner.passwordHash!, true, { epoch: row.epoch, totpVersion: owner.totpVersion, receipt: factor.receipt });
+    if (!token) throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    await clearAdminAuthFailures(ip, owner.email);
+    return signedIn(c, token, owner.email, returnToken);
+  }),
+);
+
+// ── auth screens: store branding + forgot / reset password (issue #333) ───────
+const HEX = /^#[0-9a-fA-F]{6}$/;
+const FAMILY = /^[A-Za-z0-9 ,'"-]{1,160}$/;
+const FONT_URL = /^\/[A-Za-z0-9/._-]{1,200}\.woff2$/; // same-origin path only (admin CSP: font-src 'self')
+const Branding = z.object({
+  storeName: z.string().nullable(), logoUrl: z.string().nullable(),
+  theme: z.object({ primary: z.string(), background: z.string(), surface: z.string(), text: z.string(), textMuted: z.string(), border: z.string(),
+    fontDisplay: z.string().nullable(), fontBody: z.string().nullable() }).nullable(),
+  fontFaces: z.array(z.object({ family: z.string(), url: z.string(), weight: z.string(), style: z.enum(['normal', 'italic']) })),
+});
+type BrandingT = z.infer<typeof Branding>;
+const NEUTRAL_BRANDING: BrandingT = { storeName: null, logoUrl: null, theme: null, fontFaces: [] };
+
+/** Store identity for the sign-in screens, from store.config.identity (the store's own design tokens: colors, fonts,
+ *  logo; `identity.fontFaces` lists same-origin .woff2 files). Only display facts; every value is validated so a bad
+ *  config cannot inject CSS. An unpublished store, an unknown host or a malformed value answers the neutral default. */
+export function brandingFromStore(st: { name: string; currency: string; config: unknown }): BrandingT {
+  if (!isStorePublished(st.config)) return NEUTRAL_BRANDING;
+  const raw = ((st.config ?? {}) as { identity?: Record<string, unknown> }).identity ?? {};
+  const id = storeIdentityFromConfig(st, true);
+  // A store has a theme once it set its own primary colour; the identity module's neutral fallbacks are not a theme.
+  const colorsSet = !!raw.colors && typeof raw.colors === 'object' && typeof (raw.colors as Record<string, unknown>).primary === 'string';
+  const c = id.colors;
+  const allHex = [c.primary, c.background, c.surface, c.text, c.textMuted, c.border].every((v) => HEX.test(v));
+  const fontsIn = (raw.fonts ?? {}) as Record<string, unknown>;
+  const family = (v: unknown) => (typeof v === 'string' && FAMILY.test(v) ? v : null);
+  const faces = Array.isArray(raw.fontFaces) ? raw.fontFaces : [];
+  const logo = id.logoImageUrl && /^(https:\/\/|\/)[^\s"'()<>]{1,500}$/.test(id.logoImageUrl) ? id.logoImageUrl : null;
+  return {
+    storeName: id.storeName,
+    logoUrl: logo,
+    theme: colorsSet && allHex ? { primary: c.primary, background: c.background, surface: c.surface, text: c.text, textMuted: c.textMuted, border: c.border,
+      fontDisplay: family(fontsIn.display), fontBody: family(fontsIn.body) } : null,
+    fontFaces: faces.flatMap((f) => {
+      const x = (f ?? {}) as Record<string, unknown>;
+      const ok = typeof x.family === 'string' && FAMILY.test(x.family) && typeof x.url === 'string' && FONT_URL.test(x.url) && !x.url.includes('..');
+      if (!ok) return [];
+      const weight = typeof x.weight === 'string' && /^\d{3}( \d{3})?$/.test(x.weight) ? x.weight : '400';
+      return [{ family: x.family as string, url: x.url as string, weight, style: x.style === 'italic' ? 'italic' as const : 'normal' as const }];
+    }).slice(0, 12),
+  };
+}
+
+admin.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/branding', summary: 'Pre-session: the store identity shown on the admin sign-in screens (name, logo, theme tokens) for the resolved host',
+    responses: { 200: { description: 'OK (neutral default for an unknown host or an unpublished store)', content: J(Branding) } },
+  }),
+  async (c) => {
+    let out = NEUTRAL_BRANDING;
+    try { out = brandingFromStore(await resolveStoreFromCtx(c)); } catch { /* unknown host / store: neutral */ }
+    c.header('cache-control', 'no-store');
+    return c.json(out, 200);
+  },
+);
+
+admin.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/password/forgot', summary: 'Pre-session: e-mail a single-use admin password reset link. Always the same answer, whether or not the address has an account',
+    request: { body: { content: J(z.object({ email: z.string().email().max(320) })) } },
+    responses: { 200: { description: 'Accepted', content: J(z.object({ ok: z.boolean() })) }, 429: { description: 'Too many requests', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const email = normalizeEmail(c.req.valid('json').email);
+    const retry = await reserveAdminResetRequest(clientIp(c), email);
+    if (retry > 0) throw rateLimited(c, retry, 'requests');
+    let hostStoreId: string | null = null;
+    try { hostStoreId = (await resolveStoreFromCtx(c)).id; } catch { /* unknown host: the admin's own store mails it */ }
+    // No enumeration: the lookup, token and mail run after the response is decided, off the request path, so the answer
+    // and its timing are the same for every address.
+    void (async () => {
+      const u = await findAdminByEmail(email);
+      if (!u || u.kind === 'agent') return;
+      const store = await adminMailStore(u.id, hostStoreId);
+      if (!store) return;
+      const token = await issuePasswordReset(u.id, u.passwordHash, u.securityEpoch);
+      const r = await sendAdminPasswordReset({ name: store.name, currency: store.currency, config: store.config, storeId: store.id }, u.email,
+        { url: `${adminPublicUrl()}/reset-password?token=${encodeURIComponent(token)}`, ttlMinutes: PASSWORD_RESET_TTL_SECONDS / 60 });
+      if (!r.delivered) log.warn('admin_password_reset_not_delivered', { adminId: u.id, reason: r.reason });
+    })().catch((e) => log.warn('admin_password_reset_failed', { error: e instanceof Error ? e.message : String(e) }));
+    return c.json({ ok: true }, 200);
+  }),
+);
+
+admin.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/password/reset', summary: 'Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged',
+    request: { body: { content: J(z.object({ token: z.string().min(16).max(128), password: z.string().min(10).max(256) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'RESET_INVALID', ...errBody }, 429: { description: 'Too many attempts', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { token, password } = c.req.valid('json');
+    const retry = await reserveAdminSecondStepAttempt(clientIp(c), null);
+    if (retry > 0) throw rateLimited(c, retry, 'attempts');
+    const invalid = () => new HttpError(400, 'this reset link is invalid or has expired — ask for a new one', 'RESET_INVALID');
+    if (!(await peekPasswordReset(token))) throw invalid();
+    const done = await redeemPasswordReset(token, await hashPassword(password));
+    if (!done) throw invalid();
+    log.info('admin_password_reset', { adminId: done.adminUserId });
+    return c.json({ ok: true }, 200);
   }),
 );
 
@@ -121,13 +299,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), passkeyEnabled: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, totpEnrollmentRequired: admin.totpRequired === true && !admin.totpEnabled }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, passkeyEnabled: admin.passkeyEnabled === true, totpEnrollmentRequired: secondFactorEnrollmentRequired(admin) }, 200);
   }),
 );
 

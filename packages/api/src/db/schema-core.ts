@@ -216,6 +216,22 @@ export const adminPasskeyChallenge = pgTable('admin_passkey_challenge', {
   consumedAt: timestamp({ withTimezone: true }),
 }, (t) => [index('admin_passkey_challenge_expires').on(t.expiresAt)]);
 
+/** Admin auth journey tokens (0110, issue #333): login_2fa (password verified, code pending), totp_enroll (one
+ *  session's pending sealed authenticator secret) and password_reset. Only sha256(token) is stored; single-use. */
+export const adminAuthChallenge = pgTable('admin_auth_challenge', {
+  tokenHash: text().primaryKey(),
+  kind: text({ enum: ['login_2fa', 'totp_enroll', 'password_reset'] }).notNull(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  sessionHash: text(),
+  credentialDigest: text(),
+  secret: text(),
+  epoch: integer().notNull(),
+  attempts: integer().notNull().default(0),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  consumedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+}, (t) => [index('admin_auth_challenge_admin').on(t.adminUserId, t.kind), index('admin_auth_challenge_expires').on(t.expiresAt)]);
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),

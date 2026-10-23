@@ -15,6 +15,7 @@ import * as s from '../db/schema.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
 import { adminSessionTtlMs } from './admin-session.js';
+import { deleteRecoveryCodes, regenerateRecoveryCodesTx } from './second-factor.js';
 import {
   CHALLENGE_TTL_SECONDS, MAX_PASSKEYS_PER_OWNER, STEP_UP_WINDOW_SECONDS, adminUserHandle, assertionUserHandle, authenticationOptions, b64url,
   budgets, clientDataChallenge, counterAcceptable, newNonce, registrationOptions, sha256hex, verifyAuthentication, verifyRegistration,
@@ -26,7 +27,7 @@ const expiresAt = () => new Date(Date.now() + CHALLENGE_TTL_SECONDS * 1000);
 const summary = (r: { id: string; label: string; deviceType: string; backedUp: boolean; createdAt: Date; lastUsedAt: Date | null }): PasskeySummary =>
   ({ id: r.id, label: r.label, deviceType: r.deviceType, backedUp: r.backedUp, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt });
 
-export type Refusal = { ok: false; code: 'RATE_LIMITED' | 'PASSKEY_INVALID' | 'CEREMONY_INVALID' | 'STEP_UP_REQUIRED' | 'TOTP_REQUIRED_FIRST' | 'TOO_MANY_PASSKEYS' | 'CREDENTIAL_EXISTS'; retry?: number };
+export type Refusal = { ok: false; code: 'RATE_LIMITED' | 'PASSKEY_INVALID' | 'CEREMONY_INVALID' | 'STEP_UP_REQUIRED' | 'TOO_MANY_PASSKEYS' | 'CREDENTIAL_EXISTS'; retry?: number };
 const refuse = (code: Refusal['code'], retry?: number): Refusal => ({ ok: false, code, ...(retry ? { retry } : {}) });
 
 /** Owner row under lock: the epoch every artifact is compared to. */
@@ -38,7 +39,7 @@ async function lockAdmin(tx: Db, adminId: string) {
 
 /** The calling session, locked and live (expiry + idle rule as admin-staff.ts); with `stepUp`, also fresh and earned
  *  under `epoch` (§4). */
-async function lockLiveSession(tx: Db, adminId: string, sessionHash: string, stepUp?: { epoch: number }) {
+async function lockLiveSession(tx: Db, adminId: string, sessionHash: string, stepUp?: { epoch: number }, createdWithinSeconds?: number) {
   const idle = env.ADMIN_SESSION_IDLE_HOURS;
   const conds = [
     eq(s.session.tokenHash, sessionHash), eq(s.session.adminUserId, adminId), isNull(s.session.apiTokenId),
@@ -48,8 +49,23 @@ async function lockLiveSession(tx: Db, adminId: string, sessionHash: string, ste
   if (stepUp) {
     conds.push(sql`${s.session.stepUpAt} > clock_timestamp() - make_interval(secs => ${STEP_UP_WINDOW_SECONDS})`, eq(s.session.stepUpEpoch, stepUp.epoch));
   }
+  if (createdWithinSeconds !== undefined) conds.push(sql`${s.session.createdAt} > clock_timestamp() - make_interval(secs => ${createdWithinSeconds})`);
   const [row] = await tx.select({ id: s.session.id }).from(s.session).where(and(...conds)).for('update').limit(1);
   return row ?? null;
+}
+
+/** Issue #333: the window in which a freshly signed-in session of an account with NO second factor yet may enrol its
+ *  first one without re-entering the password (that sign-in proved everything the account has: its password). */
+export const FRESH_ENROLL_SECONDS = 15 * 60;
+
+/** The calling session may add a passkey: a current-epoch step-up, or — for the account's FIRST second factor only — a
+ *  session created within FRESH_ENROLL_SECONDS. Caller holds the owner lock. */
+async function lockEnrollSession(tx: Db, owner: { id: string; epoch: number; totp: string | null }, sessionHash: string) {
+  const stepped = await lockLiveSession(tx, owner.id, sessionHash, { epoch: owner.epoch });
+  if (stepped || owner.totp) return stepped;
+  const [cnt] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, owner.id));
+  if (Number(cnt?.n ?? 0) > 0) return null;
+  return lockLiveSession(tx, owner.id, sessionHash, undefined, FRESH_ENROLL_SECONDS);
 }
 
 async function ownCredentials(tx: Db | typeof db, adminId: string) {
@@ -180,8 +196,8 @@ export async function adminRegisterOptions(i: { rp: RelyingParty; adminId: strin
   return db.transaction(async (tx) => {
     const owner = await lockAdmin(tx, i.adminId);
     if (!owner) return refuse('CEREMONY_INVALID');
-    if (!owner.totp) return refuse('TOTP_REQUIRED_FIRST');
-    if (!(await lockLiveSession(tx, owner.id, sessionHash, { epoch: owner.epoch }))) return refuse('STEP_UP_REQUIRED');
+    // Issue #333: a passkey is a second factor on its own — no authenticator app is needed first.
+    if (!(await lockEnrollSession(tx, owner, sessionHash))) return refuse('STEP_UP_REQUIRED');
     const exclude = await ownCredentials(tx, owner.id);
     if (exclude.length >= MAX_PASSKEYS_PER_OWNER) return refuse('TOO_MANY_PASSKEYS');
     const options = await registrationOptions({ rp: i.rp, userHandle: adminUserHandle(owner.id), userName: owner.email, exclude });
@@ -191,16 +207,18 @@ export async function adminRegisterOptions(i: { rp: RelyingParty; adminId: strin
   });
 }
 
-export async function adminRegisterVerify(i: { rp: RelyingParty; adminId: string; sessionToken: string; response: RegistrationResponseJSON; nonce: string | undefined; label: string }): Promise<{ ok: true; passkey: PasskeySummary } | Refusal> {
+export async function adminRegisterVerify(i: { rp: RelyingParty; adminId: string; sessionToken: string; response: RegistrationResponseJSON; nonce: string | undefined; label: string }): Promise<{ ok: true; passkey: PasskeySummary; recoveryCodes?: string[] } | Refusal> {
   const sessionHash = sha256hex(i.sessionToken);
   const retry = await budgets.adminSession(sessionHash);
   if (retry > 0) return refuse('RATE_LIMITED', retry);
   const challenge = clientDataChallenge(i.response);
   if (!challenge || !i.nonce) return refuse('CEREMONY_INVALID');
   return db.transaction(async (tx) => {
+    // Credential lock first (the order mutateAdminSecondFactor uses), then the owner row: recovery codes may be issued below.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + i.adminId}, 0))`);
     const owner = await lockAdmin(tx, i.adminId);
-    if (!owner || !owner.totp) return refuse('CEREMONY_INVALID');
-    if (!(await lockLiveSession(tx, owner.id, sessionHash, { epoch: owner.epoch }))) return refuse('STEP_UP_REQUIRED');
+    if (!owner) return refuse('CEREMONY_INVALID');
+    if (!(await lockEnrollSession(tx, owner, sessionHash))) return refuse('STEP_UP_REQUIRED');
     if (!(await claimChallenge(tx, { challenge, kind: 'register', rpId: i.rp.rpId, nonce: i.nonce!, adminId: owner.id, sessionHash, epoch: owner.epoch }))) return refuse('CEREMONY_INVALID');
     const v = await verifyRegistration({ rp: i.rp, response: i.response, expectedChallenge: challenge });
     if (!v) return refuse('CEREMONY_INVALID');
@@ -213,7 +231,14 @@ export async function adminRegisterVerify(i: { rp: RelyingParty; adminId: string
       adminUserId: owner.id, rpId: i.rp.rpId, credentialId: v.credentialId, publicKey: v.publicKey, counter: v.counter, transports: v.transports,
       deviceType: v.deviceType, backedUp: v.backedUp, aaguid: v.aaguid, label: i.label, epoch: owner.epoch,
     }).returning();
-    return { ok: true as const, passkey: summary(row!) };
+    // Issue #333: the FIRST strong factor of an account (no authenticator app, no earlier passkey) gets its one-time
+    // recovery codes now, and every other session of the account is signed out — exactly what enabling TOTP does.
+    let recoveryCodes: string[] | undefined;
+    if (!owner.totp && Number(cnt?.n ?? 0) === 0) {
+      recoveryCodes = await regenerateRecoveryCodesTx(owner.id, tx);
+      await tx.delete(s.session).where(and(eq(s.session.adminUserId, owner.id), sql`${s.session.tokenHash} <> ${sessionHash}`));
+    }
+    return { ok: true as const, passkey: summary(row!), ...(recoveryCodes ? { recoveryCodes } : {}) };
   });
 }
 
@@ -224,16 +249,36 @@ export async function listAdminPasskeys(adminId: string): Promise<PasskeySummary
 
 /** §4 "admin passkey deleted": the row, every pending challenge of the admin, and step-up authority on ALL of the
  *  admin's sessions (the calling one included) — a step-up earned with the deleted credential cannot enrol a successor. */
-export async function deleteAdminPasskey(i: { adminId: string; id: string }): Promise<boolean> {
+export async function deleteAdminPasskey(i: { adminId: string; id: string; secondFactorRequired?: boolean }): Promise<boolean | 'LAST_FACTOR'> {
   return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + i.adminId}, 0))`);
     const owner = await lockAdmin(tx, i.adminId);
     if (!owner) return false;
     const del = await tx.delete(s.adminPasskeyCredential).where(and(eq(s.adminPasskeyCredential.id, i.id), eq(s.adminPasskeyCredential.adminUserId, owner.id))).returning({ id: s.adminPasskeyCredential.id });
     if (del.length !== 1) return false;
+    // Issue #333: the last passkey of an account without an authenticator app is its only second factor.
+    const [left] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, owner.id));
+    if (!owner.totp && Number(left?.n ?? 0) === 0) {
+      if (i.secondFactorRequired) throw new LastFactorError();
+      await deleteRecoveryCodes(owner.id, tx);
+    }
     await invalidateAdminPending(tx, owner.id);
     await tx.update(s.session).set({ stepUpAt: null, stepUpEpoch: null }).where(and(eq(s.session.adminUserId, owner.id), sql`${s.session.stepUpAt} IS NOT NULL`));
     return true;
   });
+}
+
+class LastFactorError extends Error {}
+/** Route wrapper: the refusal rolls the deletion back. */
+export async function deleteAdminPasskeyChecked(i: { adminId: string; id: string; secondFactorRequired: boolean }): Promise<boolean | 'LAST_FACTOR'> {
+  try { return await deleteAdminPasskey(i); } catch (e) { if (e instanceof LastFactorError) return 'LAST_FACTOR'; throw e; }
+}
+
+/** Rename one of the admin's passkeys (issue #333: account settings manage passkeys). Labels are not credentials. */
+export async function renameAdminPasskey(i: { adminId: string; id: string; label: string }): Promise<PasskeySummary | null> {
+  const [row] = await db.update(s.adminPasskeyCredential).set({ label: i.label })
+    .where(and(eq(s.adminPasskeyCredential.id, i.id), eq(s.adminPasskeyCredential.adminUserId, i.adminId))).returning();
+  return row ? summary(row) : null;
 }
 
 /** Delete every unconsumed challenge of an admin (caller holds the admin_user lock). */

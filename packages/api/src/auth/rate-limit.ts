@@ -97,6 +97,23 @@ export async function reserveAdminAuthAttempt(ip: string, account: string): Prom
   return b.consume(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS, MAX_FAILURES);
 }
 
+/** Second sign-in step (issue #333): with a known account, the full three-bucket reservation; for a token that names
+ *  no live challenge, only the per-IP budget (a dead token must not spend some account's budget). */
+export async function reserveAdminSecondStepAttempt(ip: string, account: string | null): Promise<number> {
+  if (account) return reserveAdminAuthAttempt(ip, account);
+  return rateLimitBackend().consume(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
+}
+
+/** Admin "forgot password" (issue #333): attempt-counted per IP and per account so it cannot be used to mail-bomb an
+ *  admin or to probe addresses at speed. The account bucket is keyed by the submitted address whether or not it exists. */
+const RESET_BUCKET = 'admin-reset';
+export async function reserveAdminResetRequest(ip: string, account: string): Promise<number> {
+  const b = rateLimitBackend();
+  const perIp = await b.consume(RESET_BUCKET, `ip:${ip}`, IP_WINDOW_MS, 10);
+  if (perIp > 0) return perIp;
+  return b.consume(RESET_BUCKET, `acct:${account.toLowerCase()}`, ACCOUNT_WINDOW_MS, 3);
+}
+
 /** After a PASSWORD-verified success: forget the (ip, account) and account budgets. Never call it after a check that
  *  did not verify the password (a TOTP-only operation must not reset password-guessing budgets). */
 export async function clearAdminAuthFailures(ip: string, account: string): Promise<void> {

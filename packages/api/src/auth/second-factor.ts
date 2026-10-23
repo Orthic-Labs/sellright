@@ -98,6 +98,14 @@ export async function verifySecondFactorDetailed(adminId: string, secretB32: str
   return row?.usedAt ? { ok: true, receipt: { id: row.id, usedAt: row.usedAt } } : { ok: false };
 }
 
+/** Sign-in second factor (issue #333): with TOTP enrolled, a TOTP or recovery code; for a passkey-only account
+ *  (no TOTP) only a recovery code — a 6-digit code is never accepted without an enrolled authenticator. */
+export async function verifyLoginFactor(adminId: string, totpSecret: string | null, code: string | undefined): Promise<{ ok: boolean; receipt?: { id: string; usedAt: Date } }> {
+  if (totpSecret) return verifySecondFactorDetailed(adminId, totpSecret, code);
+  if (!code || /^\d{6}$/.test(code.trim())) return { ok: false };
+  return verifySecondFactorDetailed(adminId, '', code);
+}
+
 async function verifyTotpOnceTx(adminId: string, secretB32: string, code: string, tx: FactorDb): Promise<boolean> {
   const step = matchTotpStep(secretB32, code);
   if (step === null) return false;

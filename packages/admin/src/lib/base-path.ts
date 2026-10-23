@@ -25,5 +25,5 @@ export function currentAdminPath(): string {
 /** Screens that render without a session: the 401 from the initial /me probe must not bounce the visitor to /login. */
 export function isPublicAdminPath(): boolean {
   const p = currentAdminPath();
-  return p === '/login' || p === '/accept-invite';
+  return p === '/login' || p === '/accept-invite' || p === '/forgot-password' || p === '/reset-password';
 }

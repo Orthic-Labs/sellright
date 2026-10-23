@@ -52,8 +52,12 @@ export interface AdminPrincipal {
   stores: AdminStoreAccess[];
   /** The session row this request authenticated with (admin sessions only). */
   sessionId?: string;
+  /** When that session was created (issue #333: a freshly signed-in, not-yet-enrolled session enrols without re-entry). */
+  sessionCreatedAt?: Date;
   /** P1b: the admin has a TOTP secret enrolled. Absent for agents. */
   totpEnabled?: boolean;
+  /** Issue #333: the admin has at least one passkey — a second factor on its own. Absent for agents. */
+  passkeyEnabled?: boolean;
   /** P1b: policy (auth/mfa-policy.ts) requires TOTP for this admin. */
   totpRequired?: boolean;
 }
@@ -99,8 +103,13 @@ export async function createAdminSessionIfCredential(adminUserId: string, verifi
     // Owner first (design §5), FOR UPDATE: the conditional rehash below is a write on this row.
     const [row] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret, epoch: s.adminUser.securityEpoch }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
     if (!row || row.hash !== verifiedHash) return null;
-    // A sign-in that verified no second factor must not succeed if 2FA was enabled meanwhile (enrolment races).
-    if (!secondFactorVerified && row.totp !== null) return null;
+    // A sign-in that verified no second factor must not succeed if 2FA was enabled meanwhile (enrolment races). A
+    // registered passkey is a second factor on its own (issue #333): a password alone never signs such an account in.
+    if (!secondFactorVerified) {
+      if (row.totp !== null) return null;
+      const [pk] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, adminUserId));
+      if (Number(pk?.n ?? 0) > 0) return null;
+    }
     if (captured) {
       // 0108: the factor that was verified must still be the enrolled one (same epoch, same stored TOTP version) and a
       // consumed recovery code must still belong to the current set; otherwise the proof is from a superseded epoch.
@@ -180,11 +189,13 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       isInstallationAdmin: s.adminUser.isInstallationAdmin,
       kind: s.adminUser.kind,
       totpEnabled: sql<boolean>`(${s.adminUser.totpSecret} is not null)`,
+      passkeyEnabled: sql<boolean>`exists(select 1 from admin_passkey_credential pk where pk.admin_user_id = ${s.adminUser.id})`,
       storeRequireTotp: sql<boolean>`coalesce((${s.store.config} -> 'security' ->> 'requireTotp') = 'true', false)`,
       stepUpAt: s.session.stepUpAt,
       stepUpEpoch: s.session.stepUpEpoch,
       securityEpoch: s.adminUser.securityEpoch,
       sessionId: s.session.id,
+      sessionCreatedAt: s.session.createdAt,
       lastSeenAt: sql<Date>`coalesce(${s.session.lastSeenAt}, ${s.session.createdAt})`,
       apiTokenId: s.session.apiTokenId,
       tokenAdminUserId: s.adminApiToken.adminUserId,
@@ -246,9 +257,10 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
   if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
   if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
-  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stepUpEpoch: first.stepUpEpoch ?? null, securityEpoch: first.securityEpoch, stores, sessionId: first.sessionId };
+  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stepUpEpoch: first.stepUpEpoch ?? null, securityEpoch: first.securityEpoch, stores, sessionId: first.sessionId, sessionCreatedAt: first.sessionCreatedAt };
   if (kind === 'human') {
     principal.totpEnabled = first.totpEnabled === true;
+    principal.passkeyEnabled = first.passkeyEnabled === true;
     principal.totpRequired = totpRequiredFor(principal);
   }
   return principal;

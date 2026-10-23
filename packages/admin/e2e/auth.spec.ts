@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { AdminApi, totpAt, totpStep, uniq } from './support/api';
-import { field } from './fixtures';
+import { field, gotoStable } from './fixtures';
 import { ADMIN_URL, OWNER_EMAIL, OWNER_PASSWORD } from './support/env.mjs';
 import { inviteTokenFor } from './support/mailbox';
 
@@ -11,19 +11,36 @@ import { inviteTokenFor } from './support/mailbox';
 test.describe('admin sign-in', () => {
 	test.use({ storageState: { cookies: [], origins: [] } });
 
-	test('wrong password is refused with a generic message; the right one lands on the dashboard; sign out returns to /login', async ({ page }) => {
+	/** A staff account (via the real invite flow), optionally with 2FA enabled the way Settings > Security does. */
+	async function makeAccount(api: AdminApi, prefix: string, withTotp: boolean) {
+		const email = `${uniq(prefix)}@example.net`;
+		const password = `${prefix}-e2e-password-1`;
+		await api.post('/staff/invites', { email, role: 'manager' });
+		const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: await inviteTokenFor(email), password }) });
+		expect(accepted.status).toBe(200);
+		let secret: string | null = null;
+		const enabledAtStep = totpStep();
+		if (withTotp) {
+			const mine = await AdminApi.login(email, password);
+			({ secret } = await mine.post<{ secret: string }>('/2fa/setup'));
+			await mine.post('/2fa/enable', { secret, code: totpAt(secret!, enabledAtStep), password });
+		}
+		return { email, password, secret, enabledAtStep };
+	}
+
+	test('wrong password is refused with one generic message; the right one lands on the dashboard; sign out returns to /login', async ({ page }) => {
 		// 'commit': the SPA bounces to /login itself (location.assign on a 401), which would otherwise abort goto()
 		await page.goto('/orders', { waitUntil: 'commit' });
 		await expect(page).toHaveURL(/\/login$/); // unauthenticated deep links bounce to sign-in
 
 		await field(page, 'Email').fill(OWNER_EMAIL);
 		await field(page, 'Password').fill('not-the-password');
-		await page.getByRole('button', { name: 'Sign in' }).click();
-		await expect(page.getByText('invalid email, password, or 2FA code')).toBeVisible(); // no hint which part was wrong
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		await expect(page.getByText('Incorrect email or password.')).toBeVisible(); // no hint which part was wrong
 		await expect(page).toHaveURL(/\/login$/);
 
 		await field(page, 'Password').fill(OWNER_PASSWORD);
-		await page.getByRole('button', { name: 'Sign in' }).click();
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
@@ -33,53 +50,94 @@ test.describe('admin sign-in', () => {
 		await expect(page).toHaveURL(/\/login$/);
 	});
 
-	test('an admin with 2FA enabled can sign in by supplying the authenticator code', async ({ page, api }) => {
-		// The API's login answers a 2FA account that sent no code with the same plain 401 as a bad password (WP1.5 — it
-		// never says "2FA required"), so the screen always offers the optional authentication-code field and sends it
-		// together with the password. First attempt without a code is refused generically; the second carries the code.
-		const email = `${uniq('tf')}@example.net`;
-		const password = 'twofa-e2e-password-1';
-		await api.post('/staff/invites', { email, role: 'manager' });
-		const inv = { token: await inviteTokenFor(email) };
-		const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, password }) });
-		expect(accepted.status).toBe(200);
-
-		// enable TOTP the way Settings > Security does: setup -> code from the secret -> enable
-		const mine = await AdminApi.login(email, password);
-		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
-		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password });
-		expect((await mine.get<{ enabled: boolean }>('/2fa')).enabled).toBe(true);
-
+	test('#333: an account WITHOUT 2FA only ever sees email and password', async ({ page, api }) => {
+		const a = await makeAccount(api, 'no2fa', false);
 		await page.goto('/login');
-		await field(page, 'Email').fill(email);
-		await field(page, 'Password').fill(password);
-		await expect(field(page, 'Authentication code')).toBeVisible();
-		await page.getByRole('button', { name: 'Sign in' }).click();
-		await expect(page.getByText('invalid email, password, or 2FA code')).toBeVisible(); // no code: generic 401, no oracle
-		// a different 30s step than the one used for /2fa/enable, so replay protection is not what we measure
-		const code = totpAt(secret, totpStep() + 1);
-		await field(page, 'Authentication code').fill(code);
-		await page.getByRole('button', { name: 'Sign in' }).click();
+		await expect(page.locator('input:visible')).toHaveCount(2);
+		await expect(page.locator('input[autocomplete="one-time-code"]')).toHaveCount(0);
+		await expect(page.getByText(/Optional|Authentication code/)).toHaveCount(0);
+		await expect(field(page, 'Email')).toHaveAttribute('autocomplete', 'username webauthn');
+		await expect(field(page, 'Password')).toHaveAttribute('autocomplete', 'current-password');
+		await field(page, 'Email').fill(a.email);
+		await field(page, 'Password').fill(a.password);
+		await field(page, 'Password').press('Enter'); // Enter submits
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 	});
 
-	test('API contract: 2FA login needs password AND code together; a wrong or missing code is the same generic 401', async ({ api }) => {
-		const email = `${uniq('tc')}@example.net`;
-		const password = 'twofa-api-password-1';
-		await api.post('/staff/invites', { email, role: 'staff' });
-		const inv = { token: await inviteTokenFor(email) };
-		await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, password }) });
-		const mine = await AdminApi.login(email, password);
-		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
-		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password });
+	test('#333: an account WITH 2FA gets the code step only after the correct password, and signs in with the code', async ({ page, api }) => {
+		const a = await makeAccount(api, 'tf', true);
+		await page.goto('/login');
+		await field(page, 'Email').fill(a.email);
+		await field(page, 'Password').fill('not-the-password');
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		await expect(page.getByText('Incorrect email or password.')).toBeVisible();
+		await expect(page.locator('input[autocomplete="one-time-code"]')).toHaveCount(0); // a wrong password reveals nothing
 
+		await field(page, 'Password').fill(a.password);
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		await expect(page.getByText('Enter the 6-digit code from your authenticator app')).toBeVisible();
+		const code = page.locator('input[autocomplete="one-time-code"]');
+		await expect(code).toHaveAttribute('inputmode', 'numeric');
+		await expect(page.getByRole('button', { name: 'Use a recovery code' })).toBeVisible();
+		await code.fill('000000'); // auto-submits at 6 digits
+		await expect(page.getByText('That code didn’t work.', { exact: false })).toBeVisible();
+		// a different 30s step than the one used for /2fa/enable, so replay protection is not what we measure
+		await code.fill(totpAt(a.secret!, a.enabledAtStep + 1));
+		await expect(page).toHaveURL(`${ADMIN_URL}/`);
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+	});
+
+	test('#333: passkey sign-in through autofill (conditional mediation) with a Chromium virtual authenticator', async ({ page, api, browserName }) => {
+		test.skip(browserName !== 'chromium', 'virtual authenticator is a Chromium CDP feature');
+		test.setTimeout(120_000);
+		const a = await makeAccount(api, 'pk', true);
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send('WebAuthn.enable');
+		await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+
+		// enrol a passkey from Settings > Security (password step, then the code step, then step-up for passkey management)
+		await page.goto('/login');
+		await field(page, 'Email').fill(a.email);
+		await field(page, 'Password').fill(a.password);
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		await page.locator('input[autocomplete="one-time-code"]').fill(totpAt(a.secret!, a.enabledAtStep + 1));
+		await expect(page).toHaveURL(`${ADMIN_URL}/`);
+		await gotoStable(page, '/settings');
+		await page.getByRole('button', { name: 'Security' }).click();
+		await field(page, 'Passkey name').fill('E2E virtual key');
+		await page.getByRole('button', { name: 'Add a passkey' }).click();
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toBeVisible();
+		await field(dialog, 'Password').fill(a.password);
+		// TOTP replay guard: every accepted step must be newer than the last; the sign-in used enable+1, so wait until
+		// enable+2 is inside the ±1-step window.
+		while (totpStep() < a.enabledAtStep + 1) await page.waitForTimeout(1000);
+		await field(dialog, '2FA code (if enabled)').fill(totpAt(a.secret!, a.enabledAtStep + 2));
+		await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+		await expect(page.getByRole('list', { name: 'Passkeys' }).getByText('E2E virtual key')).toBeVisible();
+		await page.getByRole('button', { name: 'Sign out' }).click();
+		await expect(page).toHaveURL(/\/login$/);
+
+		// back on /login the email field carries "username webauthn" and the page has started a conditional request;
+		// the virtual authenticator answers it, so the admin signs in with no password and no code.
+		await page.reload();
+		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+		expect((await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).json())).email).toBe(a.email);
+	});
+
+	test('API contract: the single-request form still needs password AND code together; a wrong or missing code is refused', async ({ api }) => {
+		const a = await makeAccount(api, 'tc', true);
 		const post = (body: Record<string, unknown>) => fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-		const missing = await post({ email, password });
-		expect(missing.status).toBe(401);
-		const wrong = await post({ email, password, totp: '000000' });
+		const missing = await post({ email: a.email, password: a.password });
+		expect(missing.status).toBe(200); // step 1: a challenge, never a session
+		const body = await missing.json();
+		expect(body).toMatchObject({ twoFactorRequired: true });
+		expect(missing.headers.get('set-cookie') ?? '').not.toMatch(/sr_admin=/);
+		const wrong = await post({ email: a.email, password: a.password, totp: '000000' });
 		expect(wrong.status).toBe(401);
-		expect((await missing.json()).error.message).toBe((await wrong.json()).error.message); // no 2FA-enabled oracle
-		const good = await post({ email, password, totp: totpAt(secret, totpStep() + 1) });
+		const good = await post({ email: a.email, password: a.password, totp: totpAt(a.secret!, a.enabledAtStep + 1) });
 		expect(good.status).toBe(200);
 	});
 });
@@ -99,7 +157,7 @@ test.describe('account security (P1b)', () => {
 		await page.goto('/login');
 		await field(page, 'Email').fill(email);
 		await field(page, 'Password').fill(password);
-		await page.getByRole('button', { name: 'Sign in' }).click();
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
 		await page.goto('/settings');
 		await page.getByRole('button', { name: 'Security' }).click();
@@ -113,12 +171,17 @@ test.describe('account security (P1b)', () => {
 
 		await page.getByRole('button', { name: 'Enable 2FA' }).click();
 		await page.getByRole('button', { name: 'Set up an authenticator app' }).click();
-		const secret = (await page.locator('div.font-mono').first().innerText()).trim();
-		await field(page, 'Verification code').fill(totpAt(secret, totpStep()));
-		await field(page, 'Your current password').fill(newPassword);
+		await expect(page.locator('.auth-qr img')).toBeVisible(); // #333: QR rendered by the API, no third-party service
+		const secret = (await page.getByLabel('Setup key').innerText()).replace(/\s+/g, '');
+		await page.locator('input[autocomplete="one-time-code"]').fill(totpAt(secret, totpStep()));
+		// the password change above re-proved the password minutes ago? No: a password change is not a step-up, and this
+		// session is older than the fresh-sign-in window only in wall time; the API says which, the UI follows it.
+		const pw = page.locator('input[autocomplete="current-password"]');
+		if (await pw.count()) await pw.fill(newPassword);
 		await page.getByRole('button', { name: 'Enable', exact: true }).click();
 		await expect(page.getByRole('list', { name: 'Recovery codes' }).getByRole('listitem')).toHaveCount(10);
-		await page.getByRole('button', { name: 'I have saved my recovery codes' }).click();
+		await page.getByLabel('I’ve saved my recovery codes').check();
+		await page.getByRole('button', { name: 'Done', exact: true }).click();
 		await expect(page.getByText('10 unused recovery code(s) left.')).toBeVisible();
 	});
 });

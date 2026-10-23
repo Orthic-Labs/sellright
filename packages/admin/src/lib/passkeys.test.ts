@@ -61,8 +61,10 @@ describe('passkeys client', () => {
   });
 
   it('error mapping by API code and step_up detection', () => {
-    const t = new FakeApiError(409, 'raw'); t.code = 'TOTP_REQUIRED_FIRST';
-    expect(pk.passkeyErrorMessage(t)).toBe('Set up your authenticator app first');
+    const t = new FakeApiError(409, 'raw'); t.code = 'LAST_SECOND_FACTOR';
+    expect(pk.passkeyErrorMessage(t)).toMatch(/Add another passkey or an authenticator app/);
+    expect(pk.defaultPasskeyLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')).toBe('iPhone');
+    expect(pk.defaultPasskeyLabel('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe('Mac');
     expect(pk.isStepUpRequired(new FakeApiError(403, 'step_up_required'))).toBe(true);
     expect(pk.isStepUpRequired(new FakeApiError(403, 'other'))).toBe(false);
   });

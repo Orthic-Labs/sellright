@@ -64,7 +64,7 @@ test.describe('payments settings', () => {
 		});
 		// Anything the browser itself sends to a gateway origin would be a bug: fail loudly if it happens.
 		const external: string[] = [];
-		page.on('request', (r) => { if (!r.url().startsWith('http://127.0.0.1')) external.push(r.url()); });
+		page.on('request', (r) => { if (!r.url().startsWith('http://127.0.0.1') && !r.url().startsWith('http://localhost')) external.push(r.url()); });
 
 		await page.goto('/settings/payments');
 		await mode(page, 'Stripe', 'test').getByRole('button', { name: 'Test connection' }).click();

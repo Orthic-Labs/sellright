@@ -12,7 +12,8 @@ import { env, getEnvSource } from '../env.js';
 import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
 import { markStepUpVerifiedIfCurrent } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
-import { verifySecondFactorDetailed } from '../auth/second-factor.js';
+import { verifyLoginFactor } from '../auth/second-factor.js';
+import { adminPasskeyCount } from '../auth/admin-auth-challenge.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // Recovery exports use the same parsed master key as secret-crypto; optional
@@ -173,8 +174,10 @@ adminSystem.openapi(
       throw new HttpError(401, 'invalid password or 2FA code');
     }
     let receipt: { id: string; usedAt: Date } | undefined;
-    if (creds.totpSecret) {
-      const factor = await verifySecondFactorDetailed(admin.id, creds.totpSecret, totp);
+    // Issue #333: a passkey-only account (no authenticator app) steps up with its passkey (POST /v1/admin/step-up/passkey/*)
+    // or here with a recovery code — never with the password alone.
+    if (creds.totpSecret || (await adminPasskeyCount(admin.id)) > 0) {
+      const factor = await verifyLoginFactor(admin.id, creds.totpSecret, totp);
       if (!factor.ok) throw new HttpError(401, 'invalid password or 2FA code');
       receipt = factor.receipt;
     }
