@@ -3,6 +3,7 @@ import { routeLoader$, useNavigate, type DocumentHead } from '@qwik.dev/router';
 import { BRAND_LICENSE } from '~/platform/brand-data';
 import { apiErrorCode, checkout, createPaymentIntent, payOrder, getProduct, getCollection, getUpgradeEligibility, type ApiError, type VariantDetail, type CheckoutBody, type UpgradeEligibility } from '../../api';
 import { getStripe } from '../../stripe';
+import { paymentElementOptions } from '~/components/checkout/payment-element-options';
 import { confirmCheckoutPayment, type CheckoutPaymentRuntime } from '../../checkout-payment';
 import { checkoutLegalContract, isCheckoutPaused, legalLinks, sellerLine, supportEmailFor, type CheckoutEligibilityBasis } from '../../legal';
 import { fmtMoney as fmt } from '../../variant';
@@ -211,7 +212,7 @@ export default component$(() => {
       if (disposed) return;
       if (!stripe) { state.error = 'Payment could not load. Please reload and try again.'; return; }
       const elements = stripe.elements({ clientSecret: cs });
-      const payment = elements.create('payment', { layout: 'tabs' });
+      const payment = elements.create('payment', paymentElementOptions());
       destroy = () => payment.destroy();
       paymentRuntime.value = noSerialize({ stripe, elements });
       payment.on('ready', () => { if (!disposed) state.paymentReady = true; });

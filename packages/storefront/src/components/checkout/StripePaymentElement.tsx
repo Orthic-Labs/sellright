@@ -1,4 +1,5 @@
 import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
+import { paymentElementOptions } from './payment-element-options';
 import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement as StripePaymentElementHandle } from '@stripe/stripe-js';
 
 /**
@@ -61,7 +62,7 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 				return;
 			}
 			const elements: StripeElements = stripe.elements({ clientSecret: props.clientSecret });
-			const element = elements.create('payment', { layout: 'tabs' });
+			const element = elements.create('payment', paymentElementOptions());
 			paymentElement = element;
 			// Loading failures after mount arrive asynchronously as `loaderror`; readiness is Stripe's `ready`, not the mount call.
 			element.on('loaderror', (event) => {
