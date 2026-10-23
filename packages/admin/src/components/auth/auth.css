@@ -31,7 +31,7 @@
 @media (max-width: 420px) { .auth-card { padding: 28px 20px 24px; } }
 .auth-brand { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; min-height: 40px; margin-bottom: 24px; }
 .auth-brand img { display: block; max-height: 56px; max-width: 200px; width: auto; height: auto; object-fit: contain; }
-.auth-wordmark { font-family: var(--a-font-display); font-size: 22px; font-weight: 600; letter-spacing: 0.01em; color: var(--a-text); text-align: center; line-height: 1.2; }
+.auth-wordmark { font-family: var(--a-font-logo); font-size: 22px; font-weight: 600; letter-spacing: 0.01em; color: var(--a-text); text-align: center; line-height: 1.2; }
 .auth-title { font-family: var(--a-font-display); font-size: 24px; font-weight: 600; line-height: 1.25; margin: 0; text-align: center; color: var(--a-text); }
 .auth-sub { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--a-muted); text-align: center; overflow-wrap: anywhere; }
 .auth-body { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }

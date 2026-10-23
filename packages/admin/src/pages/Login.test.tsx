@@ -142,6 +142,42 @@ describe('step 2: only after a correct password, only for 2FA accounts', () => {
   });
 });
 
+describe('#333 review', () => {
+  it('too many wrong codes returns to the password step with the exhausted message', async () => {
+    post.mockResolvedValueOnce({ twoFactorRequired: true, challengeToken: 'c4', methods: ['totp', 'recovery_code'] });
+    post.mockRejectedValueOnce(new ApiError(401, 'x', 'LOGIN_CHALLENGE_EXHAUSTED'));
+    const { container, done } = await render();
+    await signIn(container);
+    act(() => setInput(codeField(container)!, '222222'));
+    await flush(); await flush();
+    expect(codeField(container)).toBeNull();
+    expect(container.textContent).toContain('Too many incorrect codes. Enter your password again.');
+    done();
+  });
+
+  it('focus returns to the code field after a wrong code', async () => {
+    post.mockResolvedValueOnce({ twoFactorRequired: true, challengeToken: 'c5', methods: ['totp', 'recovery_code'] });
+    post.mockRejectedValueOnce(new ApiError(401, 'x', 'INVALID_CODE'));
+    const { container, done } = await render();
+    await signIn(container);
+    act(() => setInput(codeField(container)!, '333333'));
+    await flush(); await flush();
+    expect(document.activeElement).toBe(codeField(container));
+    done();
+  });
+
+  it('a passkey-only account on a browser without passkeys goes straight to the recovery code', async () => {
+    webauthn = false;
+    post.mockResolvedValueOnce({ twoFactorRequired: true, challengeToken: 'c6', methods: ['passkey', 'recovery_code'] });
+    const { container, done } = await render();
+    await signIn(container);
+    expect(container.textContent).toContain('Use a recovery code');
+    expect(container.querySelector('input[autocomplete="off"]')).not.toBeNull();
+    expect(buttons(container).some((b) => b.textContent === 'Use your passkey')).toBe(false);
+    done();
+  });
+});
+
 describe('passkeys', () => {
   it('"Sign in with a passkey" is a secondary button when the capability is on and the browser supports WebAuthn', async () => {
     caps.mockResolvedValue({ passkeys: true });

@@ -413,7 +413,7 @@ export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
 }
 
 /** Issue #333: admin password reset link (fire-and-forget at the route; the outcome is logged, never shown). */
-export async function sendAdminPasswordReset(store: StoreEmailCtx, to: string, data: { url: string; ttlMinutes: number }): Promise<{ delivered: boolean; reason?: string }> {
+export async function sendAdminPasswordReset(store: StoreEmailCtx, to: string, data: { url: string; ttlMinutes: number; passkeys: { label: string; createdAt: Date }[] }): Promise<{ delivered: boolean; reason?: string }> {
   const ctx = emailCtx(store);
   return sendEmail({ to, from: ctx.fromEmail, ...adminPasswordReset(ctx, data) }, ctx.storeId);
 }

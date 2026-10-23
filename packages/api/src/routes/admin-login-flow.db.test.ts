@@ -44,9 +44,11 @@ function totp(secretB32: string, stepOffset = 0): string {
   return ((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).toString().padStart(6, '0');
 }
 
-let ipSeq = 0;
+// Rate-limit buckets live in the database for 15 minutes: start each run at a random point of 10.0.0.0/8 so re-runs
+// never inherit a spent budget.
+let ipSeq = Math.floor(Math.random() * 16_000_000);
 /** Every case gets its own client address (a public peer: pickClientIp uses the socket address). */
-const freshIp = () => `198.51.100.${(++ipSeq % 250) + 1}`;
+const freshIp = () => { const n = ++ipSeq; return `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}`; };
 const post = (path: string, body: unknown, ip: string, headers: Record<string, string> = {}) =>
   app.request(path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }, { remoteAddr: ip });
 const get = (path: string, headers: Record<string, string> = {}, ip = freshIp()) => app.request(path, { headers }, { remoteAddr: ip });
@@ -176,7 +178,34 @@ describe('step 2: the challenge token', () => {
     const token = await stepOne(a.email);
     for (let i = 0; i < LOGIN_CHALLENGE_MAX_ATTEMPTS; i++) expect((await post('/v1/admin/login/2fa', { challengeToken: token, code: '000000' }, freshIp())).status).toBe(401);
     const r = await post('/v1/admin/login/2fa', { challengeToken: token, code: totp(SECRET) }, freshIp());
+    expect(r.status).toBe(401); expect(await errCode(r)).toBe('LOGIN_CHALLENGE_EXHAUSTED');
+  });
+
+  it('two concurrent redemptions of one challenge with the right code create exactly one session', async () => {
+    const a = await makeAdmin({ totp: true });
+    const [code] = await regenerateRecoveryCodes(a.id);
+    const token = await stepOne(a.email);
+    const ip = freshIp();
+    // the same valid factor sent twice at once (a recovery code: single use on its own, so this isolates the claim)
+    const rs = await Promise.all([post('/v1/admin/login/2fa', { challengeToken: token, code: code! }, ip), post('/v1/admin/login/2fa', { challengeToken: token, code: code! }, ip)]);
+    expect(rs.map((r) => r.status).sort()).toEqual([200, 401]);
+    expect(await sessions(a.id)).toHaveLength(1);
+    // and with two different valid codes: still one winner
+    const [c1, c2] = await regenerateRecoveryCodes(a.id);
+    const t2 = await stepOne(a.email);
+    const rs2 = await Promise.all([post('/v1/admin/login/2fa', { challengeToken: t2, code: c1! }, ip), post('/v1/admin/login/2fa', { challengeToken: t2, code: c2! }, ip)]);
+    expect(rs2.map((r) => r.status).sort()).toEqual([200, 401]);
+    expect(await sessions(a.id)).toHaveLength(2);
+  });
+
+  it('dies when the 2FA setup changes between the steps (epoch bump: TOTP enabled after step 1)', async () => {
+    const a = await makeAdmin({ passkey: true });
+    const [code] = await regenerateRecoveryCodes(a.id);
+    const token = await stepOne(a.email);
+    await owner.query('UPDATE admin_user SET totp_secret=$2 WHERE id=$1', [a.id, sealTotpSecret(a.id, SECRET)]); // trigger bumps the epoch
+    const r = await post('/v1/admin/login/2fa', { challengeToken: token, code: code! }, freshIp());
     expect(r.status).toBe(401); expect(await errCode(r)).toBe('LOGIN_CHALLENGE_EXPIRED');
+    expect(await sessions(a.id)).toEqual([]);
   });
 
   it('dies when the password changes after step 1, and a newer step 1 replaces an older token', async () => {
@@ -276,7 +305,10 @@ describe('mandatory enrolment right after sign-in', () => {
     expect(rows.filter((r) => r.kind === 'totp_enroll' && !r.consumed_at)).toHaveLength(1); // the old pending secret is gone
     const stale = await post('/v1/admin/2fa/enable', { code: totp(s1.secret) }, freshIp(), h);
     expect(stale.status).toBe(409);
-    const ok = await post('/v1/admin/2fa/enable', { code: totp(s2.secret) }, freshIp(), h);
+    // naming the superseded QR is refused outright (the screen then fetches a new one)
+    const staleId = await post('/v1/admin/2fa/enable', { code: totp(s2.secret), setupId: (s1 as unknown as { setupId: string }).setupId }, freshIp(), h);
+    expect(staleId.status).toBe(409); expect(await errCode(staleId)).toBe('SETUP_EXPIRED');
+    const ok = await post('/v1/admin/2fa/enable', { code: totp(s2.secret), setupId: (s2 as unknown as { setupId: string }).setupId }, freshIp(), h);
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as { recoveryCodes: string[] }).recoveryCodes).toHaveLength(10);
   });
@@ -329,12 +361,140 @@ describe('sign-in branding', () => {
     const r = await get('/v1/admin/branding', { 'x-store-slug': SLUG });
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ storeName: 'Damned Designs', logoUrl: '/logo.svg',
-      theme: { primary: '#B87333', background: '#F7F2EA', surface: '#FFFFFF', text: '#111110', textMuted: '#5C5A55', border: '#E4DED3', fontDisplay: "'Cormorant Garamond', serif", fontBody: "'IBM Plex Sans', sans-serif" },
+      theme: { primary: '#B87333', background: '#F7F2EA', surface: '#FFFFFF', text: '#111110', textMuted: '#5C5A55', border: '#E4DED3', fontDisplay: "'Cormorant Garamond', serif", fontBody: "'IBM Plex Sans', sans-serif", fontLogo: null },
       fontFaces: [{ family: 'Cormorant Garamond', url: '/fonts/cormorant.woff2', weight: '600', style: 'normal' }] });
     await setConfig({ identity: { ...identity, colors: { ...identity.colors, primary: 'red;background:url(x)' } } });
     expect(((await (await get('/v1/admin/branding', { 'x-store-slug': SLUG })).json()) as { theme: unknown }).theme).toBeNull();
     await setConfig({ identity, published: false });
     expect(await (await get('/v1/admin/branding', { 'x-store-slug': SLUG })).json()).toEqual({ storeName: null, logoUrl: null, theme: null, fontFaces: [] });
     expect(await (await get('/v1/admin/branding', { 'x-store-slug': 'no-such-store-333' })).json()).toEqual({ storeName: null, logoUrl: null, theme: null, fontFaces: [] });
+  });
+});
+
+// ── #333 review additions ──────────────────────────────────────────────────────
+async function sessionFor(adminId: string, opts: { stepUp?: boolean; createdAgoMinutes?: number } = {}) {
+  const token = randomUUID() + randomUUID();
+  const [{ epoch }] = (await owner.query('SELECT security_epoch AS epoch FROM admin_user WHERE id=$1', [adminId])).rows;
+  await owner.query(`INSERT INTO "session"(admin_user_id,token_hash,expires_at,created_at,last_seen_at,step_up_at,step_up_epoch)
+    VALUES($1,$2,now()+interval '1 day',now()-make_interval(mins => $3),now(),$4,$5)`,
+  [adminId, sha(token), opts.createdAgoMinutes ?? 0, opts.stepUp ? new Date() : null, opts.stepUp ? epoch : null]);
+  return { authorization: `Bearer ${token}`, 'x-store-slug': SLUG };
+}
+const call = (method: string, path: string, headers: Record<string, string>, body?: unknown) =>
+  app.request(path, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { remoteAddr: freshIp() });
+const requireTotp = () => owner.query("UPDATE store SET config='{\"security\":{\"requireTotp\":true}}' WHERE id=$1", [STORE]).then(() => invalidateStoreCache());
+
+describe('passkey management (#333 review)', () => {
+  it('DELETE /passkeys/:id refuses the last factor of a 2FA-required account (409 LAST_SECOND_FACTOR)', async () => {
+    const a = await makeAdmin({ role: 'owner', passkey: true });
+    await requireTotp();
+    const h = await sessionFor(a.id, { stepUp: true });
+    const [{ id }] = (await owner.query('SELECT id FROM admin_passkey_credential WHERE admin_user_id=$1', [a.id])).rows;
+    const r = await call('DELETE', `/v1/admin/passkeys/${id}`, h);
+    expect(r.status).toBe(409); expect(await errCode(r)).toBe('LAST_SECOND_FACTOR');
+    expect((await owner.query('SELECT id FROM admin_passkey_credential WHERE admin_user_id=$1', [a.id])).rows).toHaveLength(1);
+  });
+
+  it('an old session (no step-up, signed in long ago) cannot register a passkey: 403 step_up_required', async () => {
+    const a = await makeAdmin();
+    const r = await call('POST', '/v1/admin/passkeys/register/options', await sessionFor(a.id, { createdAgoMinutes: 60 }), {});
+    expect(r.status).toBe(403);
+    expect(((await r.json()) as { error: { message: string } }).error.message).toBe('step_up_required');
+    expect((await call('POST', '/v1/admin/passkeys/register/options', await sessionFor(a.id), {})).status).toBe(200); // a fresh one may
+  });
+
+  it('a passkey-only account regenerates recovery codes with password + a recovery code, or password + a fresh passkey step-up — never the password alone', async () => {
+    const a = await makeAdmin({ passkey: true });
+    const [code] = await regenerateRecoveryCodes(a.id);
+    const plain = await sessionFor(a.id);
+    const bare = await call('POST', '/v1/admin/2fa/recovery-codes', plain, { password: PASSWORD });
+    expect(bare.status).toBe(403);
+    const sixDigits = await call('POST', '/v1/admin/2fa/recovery-codes', plain, { password: PASSWORD, code: '123456' });
+    expect(sixDigits.status).toBe(409);
+    const withCode = await call('POST', '/v1/admin/2fa/recovery-codes', plain, { password: PASSWORD, code: code! });
+    expect(withCode.status).toBe(200);
+    expect(((await withCode.json()) as { recoveryCodes: string[] }).recoveryCodes).toHaveLength(10);
+    const stepped = await call('POST', '/v1/admin/2fa/recovery-codes', await sessionFor(a.id, { stepUp: true }), { password: PASSWORD });
+    expect(stepped.status).toBe(200);
+    const wrongPw = await call('POST', '/v1/admin/2fa/recovery-codes', await sessionFor(a.id, { stepUp: true }), { password: 'nope nope nope' });
+    expect(wrongPw.status).toBe(401);
+  });
+
+  it('TOTP can be disabled while a passkey remains (even when 2FA is required); the passkey and recovery codes stay valid', async () => {
+    const a = await makeAdmin({ role: 'owner', totp: true, passkey: true });
+    await requireTotp();
+    await regenerateRecoveryCodes(a.id);
+    const r = await call('POST', '/v1/admin/2fa/disable', await sessionFor(a.id), { password: PASSWORD, code: totp(SECRET) });
+    expect(r.status).toBe(200);
+    const row = (await owner.query('SELECT u.totp_secret, u.security_epoch AS epoch, p.epoch AS pk FROM admin_user u JOIN admin_passkey_credential p ON p.admin_user_id=u.id WHERE u.id=$1', [a.id])).rows[0];
+    expect(row.totp_secret).toBeNull();
+    expect(row.pk).toBe(row.epoch); // re-stamped across the bump
+    expect((await owner.query('SELECT count(*)::int AS n FROM admin_recovery_code WHERE admin_user_id=$1', [a.id])).rows[0].n).toBe(10);
+    // without the passkey the requirement refuses removing the last factor
+    const b = await makeAdmin({ role: 'owner', totp: true });
+    const refused = await call('POST', '/v1/admin/2fa/disable', await sessionFor(b.id), { password: PASSWORD, code: totp(SECRET) });
+    expect(refused.status).toBe(403); expect(await errCode(refused)).toBe('TOTP_REQUIRED');
+  });
+});
+
+describe('forgot / reset (#333 review)', () => {
+  it('forgot: identical answers for known and unknown addresses; the per-address budget answers 429 with Retry-After', async () => {
+    const a = await makeAdmin();
+    const bodies: string[] = [];
+    for (const email of [a.email, 'nobody-333@login333.test']) {
+      const r = await post('/v1/admin/password/forgot', { email }, freshIp());
+      expect(r.status).toBe(200); bodies.push(await r.text());
+    }
+    expect(bodies[0]).toBe(bodies[1]);
+    for (let i = 0; i < 2; i++) expect((await post('/v1/admin/password/forgot', { email: a.email }, freshIp())).status).toBe(200);
+    const limited = await post('/v1/admin/password/forgot', { email: a.email }, freshIp());
+    expect(limited.status).toBe(429);
+    const body = await limited.json() as { error: { code: string }; retryAfterSeconds: number };
+    expect(body.error.code).toBe('RATE_LIMITED');
+    expect(body.retryAfterSeconds).toBeGreaterThan(0);
+    expect(limited.headers.get('retry-after')).toBe(String(body.retryAfterSeconds));
+  });
+
+  it('check + reset: a live link checks valid; an expired one checks invalid and cannot reset; a used one cannot be reused', async () => {
+    const a = await makeAdmin();
+    const token = await issuePasswordReset(a.id, hash, 0);
+    expect(await (await post('/v1/admin/password/reset/check', { token }, freshIp())).json()).toEqual({ valid: true });
+    await owner.query("UPDATE admin_auth_challenge SET expires_at = now() - interval '1 second' WHERE token_hash=$1", [sha(token)]);
+    expect(await (await post('/v1/admin/password/reset/check', { token }, freshIp())).json()).toEqual({ valid: false });
+    const expired = await post('/v1/admin/password/reset', { token, password: 'a brand new password 333' }, freshIp());
+    expect(expired.status).toBe(400); expect(await errCode(expired)).toBe('RESET_INVALID');
+    const t2 = await issuePasswordReset(a.id, hash, 0);
+    expect((await post('/v1/admin/password/reset', { token: t2, password: 'a brand new password 333' }, freshIp())).status).toBe(200);
+    expect(await (await post('/v1/admin/password/reset/check', { token: t2 }, freshIp())).json()).toEqual({ valid: false });
+    expect((await post('/v1/admin/password/reset', { token: t2, password: 'another new password 333' }, freshIp())).status).toBe(400);
+    const short = await post('/v1/admin/password/reset', { token: await issuePasswordReset(a.id, (await owner.query('SELECT password_hash FROM admin_user WHERE id=$1', [a.id])).rows[0].password_hash, 0), password: 'short' }, freshIp());
+    expect(short.status).toBe(400); // one shared 10-character minimum
+  });
+
+  it('a reset bumps the epoch, signs out every session and puts passkeys under review: a passkey session can do nothing else, and only the NEW password completes the review', async () => {
+    const a = await makeAdmin({ passkey: true });
+    await owner.query(`INSERT INTO admin_passkey_credential(admin_user_id,rp_id,credential_id,public_key,device_type,backed_up,label,epoch)
+      VALUES($1,'localhost',$2,'\\x00'::bytea,'singleDevice',false,'Intruder key',0)`, [a.id, `cred2-${a.id}`]);
+    const before = (await owner.query('SELECT security_epoch FROM admin_user WHERE id=$1', [a.id])).rows[0].security_epoch;
+    await sessionFor(a.id);
+    const next = 'a brand new password 333';
+    expect((await post('/v1/admin/password/reset', { token: await issuePasswordReset(a.id, hash, before), password: next }, freshIp())).status).toBe(200);
+    const after = (await owner.query('SELECT security_epoch, passkey_review_required FROM admin_user WHERE id=$1', [a.id])).rows[0];
+    expect(after.security_epoch).toBe(before + 1);
+    expect(after.passkey_review_required).toBe(true);
+    expect(await sessions(a.id)).toEqual([]);
+    expect((await owner.query('SELECT DISTINCT epoch FROM admin_passkey_credential WHERE admin_user_id=$1', [a.id])).rows).toEqual([{ epoch: before + 1 }]);
+
+    const h = await sessionFor(a.id); // e.g. a passkey sign-in
+    expect(await (await call('GET', '/v1/admin/me', h)).json()).toMatchObject({ passkeyReviewRequired: true });
+    const blocked = await call('GET', '/v1/admin/orders', h);
+    expect(blocked.status).toBe(403); expect(await errCode(blocked)).toBe('PASSKEY_REVIEW_REQUIRED');
+    const [legit, intruder] = (await owner.query('SELECT id, label FROM admin_passkey_credential WHERE admin_user_id=$1 ORDER BY label DESC', [a.id])).rows as { id: string; label: string }[];
+    expect(legit!.label).toBe('Test key'); expect(intruder!.label).toBe('Intruder key');
+    expect((await call('POST', '/v1/admin/passkeys/review', h, { password: PASSWORD, keep: [legit!.id] })).status).toBe(401); // the OLD password
+    const ok = await call('POST', '/v1/admin/passkeys/review', h, { password: next, keep: [legit!.id] });
+    expect(ok.status).toBe(200); expect(await ok.json()).toEqual({ ok: true, removed: 1 });
+    expect((await owner.query('SELECT label FROM admin_passkey_credential WHERE admin_user_id=$1', [a.id])).rows).toEqual([{ label: 'Test key' }]);
+    expect((await call('GET', '/v1/admin/orders', h)).status).not.toBe(403);
   });
 });

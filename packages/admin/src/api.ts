@@ -102,7 +102,7 @@ export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
 
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
-export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; totpEnabled?: boolean; passkeyEnabled?: boolean; totpEnrollmentRequired?: boolean; }
+export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; totpEnabled?: boolean; passkeyEnabled?: boolean; passkeyReviewRequired?: boolean; totpEnrollmentRequired?: boolean; }
 export interface AgentRow { id: string; adminUserId: string; name: string; email: string; role: string; createdBy: string | null; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; }
 export type SecondFactorMethod = 'totp' | 'passkey' | 'recovery_code';
 export interface LoginResp {

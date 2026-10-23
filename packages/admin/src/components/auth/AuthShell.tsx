@@ -12,6 +12,9 @@ export function AuthShell({ title, subtitle, children, footer, wide }: { title: 
   const vars = authThemeVars(branding.theme) as CSSProperties;
   const faces = fontFaceCss(branding);
   const [logoFailed, setLogoFailed] = useState(false);
+  // A named wordmark typeface renders at the weight the store ships for it (e.g. a 300-only logo face).
+  const logoFamily = branding.theme?.fontLogo ?? null;
+  const logoWeight = logoFamily ? branding.fontFaces.find((f) => logoFamily.includes(f.family))?.weight ?? null : null;
   useEffect(() => {
     if (branding.storeName) document.title = `Sign in · ${branding.storeName}`;
   }, [branding.storeName]);
@@ -20,8 +23,10 @@ export function AuthShell({ title, subtitle, children, footer, wide }: { title: 
       {faces && <style>{faces}</style>}
       <main className={`auth-card${wide ? ' is-wide' : ''}`} aria-labelledby="auth-title">
         <div className="auth-brand">
-          {branding.logoUrl && !logoFailed && <img src={branding.logoUrl} alt="" onError={() => setLogoFailed(true)} />}
-          {branding.storeName && <span className="auth-wordmark">{branding.storeName}</span>}
+          {branding.logoUrl && !logoFailed && <img src={branding.logoUrl} alt={branding.theme?.fontLogo ? '' : (branding.storeName ?? 'Store logo')} onError={() => setLogoFailed(true)} />}
+          {/* The name is set as a wordmark when there is no logo image, or when the store names its wordmark typeface
+              (identity.fonts.logo) — a logo image alone otherwise. */}
+          {branding.storeName && (!branding.logoUrl || logoFailed || !!branding.theme?.fontLogo) && <span className="auth-wordmark" style={logoWeight ? { fontWeight: Number(logoWeight.split(' ')[0]) } : undefined}>{branding.storeName}</span>}
         </div>
         <h1 id="auth-title" className="auth-title">{title}</h1>
         {subtitle && <p className="auth-sub">{subtitle}</p>}
@@ -33,8 +38,8 @@ export function AuthShell({ title, subtitle, children, footer, wide }: { title: 
 }
 
 /** Labelled input with optional show/hide toggle, hint, and an error rendered UNDER the field (aria-describedby). */
-export function AuthField({ label, error, hint, toggle, aside, inputClassName, ...input }: InputHTMLAttributes<HTMLInputElement> & {
-  label: string; error?: string | null; hint?: ReactNode; toggle?: boolean; aside?: ReactNode; inputClassName?: string;
+export function AuthField({ label, error, hint, toggle, aside, inputClassName, inputRef, ...input }: InputHTMLAttributes<HTMLInputElement> & {
+  label: string; error?: string | null; hint?: ReactNode; toggle?: boolean; aside?: ReactNode; inputClassName?: string; inputRef?: React.Ref<HTMLInputElement>;
 }) {
   const id = useId();
   const [shown, setShown] = useState(false);
@@ -48,6 +53,7 @@ export function AuthField({ label, error, hint, toggle, aside, inputClassName, .
       <div className="auth-control">
         <input
           id={id}
+          ref={inputRef}
           {...input}
           type={toggle ? (shown ? 'text' : 'password') : input.type}
           className={`auth-input${toggle ? ' has-toggle' : ''}${inputClassName ? ` ${inputClassName}` : ''}`}

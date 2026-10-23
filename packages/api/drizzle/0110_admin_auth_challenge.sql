@@ -8,6 +8,8 @@
 --                   admin_user.totp_secret; replaced on every setup call, consumed by POST /v1/admin/2fa/enable.
 --   password_reset  the e-mailed reset link (POST /v1/admin/password/forgot -> /reset), bound to the epoch and the
 --                   password-hash digest it was issued for.
+-- admin_user.passkey_review_required: set by a password reset when the account has passkeys; until the owner confirms
+-- which to keep (with the NEW password), every session of the account can only review them (#333 review).
 -- Global like admin_passkey_challenge (resolved before any store context; no store_id, so no RLS).
 -- Additive: the previous image never reads the table. Runtime grants follow schema-owner default privileges.
 CREATE TABLE "admin_auth_challenge" (
@@ -29,5 +31,7 @@ CREATE TABLE "admin_auth_challenge" (
     ("kind" = 'password_reset' AND "credential_digest" IS NOT NULL AND "session_hash" IS NULL AND "secret" IS NULL))
 );--> statement-breakpoint
 CREATE INDEX "admin_auth_challenge_admin" ON "admin_auth_challenge"("admin_user_id", "kind");--> statement-breakpoint
-CREATE INDEX "admin_auth_challenge_expires" ON "admin_auth_challenge"("expires_at");
--- DOWN (never run automatically): DROP TABLE "admin_auth_challenge" (the previous image never reads it).
+CREATE INDEX "admin_auth_challenge_expires" ON "admin_auth_challenge"("expires_at");--> statement-breakpoint
+ALTER TABLE "admin_user" ADD COLUMN "passkey_review_required" boolean NOT NULL DEFAULT false;
+-- DOWN (never run automatically): DROP TABLE "admin_auth_challenge"; ALTER TABLE "admin_user" DROP COLUMN "passkey_review_required"
+-- (the previous image reads neither).

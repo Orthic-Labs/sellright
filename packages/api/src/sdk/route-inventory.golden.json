@@ -1,5 +1,5 @@
 {
-  "count": 375,
+  "count": 377,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -266,9 +266,11 @@
     "POST /v1/admin/passkeys/login/verify",
     "POST /v1/admin/passkeys/register/options",
     "POST /v1/admin/passkeys/register/verify",
+    "POST /v1/admin/passkeys/review",
     "POST /v1/admin/password",
     "POST /v1/admin/password/forgot",
     "POST /v1/admin/password/reset",
+    "POST /v1/admin/password/reset/check",
     "POST /v1/admin/payment-reconciliation/{id}/verify",
     "POST /v1/admin/payment-reconciliation/effects/{id}/approve-issuance",
     "POST /v1/admin/payment-reconciliation/effects/{id}/retry",

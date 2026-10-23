@@ -609,7 +609,7 @@ const IdentityPatchSchema = z.object({
     background: z.string().optional(), surface: z.string().optional(), text: z.string().optional(),
     textMuted: z.string().optional(), border: z.string().optional(),
   }).optional(),
-  fonts: z.object({ display: z.string().optional(), body: z.string().optional(), mono: z.string().optional() }).optional(),
+  fonts: z.object({ display: z.string().optional(), body: z.string().optional(), mono: z.string().optional(), logo: z.string().optional() }).optional(),
   // Issue #333: the store's own .woff2 files (same-origin paths, e.g. the storefront's /fonts/...), so the admin sign-in
   // screens render in the store's typefaces under the admin CSP (font-src 'self'). Validated again where they are served.
   fontFaces: z.array(z.object({ family: z.string().max(160), url: z.string().regex(/^\/[A-Za-z0-9/._-]{1,200}\.woff2$/), weight: z.string().max(7).optional(), style: z.enum(['normal', 'italic']).optional() })).max(12).optional(),

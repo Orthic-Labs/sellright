@@ -15,12 +15,17 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 import { resolveAdmin, type AdminPrincipal } from '../auth/admin-session.js';
 import { secondFactorEnrollmentRequired } from '../auth/mfa-policy.js';
 import { PASSKEY_NONCE_COOKIE, clearPasskeyNonceCookie, cookie, newCsrf, setAuthCookies, setPasskeyNonceCookie } from '../auth/cookies.js';
-import { clientIp } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
+import { completePasskeyReview } from '../auth/admin-auth-challenge.js';
+import { getAdminCredentialsById } from '../auth/admin-staff.js';
+import { verifyPassword } from '../auth/password.js';
 import {
   adminLoginOptions, adminLoginVerify, adminRegisterOptions, adminRegisterVerify, adminStepUpOptions, adminStepUpVerify, deleteAdminPasskeyChecked, listAdminPasskeys, renameAdminPasskey, type Refusal,
 } from '../auth/passkeys-admin.js';
 import { CHALLENGE_TTL_SECONDS, CREDENTIAL_ID_MAX, LABEL_MAX, RESPONSE_FIELD_MAX, adminRelyingParty, budgets, passkeysEnabled } from '../auth/passkeys-core.js';
 import { withStore } from '../db/client.js';
+import { resolveStore } from '../store-context.js';
+import { storeIdentityFromConfig } from './store-identity.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, guard, requireAdmin, requireHuman, requireStepUpEpoch } from './admin-helpers.js';
 
@@ -63,6 +68,16 @@ async function audit(c: Context, admin: AdminPrincipal, action: string, data?: R
   const st = admin.stores.find((x) => x.slug === slug) ?? admin.stores[0];
   if (!st) return;
   await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'admin_security', entityId: admin.id, action, data }));
+}
+
+/** The relying party with the administered store's name as rpName — what the OS passkey prompt shows (#333 review).
+ *  rpId/origins stay the installation's (never from request headers). */
+async function storeRelyingParty(c: Context, admin: AdminPrincipal) {
+  const rp = adminRelyingParty();
+  const slug = c.req.header('x-store-slug');
+  const st = admin.stores.find((x) => x.slug === slug) ?? admin.stores[0];
+  if (!st) return rp;
+  try { return { ...rp, rpName: storeIdentityFromConfig(await resolveStore(st.slug), true).storeName.trim().slice(0, 64) || rp.rpName }; } catch { return rp; }
 }
 
 // ── pre-session ──────────────────────────────────────────────────────────────
@@ -141,7 +156,7 @@ adminPasskeys.openapi(
     requireHuman(admin);
     // The step-up rule is enforced under the owner lock (passkeys-admin.ts lockEnrollSession): a current-epoch step-up,
     // or — for the account's FIRST second factor only — a session signed in within the fresh-enrolment window (#333).
-    const r = await adminRegisterOptions({ rp: adminRelyingParty(), adminId: admin.id, sessionToken: token });
+    const r = await adminRegisterOptions({ rp: await storeRelyingParty(c, admin), adminId: admin.id, sessionToken: token });
     if (!r.ok) raise(r, 409);
     setPasskeyNonceCookie(c, r.nonce, CHALLENGE_TTL_SECONDS);
     return c.json({ options: r.options as unknown as Record<string, unknown> }, 200);
@@ -184,6 +199,34 @@ adminPasskeys.openapi(
     if (!r) throw new HttpError(404, 'passkey not found');
     await audit(c, admin, 'passkey_remove', { credential: id });
     return c.json({ ok: true }, 200);
+  }),
+);
+
+adminPasskeys.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/passkeys/review', summary: 'After a password reset: keep exactly the listed passkeys (confirmed with the current password), remove the rest',
+    request: { body: { content: J(z.object({ password: z.string().min(1).max(1024), keep: z.array(z.string().uuid()).max(20) })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ ok: z.boolean(), removed: z.number().int() })) },
+      401: { description: 'Unauthorized / wrong password', ...errBody }, 409: { description: 'No review pending / credentials changed', ...errBody }, 429: tooMany,
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    requireHuman(admin);
+    const { password, keep } = c.req.valid('json');
+    if (!admin.passkeyReviewRequired) throw new HttpError(409, 'no passkey review is pending', 'NO_REVIEW_PENDING');
+    // The NEW password is the proof: a passkey sign-in (possibly with a passkey an intruder added) cannot complete it.
+    const ip = clientIp(c);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`, 'RATE_LIMITED');
+    const creds = await getAdminCredentialsById(admin.id);
+    if (!creds?.passwordHash || !(await verifyPassword(password, creds.passwordHash))) throw new HttpError(401, 'invalid password', 'INVALID_PASSWORD');
+    await clearAdminAuthFailures(ip, admin.email);
+    const r = await completePasskeyReview(admin.id, creds.passwordHash, keep);
+    if (!r) throw new HttpError(409, 'your credentials changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    await audit(c, admin, 'passkey_review', { kept: keep.length, removed: r.removed });
+    return c.json({ ok: true, removed: r.removed }, 200);
   }),
 );
 

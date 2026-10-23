@@ -153,6 +153,7 @@ export interface paths {
                         code: string;
                         password?: string;
                         secret?: string;
+                        setupId?: string;
                     };
                 };
             };
@@ -213,7 +214,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Replace the recovery codes (current password + a TOTP or recovery code); returns the new codes once */
+        /** Replace the recovery codes (current password + a TOTP or recovery code; a passkey-only account: a recovery code or a fresh passkey step-up); returns the new codes once */
         post: {
             parameters: {
                 query?: never;
@@ -224,7 +225,7 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        code: string;
+                        code?: string;
                         password: string;
                     };
                 };
@@ -243,6 +244,15 @@ export interface paths {
                 };
                 /** @description Unauthorized / wrong password */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description step_up_required (passkey-only account without a code) */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -308,6 +318,7 @@ export interface paths {
                             passwordRequired: boolean;
                             qrSvg: string;
                             secret: string;
+                            setupId: string;
                         };
                     };
                 };
@@ -1831,6 +1842,7 @@ export interface paths {
                                 border: string;
                                 fontBody: string | null;
                                 fontDisplay: string | null;
+                                fontLogo: string | null;
                                 primary: string;
                                 surface: string;
                                 text: string;
@@ -4792,7 +4804,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password) */
+                /** @description INVALID_CODE (try again), LOGIN_CHALLENGE_EXHAUSTED or LOGIN_CHALLENGE_EXPIRED (start over with the password) */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -5494,6 +5506,7 @@ export interface paths {
                             /** @enum {string} */
                             kind: "human" | "agent";
                             passkeyEnabled: boolean;
+                            passkeyReviewRequired: boolean;
                             stores: {
                                 currency: string;
                                 name: string;
@@ -7966,6 +7979,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/passkeys/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** After a password reset: keep exactly the listed passkeys (confirmed with the current password), remove the rest */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        keep: string[];
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            removed: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized / wrong password */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description No review pending / credentials changed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/password": {
         parameters: {
             query?: never;
@@ -8111,7 +8197,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged */
+        /** Pre-session: set a new admin password with a reset link token (single use); bumps the security epoch, signs out every session, puts passkeys under review. 2FA is unchanged */
         post: {
             parameters: {
                 query?: never;
@@ -8146,6 +8232,59 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/password/reset/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pre-session: is this reset link still usable? (the reset screen shows the form only for a live link) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            valid: boolean;
+                        };
                     };
                 };
                 /** @description Too many attempts */
@@ -11114,6 +11253,7 @@ export interface paths {
                         fonts?: {
                             body?: string;
                             display?: string;
+                            logo?: string;
                             mono?: string;
                         };
                         legalName?: string;
@@ -23045,7 +23185,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "FEATURE_DISABLED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOO_MANY_PASSKEYS" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "FEATURE_DISABLED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOO_MANY_PASSKEYS" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "PASSKEY_REVIEW_REQUIRED" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

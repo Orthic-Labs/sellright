@@ -90,6 +90,7 @@
           "TOO_MANY_PASSKEYS",
           "TOKEN_INVALID",
           "TOTP_ENROLLMENT_REQUIRED",
+          "PASSKEY_REVIEW_REQUIRED",
           "VARIANT_NOT_RECURRING"
         ]
       },
@@ -14435,7 +14436,7 @@
             }
           },
           "401": {
-            "description": "INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password)",
+            "description": "INVALID_CODE (try again), LOGIN_CHALLENGE_EXHAUSTED or LOGIN_CHALLENGE_EXPIRED (start over with the password)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14505,6 +14506,10 @@
                         "fontBody": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "fontLogo": {
+                          "type": "string",
+                          "nullable": true
                         }
                       },
                       "required": [
@@ -14515,7 +14520,8 @@
                         "textMuted",
                         "border",
                         "fontDisplay",
-                        "fontBody"
+                        "fontBody",
+                        "fontLogo"
                       ]
                     },
                     "fontFaces": {
@@ -14616,9 +14622,63 @@
         }
       }
     },
+    "/v1/admin/password/reset/check": {
+      "post": {
+        "summary": "Pre-session: is this reset link still usable? (the reset screen shows the form only for a live link)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "valid"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/password/reset": {
       "post": {
-        "summary": "Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged",
+        "summary": "Pre-session: set a new admin password with a reset link token (single use); bumps the security epoch, signs out every session, puts passkeys under review. 2FA is unchanged",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14788,6 +14848,9 @@
                     "passkeyEnabled": {
                       "type": "boolean"
                     },
+                    "passkeyReviewRequired": {
+                      "type": "boolean"
+                    },
                     "totpEnrollmentRequired": {
                       "type": "boolean"
                     }
@@ -14800,6 +14863,7 @@
                     "stores",
                     "totpEnabled",
                     "passkeyEnabled",
+                    "passkeyReviewRequired",
                     "totpEnrollmentRequired"
                   ]
                 }
@@ -24831,6 +24895,9 @@
                       },
                       "mono": {
                         "type": "string"
+                      },
+                      "logo": {
+                        "type": "string"
                       }
                     }
                   },
@@ -25115,6 +25182,9 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "setupId": {
+                      "type": "string"
+                    },
                     "secret": {
                       "type": "string"
                     },
@@ -25135,6 +25205,7 @@
                     }
                   },
                   "required": [
+                    "setupId",
                     "secret",
                     "otpauthUri",
                     "qrSvg",
@@ -25185,6 +25256,11 @@
                   "password": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "setupId": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 128
                   },
                   "secret": {
                     "type": "string",
@@ -25347,7 +25423,7 @@
     },
     "/v1/admin/2fa/recovery-codes": {
       "post": {
-        "summary": "Replace the recovery codes (current password + a TOTP or recovery code); returns the new codes once",
+        "summary": "Replace the recovery codes (current password + a TOTP or recovery code; a passkey-only account: a recovery code or a fresh passkey step-up); returns the new codes once",
         "requestBody": {
           "content": {
             "application/json": {
@@ -25355,7 +25431,8 @@
                 "type": "object",
                 "properties": {
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "password": {
                     "type": "string",
@@ -25363,7 +25440,6 @@
                   }
                 },
                 "required": [
-                  "code",
                   "password"
                 ]
               }
@@ -25394,6 +25470,16 @@
           },
           "401": {
             "description": "Unauthorized / wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "step_up_required (passkey-only account without a code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -26400,6 +26486,93 @@
           },
           "404": {
             "description": "Not found / disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/passkeys/review": {
+      "post": {
+        "summary": "After a password reset: keep exactly the listed passkeys (confirmed with the current password), remove the rest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "password",
+                  "keep"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "removed": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "removed"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No review pending / credentials changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
             "content": {
               "application/json": {
                 "schema": {
@@ -29071,7 +29244,7 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8
+                    "minLength": 10
                   }
                 },
                 "required": [
@@ -29387,7 +29560,7 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8
+                    "minLength": 10
                   },
                   "currentPassword": {
                     "type": "string",

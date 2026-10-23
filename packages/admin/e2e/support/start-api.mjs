@@ -88,6 +88,9 @@ const baseEnv = {
   SMTP_PORT: String(SMTP_PORT),
   SMTP_FROM: 'noreply@e2e.example.net',
   RATE_LIMIT_BACKEND: 'memory',
+  // Every request of the suite comes from one loopback address: the per-IP admin sign-in budget (default 50 / 15 min)
+  // would otherwise throttle the suite itself. Per-account budgets keep their defaults; the API DB tests cover the IP one.
+  ADMIN_AUTH_IP_MAX_FAILURES: '5000',
   HOST: '127.0.0.1',
   PORT: String(API_PORT),
 };

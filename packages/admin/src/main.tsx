@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useState } from 'react';
 import EnrollSecondFactor from './pages/EnrollSecondFactor';
+import ReviewPasskeys from './pages/ReviewPasskeys';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import { createRoot } from 'react-dom/client';
@@ -72,6 +73,8 @@ function Protected() {
   // P1b: policy requires 2FA and none is enrolled — the API only lets this session enrol, so the whole app is
   // replaced by the enrolment screen until it is done.
   if (me.totpEnrollmentRequired) return <EnrollSecondFactor />;
+  // #333 review: after a password reset, confirm which passkeys to keep (the API allows nothing else until then).
+  if (me.passkeyReviewRequired) return <ReviewPasskeys />;
   return (
     <>
       <Layout />

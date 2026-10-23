@@ -226,7 +226,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       // Passkeys (0108): pre-session ceremony + capability probe, treated exactly like /v1/admin/login.
       || p === '/v1/admin/capabilities' || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify'
       // Issue #333: sign-in step 2, the sign-in screens' store branding and the forgot/reset password pair — same posture.
-      || p === '/v1/admin/login/2fa' || p === '/v1/admin/branding' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset';
+      || p === '/v1/admin/login/2fa' || p === '/v1/admin/branding' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check';
     // A credential means a parsable Bearer token or the session cookie — not any Authorization header (e.g. Basic).
     const hasCredential = !!bearer(c.req.header('authorization')) || !!cookie(c, SESSION_COOKIE)
       || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
@@ -292,7 +292,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       const machineCachePurge = m === 'POST' && new URL(c.req.url).pathname === '/v1/admin/cache/purge';
       const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept' || machineCachePurge
         || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify' // passkeys (0108): pre-session, no CSRF cookie yet
-        || p === '/v1/admin/login/2fa' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset'; // #333: pre-session
+        || p === '/v1/admin/login/2fa' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check'; // #333: pre-session
       if (!exempt && !csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
     }
     await next();

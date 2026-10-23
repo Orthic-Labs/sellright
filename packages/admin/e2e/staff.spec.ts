@@ -156,7 +156,7 @@ test.describe('staff', () => {
 		await field(page, 'Password').fill('short');
 		await field(page, 'Confirm password').fill('short');
 		await page.getByRole('button', { name: 'Accept invitation' }).click();
-		await expect(page.getByText('Use at least 8 characters.')).toBeVisible();
+		await expect(page.getByText('Use at least 10 characters.')).toBeVisible();
 		await field(page, 'Password').fill(PASSWORD);
 		await field(page, 'Confirm password').fill(`${PASSWORD}x`);
 		await page.getByRole('button', { name: 'Accept invitation' }).click();

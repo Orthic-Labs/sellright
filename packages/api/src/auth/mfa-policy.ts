@@ -45,3 +45,11 @@ export const ENROLLMENT_ALLOWED: ReadonlySet<string> = new Set([
   'POST /v1/admin/step-up',
   'POST /v1/admin/logout',
 ]);
+
+/** Issue #333 review: routes a session may call while the account's passkeys are under review after a password reset. */
+export const PASSKEY_REVIEW_ALLOWED: ReadonlySet<string> = new Set([
+  'GET /v1/admin/me',
+  'GET /v1/admin/passkeys',
+  'POST /v1/admin/passkeys/review',
+  'POST /v1/admin/logout',
+]);

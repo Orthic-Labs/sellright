@@ -59,7 +59,7 @@ export async function setAdminTotpSecret(adminId: string, secret: string): Promi
  * Factor, recovery-code replacement & session revocation share one transaction, serialized per admin.
  * Slow password/factor proof happens before this call; its results cannot resurrect superseded credentials. */
 export class AdminFactorMutationError extends Error {
-  constructor(readonly code: 'TOTP_REQUIRED' | 'INVALID_FACTOR' | 'PASSKEYS_ENROLLED') { super(code); }
+  constructor(readonly code: 'TOTP_REQUIRED' | 'INVALID_FACTOR') { super(code); }
 }
 export async function mutateAdminSecondFactor(input: {
   adminId: string; token: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null;
@@ -88,11 +88,10 @@ export async function mutateAdminSecondFactor(input: {
         sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`))
       .for('update').limit(1);
     if (!session || session.expiresAt.getTime() <= Date.now() || (idle > 0 && (session.lastSeenAt ?? session.createdAt).getTime() <= Date.now() - idle * 3600000)) return null;
+    // #333: a passkey is a second factor on its own (counted under the admin_user lock the registration path also takes).
+    const [pk] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, input.adminId));
+    const passkeys = Number(pk?.n ?? 0);
     if (input.action === 'disable') {
-      // 0108 TOTP invariant (design §7): with a passkey enrolled the second factor stays; recovery codes remain the
-      // universal recovery factor. Checked under the admin_user lock the registration path also takes.
-      const [pk] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, input.adminId));
-      if (Number(pk?.n ?? 0) > 0) throw new AdminFactorMutationError('PASSKEYS_ENROLLED');
       // Global credential row precedes membership & store locks. Its FK lock
       // also prevents a new membership from appearing during this decision.
       const memberships = await tx.select().from(s.adminUserStore).where(eq(s.adminUserStore.adminUserId, input.adminId))
@@ -107,7 +106,8 @@ export async function mutateAdminSecondFactor(input: {
           return { storeId: store.id, slug: store.slug, name: store.name, currency: store.currency, taxRate: store.taxRate,
             shippingTaxable: store.shippingTaxable, role: m.role, permissions: null, requireTotp: config?.security?.requireTotp === true };
         }) });
-      if (required) throw new AdminFactorMutationError('TOTP_REQUIRED');
+      // The requirement is met by a remaining passkey; only the LAST factor of a required account is refused.
+      if (required && passkeys === 0) throw new AdminFactorMutationError('TOTP_REQUIRED');
       // Proof consumption must follow policy & share its transaction: refusal
       // cannot consume a recovery code or advance the durable TOTP replay guard.
       if (!input.totpSecret || !await verifySecondFactorTx(input.adminId, input.totpSecret, input.code, tx)) {
@@ -123,10 +123,16 @@ export async function mutateAdminSecondFactor(input: {
       if (bumped) await tx.update(s.adminPasskeyCredential).set({ epoch: bumped.epoch }).where(and(eq(s.adminPasskeyCredential.adminUserId, input.adminId), eq(s.adminPasskeyCredential.epoch, admin.epoch)));
       await tx.delete(s.session).where(and(eq(s.session.adminUserId, input.adminId), ne(s.session.id, session.id)));
     } else if (input.action === 'disable') {
-      await tx.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, input.adminId));
+      const [bumped] = await tx.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, input.adminId)).returning({ epoch: s.adminUser.securityEpoch });
+      if (passkeys > 0) {
+        // #333 review: the passkeys stay the account's second factor across the epoch bump (as on enable), and so do the
+        // recovery codes that back them up.
+        if (bumped) await tx.update(s.adminPasskeyCredential).set({ epoch: bumped.epoch }).where(and(eq(s.adminPasskeyCredential.adminUserId, input.adminId), eq(s.adminPasskeyCredential.epoch, admin.epoch)));
+        return { recoveryCodes: [] };
+      }
       await deleteRecoveryCodes(input.adminId, tx);
       return { recoveryCodes: [] };
-    } else if (!input.totpSecret) return null;
+    } else if (!input.totpSecret && passkeys === 0) return null; // recovery codes back up a factor; none, none
     return { recoveryCodes: await regenerateRecoveryCodesTx(input.adminId, tx) };
   });
 }

@@ -7,7 +7,7 @@ import { act } from 'react';
 
 let passwordRequired = false;
 const post = vi.fn(async (path: string, _body?: unknown) => {
-  if (path === '/2fa/setup') return { secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauthUri: 'otpauth://totp/Store:me%40x.test?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Store', qrSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>', issuer: 'Store', account: 'me@x.test', passwordRequired };
+  if (path === '/2fa/setup') return { setupId: 'setup-id-0123456789abcdef', secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauthUri: 'otpauth://totp/Store:me%40x.test?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Store', qrSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>', issuer: 'Store', account: 'me@x.test', passwordRequired };
   if (path === '/2fa/enable') return { enabled: true, recoveryCodes: ['aaaa-bbbb-cccc-dddd', 'eeee-ffff-gggg-hhhh'] };
   throw new Error(`unexpected ${path}`);
 });
@@ -54,7 +54,7 @@ describe('TwoFactorEnroll', () => {
       expect(enable.disabled).toBe(false);
       act(() => { (container.querySelector('form') as HTMLFormElement).requestSubmit(); });
       await flush();
-      expect(post).toHaveBeenCalledWith('/2fa/enable', { code: '123456' });
+      expect(post).toHaveBeenCalledWith('/2fa/enable', { code: '123456', setupId: 'setup-id-0123456789abcdef' });
       expect([...container.querySelectorAll('[aria-label="Recovery codes"] li')].map((li) => li.textContent)).toEqual(['aaaa-bbbb-cccc-dddd', 'eeee-ffff-gggg-hhhh']);
       const finish = buttonByText(container, 'Done');
       expect(finish.disabled).toBe(true);
@@ -73,7 +73,7 @@ describe('TwoFactorEnroll', () => {
       act(() => setInput(container.querySelector('input[autocomplete="current-password"]') as HTMLInputElement, 'my-current-pass'));
       act(() => { (container.querySelector('form') as HTMLFormElement).requestSubmit(); });
       await flush();
-      expect(post).toHaveBeenCalledWith('/2fa/enable', { code: '654321', password: 'my-current-pass' });
+      expect(post).toHaveBeenCalledWith('/2fa/enable', { code: '654321', setupId: 'setup-id-0123456789abcdef', password: 'my-current-pass' });
     } finally { done(); }
   });
 });

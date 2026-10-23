@@ -16,6 +16,8 @@ import { and, count, eq, gt, isNull, lt, or, sql, isNotNull } from 'drizzle-orm'
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { openTotpSecret, sealTotpSecret } from './totp-secret.js';
+import { consumeRecoveryCode, verifyTotpOnceTx } from './second-factor.js';
+import { adminSessionTtlMs } from './admin-session.js';
 
 export const LOGIN_CHALLENGE_TTL_SECONDS = 5 * 60;
 export const LOGIN_CHALLENGE_MAX_ATTEMPTS = 5;
@@ -67,16 +69,56 @@ export async function issueLoginChallenge(adminUserId: string, passwordHash: str
 /** Read-only: the owner of a live login challenge (used to pick the rate-limit account before anything is spent). */
 export async function peekLoginChallenge(token: string): Promise<{ adminUserId: string } | null> {
   const [row] = await db.select({ adminUserId: s.adminAuthChallenge.adminUserId }).from(s.adminAuthChallenge)
-    .where(live('login_2fa', sha256(token), LOGIN_CHALLENGE_MAX_ATTEMPTS)).limit(1);
+    .where(live('login_2fa', sha256(token))).limit(1); // an exhausted token still names its account (budgets + EXHAUSTED)
   return row ?? null;
 }
 
-/** Atomically count one code attempt against the token; null when it is dead (consumed, expired, out of attempts). */
-export async function attemptLoginChallenge(token: string): Promise<{ adminUserId: string; credentialDigest: string; epoch: number } | null> {
+/** Atomically count one code attempt against the token. Returns why it cannot be used when it is dead. */
+export async function attemptLoginChallenge(token: string): Promise<{ ok: true; adminUserId: string } | { ok: false; reason: 'expired' | 'exhausted' }> {
+  const hash = sha256(token);
   const [row] = await db.update(s.adminAuthChallenge).set({ attempts: sql`${s.adminAuthChallenge.attempts} + 1` })
-    .where(live('login_2fa', sha256(token), LOGIN_CHALLENGE_MAX_ATTEMPTS))
-    .returning({ adminUserId: s.adminAuthChallenge.adminUserId, credentialDigest: s.adminAuthChallenge.credentialDigest, epoch: s.adminAuthChallenge.epoch });
-  return row ? { adminUserId: row.adminUserId, credentialDigest: row.credentialDigest!, epoch: row.epoch } : null;
+    .where(live('login_2fa', hash, LOGIN_CHALLENGE_MAX_ATTEMPTS)).returning({ adminUserId: s.adminAuthChallenge.adminUserId });
+  if (row) return { ok: true, adminUserId: row.adminUserId };
+  const [dead] = await db.select({ attempts: s.adminAuthChallenge.attempts }).from(s.adminAuthChallenge).where(live('login_2fa', hash)).limit(1);
+  return { ok: false, reason: dead && dead.attempts >= LOGIN_CHALLENGE_MAX_ATTEMPTS ? 'exhausted' : 'expired' };
+}
+
+class RollbackFactor extends Error {}
+
+/**
+ * Step 2, atomically (issue #333 review): under the owner row lock, CLAIM the challenge (single use), re-check that the
+ * password hash and security epoch it was issued for are still the account's, spend the factor (TOTP replay guard or
+ * recovery code) and create the session — all in one transaction. A wrong code rolls everything back (the token stays
+ * usable until its attempts run out; the attempt was counted before); two concurrent redemptions serialize on the
+ * owner lock and only one can claim.
+ */
+export async function redeemLoginChallenge(token: string, adminUserId: string, code: string): Promise<{ ok: true; sessionToken: string } | { ok: false; reason: 'invalid_code' | 'expired' }> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [owner] = await tx.select({ id: s.adminUser.id, kind: s.adminUser.kind, hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret, epoch: s.adminUser.securityEpoch })
+        .from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
+      if (!owner || owner.kind !== 'human') return { ok: false as const, reason: 'expired' as const };
+      const [claim] = await tx.update(s.adminAuthChallenge).set({ consumedAt: sql`clock_timestamp()` })
+        .where(and(live('login_2fa', sha256(token)), eq(s.adminAuthChallenge.adminUserId, owner.id)))
+        .returning({ digest: s.adminAuthChallenge.credentialDigest, epoch: s.adminAuthChallenge.epoch });
+      if (!claim) return { ok: false as const, reason: 'expired' as const };
+      // The password verified at step 1 and the factor set must still be the account's; otherwise the claim stands
+      // (the token is dead) and nothing else happens.
+      if (claim.digest !== credentialDigest(owner.id, owner.hash) || claim.epoch !== owner.epoch) return { ok: false as const, reason: 'expired' as const };
+      const secret = openTotpSecret(owner.id, owner.totp);
+      const c = code.trim();
+      const ok = secret && /^\d{6}$/.test(c) ? await verifyTotpOnceTx(owner.id, secret, c, tx)
+        : /^\d{6}$/.test(c) ? false // no authenticator app: a 6-digit code is never a factor
+        : await consumeRecoveryCode(owner.id, c, tx);
+      if (!ok) throw new RollbackFactor(); // un-claims the token; the attempt counter (outside) stands
+      const sessionToken = randomBytes(32).toString('hex');
+      await tx.insert(s.session).values({ adminUserId: owner.id, tokenHash: sha256(sessionToken), expiresAt: new Date(Date.now() + adminSessionTtlMs()), lastSeenAt: new Date() });
+      return { ok: true as const, sessionToken };
+    });
+  } catch (e) {
+    if (e instanceof RollbackFactor) return { ok: false, reason: 'invalid_code' };
+    throw e;
+  }
 }
 
 /** Single use: exactly one caller can consume a live token of `kind`. */
@@ -89,21 +131,24 @@ export async function consumeChallenge(kind: Kind, token: string): Promise<boole
 // ── totp_enroll ──────────────────────────────────────────────────────────────
 
 /** Store (replace) the pending authenticator secret of this session. Sealed at rest like admin_user.totp_secret. */
-export async function setPendingTotpEnrollment(adminUserId: string, sessionToken: string, epoch: number, secretB32: string): Promise<void> {
+export async function setPendingTotpEnrollment(adminUserId: string, sessionToken: string, epoch: number, secretB32: string): Promise<string> {
   const sessionHash = sha256(sessionToken);
+  const setupId = newToken();
   await db.transaction(async (tx) => {
     await tx.delete(s.adminAuthChallenge).where(and(eq(s.adminAuthChallenge.adminUserId, adminUserId), eq(s.adminAuthChallenge.kind, 'totp_enroll'),
       or(eq(s.adminAuthChallenge.sessionHash, sessionHash), lt(s.adminAuthChallenge.expiresAt, sql`clock_timestamp()`), isNotNull(s.adminAuthChallenge.consumedAt))));
-    await tx.insert(s.adminAuthChallenge).values({ tokenHash: sha256(newToken()), kind: 'totp_enroll', adminUserId, sessionHash, secret: sealTotpSecret(adminUserId, secretB32), epoch,
+    await tx.insert(s.adminAuthChallenge).values({ tokenHash: sha256(setupId), kind: 'totp_enroll', adminUserId, sessionHash, secret: sealTotpSecret(adminUserId, secretB32), epoch,
       expiresAt: new Date(Date.now() + TOTP_ENROLL_TTL_SECONDS * 1000) });
   });
+  return setupId; // names THIS secret: a confirmation for a superseded QR is refused instead of checked against a newer one
 }
 
 /** Count one confirmation attempt against this session's pending secret and return it (opened); null when there is
  *  none, it expired, or its attempts are spent. */
-export async function attemptPendingTotpEnrollment(adminUserId: string, sessionToken: string): Promise<{ tokenHash: string; secret: string; epoch: number } | null> {
+export async function attemptPendingTotpEnrollment(adminUserId: string, sessionToken: string, setupId?: string): Promise<{ tokenHash: string; secret: string; epoch: number } | null> {
   const [row] = await db.update(s.adminAuthChallenge).set({ attempts: sql`${s.adminAuthChallenge.attempts} + 1` })
     .where(and(eq(s.adminAuthChallenge.adminUserId, adminUserId), eq(s.adminAuthChallenge.kind, 'totp_enroll'), eq(s.adminAuthChallenge.sessionHash, sha256(sessionToken)),
+      ...(setupId ? [eq(s.adminAuthChallenge.tokenHash, sha256(setupId))] : []),
       isNull(s.adminAuthChallenge.consumedAt), gt(s.adminAuthChallenge.expiresAt, sql`clock_timestamp()`), lt(s.adminAuthChallenge.attempts, TOTP_ENROLL_MAX_ATTEMPTS)))
     .returning({ tokenHash: s.adminAuthChallenge.tokenHash, secret: s.adminAuthChallenge.secret, epoch: s.adminAuthChallenge.epoch });
   const secret = row ? openTotpSecret(adminUserId, row.secret) : null;
@@ -141,7 +186,7 @@ export async function peekPasswordReset(token: string): Promise<{ adminUserId: s
  * was issued for to be unchanged, set the new hash and sign out every session. The second factor is untouched: the
  * next sign-in still asks for it. Returns false when the token or the credential it was bound to is no longer current.
  */
-export async function redeemPasswordReset(token: string, newHash: string): Promise<{ adminUserId: string; email: string } | null> {
+export async function redeemPasswordReset(token: string, newHash: string): Promise<{ adminUserId: string; email: string; passkeyReviewRequired: boolean } | null> {
   return db.transaction(async (tx) => {
     const [peek] = await tx.select({ adminUserId: s.adminAuthChallenge.adminUserId }).from(s.adminAuthChallenge).where(live('password_reset', sha256(token))).limit(1);
     if (!peek) return null;
@@ -151,10 +196,19 @@ export async function redeemPasswordReset(token: string, newHash: string): Promi
     const [row] = await tx.update(s.adminAuthChallenge).set({ consumedAt: sql`clock_timestamp()` }).where(live('password_reset', sha256(token)))
       .returning({ digest: s.adminAuthChallenge.credentialDigest, epoch: s.adminAuthChallenge.epoch });
     if (!row || row.digest !== credentialDigest(owner.id, owner.hash) || row.epoch !== owner.epoch) return null;
-    await tx.update(s.adminUser).set({ passwordHash: newHash }).where(eq(s.adminUser.id, owner.id));
+    // #333 review: the reset bumps the security epoch (every step-up and pending ceremony dies) and signs out every
+    // session. Passkeys survive (they may be the account's only second factor — dropping them would make the e-mailed
+    // link a 2FA bypass) but are re-stamped to the new epoch and put under REVIEW: until the owner confirms, with the
+    // NEW password, which ones to keep, every session of the account — passkey sign-ins included — can only do that.
+    const [pk] = await tx.select({ n: count() }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, owner.id));
+    const hasPasskeys = Number(pk?.n ?? 0) > 0;
+    const next = owner.epoch + 1;
+    await tx.update(s.adminUser).set({ passwordHash: newHash, securityEpoch: next, passkeyReviewRequired: hasPasskeys }).where(eq(s.adminUser.id, owner.id));
+    if (hasPasskeys) await tx.update(s.adminPasskeyCredential).set({ epoch: next }).where(and(eq(s.adminPasskeyCredential.adminUserId, owner.id), eq(s.adminPasskeyCredential.epoch, owner.epoch)));
     await tx.delete(s.session).where(eq(s.session.adminUserId, owner.id));
     await tx.delete(s.adminAuthChallenge).where(and(eq(s.adminAuthChallenge.adminUserId, owner.id), isNull(s.adminAuthChallenge.consumedAt)));
-    return { adminUserId: owner.id, email: owner.email };
+    await tx.delete(s.adminPasskeyChallenge).where(and(eq(s.adminPasskeyChallenge.adminUserId, owner.id), isNull(s.adminPasskeyChallenge.consumedAt)));
+    return { adminUserId: owner.id, email: owner.email, passkeyReviewRequired: hasPasskeys };
   });
 }
 
@@ -171,4 +225,30 @@ export async function adminMailStore(adminUserId: string, preferredStoreId?: str
     .from(s.adminUserStore).innerJoin(s.store, eq(s.store.id, s.adminUserStore.storeId))
     .where(eq(s.adminUserStore.adminUserId, adminUserId)).orderBy(s.store.createdAt);
   return rows.find((r) => r.id === preferredStoreId) ?? rows[0] ?? null;
+}
+
+/** The account's passkeys for the reset e-mail (labels and dates only). */
+export async function adminPasskeyLabels(adminUserId: string): Promise<{ label: string; createdAt: Date }[]> {
+  return db.select({ label: s.adminPasskeyCredential.label, createdAt: s.adminPasskeyCredential.createdAt }).from(s.adminPasskeyCredential)
+    .where(eq(s.adminPasskeyCredential.adminUserId, adminUserId)).orderBy(s.adminPasskeyCredential.createdAt);
+}
+
+/**
+ * Passkey review after a password reset: keep exactly `keep` (ids of the admin's own passkeys), delete the rest, clear
+ * the review flag. The caller verified the CURRENT password in this request. When nothing is left and there is no
+ * authenticator app, the recovery codes go too (they only make sense next to a factor).
+ */
+export async function completePasskeyReview(adminUserId: string, verifiedHash: string, keep: string[]): Promise<{ removed: number } | null> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + adminUserId}, 0))`);
+    const [owner] = await tx.select({ hash: s.adminUser.passwordHash, totp: s.adminUser.totpSecret, review: s.adminUser.passkeyReviewRequired })
+      .from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
+    if (!owner || owner.hash !== verifiedHash || !owner.review) return null;
+    const mine = await tx.select({ id: s.adminPasskeyCredential.id }).from(s.adminPasskeyCredential).where(eq(s.adminPasskeyCredential.adminUserId, adminUserId));
+    const drop = mine.filter((p) => !keep.includes(p.id)).map((p) => p.id);
+    for (const id of drop) await tx.delete(s.adminPasskeyCredential).where(and(eq(s.adminPasskeyCredential.id, id), eq(s.adminPasskeyCredential.adminUserId, adminUserId)));
+    if (!owner.totp && drop.length === mine.length) await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminUserId));
+    await tx.update(s.adminUser).set({ passkeyReviewRequired: false }).where(eq(s.adminUser.id, adminUserId));
+    return { removed: drop.length };
+  });
 }

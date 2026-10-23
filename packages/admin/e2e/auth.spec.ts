@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 import { AdminApi, totpAt, totpStep, uniq } from './support/api';
 import { field, gotoStable } from './fixtures';
 import { ADMIN_URL, OWNER_EMAIL, OWNER_PASSWORD } from './support/env.mjs';
-import { inviteTokenFor } from './support/mailbox';
+import { inviteTokenFor, resetLinkFor } from './support/mailbox';
 
 /**
  * Sign-in, sign-out and 2FA (the harness's own login path, plus the TOTP secret flow the plan asked for).
@@ -113,7 +113,7 @@ test.describe('admin sign-in', () => {
 		// TOTP replay guard: every accepted step must be newer than the last; the sign-in used enable+1, so wait until
 		// enable+2 is inside the ±1-step window.
 		while (totpStep() < a.enabledAtStep + 1) await page.waitForTimeout(1000);
-		await field(dialog, '2FA code (if enabled)').fill(totpAt(a.secret!, a.enabledAtStep + 2));
+		await field(dialog, '2FA code or recovery code').fill(totpAt(a.secret!, a.enabledAtStep + 2));
 		await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
 		await expect(page.getByRole('list', { name: 'Passkeys' }).getByText('E2E virtual key')).toBeVisible();
 		await page.getByRole('button', { name: 'Sign out' }).click();
@@ -125,6 +125,40 @@ test.describe('admin sign-in', () => {
 		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 		expect((await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).json())).email).toBe(a.email);
+	});
+
+	test('#333: forgot password e-mails a single-use link; the reset signs the account out, the new password signs in, and the used link shows only "Send a new link"', async ({ page, api }) => {
+		const a = await makeAccount(api, 'reset', false);
+		await page.goto('/login');
+		await page.getByRole('link', { name: 'Forgot password?' }).click();
+		await expect(page).toHaveURL(/\/forgot-password$/);
+		await field(page, 'Email').fill(a.email);
+		await page.getByRole('button', { name: 'Send reset link' }).click();
+		await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+		const link = await resetLinkFor(a.email);
+		expect(link.startsWith(`${ADMIN_URL}/reset-password?token=`)).toBe(true);
+
+		await page.goto(link);
+		await expect(page).toHaveURL(/\/reset-password$/); // the token leaves the address bar
+		const next = 'reset-e2e-new-password-1';
+		await field(page, 'New password').fill(next);
+		await field(page, 'Confirm new password').fill(next);
+		await page.getByRole('button', { name: 'Update password' }).click();
+		await expect(page.getByRole('heading', { name: 'Password updated' })).toBeVisible();
+
+		await page.goto(link); // reused: no form, one way forward
+		await expect(page.getByRole('heading', { name: 'This link has expired' })).toBeVisible();
+		await expect(page.locator('input')).toHaveCount(0);
+		await expect(page.getByRole('link', { name: 'Send a new link' })).toBeVisible();
+		await expect(page.getByRole('link', { name: 'Back to sign in' })).toBeVisible();
+
+		const old = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: a.email, password: a.password }) });
+		expect(old.status).toBe(401);
+		await page.goto('/login');
+		await field(page, 'Email').fill(a.email);
+		await field(page, 'Password').fill(next);
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 	});
 
 	test('API contract: the single-request form still needs password AND code together; a wrong or missing code is refused', async ({ api }) => {

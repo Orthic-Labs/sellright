@@ -107,6 +107,8 @@ export const adminUser = pgTable('admin_user', {
   // 0108: per-owner security epoch — bumped by trigger admin_user_security_epoch_trg on a logical TOTP change; every
   // passkey credential/challenge and step-up is stamped with it and valid only while equal (auth/passkeys.ts).
   securityEpoch: integer().notNull().default(0),
+  // 0110 (#333): a password reset on an account with passkeys; cleared when the owner confirms which to keep.
+  passkeyReviewRequired: boolean().notNull().default(false),
   // One-click install (plan §1.10): set once the installation admin has
   // downloaded the recovery kit via GET /v1/admin/system/recovery-kit. Gates
   // Publish (plan §1.5) alongside payments/email verification.

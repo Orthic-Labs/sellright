@@ -108,11 +108,13 @@ export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: st
      <p><a href="${escape(data.acceptUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Accept invite</a></p>`);
 
 // Issue #333: admin "Forgot password?" link. The reset changes only the password; 2FA still applies at the next sign-in.
-export const adminPasswordReset = (store: StoreCtx, data: { url: string; ttlMinutes: number }) =>
+export const adminPasswordReset = (store: StoreCtx, data: { url: string; ttlMinutes: number; passkeys: { label: string; createdAt: Date }[] }) =>
   wrap(store, `Reset your ${store.name} admin password`,
     `<p>Someone asked to reset the password for your ${escape(store.name)} admin account.</p>
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Choose a new password</a></p>
-     <p>The link works once, for ${data.ttlMinutes} minutes. Resetting signs you out everywhere; two-factor authentication stays on.</p>
+     <p>The link works once, for ${data.ttlMinutes} minutes. Resetting signs out every session; two-factor authentication stays on.</p>
+     ${data.passkeys.length ? `<p>Passkeys on this account:</p><ul>${data.passkeys.map((p) => `<li>${escape(p.label)} — added ${escape(p.createdAt.toISOString().slice(0, 10))}</li>`).join('')}</ul>
+     <p>After the reset, the next sign-in asks you to confirm which of these to keep. Remove any you don't recognise.</p>` : ''}
      <p>If you didn't ask for this, ignore this email — your password stays the same.</p>`);
 
 // Free-trial license key delivery (licensing/trial.ts). The key is emailed,

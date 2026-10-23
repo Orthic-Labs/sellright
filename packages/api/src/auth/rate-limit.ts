@@ -107,6 +107,11 @@ export async function reserveAdminSecondStepAttempt(ip: string, account: string 
 /** Admin "forgot password" (issue #333): attempt-counted per IP and per account so it cannot be used to mail-bomb an
  *  admin or to probe addresses at speed. The account bucket is keyed by the submitted address whether or not it exists. */
 const RESET_BUCKET = 'admin-reset';
+/** Reset-link checks and redemptions: their own per-IP budget (the token is 256 random bits; this only blunts floods),
+ *  so loading a reset page never spends the admin sign-in budget of a shared address. */
+export async function reserveAdminResetTokenUse(ip: string): Promise<number> {
+  return rateLimitBackend().consume(RESET_BUCKET, `token-ip:${ip}`, IP_WINDOW_MS, 30);
+}
 export async function reserveAdminResetRequest(ip: string, account: string): Promise<number> {
   const b = rateLimitBackend();
   const perIp = await b.consume(RESET_BUCKET, `ip:${ip}`, IP_WINDOW_MS, 10);

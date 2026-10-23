@@ -9,19 +9,20 @@ import { inviteTokenFor } from './support/mailbox';
  * then signs in with no password and no code), the authenticator app second (QR, code only, the secret rotates until
  * confirmed), recovery codes once.
  *
- * Runs LAST (file name): turning on the store's "require 2FA" policy needs the owner to hold a factor, and enabling one
- * signs out the owner's other sessions. The spec restores the policy and the owner's factor before it ends.
+ * Independent of file order: a DEDICATED second owner (with its own authenticator, so only its own sessions are
+ * affected) turns the store's "require 2FA" policy on for this file and off again in afterAll. While it is on, the
+ * harness owner is only enrolment-restricted (its sessions are never deleted) and every other spec is unaffected after.
  */
 test.describe.configure({ mode: 'serial' });
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const PASSWORD = 'mandatory-2fa-e2e-password';
-let owner: AdminApi;
-let ownerRecovery: string[] = [];
+let policyOwner: AdminApi;
+let recovery: string[] = [];
 
-async function manager(api: AdminApi, prefix: string) {
+async function manager(prefix: string) {
 	const email = `${uniq(prefix)}@example.net`;
-	await api.post('/staff/invites', { email, role: 'manager' });
+	await policyOwner.post('/staff/invites', { email, role: 'manager' });
 	const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: await inviteTokenFor(email), password: PASSWORD }) });
 	expect(accepted.status).toBe(200);
 	return email;
@@ -34,21 +35,25 @@ async function signIn(page: Page, email: string) {
 }
 
 test.beforeAll(async () => {
-	owner = await AdminApi.login(OWNER_EMAIL, OWNER_PASSWORD);
-	const { secret } = await owner.post<{ secret: string }>('/2fa/setup');
-	({ recoveryCodes: ownerRecovery } = await owner.post<{ recoveryCodes: string[] }>('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password: OWNER_PASSWORD }));
-	await owner.post('/step-up', { password: OWNER_PASSWORD, totp: ownerRecovery[0] });
-	await owner.patch('/settings/security', { requireTotp: true });
+	const harnessOwner = await AdminApi.login(OWNER_EMAIL, OWNER_PASSWORD);
+	const email = `${uniq('policy-owner')}@example.net`;
+	await harnessOwner.post('/staff/invites', { email, role: 'owner' });
+	const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: await inviteTokenFor(email), password: PASSWORD }) });
+	expect(accepted.status).toBe(200);
+	policyOwner = await AdminApi.login(email, PASSWORD);
+	const { secret } = await policyOwner.post<{ secret: string }>('/2fa/setup');
+	({ recoveryCodes: recovery } = await policyOwner.post<{ recoveryCodes: string[] }>('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password: PASSWORD }));
+	await policyOwner.post('/step-up', { password: PASSWORD, totp: recovery[0] });
+	await policyOwner.patch('/settings/security', { requireTotp: true });
 });
 
 test.afterAll(async () => {
-	await owner.post('/step-up', { password: OWNER_PASSWORD, totp: ownerRecovery[1] });
-	await owner.patch('/settings/security', { requireTotp: false });
-	await owner.post('/2fa/disable', { password: OWNER_PASSWORD, code: ownerRecovery[2] });
+	await policyOwner.post('/step-up', { password: PASSWORD, totp: recovery[1] });
+	await policyOwner.patch('/settings/security', { requireTotp: false });
 });
 
 test('a 2FA-required account enrols a passkey (recommended, first) and reaches the admin without an authenticator app; the passkey then signs in alone', async ({ page }) => {
-	const email = await manager(owner, 'mpk');
+	const email = await manager('mpk');
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('WebAuthn.enable');
 	await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
@@ -83,7 +88,7 @@ test('a 2FA-required account enrols a passkey (recommended, first) and reaches t
 });
 
 test('the authenticator alternative: QR, key in fours, the secret rotates on every visit, and only the code is asked right after sign-in', async ({ page }) => {
-	const email = await manager(owner, 'mtotp');
+	const email = await manager('mtotp');
 	await signIn(page, email);
 	await page.getByRole('button', { name: 'Set up an authenticator app' }).click();
 	await expect(page.locator('.auth-qr img')).toBeVisible();

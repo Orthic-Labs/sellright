@@ -158,3 +158,6 @@ export function passwordNeedsRehash(stored: string | null): boolean {
     parsed.parallelism !== ARGON2_PARALLELISM ||
     parsed.expected.length !== ARGON2_TAG_LENGTH;
 }
+
+/** Issue #333 review: ONE minimum for every admin password a person chooses (invite accept, staff create, reset, change). */
+export const ADMIN_PASSWORD_MIN = 10;

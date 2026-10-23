@@ -15,9 +15,9 @@ import { cancelOrderStripeIntents, stripeDiscoverable } from '../payments/stripe
 import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
-import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
+import { ADMIN_PASSWORD_MIN, hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
 import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
-import { adminAuthFacts, adminMailStore, adminPasskeyCount, attemptLoginChallenge, consumeChallenge, credentialDigest, issueLoginChallenge, issuePasswordReset, LOGIN_CHALLENGE_TTL_SECONDS, PASSWORD_RESET_TTL_SECONDS, peekLoginChallenge, peekPasswordReset, redeemPasswordReset } from '../auth/admin-auth-challenge.js';
+import { adminAuthFacts, adminMailStore, adminPasskeyCount, attemptLoginChallenge, issueLoginChallenge, redeemLoginChallenge, issuePasswordReset, adminPasskeyLabels, LOGIN_CHALLENGE_TTL_SECONDS, PASSWORD_RESET_TTL_SECONDS, peekLoginChallenge, peekPasswordReset, redeemPasswordReset } from '../auth/admin-auth-challenge.js';
 import { sendAdminPasswordReset } from '../email/dispatch.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { storeIdentityFromConfig } from './store-identity.js';
@@ -28,7 +28,7 @@ import { secondFactorEnrollmentRequired } from '../auth/mfa-policy.js';
 import type { Context } from 'hono';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
-import { clientIp, reserveAdminAuthAttempt, reserveAdminSecondStepAttempt, reserveAdminResetRequest, clearAdminAuthFailures } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, reserveAdminSecondStepAttempt, reserveAdminResetRequest, reserveAdminResetTokenUse, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyLoginFactor } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -146,7 +146,7 @@ admin.openapi(
     request: { body: { content: J(z.object({ challengeToken: z.string().min(16).max(128), code: z.string().min(1).max(64), returnToken: z.boolean().optional() })) } },
     responses: {
       200: { description: 'Signed in', content: J(LoginOk) },
-      401: { description: 'INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password)', ...errBody },
+      401: { description: 'INVALID_CODE (try again), LOGIN_CHALLENGE_EXHAUSTED or LOGIN_CHALLENGE_EXPIRED (start over with the password)', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
   }),
@@ -158,18 +158,19 @@ admin.openapi(
     // Same three admin budgets as step 1 (a dead token spends only the per-IP budget).
     const retry = await reserveAdminSecondStepAttempt(ip, owner?.email ?? null);
     if (retry > 0) throw rateLimited(c, retry, 'attempts');
-    const row = owner ? await attemptLoginChallenge(challengeToken) : null;
-    if (!row || !owner || owner.id !== row.adminUserId || owner.kind !== 'human') throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
-    // The password verified in step 1 and the factor set must still be the account's (any change kills the challenge).
-    if (credentialDigest(owner.id, owner.passwordHash) !== row.credentialDigest || owner.securityEpoch !== row.epoch) {
-      await consumeChallenge('login_2fa', challengeToken);
+    if (!owner || owner.kind !== 'human') throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    const attempt = await attemptLoginChallenge(challengeToken);
+    if (!attempt.ok) {
+      if (attempt.reason === 'exhausted') throw new HttpError(401, 'too many incorrect codes — enter your password again', 'LOGIN_CHALLENGE_EXHAUSTED');
       throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
     }
-    const factor = await verifyLoginFactor(owner.id, owner.totpSecret, code);
-    if (!factor.ok) throw new HttpError(401, 'that code didn\'t work — check your authenticator app and try again', 'INVALID_CODE');
-    if (!(await consumeChallenge('login_2fa', challengeToken))) throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
-    const token = await createAdminSessionIfCredential(owner.id, owner.passwordHash!, true, { epoch: row.epoch, totpVersion: owner.totpVersion, receipt: factor.receipt });
-    if (!token) throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    // Claim + factor + session in ONE transaction under the owner lock (auth/admin-auth-challenge.ts).
+    const r = await redeemLoginChallenge(challengeToken, owner.id, code);
+    if (!r.ok) {
+      if (r.reason === 'invalid_code') throw new HttpError(401, 'that code didn\'t work — check your authenticator app and try again', 'INVALID_CODE');
+      throw new HttpError(401, CHALLENGE_DEAD, 'LOGIN_CHALLENGE_EXPIRED');
+    }
+    const token = r.sessionToken;
     await clearAdminAuthFailures(ip, owner.email);
     return signedIn(c, token, owner.email, returnToken);
   }),
@@ -182,7 +183,9 @@ const FONT_URL = /^\/[A-Za-z0-9/._-]{1,200}\.woff2$/; // same-origin path only (
 const Branding = z.object({
   storeName: z.string().nullable(), logoUrl: z.string().nullable(),
   theme: z.object({ primary: z.string(), background: z.string(), surface: z.string(), text: z.string(), textMuted: z.string(), border: z.string(),
-    fontDisplay: z.string().nullable(), fontBody: z.string().nullable() }).nullable(),
+    fontDisplay: z.string().nullable(), fontBody: z.string().nullable(),
+    /** identity.fonts.logo: the typeface of the store's wordmark (shown next to a logo image only when set). */
+    fontLogo: z.string().nullable() }).nullable(),
   fontFaces: z.array(z.object({ family: z.string(), url: z.string(), weight: z.string(), style: z.enum(['normal', 'italic']) })),
 });
 type BrandingT = z.infer<typeof Branding>;
@@ -207,7 +210,7 @@ export function brandingFromStore(st: { name: string; currency: string; config: 
     storeName: id.storeName,
     logoUrl: logo,
     theme: colorsSet && allHex ? { primary: c.primary, background: c.background, surface: c.surface, text: c.text, textMuted: c.textMuted, border: c.border,
-      fontDisplay: family(fontsIn.display), fontBody: family(fontsIn.body) } : null,
+      fontDisplay: family(fontsIn.display), fontBody: family(fontsIn.body), fontLogo: family(fontsIn.logo) } : null,
     fontFaces: faces.flatMap((f) => {
       const x = (f ?? {}) as Record<string, unknown>;
       const ok = typeof x.family === 'string' && FAMILY.test(x.family) && typeof x.url === 'string' && FONT_URL.test(x.url) && !x.url.includes('..');
@@ -252,7 +255,7 @@ admin.openapi(
       if (!store) return;
       const token = await issuePasswordReset(u.id, u.passwordHash, u.securityEpoch);
       const r = await sendAdminPasswordReset({ name: store.name, currency: store.currency, config: store.config, storeId: store.id }, u.email,
-        { url: `${adminPublicUrl()}/reset-password?token=${encodeURIComponent(token)}`, ttlMinutes: PASSWORD_RESET_TTL_SECONDS / 60 });
+        { url: `${adminPublicUrl()}/reset-password?token=${encodeURIComponent(token)}`, ttlMinutes: PASSWORD_RESET_TTL_SECONDS / 60, passkeys: await adminPasskeyLabels(u.id) });
       if (!r.delivered) log.warn('admin_password_reset_not_delivered', { adminId: u.id, reason: r.reason });
     })().catch((e) => log.warn('admin_password_reset_failed', { error: e instanceof Error ? e.message : String(e) }));
     return c.json({ ok: true }, 200);
@@ -261,13 +264,27 @@ admin.openapi(
 
 admin.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/password/reset', summary: 'Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged',
-    request: { body: { content: J(z.object({ token: z.string().min(16).max(128), password: z.string().min(10).max(256) })) } },
+    method: 'post', path: '/v1/admin/password/reset/check', summary: 'Pre-session: is this reset link still usable? (the reset screen shows the form only for a live link)',
+    request: { body: { content: J(z.object({ token: z.string().min(1).max(128) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ valid: z.boolean() })) }, 429: { description: 'Too many attempts', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { token } = c.req.valid('json');
+    const retry = await reserveAdminResetTokenUse(clientIp(c));
+    if (retry > 0) throw rateLimited(c, retry, 'attempts');
+    return c.json({ valid: !!(await peekPasswordReset(token)) }, 200);
+  }),
+);
+
+admin.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/password/reset', summary: 'Pre-session: set a new admin password with a reset link token (single use); bumps the security epoch, signs out every session, puts passkeys under review. 2FA is unchanged',
+    request: { body: { content: J(z.object({ token: z.string().min(16).max(128), password: z.string().min(ADMIN_PASSWORD_MIN).max(256) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'RESET_INVALID', ...errBody }, 429: { description: 'Too many attempts', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { token, password } = c.req.valid('json');
-    const retry = await reserveAdminSecondStepAttempt(clientIp(c), null);
+    const retry = await reserveAdminResetTokenUse(clientIp(c));
     if (retry > 0) throw rateLimited(c, retry, 'attempts');
     const invalid = () => new HttpError(400, 'this reset link is invalid or has expired — ask for a new one', 'RESET_INVALID');
     if (!(await peekPasswordReset(token))) throw invalid();
@@ -299,13 +316,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), passkeyEnabled: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), passkeyEnabled: z.boolean(), passkeyReviewRequired: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, passkeyEnabled: admin.passkeyEnabled === true, totpEnrollmentRequired: secondFactorEnrollmentRequired(admin) }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, passkeyEnabled: admin.passkeyEnabled === true, passkeyReviewRequired: admin.passkeyReviewRequired === true, totpEnrollmentRequired: secondFactorEnrollmentRequired(admin) }, 200);
   }),
 );
 

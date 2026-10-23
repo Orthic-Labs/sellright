@@ -58,6 +58,8 @@ export interface AdminPrincipal {
   totpEnabled?: boolean;
   /** Issue #333: the admin has at least one passkey — a second factor on its own. Absent for agents. */
   passkeyEnabled?: boolean;
+  /** Issue #333 review: a password reset put this account's passkeys under review (see mfa-policy.ts REVIEW_ALLOWED). */
+  passkeyReviewRequired?: boolean;
   /** P1b: policy (auth/mfa-policy.ts) requires TOTP for this admin. */
   totpRequired?: boolean;
 }
@@ -190,6 +192,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       kind: s.adminUser.kind,
       totpEnabled: sql<boolean>`(${s.adminUser.totpSecret} is not null)`,
       passkeyEnabled: sql<boolean>`exists(select 1 from admin_passkey_credential pk where pk.admin_user_id = ${s.adminUser.id})`,
+      passkeyReviewRequired: s.adminUser.passkeyReviewRequired,
       storeRequireTotp: sql<boolean>`coalesce((${s.store.config} -> 'security' ->> 'requireTotp') = 'true', false)`,
       stepUpAt: s.session.stepUpAt,
       stepUpEpoch: s.session.stepUpEpoch,
@@ -261,6 +264,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   if (kind === 'human') {
     principal.totpEnabled = first.totpEnabled === true;
     principal.passkeyEnabled = first.passkeyEnabled === true;
+    principal.passkeyReviewRequired = first.passkeyReviewRequired === true;
     principal.totpRequired = totpRequiredFor(principal);
   }
   return principal;

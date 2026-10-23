@@ -56,8 +56,8 @@ export async function remainingRecoveryCodes(adminId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
-type FactorDb = Pick<typeof db, 'select' | 'update' | 'insert' | 'delete' | 'execute'>;
-async function consumeRecoveryCode(adminId: string, code: string, tx: FactorDb = db): Promise<boolean> {
+export type FactorDb = Pick<typeof db, 'select' | 'update' | 'insert' | 'delete' | 'execute'>;
+export async function consumeRecoveryCode(adminId: string, code: string, tx: FactorDb = db): Promise<boolean> {
   if (normalizeRecoveryCode(code).length !== 16) return false;
   const used = await tx
     .update(s.adminRecoveryCode)
@@ -106,7 +106,7 @@ export async function verifyLoginFactor(adminId: string, totpSecret: string | nu
   return verifySecondFactorDetailed(adminId, '', code);
 }
 
-async function verifyTotpOnceTx(adminId: string, secretB32: string, code: string, tx: FactorDb): Promise<boolean> {
+export async function verifyTotpOnceTx(adminId: string, secretB32: string, code: string, tx: FactorDb): Promise<boolean> {
   const step = matchTotpStep(secretB32, code);
   if (step === null) return false;
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'totp-step:' + adminId}, 0))`);

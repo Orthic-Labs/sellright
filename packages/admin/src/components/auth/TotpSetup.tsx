@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import { AuthAlert, AuthField, AuthSpinner, CodeInput } from './AuthShell';
 
-interface Setup { secret: string; otpauthUri: string; qrSvg: string; issuer: string; account: string; passwordRequired: boolean }
+interface Setup { setupId: string; secret: string; otpauthUri: string; qrSvg: string; issuer: string; account: string; passwordRequired: boolean }
 
 /** Group a base32 secret in fours for reading aloud / typing. */
 export const groupSecret = (s: string) => s.replace(/\s+/g, '').match(/.{1,4}/g)?.join(' ') ?? s;
@@ -33,14 +33,16 @@ export function TotpSetup({ onEnabled, onCancel, cancelLabel = 'Back' }: { onEna
       setSetup(s); setNeedPassword(s.passwordRequired);
     } catch (e) { setLoadErr(e instanceof ApiError ? e.message : 'Could not start setup. Try again.'); }
   }
-  useEffect(() => { void start(); }, []);
+  // One setup per mount (a second concurrent call would rotate the secret under the QR being shown).
+  const started = useRef(false);
+  useEffect(() => { if (started.current) return; started.current = true; void start(); }, []);
 
   async function enable(e?: React.FormEvent) {
     e?.preventDefault();
     if (busy || code.length !== 6 || (needPassword && !password)) return;
     setCodeErr(null); setPwErr(null); setFormErr(null); setBusy(true);
     try {
-      const r = await api.post<{ recoveryCodes: string[] }>('/2fa/enable', { code, ...(needPassword ? { password } : {}) });
+      const r = await api.post<{ recoveryCodes: string[] }>('/2fa/enable', { code, setupId: setup!.setupId, ...(needPassword ? { password } : {}) });
       onEnabled(r.recoveryCodes);
     } catch (e2) {
       if (e2 instanceof ApiError && e2.code === 'PASSWORD_REQUIRED') { setNeedPassword(true); setPwErr('Enter your current password to confirm.'); }

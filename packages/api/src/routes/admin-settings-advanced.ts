@@ -3,7 +3,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { hashPassword, verifyPassword } from '../auth/password.js';
+import { ADMIN_PASSWORD_MIN, hashPassword, verifyPassword } from '../auth/password.js';
 import { verifySecondFactor, verifySecondFactorDetailed } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { csrfValid, cookie, SESSION_COOKIE } from '../auth/cookies.js';
@@ -172,7 +172,7 @@ adminSettingsAdvanced.openapi(
 adminSettingsAdvanced.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/staff', summary: 'Add / invite a staff member to this store',
-    request: { body: { content: J(z.object({ email: z.string().email(), role: roleEnum.default('staff'), password: z.string().min(8) })) } },
+    request: { body: { content: J(z.object({ email: z.string().email(), role: roleEnum.default('staff'), password: z.string().min(ADMIN_PASSWORD_MIN) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ adminUserId: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -504,7 +504,7 @@ adminSettingsAdvanced.openapi(
     request: { body: { content: J(z.object({
       token: z.string().min(1).max(256),
       // New account only: the password to create it with.
-      password: z.string().min(8).optional(),
+      password: z.string().min(ADMIN_PASSWORD_MIN).optional(),
       // Existing account only: proof of identity (ignored when the request carries that admin's own session).
       currentPassword: z.string().min(1).optional(),
       totp: z.string().optional(),
@@ -560,7 +560,7 @@ adminSettingsAdvanced.openapi(
         throw new HttpError(401, 'this address already has an account — sign in as it, or confirm its current password, to accept', 'INVITE_SIGN_IN_REQUIRED', undefined, { existingAccount: true });
       }
     } else {
-      if (!b.password) throw new HttpError(400, 'choose a password (at least 8 characters) to create your account', 'PASSWORD_REQUIRED', 'password');
+      if (!b.password) throw new HttpError(400, 'choose a password (at least 10 characters) to create your account', 'PASSWORD_REQUIRED', 'password');
       newPasswordHash = await hashPassword(b.password);
     }
     // SR-16: invite claim + account creation + attach + audit row commit atomically. Actor is the

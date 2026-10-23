@@ -67,16 +67,17 @@ export default function Login() {
     // eslint-disable-next-line
   }, []);
 
-  useEffect(() => { if (step.kind === 'code') codeRef.current?.focus(); }, [step]);
+  // Focus the code field on the code step and again after every failed attempt (the field is re-enabled then).
+  useEffect(() => { if (step.kind === 'code' && !busy) codeRef.current?.focus(); }, [step, busy, fieldErr]);
 
   if (me) return <Navigate to="/" replace />;
 
   function fail(e: unknown, fallback: string) {
     const retry = retryAfterOf(e);
     if (retry) { setLockedUntil(Date.now() + retry * 1000); setFormErr(null); setFieldErr(null); return; }
-    if (e instanceof ApiError && e.code === 'LOGIN_CHALLENGE_EXPIRED') {
+    if (e instanceof ApiError && (e.code === 'LOGIN_CHALLENGE_EXPIRED' || e.code === 'LOGIN_CHALLENGE_EXHAUSTED')) {
       setStep({ kind: 'credentials' }); setCode(''); setPassword('');
-      setNotice('Your sign-in timed out. Enter your password again.');
+      setNotice(e.code === 'LOGIN_CHALLENGE_EXHAUSTED' ? 'Too many incorrect codes. Enter your password again.' : 'Your sign-in timed out. Enter your password again.');
       return;
     }
     if (e instanceof ApiError && (e.status === 401 || e.status === 400)) { setFieldErr(fallback); return; }
@@ -95,7 +96,8 @@ export default function Login() {
       const r = await api.post<LoginResp>('/login', { email: email.trim(), password });
       if (r.twoFactorRequired && r.challengeToken) {
         const methods = r.methods ?? ['totp', 'recovery_code'];
-        setStep({ kind: 'code', challengeToken: r.challengeToken, methods, mode: methods.includes('totp') ? 'totp' : methods.includes('passkey') ? 'passkey' : 'recovery' });
+        // Passkey mode only where this browser can actually use one; otherwise the recovery code.
+        setStep({ kind: 'code', challengeToken: r.challengeToken, methods, mode: methods.includes('totp') ? 'totp' : methods.includes('passkey') && pk ? 'passkey' : 'recovery' });
         setCode(''); setBusy(false);
         return;
       }
@@ -116,7 +118,6 @@ export default function Login() {
       fail(err, step.mode === 'recovery' ? 'That recovery code didn’t work. Check it and try again.' : 'That code didn’t work. Check your authenticator app and try again.');
       setCode('');
       setBusy(false);
-      codeRef.current?.focus();
     } finally { submitting.current = false; }
   }
 
@@ -156,7 +157,7 @@ export default function Login() {
         ) : (
           <form noValidate onSubmit={(e) => { e.preventDefault(); if (code.trim()) void submitCode(code.trim()); }} style={{ display: 'contents' }}>
             {recovery ? (
-              <AuthField label="Recovery code" name="recovery-code" autoComplete="off" autoCapitalize="none" spellCheck={false}
+              <AuthField inputRef={codeRef} label="Recovery code" name="recovery-code" autoComplete="off" autoCapitalize="none" spellCheck={false}
                 placeholder="xxxx-xxxx-xxxx-xxxx" value={code} onChange={(e) => setCode(e.target.value)} error={fieldErr} autoFocus />
             ) : (
               <CodeInput inputRef={codeRef} value={code} error={fieldErr} disabled={busy || locked}

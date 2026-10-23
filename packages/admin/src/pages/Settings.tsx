@@ -9,6 +9,8 @@ import ShippingMethods from '../components/ShippingMethods';
 import { useToast } from '../components/Toast';
 import { TwoFactorEnroll } from '../components/TwoFactorEnroll';
 import { PasskeysSection } from '../components/PasskeysSection';
+import { StepUpDialog } from '../components/StepUpDialog';
+import { isStepUpRequired } from '../lib/passkeys';
 import { OrderNumbering } from '../components/OrderNumbering';
 
 const NEEDS_KEYS = new Set(['stripe']);
@@ -68,13 +70,16 @@ export default function SettingsPage() {
     onError: (e) => toast.error('Could not save the Apple Services ID', (e as Error).message),
   });
 
-  const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean; required: boolean; recoveryCodesRemaining: number }>('/2fa') });
+  const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean; required: boolean; recoveryCodesRemaining: number; passkeys?: number }>('/2fa') });
   const [enrolling, setEnrolling] = useState(false);
   const [code, setCode] = useState('');
   const [tfaPassword, setTfaPassword] = useState('');
   const [newCodes, setNewCodes] = useState<string[] | null>(null);
   const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code, password: tfaPassword }), onSuccess: () => { setCode(''); setTfaPassword(''); tfa.refetch(); void refresh(); } });
-  const regenCodes = useMutation({ mutationFn: () => api.post<{ recoveryCodes: string[] }>('/2fa/recovery-codes', { code, password: tfaPassword }), onSuccess: (r) => { setCode(''); setTfaPassword(''); setNewCodes(r.recoveryCodes); tfa.refetch(); } });
+  const regenCodes = useMutation({ mutationFn: () => api.post<{ recoveryCodes: string[] }>('/2fa/recovery-codes', { ...(code ? { code } : {}), password: tfaPassword }), onSuccess: (r) => { setCode(''); setTfaPassword(''); setNewCodes(r.recoveryCodes); tfa.refetch(); },
+    // #333 review: a passkey-only account without a recovery code proves its factor with a passkey step-up first.
+    onError: (e) => { if (isStepUpRequired(e)) setRegenStepUp(true); } });
+  const [regenStepUp, setRegenStepUp] = useState(false);
   // Password change: the API wants a recent step-up AND the current password; one form does both.
   const [pw, setPw] = useState({ current: '', next: '', confirm: '', totp: '' });
   const [pwDone, setPwDone] = useState<string | null>(null);
@@ -267,6 +272,25 @@ export default function SettingsPage() {
                     <button className="btn-danger" disabled={!code || !tfaPassword || disable2fa.isPending} onClick={() => disable2fa.mutate()}>{disable2fa.isPending ? <Spinner /> : 'Disable 2FA'}</button>
                   </div>
                 </>
+              ) : (tfa.data?.passkeys ?? 0) > 0 && !enrolling ? (
+                <>
+                  <InlineAlert tone="positive" title="2FA is on with your passkey.">{tfa.data!.recoveryCodesRemaining} unused recovery code(s) left. You can also add an authenticator app.</InlineAlert>
+                  {newCodes && (
+                    <div className="stack-y-2">
+                      <p className="text-sm text-gray-600">New recovery codes (shown once; the old ones no longer work):</p>
+                      <ul aria-label="Recovery codes" className="grid grid-cols-2 gap-1 font-mono text-sm bg-gray-50 border border-gray-200 rounded-sm p-3 max-w-md">{newCodes.map((c) => <li key={c}>{c}</li>)}</ul>
+                      <button className="btn-ghost btn-sm" onClick={() => setNewCodes(null)}>Done</button>
+                    </div>
+                  )}
+                  <Field label="Current password"><input className="input max-w-sm" type="password" autoComplete="current-password" value={tfaPassword} onChange={(e) => setTfaPassword(e.target.value)} /></Field>
+                  <Field label="Recovery code (or confirm with your passkey)"><input className="input max-w-[14rem]" autoComplete="one-time-code" maxLength={19} placeholder="xxxx-xxxx-xxxx-xxxx" value={code} onChange={(e) => setCode(e.target.value.trim())} /></Field>
+                  {regenCodes.error && !isStepUpRequired(regenCodes.error) && <InlineAlert tone="critical">{(regenCodes.error as Error).message}</InlineAlert>}
+                  <div className="flex gap-2">
+                    <button className="btn-ghost" disabled={!tfaPassword || regenCodes.isPending} onClick={() => regenCodes.mutate()}>{regenCodes.isPending ? <Spinner /> : 'New recovery codes'}</button>
+                    <button className="btn-ghost" onClick={() => setEnrolling(true)}>Add an authenticator app</button>
+                  </div>
+                  {regenStepUp && <StepUpDialog description="Confirm it's you with your passkey to replace your recovery codes." onCancel={() => setRegenStepUp(false)} onVerified={() => { setRegenStepUp(false); regenCodes.mutate(); }} />}
+                </>
               ) : enrolling ? (
                 <TwoFactorEnroll onDone={() => { setEnrolling(false); tfa.refetch(); void refresh(); }} onCancel={() => setEnrolling(false)} />
               ) : (
@@ -319,10 +343,10 @@ export default function SettingsPage() {
                   {inv && (
                     <div className="stack-y-2 pt-1 max-w-lg">
                       <div className="flex gap-2"><input className="input" placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><select className="input w-32" value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['staff', 'manager', 'owner', 'read_only'].map((r) => <option key={r}>{r}</option>)}</select></div>
-                      <input className="input" type="password" placeholder="initial password (min 8)" value={inv.password} onChange={(e) => setInv({ ...inv, password: e.target.value })} />
+                      <input className="input" type="password" placeholder="initial password (min 10)" value={inv.password} onChange={(e) => setInv({ ...inv, password: e.target.value })} />
                       <p className="text-xs text-gray-400">The invitee signs in with this email and password; they can change it later.</p>
                       {addStaff.error && <InlineAlert tone="critical">{(addStaff.error as Error).message}</InlineAlert>}
-                      <div className="flex gap-2"><button className="btn-primary" disabled={addStaff.isPending || !inv.email || inv.password.length < 8} onClick={() => addStaff.mutate()}>{addStaff.isPending ? <Spinner className="text-white" /> : 'Add staff'}</button><button className="btn-ghost" onClick={() => setInv(null)}>Cancel</button></div>
+                      <div className="flex gap-2"><button className="btn-primary" disabled={addStaff.isPending || !inv.email || inv.password.length < 10} onClick={() => addStaff.mutate()}>{addStaff.isPending ? <Spinner className="text-white" /> : 'Add staff'}</button><button className="btn-ghost" onClick={() => setInv(null)}>Cancel</button></div>
                     </div>
                   )}
                 </>

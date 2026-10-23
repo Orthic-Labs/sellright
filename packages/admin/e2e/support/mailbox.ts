@@ -33,3 +33,22 @@ export async function inviteLinkFor(email: string, timeoutMs = 10_000): Promise<
 export async function inviteTokenFor(email: string, timeoutMs = 10_000): Promise<string> {
 	return new URL(await inviteLinkFor(email, timeoutMs)).searchParams.get('token')!;
 }
+
+/** The newest admin password-reset link (issue #333) e-mailed to `email`, waiting up to `timeoutMs`. */
+export async function resetLinkFor(email: string, timeoutMs = 10_000): Promise<string> {
+	const deadline = Date.now() + timeoutMs;
+	const to = email.toLowerCase();
+	for (;;) {
+		if (existsSync(MAILBOX_FILE)) {
+			const mails = readFileSync(MAILBOX_FILE, 'utf8').trim().split('\n').filter(Boolean)
+				.map((l) => JSON.parse(l) as { to: string[]; data: string })
+				.filter((m) => m.to.includes(to));
+			for (const m of mails.reverse()) {
+				const hit = /https?:\/\/[^\s"'<>]+\/reset-password\?token=[A-Za-z0-9_-]{20,}/.exec(decodeQp(m.data));
+				if (hit) return hit[0];
+			}
+		}
+		if (Date.now() > deadline) throw new Error(`no reset e-mail for ${email} within ${timeoutMs}ms`);
+		await new Promise((r) => setTimeout(r, 200));
+	}
+}

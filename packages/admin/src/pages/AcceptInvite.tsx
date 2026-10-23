@@ -70,7 +70,7 @@ export default function AcceptInvite() {
     if (!email.trim()) { setFieldErr({ email: 'Enter the address this invitation was sent to.' }); return; }
     if (!password) { setFieldErr({ password: existing ? 'Enter your current password.' : 'Choose a password.' }); return; }
     if (!existing) {
-      if (password.length < 8) { setFieldErr({ password: 'Use at least 8 characters.' }); return; }
+      if (password.length < 10) { setFieldErr({ password: 'Use at least 10 characters.' }); return; }
       if (password !== confirm) { setFieldErr({ confirm: 'The passwords don’t match.' }); return; }
     }
     setBusy(true);
@@ -143,7 +143,7 @@ export default function AcceptInvite() {
           <AuthField label="Current password" toggle autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required error={fieldErr.password} />
         ) : (
           <>
-            <AuthField label="Password" toggle autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required error={fieldErr.password} hint="At least 8 characters." />
+            <AuthField label="Password" toggle autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required error={fieldErr.password} hint="At least 10 characters." />
             <AuthField label="Confirm password" toggle autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required error={fieldErr.confirm} />
           </>
         )}

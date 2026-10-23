@@ -263,6 +263,13 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
       proof.equal(await global("SELECT count(*)::int AS n FROM admin_auth_challenge WHERE kind='password_reset'"), before, 'an unknown address gets no reset token', 'state');
     } };
   }, { contract: 'public' });
+  add('POST /v1/admin/password/reset/check', PUBLIC, async () => {
+    const before = await global("SELECT count(*)::int AS n, count(consumed_at)::int AS used FROM admin_auth_challenge WHERE kind='password_reset'");
+    return { url: '/v1/admin/password/reset/check', body: { token: randomBytes(32).toString('base64url') }, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { valid: false }, 'an unknown token is not live, for every caller');
+      proof.equal(await global("SELECT count(*)::int AS n, count(consumed_at)::int AS used FROM admin_auth_challenge WHERE kind='password_reset'"), before, 'a check consumes nothing', 'state');
+    } };
+  }, { contract: 'public' });
   add('POST /v1/admin/password/reset', PUBLIC, async () => {
     const target = await targetHuman();
     const row = await one('SELECT password_hash, security_epoch FROM admin_user WHERE id=$1', [target.id]);
@@ -355,6 +362,14 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
     return { url: '/v1/admin/passkeys/' + enrolled.id, body: { label: 'Renamed key' }, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
       proof.equal((await json(response)).label, 'Renamed key', 'renamed credential echoed without key material');
       proof.equal(await global('SELECT admin_user_id, label FROM admin_passkey_credential WHERE id=$1', [enrolled.id]), [{ admin_user_id: target.id, label: 'Renamed key' }], 'only the label of the admin\'s own credential changed', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('POST /v1/admin/passkeys/review', HUMAN, async (principal, allow) => {
+    const target = allow ? await fixture.freshIdentity(principal) : fixture.identityFor('owner');
+    if (allow) await global('UPDATE admin_user SET passkey_review_required=true WHERE id=$1', [target.id]);
+    return { url: '/v1/admin/passkeys/review', body: { password: target.password, keep: [] }, ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { ok: true, removed: 0 }, 'exact success response');
+      proof.equal(await global('SELECT passkey_review_required FROM admin_user WHERE id=$1', [target.id]), [{ passkey_review_required: false }], 'review completed for the calling admin only', 'state');
     } };
   }, { group: 'credentials' });
   add('POST /v1/admin/step-up/passkey/options', HUMAN, async (principal, allow) => {

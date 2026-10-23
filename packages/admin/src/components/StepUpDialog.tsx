@@ -69,8 +69,9 @@ export function StepUpDialog({ description, onVerified, onCancel }: { descriptio
             <input className="input" type="password" autoFocus={!hasPasskey} value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
           <div>
-            <label className="label">2FA code (if enabled)</label>
-            <input className="input tracking-widest" inputMode="numeric" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+            <label className="label">2FA code or recovery code</label>
+            <input className="input tracking-widest" autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} maxLength={19} value={totp} onChange={(e) => setTotp(e.target.value.replace(/[^0-9A-Za-z-]/g, ''))} placeholder="000000" />
+            <p className="text-xs text-gray-400 mt-1">The 6-digit code from your authenticator app, or one of your recovery codes.</p>
           </div>
           <div className="flex gap-2">
             <button type="button" className="btn-secondary flex-1" onClick={onCancel}>Cancel</button>

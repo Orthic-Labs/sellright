@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 
-export interface BrandingTheme { primary: string; background: string; surface: string; text: string; textMuted: string; border: string; fontDisplay: string | null; fontBody: string | null }
+export interface BrandingTheme { primary: string; background: string; surface: string; text: string; textMuted: string; border: string; fontDisplay: string | null; fontBody: string | null; fontLogo?: string | null }
 export interface Branding { storeName: string | null; logoUrl: string | null; theme: BrandingTheme | null; fontFaces: { family: string; url: string; weight: string; style: 'normal' | 'italic' }[] }
 
 export const NEUTRAL_BRANDING: Branding = { storeName: null, logoUrl: null, theme: null, fontFaces: [] };
@@ -86,6 +86,7 @@ export function authThemeVars(theme: BrandingTheme | null): Record<string, strin
     '--a-disabled-text': ensureContrast(mix(t.surface, text, 0.45), mix(t.surface, text, 0.1), text, 3),
     '--a-font-display': t.fontDisplay ?? t.fontBody ?? SYSTEM_SANS,
     '--a-font-body': t.fontBody ?? SYSTEM_SANS,
+    '--a-font-logo': t.fontLogo ?? t.fontDisplay ?? t.fontBody ?? SYSTEM_SANS,
     '--a-font-mono': MONO,
     '--a-radius': '14px',
     '--a-radius-sm': '8px',
