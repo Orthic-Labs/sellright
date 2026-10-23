@@ -102,9 +102,14 @@ export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
 
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
-export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; totpEnabled?: boolean; totpEnrollmentRequired?: boolean; }
+export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; totpEnabled?: boolean; passkeyEnabled?: boolean; totpEnrollmentRequired?: boolean; }
 export interface AgentRow { id: string; adminUserId: string; name: string; email: string; role: string; createdBy: string | null; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; }
-export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; totpEnrollmentRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
+export type SecondFactorMethod = 'totp' | 'passkey' | 'recovery_code';
+export interface LoginResp {
+  token?: string; csrfToken?: string; totpEnrollmentRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[];
+  /** Issue #333 step 1 for an account with a second factor: no session yet; redeem `challengeToken` at /login/2fa. */
+  twoFactorRequired?: boolean; challengeToken?: string; expiresInSeconds?: number; methods?: SecondFactorMethod[];
+}
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
 export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; firstName?: string | null; lastName?: string | null; }

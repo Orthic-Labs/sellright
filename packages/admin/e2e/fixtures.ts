@@ -20,7 +20,9 @@ export const toast = (page: Page, text: string | RegExp) => page.getByText(text)
 
 /** The input/select/textarea that follows a <label> whose text is exactly `label` (labels in this app are not always bound with htmlFor). */
 export const field = (scope: Page | import('@playwright/test').Locator, label: string) =>
-	scope.locator(`xpath=.//label[normalize-space(.)=${JSON.stringify(label)}]/following-sibling::*[self::input or self::select or self::textarea][1]`);
+	scope.locator(`xpath=.//label[normalize-space(.)=${JSON.stringify(label)}]/following-sibling::*[self::input or self::select or self::textarea][1]`
+		// Sign-in journey screens (issue #333) associate the label by for/id with the input wrapped in its own control.
+		+ ` | .//*[self::input or self::select or self::textarea][@id=(//label[normalize-space(.)=${JSON.stringify(label)}]/@for)]`);
 
 /**
  * goto() that survives the SPA's post-login `location.assign('/')`: right after a UI sign-in the router has already

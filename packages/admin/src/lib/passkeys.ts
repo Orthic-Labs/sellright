@@ -22,7 +22,7 @@ const CODE_MESSAGES: Record<string, string> = {
   PASSKEY_INVALID: 'That passkey could not be verified.',
   CEREMONY_INVALID: 'The passkey request expired. Please try again.',
   FEATURE_DISABLED: 'Passkeys are not available.',
-  TOTP_REQUIRED_FIRST: 'Set up your authenticator app first',
+  LAST_SECOND_FACTOR: 'Two-step verification is required for your account. Add another passkey or an authenticator app before removing this one.',
   TOO_MANY_PASSKEYS: 'You have reached the maximum number of passkeys. Remove one to add another.',
   CREDENTIAL_EXISTS: 'This passkey is already registered.',
 };
@@ -67,10 +67,26 @@ export async function loginWithPasskey({ useBrowserAutofill = false }: { useBrow
   return api.post<LoginResp>('/passkeys/login/verify', { response });
 }
 
-export async function registerPasskey(label: string): Promise<PasskeyRow> {
+/** `recoveryCodes` is present (shown once) when this passkey is the account's first second factor. */
+export async function registerPasskey(label: string): Promise<PasskeyRow & { recoveryCodes?: string[] }> {
   const { options } = await api.post<RegOpts>('/passkeys/register/options', {});
   const response = await ceremony(() => startRegistration({ optionsJSON: options }));
-  return api.post<PasskeyRow>('/passkeys/register/verify', { response, label });
+  return api.post<PasskeyRow & { recoveryCodes?: string[] }>('/passkeys/register/verify', { response, label });
+}
+
+export async function renamePasskey(id: string, label: string): Promise<PasskeyRow> {
+  return api.patch<PasskeyRow>(`/passkeys/${encodeURIComponent(id)}`, { label });
+}
+
+/** A sensible default name for a new passkey from the browser's platform (the user can rename it in Settings). */
+export function defaultPasskeyLabel(ua = typeof navigator === 'undefined' ? '' : navigator.userAgent): string {
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  if (/Android/.test(ua)) return 'Android phone';
+  if (/Macintosh|Mac OS X/.test(ua)) return 'Mac';
+  if (/Windows/.test(ua)) return 'Windows PC';
+  if (/Linux/.test(ua)) return 'Linux computer';
+  return 'Passkey';
 }
 
 export async function stepUpWithPasskey(): Promise<void> {

@@ -10,8 +10,9 @@ import { requireDisposablePostgresUrl } from '../db/test-database-url.js';
 import { env } from '../env.js';
 import { createSoftwareAuthenticator } from '../sdk/webauthn.testkit.js';
 import { hashPassword } from './password.js';
+import { getAdminCredentialsById, mutateAdminSecondFactor } from './admin-staff.js';
 import {
-  adminLoginOptions, adminLoginVerify, adminRegisterOptions, adminRegisterVerify, adminStepUpOptions, adminStepUpVerify, deleteAdminPasskey, listAdminPasskeys,
+  adminLoginOptions, adminLoginVerify, adminRegisterOptions, adminRegisterVerify, adminStepUpOptions, adminStepUpVerify, deleteAdminPasskey, deleteAdminPasskeyChecked, listAdminPasskeys,
 } from './passkeys-admin.js';
 import { adminUserHandle, customerUserHandle, relyingPartyFor } from './passkeys-core.js';
 import {
@@ -87,12 +88,46 @@ describe('admin passkeys', () => {
     const sessions = await pool.query('SELECT token_hash FROM "session" WHERE admin_user_id=$1', [ADMIN]);
     expect(sessions.rows.length).toBe(2);
   });
-  it('refuses registration without TOTP and without a current-epoch step-up', async () => {
+  it('refuses registration without a current-epoch step-up; without TOTP a passkey is the first factor and brings recovery codes (#333)', async () => {
     await pool.query('UPDATE "session" SET step_up_epoch=NULL WHERE token_hash=$1', [sha(SESSION)]);
     expect((await adminRegisterOptions({ rp, adminId: ADMIN, sessionToken: SESSION }))).toMatchObject({ ok: false, code: 'STEP_UP_REQUIRED' });
     await pool.query('UPDATE "session" SET step_up_epoch=0 WHERE token_hash=$1', [sha(SESSION)]);
     await pool.query('UPDATE admin_user SET totp_secret=NULL WHERE id=$1', [ADMIN]); // trigger: epoch 1, step-ups cleared
-    expect((await adminRegisterOptions({ rp, adminId: ADMIN, sessionToken: SESSION }))).toMatchObject({ ok: false, code: 'TOTP_REQUIRED_FIRST' });
+    await pool.query("UPDATE \"session\" SET created_at=now() - interval '1 hour' WHERE token_hash=$1", [sha(SESSION)]);
+    expect((await adminRegisterOptions({ rp, adminId: ADMIN, sessionToken: SESSION }))).toMatchObject({ ok: false, code: 'STEP_UP_REQUIRED' });
+    // ...but a session signed in moments ago may add the account's FIRST second factor without re-entering the password
+    await pool.query('UPDATE "session" SET created_at=now() WHERE token_hash=$1', [sha(SESSION)]);
+    expect((await adminRegisterOptions({ rp, adminId: ADMIN, sessionToken: SESSION })).ok).toBe(true);
+    await pool.query('UPDATE "session" SET step_up_at=now(), step_up_epoch=1 WHERE token_hash=$1', [sha(SESSION)]);
+    const auth = authenticator();
+    const o = await adminRegisterOptions({ rp, adminId: ADMIN, sessionToken: SESSION });
+    if (!o.ok) throw new Error('register options refused: ' + o.code);
+    const v = await adminRegisterVerify({ rp, adminId: ADMIN, sessionToken: SESSION, response: auth.register({ challenge: o.options.challenge, userHandle: adminUserHandle(ADMIN) }), nonce: o.nonce, label: 'laptop' });
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.recoveryCodes).toHaveLength(10); // first second factor of the account: one-time recovery codes
+    expect((await pool.query('SELECT count(*)::int AS n FROM admin_recovery_code WHERE admin_user_id=$1 AND used_at IS NULL', [ADMIN])).rows[0]!.n).toBe(10);
+    const second = await enrolAdmin();
+    expect((await pool.query('SELECT count(*)::int AS n FROM admin_passkey_credential WHERE admin_user_id=$1', [ADMIN])).rows[0]!.n).toBe(2);
+    expect(second.passkey.label).toBe('phone');
+  });
+  it('the last passkey of an account without an authenticator app cannot be removed while 2FA is required (#333)', async () => {
+    await pool.query('UPDATE admin_user SET totp_secret=NULL WHERE id=$1', [ADMIN]);
+    await pool.query('UPDATE "session" SET step_up_at=now(), step_up_epoch=1 WHERE token_hash=$1', [sha(SESSION)]);
+    const { passkey } = await enrolAdmin();
+    expect(await deleteAdminPasskeyChecked({ adminId: ADMIN, id: passkey.id, secondFactorRequired: true })).toBe('LAST_FACTOR');
+    expect((await pool.query('SELECT id FROM admin_passkey_credential WHERE id=$1', [passkey.id])).rows).toHaveLength(1);
+    expect(await deleteAdminPasskeyChecked({ adminId: ADMIN, id: passkey.id, secondFactorRequired: false })).toBe(true);
+    expect((await pool.query('SELECT count(*)::int AS n FROM admin_recovery_code WHERE admin_user_id=$1', [ADMIN])).rows[0]!.n).toBe(0);
+  });
+  it('enabling the authenticator app later keeps the passkeys valid (#333)', async () => {
+    await pool.query('UPDATE admin_user SET totp_secret=NULL WHERE id=$1', [ADMIN]); // epoch 1
+    await pool.query('UPDATE "session" SET step_up_at=now(), step_up_epoch=1 WHERE token_hash=$1', [sha(SESSION)]);
+    const { auth, passkey } = await enrolAdmin();
+    const creds = (await getAdminCredentialsById(ADMIN))!;
+    expect(await mutateAdminSecondFactor({ adminId: ADMIN, token: SESSION, ...creds, action: 'enable', secret: 'JBSWY3DPEHPK3PXP' })).not.toBeNull();
+    expect((await pool.query('SELECT epoch FROM admin_passkey_credential WHERE id=$1', [passkey.id])).rows[0]!.epoch).toBe(2);
+    expect((await loginAdmin(auth, 1)).ok).toBe(true);
   });
   it('negates every login binding: nonce, replay, wrong origin, userHandle, counter regression, stale epoch', async () => {
     const { auth, passkey } = await enrolAdmin();

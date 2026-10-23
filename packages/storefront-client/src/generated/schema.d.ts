@@ -24,6 +24,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             enabled: boolean;
+                            passkeys: number;
                             recoveryCodesRemaining: number;
                             required: boolean;
                         };
@@ -138,7 +139,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm + enable 2FA (re-proves the current password); returns one-time recovery codes */
+        /** Confirm + enable 2FA with the 6-digit code for this session's pending secret (the current password only when the session is not freshly signed in); returns one-time recovery codes */
         post: {
             parameters: {
                 query?: never;
@@ -150,8 +151,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         code: string;
-                        password: string;
-                        secret: string;
+                        password?: string;
+                        secret?: string;
                     };
                 };
             };
@@ -168,7 +169,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Unauthorized / wrong password */
+                /** @description Unauthorized / wrong or missing password (PASSWORD_REQUIRED) */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -177,7 +178,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Bad code or already enabled */
+                /** @description Bad code, setup expired, or already enabled */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -284,7 +285,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start 2FA setup (returns a secret to confirm) */
+        /** Start 2FA setup: a NEW pending secret for this session on every call (QR + manual key); replaces any earlier pending one */
         post: {
             parameters: {
                 query?: never;
@@ -301,13 +302,26 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            account: string;
+                            issuer: string;
                             otpauthUri: string;
+                            passwordRequired: boolean;
+                            qrSvg: string;
                             secret: string;
                         };
                     };
                 };
                 /** @description Unauthorized */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Already enabled */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1767,6 +1781,62 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pre-session: the store identity shown on the admin sign-in screens (name, logo, theme tokens) for the resolved host */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK (neutral default for an unknown host or an unpublished store) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            fontFaces: {
+                                family: string;
+                                /** @enum {string} */
+                                style: "normal" | "italic";
+                                url: string;
+                                weight: string;
+                            }[];
+                            logoUrl: string | null;
+                            storeName: string | null;
+                            theme: {
+                                background: string;
+                                border: string;
+                                fontBody: string | null;
+                                fontDisplay: string | null;
+                                primary: string;
+                                surface: string;
+                                text: string;
+                                textMuted: string;
+                            } | null;
+                        };
                     };
                 };
             };
@@ -4595,7 +4665,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin login */
+        /** Admin login, step 1 (email + password). An account with a second factor gets a single-use challenge for POST /v1/admin/login/2fa, never a session */
         post: {
             parameters: {
                 query?: never;
@@ -4615,7 +4685,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK or 2FA required */
+                /** @description Signed in, or (twoFactorRequired) the password was right and the code step follows */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -4625,7 +4695,10 @@ export interface paths {
                             admin?: {
                                 email: string;
                             };
+                            challengeToken?: string;
                             csrfToken?: string;
+                            expiresInSeconds?: number;
+                            methods?: ("totp" | "passkey" | "recovery_code")[];
                             stores?: {
                                 currency: string;
                                 name: string;
@@ -4640,6 +4713,86 @@ export interface paths {
                     };
                 };
                 /** @description Invalid */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/login/2fa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin login, step 2: redeem the step-1 challenge once with a TOTP or recovery code */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challengeToken: string;
+                        code: string;
+                        returnToken?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Signed in */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            admin?: {
+                                email: string;
+                            };
+                            challengeToken?: string;
+                            csrfToken?: string;
+                            expiresInSeconds?: number;
+                            methods?: ("totp" | "passkey" | "recovery_code")[];
+                            stores?: {
+                                currency: string;
+                                name: string;
+                                role: string;
+                                slug: string;
+                                storeId: string;
+                            }[];
+                            token?: string;
+                            totpEnrollmentRequired?: boolean;
+                            twoFactorRequired?: boolean;
+                        };
+                    };
+                };
+                /** @description INVALID_CODE (try again) or LOGIN_CHALLENGE_EXPIRED (start over with the password) */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -5340,6 +5493,7 @@ export interface paths {
                             isInstallationAdmin: boolean;
                             /** @enum {string} */
                             kind: "human" | "agent";
+                            passkeyEnabled: boolean;
                             stores: {
                                 currency: string;
                                 name: string;
@@ -7377,11 +7531,73 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description LAST_SECOND_FACTOR */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         options?: never;
         head?: never;
-        patch?: never;
+        /** Rename one of the signed-in admin's passkeys */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        label: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            backedUp: boolean;
+                            createdAt: string;
+                            deviceType: string;
+                            id: string;
+                            label: string;
+                            lastUsedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found / disabled */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/admin/passkeys/login/options": {
@@ -7554,7 +7770,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start adding a passkey (recent step-up under the current security epoch; TOTP must be enrolled) */
+        /** Start adding a passkey (recent step-up under the current security epoch; a passkey is a second factor on its own) */
         post: {
             parameters: {
                 query?: never;
@@ -7610,7 +7826,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description TOTP_REQUIRED_FIRST / TOO_MANY_PASSKEYS */
+                /** @description TOO_MANY_PASSKEYS */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -7680,7 +7896,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
+                /** @description OK (recoveryCodes: shown once, only when this passkey is the account's first second factor) */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -7693,6 +7909,7 @@ export interface paths {
                             id: string;
                             label: string;
                             lastUsedAt: string | null;
+                            recoveryCodes?: string[];
                         };
                     };
                 };
@@ -7807,6 +8024,123 @@ export interface paths {
                 };
                 /** @description step_up_required */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/password/forgot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pre-session: e-mail a single-use admin password reset link. Always the same answer, whether or not the address has an account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description Too many requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/password/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pre-session: set a new admin password with a reset link token (single use); signs out every session. 2FA is unchanged */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        password: string;
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description RESET_INVALID */
+                400: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -10770,6 +11104,13 @@ export interface paths {
                             text?: string;
                             textMuted?: string;
                         };
+                        fontFaces?: {
+                            family: string;
+                            /** @enum {string} */
+                            style?: "normal" | "italic";
+                            url: string;
+                            weight?: string;
+                        }[];
                         fonts?: {
                             body?: string;
                             display?: string;

@@ -41,7 +41,7 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
   // credentials: 2FA, step-up, payment + e-mail secrets (test-send is allowed: it only sends)
   ...D('credentials', 'POST /v1/admin/2fa/setup', 'POST /v1/admin/2fa/enable', 'POST /v1/admin/2fa/disable', 'POST /v1/admin/step-up',
     // passkeys (0108): enrolment, removal and passkey step-up are credential changes; the public login ceremony is excepted below
-    'POST /v1/admin/passkeys/register/options', 'POST /v1/admin/passkeys/register/verify', 'DELETE /v1/admin/passkeys/:id',
+    'POST /v1/admin/passkeys/register/options', 'POST /v1/admin/passkeys/register/verify', 'DELETE /v1/admin/passkeys/:id', 'PATCH /v1/admin/passkeys/:id',
     'POST /v1/admin/step-up/passkey/options', 'POST /v1/admin/step-up/passkey/verify',
     'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook',
@@ -64,6 +64,9 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
   'POST /v1/admin/variants/:id/stock/adjust', // stock delta with a reason: ordinary inventory work, reversible
   'POST /v1/admin/passkeys/login/options', // passkeys (0108): pre-session ceremony, no principal; the guard's PUBLIC set
   'POST /v1/admin/passkeys/login/verify', // ... same; a supplied agent credential is ignored exactly as on /v1/admin/login
+  'POST /v1/admin/login/2fa', // issue #333: sign-in step 2 — pre-session; the challenge token selects the account, not a principal
+  'POST /v1/admin/password/forgot', // issue #333: pre-session; only e-mails a link to the account's own address
+  'POST /v1/admin/password/reset', // issue #333: pre-session; the e-mailed single-use token is the whole authority
 ]);
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.

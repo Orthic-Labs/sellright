@@ -5,7 +5,7 @@ import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal } from '../auth/admin-session.js';
 import { isAgentToken, resolveAgentByToken } from '../auth/admin-api-token.js';
 import { agentDenied, type AgentRouteContext } from '../auth/agent-policy.js';
-import { ENROLLMENT_ALLOWED } from '../auth/mfa-policy.js';
+import { ENROLLMENT_ALLOWED, secondFactorEnrollmentRequired } from '../auth/mfa-policy.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { errJson } from '../lib/api-error.js';
@@ -15,7 +15,9 @@ declare module 'hono' { interface ContextVariableMap { adminPrincipal: AdminPrin
 
 const PUBLIC = new Set(['/v1/admin/login', '/v1/admin/logout',
   // Passkeys (0108): pre-session routes treated exactly like /v1/admin/login — no principal is resolved, the ceremony decides.
-  '/v1/admin/capabilities', '/v1/admin/passkeys/login/options', '/v1/admin/passkeys/login/verify']); // NOT staff/accept: it is public for the unauthenticated invitee, but an agent credential on it must still hit the deny set (Astra v5 F4)
+  '/v1/admin/capabilities', '/v1/admin/passkeys/login/options', '/v1/admin/passkeys/login/verify',
+  // Issue #333: sign-in step 2, sign-in branding, forgot/reset password — pre-session; the token in the body decides.
+  '/v1/admin/login/2fa', '/v1/admin/branding', '/v1/admin/password/forgot', '/v1/admin/password/reset']); // NOT staff/accept: it is public for the unauthenticated invitee, but an agent credential on it must still hit the deny set (Astra v5 F4)
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** Engine admin routes that accept a non-session credential (or none) and authenticate it themselves. */
 const SERVICE_CREDENTIAL_ROUTES = new Set(['POST /v1/admin/staff/accept', 'POST /v1/admin/cache/purge', 'POST /v1/admin/apps/releases']);
@@ -72,8 +74,8 @@ const guardImpl = async (c: Parameters<MiddlewareHandler>[0], next: Parameters<M
   const route = [...matchedRoutes(c)].reverse().find((r) => !r.path.includes('*'))?.path ?? path;
   if (admin.kind !== 'agent') {
     // P1b: TOTP is required for this admin but not enrolled — the session may only enrol (auth/mfa-policy.ts).
-    if (admin.totpRequired && !admin.totpEnabled && !ENROLLMENT_ALLOWED.has(`${method} ${route}`)) {
-      return errJson(c, 403, 'TOTP_ENROLLMENT_REQUIRED', 'two-factor authentication is required for your account — set up an authenticator app to continue');
+    if (secondFactorEnrollmentRequired(admin) && !ENROLLMENT_ALLOWED.has(`${method} ${route}`)) {
+      return errJson(c, 403, 'TOTP_ENROLLMENT_REQUIRED', 'two-factor authentication is required for your account — add a passkey or set up an authenticator app to continue');
     }
     return next();
   }
