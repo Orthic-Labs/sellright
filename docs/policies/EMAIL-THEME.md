@@ -1,6 +1,6 @@
 # Email theme tokens and mailer sender fallback
 
-Status: implemented on `feat/defork-email-theme` (plan 3.8). Owner visual approval is required before any store relies on a non-default theme.
+Status: implemented in `packages/api/src/email/theme.ts` (plan 3.8) and merged to `main` (PR #159). Owner visual approval before a store relies on a non-default theme is a process step that no code or check in this repository enforces (unverified).
 
 ## Theme tokens
 

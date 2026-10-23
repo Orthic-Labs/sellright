@@ -1,6 +1,6 @@
 # Release registration policy host (defork plan 3.2)
 
-The engine owns `POST /v1/admin/apps/releases` (`packages/api/src/releases/release-registration.ts`). Plugins customise it through `ApiPlugin.releaseRegistration` (`releases/registration-policy.ts`); they never mount this route themselves.
+The engine owns `POST /v1/admin/apps/releases` (`packages/api/src/releases/release-registration.ts`). Plugins customise it through `EnginePlugin.releaseRegistration` or the legacy `ApiPlugin.releaseRegistration` (`releases/registration-policy.ts`); they never mount this route themselves.
 
 ## Contract
 
@@ -18,9 +18,11 @@ Same-version republish: identical to the fork. With `platform` non-null the exis
 
 ## Startup conflicts
 
-`createApp()` calls `assertNoReleaseRegistrationConflicts` before mounting and throws when: two plugins' policies claim the same app (a catch-all overlaps everything); two policies share a credential hash; a credential is not 64-hex or lacks `storeSlug`; a policy claims an empty `apps` list; a plugin mounts `POST /v1/admin/apps/releases`; or two plugins mount the same method+path (`ALL` middleware entries are ignored). Built-in routes may still be shadowed-by-order as before, except the host-owned release route. After every plugin `init(app)` has run, `assertHostRouteUnshadowed` also fails startup if the host route's route-table entry count changed (a plugin registered POST/ALL on it from `init()`).
+`createApp()` (through `buildHttpApp` in `app.ts`) calls `assertNoReleaseRegistrationConflicts` before mounting and throws when: two plugins' policies claim the same app (a catch-all overlaps everything); two policies share a credential hash; a credential is not 64-hex or lacks `storeSlug`; a policy claims an empty `apps` list; a plugin mounts `POST /v1/admin/apps/releases`; or two plugins mount the same method+path (`ALL` middleware entries are ignored). Built-in routes may still be shadowed-by-order as before, except the host-owned release route. After every plugin `init(app)` has run, `assertHostRouteUnshadowed` also fails startup if the host route's route-table entry count changed (a plugin registered POST/ALL on it from `init()`).
 
 ## Fork mapping (for the plugin lane port of `release-routes.ts`)
+
+The Fork column cites RightSites files (`rightsites-plugin/`) that are not in this repository (unverified), and so are the statements of parity with the fork on this page. The Engine hook column is checked against `releases/release-registration.ts`.
 
 | Fork (`rightsites-plugin/`) | Engine hook |
 |---|---|

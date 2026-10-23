@@ -1,3 +1,5 @@
+> Historical (2026-06-13). Current state: packages/admin/README.md.
+
 # SellRight Admin Redesign Plan
 
 Date: 2026-06-13

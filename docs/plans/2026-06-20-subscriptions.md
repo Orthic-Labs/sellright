@@ -1,3 +1,5 @@
+> Historical (2026-06-20). Current state: packages/api/src/payments/subscriptions.ts.
+
 # Plan — Subscriptions / recurring billing (SellRight, #2)
 
 **Goal:** Sell recurring (monthly/yearly) plans via Stripe Billing that issue a license on the first paid invoice and extend that license's `expiresAt`/`updatesUntil` on every renewal — reusing the existing order → settle → license machinery, adding only the Stripe Billing wiring and a `subscription` link row.

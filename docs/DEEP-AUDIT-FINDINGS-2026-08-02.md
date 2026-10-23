@@ -1,3 +1,5 @@
+> Historical (2026-08-02). Current state: docs/plans/REMAINING-WORK.md.
+
 # SellRight Deep Audit — Findings & Fixes (2026-08-02)
 
 The reasoning-lens pass that never ran in the 2026-08-01 MiniMax audit, run properly at HEAD `fda6fc9`. Money-path correctness, security, architecture, and dependency-CVE lenses over real code. **Every finding below was re-verified by me against the cited `file:line` — not taken on a subagent's word.** Two independent money-lens agents converged on the same critical bugs, which is why confidence is high.

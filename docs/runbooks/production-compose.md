@@ -1,6 +1,6 @@
 # Production Compose operations
 
-SellRight's supported single-instance production path is `deploy/compose.yaml` plus `deploy/install.sh` (see the [one-click install plan](../plans/2026-09-27-one-click-install.md), Workstream D). `deploy/compose.yaml` pulls **pinned, cosign-signed images from GHCR** (`ghcr.io/orthic-labs/sellright-{api,admin,storefront}`); it has no `build:` sections. The database, uploaded assets, downloads, and Caddy state live in named Docker volumes.
+SellRight's supported single-instance production path is `deploy/compose.yaml` plus `deploy/install.sh` (design history: the [one-click install plan](../plans/2026-09-27-one-click-install.md), Workstream D). `deploy/compose.yaml` pulls **cosign-signed images from GHCR** (`ghcr.io/orthic-labs/sellright-{api,admin,storefront}`, tag from `SELLRIGHT_IMAGE_TAG`, default `latest`); it has no `build:` sections. The database, uploaded assets, downloads, and Caddy state live in named Docker volumes.
 
 ## Install (new server)
 
@@ -8,9 +8,9 @@ SellRight's supported single-instance production path is `deploy/compose.yaml` p
 curl -fsSL https://raw.githubusercontent.com/Orthic-Labs/sellright/main/deploy/install.sh | sudo sh
 ```
 
-This checks the OS/RAM/disk/ports, installs Docker + cosign if missing, generates every machine secret (database passwords, `SELLRIGHT_MASTER_KEY`, cookie/download/licensing/contact/cache secrets) with `openssl rand`/`/dev/urandom`, verifies each image's signature (`cosign verify`, keyless — see `.github/workflows/ci.yml`'s `release` job) before pulling, starts the stack, and writes a recovery kit (see `docs/runbooks/recovery.md`). It never displays or logs a secret. Re-running is idempotent — it leaves an existing `/opt/sellright/.env` and recovery kit untouched.
+This checks the OS (Ubuntu or Debian only), RAM (at least 2 GiB), free disk on `/` (at least 10 GiB) and that ports 80 and 443 are free, installs Docker, cosign and jq if missing, generates every machine secret (database passwords, `SELLRIGHT_MASTER_KEY`, cookie/download/licensing/contact/cache secrets) with `openssl rand`/`/dev/urandom`, verifies each image's signature (`cosign verify`, keyless; see `.github/workflows/ci.yml`'s `release` job) before pulling, starts the stack, and writes a recovery kit (see `docs/runbooks/recovery.md`). It never prints a generated machine secret; the one secret it prints is the single-use admin claim link at the end (`sellright setup-link`). Re-running is idempotent: it leaves an existing `/opt/sellright/.env` and recovery kit untouched.
 
-Manage the running install with the `sellright` CLI it installs to `/usr/local/bin/sellright`: `status`, `logs`, `backup [--offsite]`, `recovery-kit`, `restore --kit … --set …`, `setup-link`, `reset-admin <email>`. `update` is a stub pending WS-E.
+Manage the running install with the `sellright` CLI it installs to `/usr/local/bin/sellright`: `status`, `logs`, `backup [--offsite]`, `recovery-kit`, `restore --kit <file> --set <dir>`, `setup-link`, `reset-admin <email>`, `maintenance <on|off|status>`, `functional-check`, and `update [--from-source]`. `update` turns maintenance mode on, takes a backup, pulls and cosign-verifies the images, runs migrations, starts the services and runs the functional checks; on a failed check it restarts the previous images and leaves maintenance mode on (see `docs/runbooks/migrations.md`).
 
 ## Building from source (development)
 
@@ -19,7 +19,7 @@ cp deploy/.env.example deploy/.env   # fill every required value
 docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
 ```
 
-`compose.build.yaml` adds back the `build:` contexts (`packages/{api,admin,storefront}/Dockerfile`) for developers who don't want to pull from GHCR. Never combine it with a production `.env` that expects pinned digests.
+`compose.build.yaml` adds back the `build:` contexts (`packages/{api,admin,storefront}/Dockerfile`) for developers who don't want to pull from GHCR. On an `install.sh` install, `sellright update --from-source` (with `SELLRIGHT_SOURCE` set to a checked-out repo) builds locally from this file, with no registry pull and no cosign verification.
 
 The API image runs schema migrations and create-only bootstrap before starting the server. Re-running with the same `BOOTSTRAP_STORE_SLUG` does not recreate the store or reset an existing admin password.
 
@@ -49,7 +49,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml logs caddy | grep -
 curl -v https://<public-ip>/  # expect a valid, non-self-signed cert
 ```
 
-**Fallback**: if that fails (rate limits, ACME account restrictions, or Caddy version behavior differing from docs), `install.sh` requires a real domain up front instead — this is the safe default until the IP-certificate path is confirmed working in production.
+**Current `install.sh` behavior**: it does not require a domain. It writes `SELLRIGHT_DOMAIN` from the environment variable of the same name, or `:80` when that is unset; `sellright setup-link` treats `:80` as a hostname not yet configured and prints an `http://localhost` claim link. To switch to a domain, set `SELLRIGHT_DOMAIN` in `/opt/sellright/.env` and run `docker compose --env-file .env -f compose.yaml up -d caddy` from `/opt/sellright`.
 
 ## Backup and restore (canonical: `sellright` CLI)
 

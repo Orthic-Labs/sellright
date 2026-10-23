@@ -1,3 +1,5 @@
+> Historical (2026-07-17). Current state: docs/plans/REMAINING-WORK.md.
+
 # Open-Source Readiness Audit — 2026-07-17
 
 Scope: lifecycle, performance, security, scalability of `adrdsouza/sellright` at

@@ -29,5 +29,8 @@ export const myappWidget = pgTable('myapp_widget', {
 import { myappWidget } from '../db/extensions/schema-myapp.js';
 ```
 
-Migration generation/apply still follows this repo's normal `db:generate` /
-`db:migrate` flow — this seam only widens what drizzle-kit's schema scan sees.
+Migration generation/apply follows `docs/runbooks/migrations.md`: `drizzle-kit
+generate` computed bogus diffs against this checkout's snapshot from migration 0072
+on (see the header of `drizzle/0084_order_edit.sql`), and `db:migrate` runs only
+files listed in `meta/_journal.json`. This seam only widens what drizzle-kit's
+schema scan sees.

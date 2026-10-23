@@ -1,3 +1,5 @@
+> Historical (2026-06-19). Current state: docs/FEATURES.md.
+
 # SellRight — Commerce Gap Analysis & Spec Sheet
 
 > vs WooCommerce · Shopify (+Plus) · BigCommerce. Grounded in a code inventory of `packages/api` + `packages/admin` + `packages/storefront` and web research of each platform's best-selling plugins/apps. Generated 2026-06-19.

@@ -1,3 +1,4 @@
+> Historical (2026-06-20). Current state: docs/ADMIN-THEME-SYSTEM.md.
 # SellRight Admin — Design Uplift
 
 > Applied via `/review-frontend` + `ui-ux-pro-max` + interaction-design principles. Status: **shared-layer changes implemented & build-verified; NOT committed** — pending Adrian's eyes (CLAUDE.md §8). Per-page items below are ready on approval.

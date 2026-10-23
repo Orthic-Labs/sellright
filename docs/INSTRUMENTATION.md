@@ -1,6 +1,6 @@
 # Instrumentation (de-fork plan 2.9, migration 0088)
 
-Everything here is additive and R0-compatible: new columns are nullable or defaulted, so the previous release's INSERT/UPDATE statements keep working. Health predicates consume these fields by projection name (`HEALTH-PREDICATES.md`); this file documents what the engine writes.
+Everything here is additive and R0-compatible: new columns are nullable or defaulted, so the previous release's INSERT/UPDATE statements keep working. Health predicates consume these fields by projection name (`HEALTH-PREDICATES.md`, not in this repository; unverified); this file documents what the engine writes.
 
 ## Claim columns (`webhook_delivery`, `email_outbox`, `push_outbox`)
 
@@ -18,7 +18,7 @@ Projection contract: candidate epoch = `claimed_at`; old-runtime epochs ignore `
 
 Advanced only by a successful provider retrieval bound to the attempt (`payments/provider-observation.ts`, monotonic in `provider_observed_at`). Never from webhook payloads, failed/unavailable fetches, or identity-mismatched responses.
 
-Vocabulary is MAINTENANCE-INVENTORY 4.6 (normative), pinned by `payments/provider-vocabulary.test.ts`:
+Vocabulary follows MAINTENANCE-INVENTORY 4.6 (not in this repository; unverified) and is pinned by `payments/provider-vocabulary.test.ts`:
 
 | Method | Retrieval paths that write | `provider_status` | Terminal |
 |---|---|---|---|
@@ -42,7 +42,7 @@ Wired in this repo (StoreKit lives in the engine): `POST /v1/webhooks/apple/stor
 
 ## Open items for consumers
 - Nothing re-observes `failed` NMI attempts or settled-then-stale Stripe `failed` attempts on a schedule; the gate's "stale observation" rule will count them until a reconcile pass or operator verify refreshes them.
-- The plan's fork (RightSites) must call `recordStoreKitEvent`/`recordStoreKitEventDetached` from any fork-only StoreKit handlers once it adopts the engine.
+- The plan's fork (RightSites) must call `recordStoreKitEvent`/`recordStoreKitEventDetached` from any fork-only StoreKit handlers once it adopts the engine (unverified: RightSites code is not in this repository).
 
 ## Webhook reaper default (INSTR-1)
-The engine default stays dry-run (`JOBS_WEBHOOK_REAPER_APPLY` unset), so other SellRight stores are unchanged. RightSites' candidate configuration sets `JOBS_WEBHOOK_REAPER_APPLY=1` (DECISIONS X-33, listed in the 7.1 intended-config table), and HEALTH F2 relies on it: without it a crashed claim stays `processing` forever. The reaper keys on `updated_at` (set at claim) and nulls `claimed_at` on release.
+The engine default stays dry-run (`JOBS_WEBHOOK_REAPER_APPLY` unset), so other SellRight stores are unchanged. Without `JOBS_WEBHOOK_REAPER_APPLY=1` a webhook row left `processing` by a crashed claim stays `processing`: dry-run only counts (`jobs/webhook-reaper.ts`) and `claimDueWebhooks` (`webhooks/emit.ts`) claims `pending` rows only. Whether RightSites sets it (DECISIONS X-33, HEALTH F2) is not checked here (unverified: RightSites configuration and docs are not in this repository). The reaper keys on `updated_at` (set at claim) and nulls `claimed_at` on release.

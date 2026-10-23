@@ -12,7 +12,7 @@ Set a distinct application name in each deployment:
 # SellRight
 PGAPPNAME=sellright-api
 
-# RightSites production API
+# RightSites production API (unverified: that deployment is not in this repository)
 PGAPPNAME=rightsites-api
 ```
 
@@ -53,7 +53,8 @@ LIMIT 20;
 ```
 
 The first result must be `1s`; the count and top-query query must execute
-without an extension/preload error. The cluster on port 5433 is shared, so do
+without an extension/preload error. If the cluster is shared with other
+applications (the dev defaults in `packages/api/.env.example` use port 5433), do
 not change `shared_buffers`, `work_mem`, or `effective_cache_size` without
 measuring this data first.
 
@@ -65,8 +66,9 @@ measuring this data first.
 
 
 Run as a Postgres administrator for each database used by the application. The
-15-second idle-in-transaction timeout is safe only after the external-I/O
-transaction-boundary regression test is present and green.
+15-second idle-in-transaction timeout is safe only while the external-I/O
+transaction-boundary regression test
+(`packages/api/src/db/no-external-io-in-transaction.test.ts`) passes.
 
 ```sql
 ALTER ROLE sellright_app IN DATABASE rightsites
@@ -86,6 +88,12 @@ ALTER ROLE sellright_app IN DATABASE sellright_dev
 
 If a separate test database is provisioned, repeat the same `IN DATABASE`
 statements for it. New sessions are required before the settings take effect.
+
+The `rightsites` database above belongs to a RightSites deployment (unverified:
+not in this repository); `sellright_dev` is the database named in
+`packages/api/.env.example`. The Compose `db-init` service does not apply these
+timeouts, and `deploy/compose.yaml` sets no `PGAPPNAME`, so a Compose install
+uses the default `sellright-api`.
 
 ## Resolver role bootstrap (SR-01/SR-02 follow-up)
 

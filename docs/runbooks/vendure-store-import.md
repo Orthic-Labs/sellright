@@ -92,6 +92,11 @@ target roots) is safe:
   different imports, or a hand-edited file, claiming the same path) that
   needs a human to look at — it is never silently overwritten.
 
+At the CLI level, a second run against the same tenant after a committed
+`--apply` stops at the empty-tenant check (`Target tenant must be empty`) before
+any file is touched. The copied/skipped counts above apply to `stageVendureAssets`
+and to a re-run after an apply that did not commit.
+
 Dry-run mode reports the same copied/skipped/missing breakdown as apply mode
 without writing anything: it stats the would-be target file (or, if the
 target tree doesn't exist yet at all — e.g. the very first run for a new

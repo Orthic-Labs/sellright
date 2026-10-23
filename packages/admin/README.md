@@ -1,26 +1,27 @@
 # @sellright/admin — admin SPA
 
-Thin Shopify-style operator console for SellRight. **Built and deployed** (not a
-placeholder).
+Operator console for SellRight. It builds to a static bundle that the `admin`
+service in `deploy/compose.yaml` serves with nginx.
 
 ## Stack
 
-- React 18 + Vite 6 + TypeScript
-- Tailwind (light theme, copper-free; `brand` green `#008060` accent)
+- React 19 + Vite 8 + TypeScript 6
+- Tailwind CSS 4 (CSS-first, `src/index.css`) with runtime-swappable theme tokens (`src/theme-tokens.css`, `src/theme.tsx`; see [ADMIN-THEME-SYSTEM.md](../../docs/ADMIN-THEME-SYSTEM.md))
 - TanStack Query (data) + react-router-dom (routing)
 - **Hand-rolled fetch client** (`src/api.ts`) — NOT the hono `hc` client. The
   session token lives in an httpOnly `sr_admin` cookie, mutations echo the
-  non-httpOnly CSRF cookie in `x-csrf-token`, and only the active store slug is
-  kept in `localStorage`.
+  non-httpOnly `sr_csrf` cookie in `x-csrf-token`, and only the active store slug
+  (`sr_admin_store`) and the theme choice (`sr-theme`, `sr-mode`) are kept in
+  `localStorage`.
 
 ## Toolchain isolation
 
-Standalone — **excluded from the pnpm workspace** (`!packages/admin` in
-`pnpm-workspace.yaml`), with its own lockfile, exactly like the storefront. Its
-React deps cannot disturb the api/shared build. Install with
-`pnpm install --ignore-workspace`.
+Standalone - **excluded from the pnpm workspace** (`!packages/admin` in the
+root `pnpm-workspace.yaml`), with its own `pnpm-workspace.yaml` and lockfile. Its
+React deps cannot disturb the api/shared build. Install from the repo root with
+`pnpm --dir packages/admin install --frozen-lockfile` (the command CI uses).
 
-## Pages (30)
+## Pages
 
 - **Login** — admin email/password, optional TOTP, httpOnly cookie session
 - **Dashboard** — KPIs (revenue, orders, AOV, to-fulfill, customers, low-stock) + recent orders
@@ -49,20 +50,31 @@ React deps cannot disturb the api/shared build. Install with
 - **Locations** — multi-location inventory
 - **Webhooks** — webhook endpoint management
 - **TaxZones** — tax zone configuration
-- **Staff** — staff list, roles, invitations; per-action permission matrix
+- **Staff** - staff list, roles, invitations; per-action permission matrix; agent API tokens (`AgentAccess`)
 - **CurrencyRates** — currency exchange rate management
-- **Settings** — store/tax, payment toggles, shipping methods, Google sign-in client id, notifications, 2FA
+- **Settings** - store profile, payment provider toggles, taxes, shipping methods, customer Google sign-in, 2FA, team & permissions, account
+- **PaymentsSettings** - payment provider credentials and mode (`/settings/payments`)
+- **EmailSettings** - transactional email settings (`/settings/email`)
+- **Seo** - SEO site settings and IndexNow (`/settings/seo`)
+- **Subscriptions** - recurring subscriptions list
+- **TrackingGrid** - add tracking to open paid orders in a grid (`/orders/tracking-grid`)
+- **Waitlist** - demand report for out-of-stock waitlist signups
+- **Loyalty** - points and rewards program settings
+- **Reviews** - product review moderation and review settings
+- **Setup** - install claim screen (`/setup`), shown while the install is unclaimed
+- **Onboarding** - first-run country and currency confirmation after the claim (`/onboarding`)
+- **AcceptInvite** - staff invite acceptance (`/accept-invite`)
 
 A multi-store switcher (top bar) sets the active store; all data is store-scoped
 server-side via RLS.
 
 ## Dev / serve
 
-Needs the SellRight API running on `:3300` (the dev server proxies `/v1` → API
-and `/assets` → DD's image server).
+Needs the SellRight API running on `:3300` by default (`SELLRIGHT_API_ORIGIN`
+overrides it; the dev server proxies `/v1` and `/assets` to it).
 
 ```bash
-pnpm install --ignore-workspace
+pnpm install --frozen-lockfile
 pnpm dev          # vite dev server on :4300 (proxy-enabled)
 pnpm qa:browser   # vite dev server on :4300 with API mocks; open /?qa=1
 pnpm build        # tsc + vite build -> dist/
@@ -79,15 +91,10 @@ pnpm verify            # includes admin typecheck + build
 For production, serve the built `dist/` directory behind the site proxy. Use
 `pnpm dev` only for local/dev environments where the Vite proxy is needed.
 
-## Known gaps (as of commit 43ebcbb)
+## Known gaps
 
-The following are now wired (no longer gaps):
-- **Gallery management** — `ProductDetail` adds/removes/promotes gallery images via `product_asset` (WP8c, commit b93dae6).
-- **Per-variant option assignment** — `OptionsEditor` in `ProductDetail` toggles options per variant via `PUT /variants/{variantId}/options` (commit b93dae6).
+Gallery management (`ProductDetail` adds, removes and promotes gallery images via `product_asset`) and per-variant option assignment (`OptionsEditor` in `ProductDetail`, `PUT /variants/{variantId}/options`) are wired.
 
 Remaining gaps:
 - **Media library** — there is no standalone asset browser/picker; images are uploaded inline on the product page only.
-- **Production admin host** — deployment is environment-specific; keep the
-  production path on built static assets, not the Vite dev server.
-- **Real gateway/payment operations** — Stripe scaffolding exists in the API; no payment UI actions in the admin beyond toggling the provider.
-- **Gateway-backed refund UI** — the return-approval flow writes a Settled ledger row but does not call the payment gateway (ra-002).
+- **Production admin host** - the Compose stack serves the built static bundle with nginx (`packages/admin/Dockerfile`); do not use the Vite dev server in production.
