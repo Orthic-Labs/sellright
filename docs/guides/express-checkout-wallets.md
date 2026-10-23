@@ -77,3 +77,16 @@ legacy `/.well-known/apple-developer-merchantid-domain-association` file is not 
 
 A refused wallet payment closes the sheet with a message. If the order was already created, the page stays on that
 order with the normal payment form, so the shopper can still pay by card.
+
+## Pay-later messaging on product pages
+
+`PayLaterMessaging` from `~/platform/views` places the same Payment Method Messaging Element checkout shows, for a product
+price:
+
+```tsx
+<PayLaterMessaging amount={7500} currency={props.product.currencyCode} />
+```
+
+`amount` is in minor units. It names only the installment methods enabled on the store's Stripe account, and stays hidden
+without a configured gateway, for an unsupported currency or a non-positive amount, and when Stripe.js or the element
+fails to load.

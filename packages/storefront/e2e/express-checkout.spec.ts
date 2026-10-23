@@ -209,4 +209,18 @@ test.describe('express checkout (wallet)', () => {
 		expect(after.lines.map((l) => [l.sku, l.quantity])).toEqual(before.lines.map((l) => [l.sku, l.quantity]));
 		stub.assertReached();
 	});
+	test('PDP pay-later messaging: the price in cents, hidden when the element fails to load', async ({ apiProxyPage: page }) => {
+		test.skip(process.env.E2E_PLATFORM_PROBE !== '1', 'needs E2E_PLATFORM_PROBE=1 (the PDP probe route): did not run, missing coverage');
+		const stub = await installStripeStub(page);
+		await page.goto('/__express-buy-now-probe/?amount=8000');
+		// The stub draws no messaging iframe: shown = the wrapper is displayed once the element reports ready.
+		await expect(page.getByTestId('pay-later-messaging')).toHaveCSS('display', 'block', { timeout: 15_000 });
+		expect((await stub.calls()).find((c) => c.fn === 'elements.create' && c.type === 'paymentMethodMessaging')?.options).toEqual({ amount: 8000, currency: 'USD' });
+
+		await page.addInitScript(() => { (window as unknown as { __STRIPE_LOADERROR: string }).__STRIPE_LOADERROR = 'blocked'; });
+		await page.goto('/__express-buy-now-probe/?amount=7500');
+		await expect.poll(async () => (await stub.calls()).some((c) => c.fn === 'elements.create' && c.type === 'paymentMethodMessaging')).toBe(true);
+		await expect(page.getByTestId('pay-later-messaging')).toHaveCSS('display', 'none');
+		stub.assertReached();
+	});
 });
