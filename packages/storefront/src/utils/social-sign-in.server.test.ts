@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearSocialSignInCache, idsFromShopConfig, socialSignInIdsForHost, TTL_MS } from './social-sign-in.server';
+import { clearSocialSignInCache, idsFromShopConfig, MAX_ENTRIES, socialSignInIdsForHost, TTL_MS } from './social-sign-in.server';
 
 describe('idsFromShopConfig', () => {
 	it('reads the public ids and treats anything else as off', () => {
@@ -33,5 +33,24 @@ describe('socialSignInIdsForHost', () => {
 	it('fails closed when the API is unreachable', async () => {
 		const fetcher = vi.fn().mockRejectedValue(new Error('down'));
 		expect(await socialSignInIdsForHost('h', { storePin: '', fetcher, now: 0 })).toEqual({ google: '', apple: '' });
+	});
+
+	it('shares one config read between concurrent misses for the same host', async () => {
+		let release!: (v: unknown) => void;
+		const fetcher = vi.fn().mockReturnValue(new Promise((r) => { release = r; }));
+		const all = Promise.all([1, 2, 3].map(() => socialSignInIdsForHost('h', { storePin: '', fetcher, now: 0 })));
+		release({ auth: { googleClientId: 'g' } });
+		expect((await all).map((ids) => ids.google)).toEqual(['g', 'g', 'g']);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps at most MAX_ENTRIES hosts, dropping the oldest', async () => {
+		const fetcher = vi.fn().mockResolvedValue({ auth: { googleClientId: 'g' } });
+		for (let i = 0; i <= MAX_ENTRIES; i++) await socialSignInIdsForHost(`h${i}`, { storePin: '', fetcher, now: 0 });
+		expect(fetcher).toHaveBeenCalledTimes(MAX_ENTRIES + 1);
+		await socialSignInIdsForHost(`h${MAX_ENTRIES}`, { storePin: '', fetcher, now: 0 }); // newest: still cached
+		expect(fetcher).toHaveBeenCalledTimes(MAX_ENTRIES + 1);
+		await socialSignInIdsForHost('h0', { storePin: '', fetcher, now: 0 }); // oldest: evicted, read again
+		expect(fetcher).toHaveBeenCalledTimes(MAX_ENTRIES + 2);
 	});
 });

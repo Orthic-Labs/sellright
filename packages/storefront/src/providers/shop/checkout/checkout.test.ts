@@ -353,3 +353,36 @@ describe('empty response bodies are failed reads', () => {
 		});
 	}
 });
+
+// #362: one config read per page in the browser — widgets on one page share it; a new page or a failed read asks again.
+describe('getShopConfig shares one read per page', () => {
+	const cfg = { stripeMode: 'test', stripePublishableKey: null, stripeConfigured: false, gateways: { nmi: null, sezzle: false }, loyalty: null, auth: { magicLink: false, passkeys: false, googleClientId: null, appleServicesId: null } };
+	afterEach(() => window.history.replaceState(null, '', '/'));
+
+	it('concurrent and later callers on the same page get the same read', async () => {
+		window.history.replaceState(null, '', '/products/share-a/');
+		enqueue(respond(200, cfg));
+		const [a, b] = await Promise.all([getShopConfig(), getShopConfig()]);
+		expect(await getShopConfig()).toBe(a);
+		expect(b).toBe(a);
+		expect(calls.filter((c) => c.url.includes('/v1/shop/config'))).toHaveLength(1);
+	});
+
+	it('a different page reads again', async () => {
+		window.history.replaceState(null, '', '/products/share-b/');
+		enqueue(respond(200, cfg), respond(200, cfg));
+		await getShopConfig();
+		window.history.replaceState(null, '', '/checkout/');
+		await getShopConfig();
+		expect(calls.filter((c) => c.url.includes('/v1/shop/config'))).toHaveLength(2);
+	});
+
+	it('a failed read is not kept', async () => {
+		window.history.replaceState(null, '', '/products/share-c/');
+		enqueue(respond(500, { error: 'down' }), respond(200, cfg));
+		await expect(getShopConfig()).rejects.toThrow();
+		await Promise.resolve();
+		await expect(getShopConfig()).resolves.toEqual(cfg);
+		expect(calls.filter((c) => c.url.includes('/v1/shop/config'))).toHaveLength(2);
+	});
+});

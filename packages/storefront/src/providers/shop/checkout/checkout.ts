@@ -284,10 +284,28 @@ export const getOrder = async (code: string, receiptToken?: string, signal?: Abo
 	return nonEmpty(data, 'order') as OrderSummary;
 };
 
-/** Public runtime config — decides whether Stripe is wired for this store. */
-export const getShopConfig = async (): Promise<ShopConfig> => {
+const fetchShopConfig = async (): Promise<ShopConfig> => {
 	const { data } = await sellright().GET('/v1/shop/config', {});
 	return nonEmpty(data, 'shop config') as ShopConfig;
+};
+
+// One config read per page in the browser (#362): the PDP pay-later line, express buttons, cart drawer, checkout and
+// loyalty widgets each asked for it on their own. Public store settings only (no stock, prices or customer data). The
+// share is keyed to the page (path + query), so a client-side navigation reads it again, and a failed read is not kept.
+// Object-property holder (not a module-level `let`) so the minifier can't fold it. Never used on the server, where a
+// module value would outlive the request.
+const configShare: { page?: string; read?: Promise<ShopConfig> } = {};
+
+/** Public runtime config — decides whether Stripe is wired for this store. */
+export const getShopConfig = (): Promise<ShopConfig> => {
+	if (typeof window === 'undefined') return fetchShopConfig();
+	const page = window.location.pathname + window.location.search;
+	if (configShare.read && configShare.page === page) return configShare.read;
+	const read = fetchShopConfig();
+	configShare.page = page;
+	configShare.read = read;
+	read.catch(() => { if (configShare.read === read) configShare.read = undefined; });
+	return read;
 };
 
 /**

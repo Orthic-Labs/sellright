@@ -5,7 +5,8 @@
 // fallback for pinned single-store deployments that set it.
 //
 // Ids are public by design. Each host's answer is kept for TTL_MS so the CSP step stays fast; a change in admin shows
-// within that window. This caches configuration only, never stock or prices.
+// within that window; concurrent misses for one host share a single read (#362). This caches configuration only, never
+// stock or prices.
 import { googleSignInClientIdForHost } from '~/config/google-signin';
 import { appleSignInClientIdForHost } from '~/config/apple-signin';
 
@@ -18,6 +19,10 @@ export const TTL_MS = 60_000;
 const TIMEOUT_MS = 1_500;
 const NONE: SocialSignInIds = { google: '', apple: '' };
 const cache = new Map<string, { at: number; ids: SocialSignInIds }>();
+/** Misses in flight per key: concurrent requests for one host (a document and its assets) share one config read. */
+const inflight = new Map<string, Promise<SocialSignInIds>>();
+/** Hosts are validated upstream, but the map is still bounded: the oldest entry goes first. */
+export const MAX_ENTRIES = 256;
 
 type ConfigFetcher = (headers: Record<string, string>) => Promise<unknown>;
 
@@ -52,12 +57,23 @@ export async function socialSignInIdsForHost(
 	let ids: SocialSignInIds;
 	if (hit && now - hit.at < TTL_MS) ids = hit.ids;
 	else {
-		try {
-			ids = idsFromShopConfig(await fetcher(pin ? { 'x-store-slug': pin } : { 'x-forwarded-host': h }));
-		} catch {
-			ids = NONE;
+		let pending = inflight.get(key);
+		if (!pending) {
+			pending = (async () => {
+				let read: SocialSignInIds;
+				try {
+					read = idsFromShopConfig(await fetcher(pin ? { 'x-store-slug': pin } : { 'x-forwarded-host': h }));
+				} catch {
+					read = NONE;
+				}
+				cache.delete(key);
+				cache.set(key, { at: now, ids: read });
+				while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
+				return read;
+			})().finally(() => inflight.delete(key));
+			inflight.set(key, pending);
 		}
-		cache.set(key, { at: now, ids });
+		ids = await pending;
 	}
 	const env = fallback(h);
 	return { google: ids.google || env.google, apple: ids.apple || env.apple };
@@ -70,4 +86,5 @@ function fallback(host: string): SocialSignInIds {
 /** Test seam. */
 export function clearSocialSignInCache(): void {
 	cache.clear();
+	inflight.clear();
 }
