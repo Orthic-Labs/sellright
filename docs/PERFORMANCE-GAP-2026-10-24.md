@@ -152,4 +152,57 @@ workers, a tuned Postgres) are small.
 
 <!-- STOREFRONT TABLE -->
 
-<!-- ADMIN TABLE -->
+## 7. Admin → API → Postgres, per screen
+
+Counted by reading handlers; "SQL" includes BEGIN, `set_config`, COMMIT (3) and excludes the per-request
+admin principal lookup (one `pool.query`, plus an UPDATE at most once a minute). React Query defaults are
+`retry: 1`, `refetchOnWindowFocus: false`, `staleTime: 15 s` (`packages/admin/src/main.tsx:67`), so there
+is no polling and no focus refetch; returning to a screen after 15 s refetches it. The iOS app has no
+polling either and debounces its searches at 300 ms.
+
+| Screen | Calls | SQL per call (approx) | What hurts |
+|---|---|---|---|
+| Login → shell | `setup/status`, `login`, `me`, full reload, `setup/status`, **`me` again** | 1, 8–12, 0, 1, 0 | duplicate `/me` after login (`Login.tsx:49`) |
+| Global search | `GET /search` **per keystroke**, no debounce | 6 | three `ILIKE` queries; only `product.name` has a trigram index (`Layout.tsx:125`) |
+| Dashboard | `dashboard`, then `reports/sales?days=30` **sequentially** | 9, 4 | whole store config JSONB read for one flag; all-time SUM/COUNT over paid orders; full stock scan; **~10 correlated subqueries per open order** for pending fulfilment (`admin-dashboard.ts:39`); `coalesce(placed_at, created_at)` date predicate with no index |
+| Products list | per keystroke | 5 | 3 correlated subqueries per row, OFFSET, COUNT(*) |
+| Product open | `products/:id` then `products/:id/options` sequentially | 7–8, 5 | `select *` on product |
+| Product save | `PATCH product`, then **per changed variant** `PATCH variant` and `PATCH stock`, all sequential, then `GET product` | ~9, ~11, ~11 each, 8 | 5 variants with price and stock = 12 round trips, ~115 statements, up to 11 `catalog.product_changed` webhook deliveries, ~16 Cloudflare purges, and a manifest regeneration per stock PATCH (`ProductDetail.tsx:100-125`, `admin-products.ts:130,175,208`) |
+| Bulk stock | 1 call | 5 + ~7 per item | emit and purge per item, products repeated |
+| Inventory | per keystroke | 5 | `ILIKE` on sku/name with no trigram; ORDER BY a computed column; OFFSET + COUNT |
+| Orders list | per keystroke | 5 | **~10 correlated subqueries per row** from `paymentStatusWithBalanceSql` + `fulfillmentStatusSql` (`orders/status-sql.ts:63,87`), in both the rows and the COUNT; with a status filter they run for every live order; ORDER BY `coalesce(placed_at, created_at)` has no index; code/email `ILIKE` without trigram |
+| Order detail | `orders/:code` then `orders/:code/edit/context` sequentially | 16–18 (+8 with credit), 14–20 + N | both re-read order, lines, adjustments and amount due; `select *` from `audit_log` with JSONB; `liveEditSettlement` per history row (N+1) |
+| Fulfil | 1 call, then both detail queries refetch | ~12 + 3–4 per line | webhook and email outbox inside the transaction; `onStockChanged(slug)` without variant ids = **full** manifest rebuild |
+| Cancel | 1 call | ~35–45 across 5–7 transactions | lookup txn, config txn, credential reads, advisory lock, plan txn + main txn, Stripe call after commit, audit txn |
+| Refund | 1 call | ~40+ | gateway HTTP call inside the advisory lock (pins one of 3 lock connections), then a second `withLockedSet` |
+| Order export | 1 call | 4 | up to 50k rows × ~15 correlated subqueries, built in memory |
+| Customers list / detail | per keystroke / 4 parallel | 5 / 7, 5, ~8, 6 | `ILIKE` on email/first/last with no trigram, in rows and COUNT |
+| Blog list / open / save | 1 / 1 / 1 + list refetch | 4 / 4 / 5–6 | list unpaginated; open returns `body` and `bodyHtml`; sanitise inside the transaction |
+| SEO page | `seo/config` + `seo/sitemaps` in parallel | 4, 10 in 2 txns | **rebuilds every sitemap URL (all products, collections, posts) on every page view** (`admin-seo.ts:181`) |
+| Settings load / save | 6 parallel / 1 | 4 (full config JSONB) / ~14 in 2 txns + 2 NOTIFY | every config write does `SELECT … FOR UPDATE` on the whole blob, rewrites it, audits, then the page refetches the whole row (`admin-settings.ts:69-101,166-209`) |
+| Activity | 1 | 4 | `audit_log` has only `(entity, entity_id)`; `ORDER BY at DESC` sorts the whole store's log (`admin-reports.ts:168`) |
+| Reports | 3 parallel, re-run on every `days` change | 4 each | non-sargable `coalesce(...)` date predicate |
+
+### Admin reductions, ranked (estimates)
+
+1. **Materialise `payment_status` and `fulfillment_status` on the order row**, maintained on write. Removes
+   ~10 sub-plans per row from the orders list, its COUNT, the dashboard pending count and the export
+   (`admin.ts:373,383`, `admin-dashboard.ts:39`, `status-sql.ts:63,87`).
+2. **Debounce `SearchInput` and the global search at ~250 ms** (`components/ui.tsx:276`,
+   `Layout.tsx:125`): roughly 70–80 % fewer search requests.
+3. **One `PATCH /products/:id` carrying variants and stock**: 12 round trips and ~115 statements become
+   1–2 and ~30; webhook deliveries 11 → 1; one manifest regeneration instead of five.
+4. **Index `audit_log (store_id, at DESC)`**; project columns instead of `select *` in order detail.
+5. **Expression index `order (store_id, coalesce(placed_at, created_at) DESC) WHERE deleted_at IS NULL`**
+   plus keyset pagination; count only when filters change. Fixes orders list, reports and dashboard.
+6. **Merge order detail and edit context** (or share their reads) and drop the per-history-row
+   `liveEditSettlement` call (`admin.ts:396-510`, `order-edit-service.ts:1594-1625`).
+7. **Trigram indexes** on `customer.email/first_name/last_name`, `order.code`, `product_variant.sku/name`.
+8. **Bulk stock**: group emit and purge by product; multi-row inserts for movements and audit rows.
+9. **Dashboard**: `published` from the cached store context; 60 s roll-up of all-time KPIs; run the trend
+   query in parallel.
+10. **Settings**: one transaction with `jsonb_set`, one NOTIFY, skip no-op writes (~14 → ~6 statements).
+
+Smaller: cache the sitemap preview; remove the duplicate `/me`; paginate `GET /blog`; scope the fulfil
+`onStockChanged` to the order's variants.
+
