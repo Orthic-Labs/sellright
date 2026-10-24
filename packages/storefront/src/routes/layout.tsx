@@ -82,9 +82,10 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
 	// params unless allow-listed, so the preview token must be declared.
 	search: ['preview_token'],
-	// The shell reads these three loaders in the browser as well. With the router's default ('never') each read after
-	// load re-fetched its loader from the server, re-running it (and its API calls) on every page (#362). Their values are
-	// small and already rendered into the page.
+	// The shell reads this loader (and the auth loader below) in the browser as well. With the router's default ('never')
+	// each read after load re-fetched it from the server, re-running it and its API call on every page (#362). The value
+	// is small and already rendered into the page. The maintenance loader keeps the default on purpose: passing options
+	// makes a loader skip query-only navigations, and maintenance must be re-read on every navigation.
 	serializationStrategy: 'always',
 });
 
@@ -105,7 +106,7 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
  * for anything that gates whether a page is even servable) so a maintenance
  * window that ends mid-visit clears on the visitor's very next navigation.
  */
-export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus(), { serializationStrategy: 'always' });
+export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
 
 /** Resolve imported credentials before SSR can paint a signed-out account state. */
 export const useAuthLoader = routeLoader$(async ({ cookie, headers, url, sharedMap }) => {
@@ -203,6 +204,19 @@ export default component$(() => {
 	}));
 
 	useContextProvider(APP_STATE, state);
+
+	// Follow the session the root auth loader resolves on each navigation (e.g. /sign-in navigating on, or a sign-out):
+	// components read "signed in" from appState.customer instead of asking /auth/me again (#362). Fields the account area
+	// adds (phone) stay while it is the same customer.
+	useTask$(({ track }) => {
+		const customer = track(() => authData.value.customer);
+		if (!customer) {
+			if (state.customer.id !== CUSTOMER_NOT_DEFINED_ID) state.customer = { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' } as ActiveCustomer;
+			return;
+		}
+		const same = state.customer.id === customer.id;
+		state.customer = { ...(same ? state.customer : {}), ...customer } as ActiveCustomer;
+	});
 
 	// T3: Restore persisted country selection (qidle — lazy, no urgency)
 	useOnDocument('qidle', $(() => {

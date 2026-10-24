@@ -6,6 +6,8 @@ export interface CartShippingQuote {
  method: EligibleShippingMethods | null;
  /** The server's nearest free-shipping tier, or null. */
  freeShipping: { threshold: number; remaining: number } | null;
+ /** Set when the quote request itself failed (the null method then means "unknown", not "none"). */
+ failed?: true;
 }
 
 /**
@@ -34,6 +36,6 @@ export const fetchCartShipping = async (
   };
  } catch (e) {
   console.warn('[Cart] Server shipping quote failed:', e);
-  return { method: null, freeShipping: null };
+  return { method: null, freeShipping: null, failed: true };
  }
 };

@@ -117,8 +117,9 @@ const CheckoutContent = component$(() => {
     }
 
     // Every live cart read replaces the mirror's lines array, which re-runs this task with the same items. Re-quote only
-    // when the destination, items or coupons actually changed since the last successful quote on this page (#362).
-    const quoteKey = JSON.stringify([countryCode, items, couponCodes]);
+    // when the destination, items, coupons or totals (a repriced cart can move the free-shipping tier) changed since the
+    // last successful quote on this page (#362).
+    const quoteKey = JSON.stringify([countryCode, items, couponCodes, localCart.cart.subtotal, localCart.cart.discountTotal]);
     if (quoteKey === shippingQuoteKey.value) return;
 
     let cancelled = false;

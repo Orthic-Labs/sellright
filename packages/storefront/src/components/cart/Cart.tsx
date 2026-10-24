@@ -146,15 +146,17 @@ export default component$(() => {
 			return;
 		}
 		// The cart-open live read replaces the lines array with the same items, which re-ran this quote. Quote again only
-		// when the destination, items or coupons changed while the drawer stayed open (#362); each open quotes afresh.
-		const quoteKey = JSON.stringify([countryCode, items, couponCodes]);
+		// when the destination, items, coupons or totals changed while the drawer stayed open (#362); each open quotes afresh.
+		// Totals are part of the key: a live read that repriced the same items can move the free-shipping tier.
+		const quoteKey = JSON.stringify([countryCode, items, couponCodes, cartState.cart.subtotal, cartState.cart.discountTotal]);
 		if (quoteKey === shippingState.quoteKey) return;
 
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
-		const { method: selectedShippingMethod, freeShipping } = await fetchCartShipping(countryCode, items, couponCodes);
+		const { method: selectedShippingMethod, freeShipping, failed } = await fetchCartShipping(countryCode, items, couponCodes);
 		if (cancelled) return;
-		shippingState.quoteKey = quoteKey;
+		// A failed quote is not remembered: the next cart change (or reopen) asks again.
+		shippingState.quoteKey = failed ? '' : quoteKey;
 		appState.freeShipping = freeShipping;
 
 		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
