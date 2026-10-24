@@ -4,8 +4,8 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
-import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,nativeDemoLogin,interactiveAuthHeaders,interactiveMutationAllowed,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
+import {assertInteractiveDatabase,resolveVisitorAuth,revokeVisitorSession,provisionVisitor,removeVisitor,cleanVisitors,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
 import {verifyDemoMigrations} from './migration-gate.mjs';
 
@@ -145,43 +145,45 @@ const server=createServer(async(req,res)=>{
     const previous=traffic.get(key);const hits=previous?.minute===minute?previous.hits+1:1;
     traffic.set(key,{minute,hits});
     if(hits>1200)return json(429,{error:'Demo is busy. Please retry shortly.'});
-    if(mutation&&!sameOriginMutation(req.headers,url.host))return json(403,{error:'Same-origin request required'});
+    const sameOrigin=sameOriginMutation(req.headers,url.host);
+    // An explicit hostile/malformed Origin is never a native-client exemption.
+    if(mutation&&req.headers.origin!==undefined&&!sameOrigin)return json(403,{error:'Same-origin request required'});
     if(url.pathname==='/robots.txt'){res.end('User-agent: *\nDisallow: /\n');return;}
     if(url.pathname==='/v1/readyz'){
       const stores=await assertInteractiveDatabase(pool);
       return json(cleanupHealthy?200:503,{status:cleanupHealthy?'ok':'error',synthetic:true,interactiveAdmin:true,isolatedVisitors:true,activeVisitors:stores.length-1});
     }
-    let visitor=await visitorFor(pool,cookies(req.headers.cookie).sr_demo);
+    const auth=await resolveVisitorAuth(pool,req.headers.authorization,cookies(req.headers.cookie).sr_demo);
+    let visitor=auth.visitor;
+    if(auth.bearer&&!visitor)return json(401,{error:'Invalid or expired demo bearer token'});
+    const nativeLogin=nativeDemoLogin(req.headers,url.pathname,method);
+    if(mutation&&!sameOrigin&&!auth.bearer&&!nativeLogin)return json(403,{error:'Same-origin request required'});
     if(url.pathname==='/demo/session'&&method==='POST'){
       if(!visitor)visitor=await provision();
       if(visitor.csrf)setVisitorCookies(res,visitor,url);
       return json(200,{slug:visitor.slug,expiresAt:visitor.config.expiresAt});
     }
     if(url.pathname==='/demo/session'&&method==='GET')return json(visitor?200:401,visitor?{slug:visitor.slug,expiresAt:visitor.config.expiresAt}:{error:'Start a demo session'});
-    // The published admin credential (README: "Demo login: admin / admin").
-    // Exempt from the CSRF gate below for the same reason /demo/session is —
-    // there is no session/CSRF token yet for a visitor who hasn't logged in.
-    // A shared literal never crosses tenants: a correct guess always maps to
-    // *the caller's own* fresh-or-existing sandbox (a new store on first use,
-    // the same cookie-bound store on any later use from that browser), never
-    // to another visitor's data, because visitor identity here comes only
-    // from the still-httpOnly sr_admin cookie this response is about to set.
+    // Published admin/admin credentials only mint/reuse the caller's sandbox.
+    // Originless API login always creates a fresh visitor, never adopts cookies.
     if(url.pathname==='/v1/admin/login'&&method==='POST'){
       let body;{let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>2000)return json(413,{error:'Request too large'});chunks.push(chunk);}
         try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return json(400,{error:'Invalid request body'});}}
       if(!demoAdminCredentials(body))return json(401,{error:'invalid email or password'});
-      if(!visitor){visitor=await provision();setVisitorCookies(res,visitor,url);}
-      return json(200,{token:visitor.token,csrfToken:visitor.csrf,admin:{email:'admin'},stores:[{storeId:visitor.id,slug:visitor.slug,name:'Everyday Supply',currency:'USD',role:'manager'}]});
+      if(!sameOrigin&&(!nativeLogin||body.returnToken!==true))return json(403,{error:'Native demo login requires JSON and returnToken: true'});
+      if(!sameOrigin||!visitor){visitor=await provision();if(sameOrigin)setVisitorCookies(res,visitor,url);}
+      return json(200,{...(body.returnToken===true?{token:visitor.token}:{}),csrfToken:visitor.csrf,admin:{email:'admin'},stores:[{storeId:visitor.id,slug:visitor.slug,name:'Everyday Supply',currency:'USD',role:'manager'}]});
     }
     const csrf=cookies(req.headers.cookie).sr_csrf;
-    if(mutation&&(!visitor||!csrf||hash(csrf)!==visitor.config.csrfHash||req.headers['x-csrf-token']!==csrf))return json(403,{error:'Demo session or CSRF token is invalid'});
+    if(mutation&&!interactiveMutationAllowed(req.headers,url.host,auth,csrf))return json(403,{error:'Demo session or CSRF token is invalid'});
     if(url.pathname==='/demo/reset'&&method==='POST'){
       await serial(visitor.id,()=>removeVisitor(pool,visitor.id));
-      res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
+      if(!auth.bearer)res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
       return json(200,{reset:true});
     }
     if(url.pathname==='/v1/admin/logout'&&method==='POST'){
-      res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
+      await serial(visitor.id,()=>revokeVisitorSession(pool,visitor));
+      if(!auth.bearer)res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
       return json(200,{ok:true});
     }
     if(url.pathname==='/enter'&&method==='GET'){res.writeHead(303,{location:'/admin'});res.end();return;}
@@ -192,8 +194,7 @@ const server=createServer(async(req,res)=>{
       if(mutation){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>12000)return json(413,{error:'Request too large'});chunks.push(chunk);}body=JSON.parse(Buffer.concat(chunks).toString()||'{}');if(!interactiveBody(url.pathname,body))return json(400,{error:'Only bounded demo data is accepted'});}
       const execute=async()=>{
         if(mutation)await bounded(visitor);
-        const headers={cookie:`sr_admin=${visitor.token}; sr_csrf=${csrf??''}`};
-        if(csrf)headers['x-csrf-token']=csrf;
+        const headers=interactiveAuthHeaders(visitor,csrf,auth.bearer);
         if(req.headers['idempotency-key'])headers['idempotency-key']=String(req.headers['idempotency-key']).slice(0,100);
         if(url.pathname==='/v1/shop/cart/estimate'){
           const cartResponse=await call(visitor,'/v1/shop/cart/'+body.cartToken);

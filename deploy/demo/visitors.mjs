@@ -54,6 +54,21 @@ export async function visitorFor(pool, token) {
   if (!row || Date.parse(row.config.expiresAt) <= Date.now()) return null;
   return {...row, token};
 }
+// An explicit Authorization header owns authentication, including failure:
+// malformed/expired bearer credentials must never adopt an ambient cookie.
+export async function resolveVisitorAuth(pool, authorization, cookieToken) {
+  const bearer = authorization !== undefined;
+  const match = typeof authorization === 'string' ? /^Bearer[ \t]+([^ \t]+)$/i.exec(authorization) : null;
+  const token = bearer ? match?.[1] : cookieToken;
+  return {bearer, visitor: await visitorFor(pool, token)};
+}
+
+// Logout revokes only this credential. Tenant data remains for normal expiry
+// cleanup; removing a sandbox is the separate, explicitly requested reset.
+export async function revokeVisitorSession(pool, visitor) {
+  await scoped(pool, visitor.id, c => c.query('DELETE FROM session WHERE token_hash=$1 AND admin_user_id=$2', [hash(visitor.token), visitor.admin_id]));
+}
+
 export async function provisionVisitor(pool) {
   const id = randomUUID(); const slug = 'demo-v-' + id.replaceAll('-', '');
   const token = randomBytes(32).toString('hex'); const csrf = randomBytes(24).toString('hex');

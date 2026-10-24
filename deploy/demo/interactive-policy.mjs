@@ -1,4 +1,5 @@
 import {Readable} from 'node:stream';
+import {createHash} from 'node:crypto';
 import {pipeline} from 'node:stream/promises';
 
 const id = '[a-zA-Z0-9_-]+';
@@ -182,15 +183,42 @@ export function interactiveBody(path, body) {
 // admin_user.password_hash, so a literal "admin"/"admin" pair is rejected by
 // schema validation alone, independent of this function ever running there.
 export function demoAdminCredentials(body) {
-  return !!(only(body, ['email', 'password']) &&
+  return !!(only(body, ['email', 'password', 'returnToken']) &&
+    (body.returnToken === undefined || typeof body.returnToken === 'boolean') &&
     typeof body.email === 'string' && typeof body.password === 'string' &&
     body.email.trim().toLowerCase() === 'admin' && body.password === 'admin');
+}
+
+// Only an explicit JSON API login can provision without a browser Origin.
+// Fetch metadata marks browser traffic; it must keep the same-origin gate.
+export function nativeDemoLogin(headers, path, method) {
+  return path === '/v1/admin/login' && method === 'POST' &&
+    headers.origin === undefined && headers['sec-fetch-site'] === undefined &&
+    /^application\/json(?:\s*;|$)/i.test(headers['content-type'] ?? '');
+}
+
+// Call only after resolveVisitorAuth has validated the explicit bearer.
+// Never copy client tenant/auth/cookie headers into the in-process API call.
+export function interactiveAuthHeaders(visitor, csrf, bearer) {
+  return bearer ? {authorization: `Bearer ${visitor.token}`} :
+    {cookie: `sr_admin=${visitor.token}; sr_csrf=${csrf ?? ''}`, ...(csrf ? {'x-csrf-token': csrf} : {})};
 }
 
 export function sameOriginMutation(headers, host) {
   if (!headers.origin) return false;
   try { const origin=new URL(headers.origin);return ['http:','https:'].includes(origin.protocol)&&origin.host === host && !['cross-site', 'none'].includes(headers['sec-fetch-site']); }
   catch { return false; }
+}
+
+// Session validation precedes this guard. Explicit bearer clients use the
+// validated capability; ambient cookies still require Origin + double submit.
+export function interactiveMutationAllowed(headers, host, auth, csrf) {
+  const sameOrigin = sameOriginMutation(headers, host);
+  if (headers.origin !== undefined && !sameOrigin) return false;
+  if (auth.bearer) return !!auth.visitor;
+  return !!(sameOrigin && auth.visitor && typeof csrf === 'string' && csrf &&
+    headers['x-csrf-token'] === csrf &&
+    createHash('sha256').update(csrf).digest('hex') === auth.visitor.config.csrfHash);
 }
 
 // Host header allowlist for the demo's own HTTP entry point. `bindHost` is

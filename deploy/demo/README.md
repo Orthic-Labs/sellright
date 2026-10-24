@@ -26,9 +26,11 @@ This is a product evaluation environment, not gateway acceptance evidence.
 
 - Only the dedicated `sellright_demo` database is accepted. The runtime role
   must remain non-superuser/non-BYPASSRLS. Never use a merchant/development clone.
-- An HttpOnly random visitor token resolves to a server-owned tenant and expiry.
-  Client tenant headers, authorization headers and admin cookies cannot select
-  another visitor's store. CSRF plus same-origin checks protect all writes.
+- A random visitor token resolves to its server-owned tenant & expiry through a
+  hashed session lookup. Browser cookies require same-origin plus CSRF for writes;
+  validated explicit bearer tokens support native clients without ambient cookies.
+  Client tenant headers cannot override either identity. Invalid Authorization
+  fails closed, even when another valid visitor cookie accompanies it.
 - Every new tenant and generated admin account expires after one hour. At most
   40 retained visitor tenants are allowed. Per-visitor caps bound orders, carts,
   products, variants, discounts and audit activity; the edge also has a request cap.
@@ -62,6 +64,22 @@ This is a product evaluation environment, not gateway acceptance evidence.
   enqueue synthetic outbox records, but no dispatcher runs and reset removes them.
 - No database migration or extra runtime dependency is required. The provisioner
   uses the existing runtime DML grants, never the owner connection.
+
+### Native Admin Login
+
+Native clients use the normal admin API shape: POST `/v1/admin/login` with
+`Content-Type: application/json` & `{"email":"admin","password":"admin","returnToken":true}`.
+Originless login always creates a fresh isolated sandbox, ignores ambient cookies
+& returns its bearer token without setting browser cookies. Send that token as
+`Authorization: Bearer <token>` on subsequent requests; tenant selection comes
+from that token, including when a different `X-Store-Slug` is supplied.
+
+Browser login retains same-origin protection & returns a token only when
+`returnToken:true` is explicitly requested. Every Origin-present mutation still
+requires a valid same-origin Origin, even with bearer authentication. Cookie
+mutations also require the matching CSRF cookie/header pair. POST
+`/v1/admin/logout` revokes the authenticated token, retaining sandbox data until
+expiry cleanup. POST `/demo/reset` deletes only the authenticated sandbox.
 
 ### Verification and Rollout
 

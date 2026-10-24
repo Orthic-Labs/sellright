@@ -42,7 +42,9 @@ test('demoAdminCredentials accepts only the published literal, case-insensitive 
   assert.equal(demoAdminCredentials({ email: 'admin', password: 'admin' }), true);
   assert.equal(demoAdminCredentials({ email: 'Admin', password: 'admin' }), true);
   assert.equal(demoAdminCredentials({ email: ' admin ', password: 'admin' }), true);
+  for (const returnToken of [true, false]) assert.equal(demoAdminCredentials({email:'admin', password:'admin', returnToken}), true);
   for (const bad of [
+    ...[null, 1, 'true', {}, []].map(returnToken => ({email:'admin', password:'admin', returnToken})),
     { email: 'admin', password: 'wrong' },
     { email: 'root', password: 'admin' },
     { email: 'admin@demo.invalid', password: 'admin' },
