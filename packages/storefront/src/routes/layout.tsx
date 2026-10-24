@@ -82,6 +82,10 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
 	// params unless allow-listed, so the preview token must be declared.
 	search: ['preview_token'],
+	// The shell reads these three loaders in the browser as well. With the router's default ('never') each read after
+	// load re-fetched its loader from the server, re-running it (and its API calls) on every page (#362). Their values are
+	// small and already rendered into the page.
+	serializationStrategy: 'always',
 });
 
 // onRequest (not onGet): the policy must cover actions (POST) as well as documents and loader data (GET).
@@ -101,7 +105,7 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
  * for anything that gates whether a page is even servable) so a maintenance
  * window that ends mid-visit clears on the visitor's very next navigation.
  */
-export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
+export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus(), { serializationStrategy: 'always' });
 
 /** Resolve imported credentials before SSR can paint a signed-out account state. */
 export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
@@ -123,7 +127,7 @@ export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
 		if (srErrorStatus(error) !== 401) throw error;
 		return { isAuthenticated: false, countryCode, customer: null };
 	}
-});
+}, { serializationStrategy: 'always' });
 
 
 // Component to render the global login modal

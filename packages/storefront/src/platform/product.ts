@@ -19,6 +19,11 @@ import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
 import { hasView } from '~/platform/gateway';
 
+/** The page reads these loaders in the browser too (render and head refresh). With the router's default ('never') each
+ *  read after load re-fetched the loader, running it and its API calls again (#362). Their values are already rendered
+ *  into the page; the product carries the fail-closed stock shell only (live stock is read in the browser). */
+const PAGE_LOADER_OPTIONS = { serializationStrategy: 'always' } as const;
+
 export interface ProductLoaderResult {
   product: CatalogProduct;
   source: 'manifest' | 'network';
@@ -66,23 +71,23 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url 
     // File doesn't exist or failed to parse — fall back to the live API.
   }
 
+  // No manifest: take the product id from the detail response and the rating from the reviews endpoint (null on any
+  // failure — reviews must never block or fail the PDP shell). Both reads start together, not one after the other (#362).
+  const reviewsRead = getProductReviews(slug, { limit: 1 }).catch(() => null);
   try {
     const product = await getProductDetail(slug);
     if (!product) {
       status(404);
       return fail(404, { message: `Product not found: ${slug}` });
     }
-    // No manifest: take the product id from the detail response and the
-    // rating from the reviews endpoint (null on any failure — reviews must
-    // never block or fail the PDP shell).
-    const reviews = await getProductReviews(slug, { limit: 1 }).catch(() => null);
+    const reviews = await reviewsRead;
     return { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
   } catch (error) {
     console.error('Product loader error:', error);
     status(404);
     return fail(404, { message: `Product not found: ${slug}` });
   }
-});
+}, PAGE_LOADER_OPTIONS);
 
 // Product JSON-LD proxied live from the SellRight API
 // (/v1/shop/seo/jsonld/products/{slug}) — offers.price/availability are
@@ -96,7 +101,7 @@ export const useProductJsonLd = routeLoader$(async ({ params, url }) => {
   const { slug } = cleanUpParams(params);
   if (!slug) return null;
   return jsonLdProduct(slug);
-});
+}, PAGE_LOADER_OPTIONS);
 
 // ─────────────────────────────────────────────────────────────────
 // Head — identical to original (preserves generateImagePreloadLinks for LCP)

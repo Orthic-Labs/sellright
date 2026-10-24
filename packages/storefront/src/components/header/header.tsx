@@ -82,7 +82,8 @@ export default component$(() => {
 					<nav class="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center gap-10">
 						<Link
 							href="/shop"
-							prefetch
+							// Bundles only: data prefetch ran every route loader (layout identity/maintenance/auth + page data) per visible link (#362).
+							prefetch="js"
 							class={`header-nav-link ${location.url.pathname.startsWith('/shop') ? 'active' : ''}`}
 						>
 							Shop

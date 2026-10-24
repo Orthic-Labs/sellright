@@ -20,4 +20,6 @@ export const useRelatedProducts = routeLoader$(async ({ params }): Promise<Relat
 	} catch {
 		return EMPTY;
 	}
-});
+// Serialized into the page (names, links, images, prices: no availability). With the router's default ('never') the
+// browser re-fetched it after load, and that request re-ran the product route's loaders and their API calls (#362).
+}, { serializationStrategy: 'always' });

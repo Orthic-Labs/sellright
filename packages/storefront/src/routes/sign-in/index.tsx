@@ -20,6 +20,8 @@ export const useGoogleClientId = routeLoader$(async ({ request }) =>
 	(await socialSignInIdsForHost(
 		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
 	)).google,
+	// Serialized into the page: read after load, the default ('never') re-fetched it and re-ran the route's loaders (#362).
+	{ serializationStrategy: 'always' },
 );
 
 /** Empty = Apple sign-in off for THIS request's host (same per-host decision the CSP makes in entry.express.tsx). */
@@ -27,6 +29,8 @@ export const useAppleClientId = routeLoader$(async ({ request }) =>
 	(await socialSignInIdsForHost(
 		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
 	)).apple,
+	// Serialized into the page: read after load, the default ('never') re-fetched it and re-ran the route's loaders (#362).
+	{ serializationStrategy: 'always' },
 );
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

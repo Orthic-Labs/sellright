@@ -153,7 +153,8 @@ export default component$((props: ProductCardProps) => {
 	return (
 		<Link
 			href={props.href ?? `/products/${slug}/`}
-			prefetch
+			// Bundles only: data prefetch ran every route loader (layout identity/maintenance/auth + page data) per visible link (#362).
+			prefetch="js"
 			class="group block active:scale-[0.97] transition-transform duration-150"
 			onClick$={handleCardClick}
 		>

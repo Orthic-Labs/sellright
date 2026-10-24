@@ -6,6 +6,15 @@ import { jsonLdOrganization } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { getProductBySlug, search } from '~/providers/shop/products/products';
 import { srCollections } from '~/utils/sellright';
+import { hasView } from '~/platform/gateway';
+
+/** A brand `route.home` view renders BrandHomeMount (identity, featured tiles, spotlight), never the base page's spotlight,
+ *  feature strip or collection links: their loaders return empty without any I/O there (#362). */
+const brandHome = () => hasView('route.home');
+
+/** The home page reads its loaders in the browser too; with the router's default ('never') each read after load
+ *  re-fetched the loader and re-ran its API calls (#362). Their values are already rendered into the page. */
+const HOME_LOADER_OPTIONS = { serializationStrategy: 'always' } as const;
 
 /* Optional homepage spotlight product — configure VITE_HOME_SPOTLIGHT_SLUG to
  * feature a real catalog item. Unset by default so a fresh install never
@@ -24,7 +33,7 @@ const FEATURE_PRODUCT_SLUG = (import.meta.env.VITE_HOME_FEATURE_SLUG as string |
 // (/v1/shop/seo/jsonld/organization) — never generated locally from
 // theme.config.ts, so the schema always matches whatever the backend store
 // config says (siteUrl, address, social links, etc).
-export const useOrganizationJsonLd = routeLoader$(async () => jsonLdOrganization());
+export const useOrganizationJsonLd = routeLoader$(async () => jsonLdOrganization(), HOME_LOADER_OPTIONS);
 
 async function fetchHomeProduct(slug: string) {
   if (!slug) return null;
@@ -62,14 +71,14 @@ async function fetchHomeProduct(slug: string) {
   }
 }
 
-export const usePreorderProduct = routeLoader$(async () => fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG));
+export const usePreorderProduct = routeLoader$(async () => (brandHome() ? null : fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG)), HOME_LOADER_OPTIONS);
 
 // Distinct from usePreorderProduct on purpose — same slug would render the
 // same product in both the spotlight section AND HomeTeeSection.
 export const useFeatureProduct = routeLoader$(async () => {
-  if (!FEATURE_PRODUCT_SLUG || FEATURE_PRODUCT_SLUG === SPOTLIGHT_PRODUCT_SLUG) return null;
+  if (brandHome() || !FEATURE_PRODUCT_SLUG || FEATURE_PRODUCT_SLUG === SPOTLIGHT_PRODUCT_SLUG) return null;
   return fetchHomeProduct(FEATURE_PRODUCT_SLUG);
-});
+}, HOME_LOADER_OPTIONS);
 
 /** Live storefront catalog — 4 tiles, same data/shape as the shop grid
  * (adaptSearch), so a demo/fresh install always has real, honest product
@@ -81,18 +90,19 @@ export const useFeaturedProducts = routeLoader$(async () => {
   } catch {
     return [];
   }
-});
+}, HOME_LOADER_OPTIONS);
 
 /** Collection links (Desk & Paper / Everyday Carry / At Home on the seeded
  * demo catalog) — whatever the store actually has, never a hardcoded list. */
 export const useHomeCollections = routeLoader$(async () => {
+  if (brandHome()) return [];
   try {
     const res = await srCollections();
     return (res?.items ?? []).filter((c) => c.products > 0).slice(0, 6);
   } catch {
     return [];
   }
-});
+}, HOME_LOADER_OPTIONS);
 
 /** SEO head body for the homepage. The route's `head` resolves the loaders and passes the hero preload href in, so the
  *  brand-replaceable hero asset import stays in the presentation file. null (a brand home view, which preloads its own hero
