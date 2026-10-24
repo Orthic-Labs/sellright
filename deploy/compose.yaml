@@ -63,12 +63,12 @@ services:
         ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
           GRANT EXECUTE ON FUNCTIONS TO sellright_app;
         -- #358 / #360: bound how long any runtime session can hold a connection
-        -- (docs/runbooks/postgres-app-role.md). The API overrides these per pool:
+        -- (values from docs/runbooks/postgres-app-role.md). The API overrides these per pool:
         -- the jobs pool allows 120 s statements, and the advisory-lock pool waits
         -- on workflow locks by design (statement and lock timeouts off).
         ALTER ROLE sellright_app SET statement_timeout = '30s';
-        ALTER ROLE sellright_app SET lock_timeout = '10s';
-        ALTER ROLE sellright_app SET idle_in_transaction_session_timeout = '30s';
+        ALTER ROLE sellright_app SET lock_timeout = '5s';
+        ALTER ROLE sellright_app SET idle_in_transaction_session_timeout = '15s';
 
         -- SR-01/SR-02 follow-up: least-privilege owner for the cross-tenant
         -- SECURITY DEFINER resolver seam (resolve_store_for_gateway_event,

@@ -87,6 +87,20 @@ ALTER ROLE sellright_app IN DATABASE sellright_dev
 If a separate test database is provisioned, repeat the same `IN DATABASE`
 statements for it. New sessions are required before the settings take effect.
 
+The compose stack applies the same three settings to `sellright_app` in its `db-init` step (#358 / #360). The API
+overrides them per connection pool, so each limit only bounds the workload it is meant for:
+
+| Pool | Env | Session settings |
+|---|---|---|
+| requests | `PGPOOL_MAX` (10) | role defaults above |
+| jobs (scheduled passes) | `PGJOBS_POOL_MAX` (4) | `statement_timeout = 120s` (a job may scan a whole store) |
+| locks (scheduler lease, readiness probe) | `PGLOCKS_POOL_MAX` (4) | role defaults above |
+| advisory (payment/refund workflow locks) | `ceil(PGPOOL_MAX/4)` | `statement_timeout = 0`, `lock_timeout = 0` (waits on workflow locks by design) |
+
+The store-cache LISTEN session is one more dedicated connection. One API process therefore opens at most
+`PGPOOL_MAX + PGJOBS_POOL_MAX + PGLOCKS_POOL_MAX + ceil(PGPOOL_MAX/4) + 1` connections; keep the sum over every
+process on the cluster under `max_connections`. Live per-pool counts are on `GET /v1/readyz`.
+
 ## Resolver role bootstrap (SR-01/SR-02 follow-up)
 
 `resolve_store_for_gateway_event` (0053/0060) and `resolve_store_for_storekit_bundle`
