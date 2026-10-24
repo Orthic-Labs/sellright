@@ -32,11 +32,11 @@ const EnvSchema = z.object({
   // under normal load while still bounding worst-case request latency.
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
   // #358 / #360: scheduled jobs never draw from the request pool above. Their transactions run on their own small
-  // pool (a pass holds at most two connections; JOBS_CONCURRENCY + JOBS_CRITICAL_CONCURRENCY passes run at once,
-  // so the default 6 leaves headroom), and job leadership is a
+  // pool (a pass holds at most two connections and JOBS_CONCURRENCY + JOBS_CRITICAL_CONCURRENCY passes run at once,
+  // so the default 8 = 2 × (2 + 2) covers the worst case), and job leadership is a
   // scheduler_lease row claimed through the short-statement locks pool (also the readiness probe), so a lease
   // holds no connection while the job works. Payment workflow advisory locks keep their separate pool.
-  PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(6),
+  PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(8),
   PGLOCKS_POOL_MAX: z.coerce.number().int().positive().default(4),
   // Payment/refund workflow advisory locks (#360 N1): how long one waits for a workflow lock another request holds
   // (the lock wait is bounded by Postgres, the connection acquisition by PGPOOL_CONNECTION_TIMEOUT_MS), and when a

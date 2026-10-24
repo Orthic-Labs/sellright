@@ -21,10 +21,12 @@ vi.mock('./leader-lock.js', () => ({
   },
 }));
 import { startJobScheduler, type JobScheduler } from './scheduler.js';
+import { resetJobAdmission } from './admission.js';
 let scheduler: JobScheduler | undefined;
 afterEach(async () => {
   await scheduler?.stop();
   scheduler = undefined;
+  resetJobAdmission(); // createApp does this at every start; a stopped admission stays stopped otherwise
   vi.useRealTimers();
   vi.clearAllMocks();
   mocks.publishAllowed = false;

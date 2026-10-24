@@ -59,7 +59,7 @@
 import { env } from '../env.js';
 import { publishCatalogManifest } from './catalog.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
-import { _resetJobAdmissionForTest, jobAdmission } from '../jobs/admission.js';
+import { _resetJobAdmissionForTest, AdmissionStoppedError, jobAdmission } from '../jobs/admission.js';
 import { detachFromPass } from '../db/client.js';
 import { resolveStore } from '../store-context.js';
 import { markManifestRegenerationPending, clearManifestRegenerationPending } from './manifest-pending.js';
@@ -159,6 +159,8 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
     // that instance's own run is responsible for the marker, not this one.
     if (result && token !== null) await clearManifestRegenerationPending(storeId, token);
   } catch (e) {
+    // Shutting down: the durable marker stays, the next run's drain publishes.
+    if (e instanceof AdmissionStoppedError) return;
     logErr.error('stock-triggered catalog manifest regeneration failed', e, { storeSlug });
     // Marker deliberately left in place — catalog-manifest-drain will retry.
   } finally {

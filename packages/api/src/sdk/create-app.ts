@@ -25,6 +25,7 @@ import { assertRuntimeRoleUnprivileged, checkConnectionBudget, checkSchedulerLea
 import * as engineSchema from '../db/schema.js';
 import { closeEngineResources, markEngineClosed } from '../resources.js';
 import { startJobScheduler, type JobScheduler, type PluginJob } from '../jobs/scheduler.js';
+import { resetJobAdmission } from '../jobs/admission.js';
 import { startStoreCacheInvalidationListener, stopStoreCacheInvalidationListener } from '../store-context.js';
 import { log, err as logError, resetLogger } from '../lib/logger.js';
 import { fingerprint } from './fingerprint.js';
@@ -303,6 +304,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
             }
           }
           if (phase !== 'created') throw new EngineSetupError(`start() interrupted in phase ${phase}`, 'ENGINE_PHASE');
+          resetJobAdmission(); // a fresh admission for this run (a previous run's stop() leaves it stopped)
           scheduler = startJobScheduler(pluginJobs);
           // #360 N7: log this process's connection maximum; warn when it exceeds the configured budget, the role's
           // connection limit or the cluster's max_connections. Best-effort, never blocks startup.

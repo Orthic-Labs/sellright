@@ -330,12 +330,14 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
       state.stopped = true;
       for (const t of state.timers) clearTimeout(t);
       state.timers.clear();
-      // #360 L1: queued passes (scheduled, startup and stock-triggered alike) are rejected and running ones waited
-      // for through the shared admission, which tracks every pass it admitted.
+      // ONE deadline for the whole stop (pm2's kill_timeout is 10 s). #360 L1: queued passes (scheduled, startup and
+      // stock-triggered alike) are rejected and running ones waited for through the shared admission, which tracks
+      // every pass it admitted; the scheduler's own wrappers get whatever time is left.
+      const end = Date.now() + timeoutMs;
       await jobAdmission().stop(timeoutMs);
       if (state.inflight.size === 0) return;
       let timer: NodeJS.Timeout | undefined;
-      const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
+      const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(0, end - Date.now())); });
       await Promise.race([Promise.allSettled([...state.inflight]).then(() => undefined), deadline]);
       clearTimeout(timer);
     },

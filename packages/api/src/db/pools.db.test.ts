@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
-import { checkConnectionBudget, closePools, currentLeaseSignal, inJobScope, LeaseLostError, LOCKS_QUERY_TIMEOUT_MS, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
+import { schedulerLeaseAccess, checkConnectionBudget, closePools, currentLeaseSignal, inJobScope, LeaseLostError, LOCKS_QUERY_TIMEOUT_MS, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
 import { afterCommit } from './after-commit.js';
 import { emailWakeIdleForTests, setEmailWakeEnabledForTests, wakeEmailDelivery } from '../email/wake.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
@@ -192,8 +192,12 @@ describe('detached work escapes the pass (#360 H1)', () => {
         return withStore(STORE, (tx) => tx.execute(sql`UPDATE scheduler_lease SET holder = 'late-commit' WHERE name = 'fence-probe'`));
       })();
     });
+    const warn = vi.spyOn(log, 'warn');
     open(); // the lease row is gone by now
     await expect(late).resolves.toBeDefined();
+    // The leak detector names the escaped work (re-review item 5).
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('escaped detachFromPass'))).toBe(true);
+    warn.mockRestore();
     const probe = await locksPool.query<{ holder: string }>("SELECT holder FROM scheduler_lease WHERE name = 'fence-probe'");
     expect(probe.rows[0]!.holder).toBe('late-commit');
   });
@@ -292,6 +296,22 @@ describe('bounded failure modes', () => {
       expect(warn.mock.calls.some(([msg]) => String(msg).includes('db connection budget exceeded'))).toBe(true);
     } finally {
       warn.mockRestore();
+    }
+  });
+});
+
+describe('scheduler_lease grants (#360 L5)', () => {
+  it('requires ALL of SELECT, INSERT, UPDATE and DELETE: a SELECT-only role is denied', async () => {
+    const role = `sr_probe_select_${randomUUID().slice(0, 8)}`;
+    await pool.query(`CREATE ROLE ${role} NOLOGIN`);
+    try {
+      await pool.query(`GRANT SELECT ON scheduler_lease TO ${role}`);
+      expect(await schedulerLeaseAccess(role)).toBe('denied');
+      await pool.query(`GRANT INSERT, UPDATE, DELETE ON scheduler_lease TO ${role}`);
+      expect(await schedulerLeaseAccess(role)).toBe('ok');
+    } finally {
+      await pool.query(`REVOKE ALL ON scheduler_lease FROM ${role}`);
+      await pool.query(`DROP ROLE ${role}`);
     }
   });
 });

@@ -118,10 +118,11 @@ export function createAdmission(opts: {
 
 let shared: Admission | undefined;
 
-/** The process-wide admission (created on first use, and again after a stop, from JOBS_CONCURRENCY,
- *  JOBS_CRITICAL_CONCURRENCY and JOBS_PASS_DEADLINE_MS). */
+/** The process-wide admission (created on first use from JOBS_CONCURRENCY, JOBS_CRITICAL_CONCURRENCY and
+ *  JOBS_PASS_DEADLINE_MS). Once stopped it stays stopped — every late caller gets AdmissionStoppedError — until
+ *  resetJobAdmission() (createApp start). */
 export function jobAdmission(): Admission {
-  if (!shared || shared.stopped) {
+  if (!shared) {
     shared = createAdmission({
       concurrency: env.JOBS_CONCURRENCY ?? 2,
       criticalConcurrency: env.JOBS_CRITICAL_CONCURRENCY ?? 2,
@@ -131,10 +132,13 @@ export function jobAdmission(): Admission {
   return shared;
 }
 
-/** Test-only: drop the process-wide admission so a suite that left passes hanging starts from free slots. */
-export function _resetJobAdmissionForTest(): void {
+/** Engine start (createApp): a fresh admission for this run, replacing one a previous run stopped. */
+export function resetJobAdmission(): void {
   shared = undefined;
 }
+
+/** Test-only alias: drop the process-wide admission so a suite that left passes hanging starts from free slots. */
+export const _resetJobAdmissionForTest = resetJobAdmission;
 
 /** Readiness numbers (GET /v1/readyz): passes holding a slot, and how many of them are past their deadline. */
 export function admissionGauges(): { active: number; overdue: number } {

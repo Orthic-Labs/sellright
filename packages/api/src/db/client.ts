@@ -65,9 +65,11 @@ export function initPools(e: Env = getEnv()): Pool {
       max,
       idleTimeoutMillis: e.PGPOOL_IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: e.PGPOOL_CONNECTION_TIMEOUT_MS,
-      // TCP keepalive (#360 M1): a half-open socket (peer gone without FIN) is detected by the kernel instead of
-      // pinning a pooled connection until the OS gives up minutes later.
+      // TCP keepalive (#360 M1): probes start after 10 s idle, so a half-open socket (peer gone without FIN) is
+      // detected after the kernel's tcp_keepalive_intvl × tcp_keepalive_probes rather than its 2 h default idle.
+      // Queries in flight on such a socket are bounded by the per-pool query ceilings below.
       keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
       ...extra,
     });
     // 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
@@ -168,16 +170,26 @@ export async function checkConnectionBudget(e: Env = getEnv()): Promise<void> {
   else log.info('db connection budget', fields);
 }
 
+/** Whether `role` (default: the connected role) may SELECT, INSERT, UPDATE and DELETE on scheduler_lease — ALL four;
+ *  has_table_privilege with a comma list means ANY of them, so each privilege is checked on its own. */
+export async function schedulerLeaseAccess(role?: string): Promise<'ok' | 'missing' | 'denied'> {
+  const { rows } = await locksPool.query<{ ok: boolean | null }>(
+    `SELECT CASE WHEN to_regclass('public.scheduler_lease') IS NULL THEN NULL
+       ELSE (SELECT bool_and(has_table_privilege(coalesce($1, current_user), 'public.scheduler_lease', p))
+             FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p) END AS ok`,
+    [role ?? null],
+  );
+  const ok = rows[0]?.ok;
+  return ok === null || ok === undefined ? 'missing' : ok ? 'ok' : 'denied';
+}
+
 /** Boot check (createApp, best-effort; #360 L5): job leadership needs the runtime role to read and write
  *  scheduler_lease. A missing grant (a migration run as a role whose default privileges don't cover the app role)
  *  would make every scheduled pass fail; say so once, loudly, at boot. */
 export async function checkSchedulerLeaseAccess(): Promise<void> {
-  const { rows } = await locksPool.query<{ ok: boolean | null }>(
-    "SELECT CASE WHEN to_regclass('public.scheduler_lease') IS NULL THEN NULL ELSE has_table_privilege(current_user, 'public.scheduler_lease', 'SELECT,INSERT,UPDATE,DELETE') END AS ok",
-  );
-  const ok = rows[0]?.ok;
-  if (ok === null) logErr.error('scheduler_lease is missing (migration 0112 not applied): every leader-locked job will fail');
-  else if (!ok) logErr.error('the runtime role lacks SELECT/INSERT/UPDATE/DELETE on scheduler_lease: every leader-locked job will fail; grant it as the owner');
+  const access = await schedulerLeaseAccess();
+  if (access === 'missing') logErr.error('scheduler_lease is missing (migration 0112 not applied): every leader-locked job will fail');
+  else if (access === 'denied') logErr.error('the runtime role lacks SELECT, INSERT, UPDATE or DELETE on scheduler_lease: every leader-locked job will fail; grant all four as the owner');
 }
 
 /** #360 N2: a scheduler lease the current job pass holds (jobs/leader-lock.ts). While one is in scope, every store
@@ -212,7 +224,12 @@ async function assertLeasesHeld(client: PoolClient, fences: readonly LeaseFence[
     if (f.lost) throw new LeaseLostError(f.name);
     // A fence still in scope after its pass ended belongs to detached work that escaped detachFromPass(); the pass
     // gave the lease back on purpose, so that work is not refused (#360 H1). Only a LOST lease refuses commits.
-    if (f.released) continue;
+    if (f.released) {
+      // Leak detector: this commit passes only because its pass already gave the lease back, so this transaction
+      // belongs to work that escaped detachFromPass(). Harmless now, but a missing detach point to fix.
+      log.warn('commit after its pass released the lease: detached work escaped detachFromPass()', { lease: f.name });
+      continue;
+    }
     // FOR SHARE: a competing claim (INSERT … ON CONFLICT DO UPDATE) waits for this COMMIT, so the lease cannot change
     // hands between this check and the commit. clock_timestamp(), not now(): the transaction may be old.
     const r = await client.query(

@@ -6,17 +6,17 @@ import { connectionBudget } from './client.js';
 import type { Env } from '../env.js';
 
 // #360 N7: the per-process maximum counts every pool plus the tenant resolver, the webhook pass and the listener.
-const env = (requests: number) => ({ PGPOOL_MAX: requests, PGJOBS_POOL_MAX: 6, PGLOCKS_POOL_MAX: 4 }) as Env;
+const env = (requests: number) => ({ PGPOOL_MAX: requests, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4 }) as Env;
 
 describe('connectionBudget', () => {
-  it('is 28 per process at the default request pool of 10', () => {
+  it('is 30 per process at the default request pool of 10', () => {
     const b = connectionBudget(env(10));
-    expect(b.total).toBe(28);
-    expect(b.parts).toEqual({ requests: 10, jobs: 6, locks: 4, advisory: 3, tenantResolution: 2, webhookPass: 2, listener: 1 });
+    expect(b.total).toBe(30);
+    expect(b.parts).toEqual({ requests: 10, jobs: 8, locks: 4, advisory: 3, tenantResolution: 2, webhookPass: 2, listener: 1 });
   });
 
-  it('is 39 at a request pool of 20 (the advisory pool caps at 4)', () => {
-    expect(connectionBudget(env(20)).total).toBe(39);
+  it('is 41 at a request pool of 20 (the advisory pool caps at 4)', () => {
+    expect(connectionBudget(env(20)).total).toBe(41);
   });
 
   it('counts every Pool and Client the serving process constructs', () => {
