@@ -8,6 +8,8 @@ export default {
   version: "0.2.0",
   packageManager: "pnpm",
   deps: { workdirs: [".", "packages/admin"] },
+  // Everything the iOS archive reads: the XcodeGen spec, sources, widget, shared code and assets live under ios/.
+  buildInputs: { include: ["ios/**", "right-release.config.mjs"], required: ["ios/project.yml", "right-release.config.mjs"] },
   targets: {
     ios: {
       // Shared iOS recipe (bogusyogi/rightkit#349, rightkit docs/IOS-PACKAGE-RECIPE.md). Archive/export need the GUI session on the Mac.
