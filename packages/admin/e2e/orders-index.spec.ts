@@ -1,5 +1,13 @@
 import { test, expect, row, toast } from './fixtures';
 import { createOrder, createPendingOrder, uniq, SKU } from './support/api';
+import type { Page } from '@playwright/test';
+
+/** Search the orders list and wait until it applied: the box reports typing once it pauses (debounced), and a filter
+ *  change clears the row selection, so selecting rows before it lands would be undone. */
+async function searchOrders(page: Page, text: string): Promise<void> {
+	await page.getByLabel('Search code or email').fill(text);
+	await expect(page).toHaveURL(new RegExp(`[?&]q=${text}(&|$)`));
+}
 
 /**
  * Plan 1.3 #9 — Orders index: saved views, search by code/email, payment + fulfillment filters,
@@ -98,7 +106,7 @@ test.describe('orders index', () => {
 	test('bulk fulfill marks selected paid orders shipped and consumes live stock', async ({ page, api }) => {
 		const before = await api.stock(SKU.tee);
 		await page.goto('/orders');
-		await page.getByLabel('Search code or email').fill(u);
+		await searchOrders(page, u);
 		await page.getByLabel('Payment filter').selectOption('paid');
 		await page.getByLabel('Fulfillment filter').selectOption('unfulfilled');
 		await page.getByLabel(`Select row ${paidA}`).check();
@@ -121,7 +129,7 @@ test.describe('orders index', () => {
 		const reserved = await api.stock(SKU.mug);
 
 		await page.goto('/orders');
-		await page.getByLabel('Search code or email').fill(tag);
+		await searchOrders(page, tag);
 		await expect(row(page, unpaid)).toHaveCount(1);
 		await page.getByLabel(`Select row ${unpaid}`).check();
 		await page.getByLabel(`Select row ${paid}`).check();
@@ -140,7 +148,7 @@ test.describe('orders index', () => {
 		const paid = (await createOrder(api, { email: `${tag}-p@example.net` })).code;
 
 		await page.goto('/orders');
-		await page.getByLabel('Search code or email').fill(tag);
+		await searchOrders(page, tag);
 		await page.getByLabel(`Select row ${unpaid}`).check();
 		await page.getByLabel(`Select row ${paid}`).check();
 		await page.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -149,7 +157,7 @@ test.describe('orders index', () => {
 
 		// Archived view = the trash
 		await page.getByRole('button', { name: 'Archived', exact: true }).click();
-		await page.getByLabel('Search code or email').fill(tag);
+		await searchOrders(page, tag);
 		await expect(row(page, unpaid)).toHaveCount(1);
 		await expect(row(page, paid)).toHaveCount(1);
 
@@ -159,12 +167,12 @@ test.describe('orders index', () => {
 		await expect(toast(page, '1 order restored')).toBeVisible();
 		await expect(row(page, paid)).toHaveCount(0);
 		await page.getByRole('button', { name: 'All', exact: true }).click();
-		await page.getByLabel('Search code or email').fill(tag);
+		await searchOrders(page, tag);
 		await expect(row(page, paid)).toHaveCount(1);
 
 		// purge the unpaid one permanently (confirm dialog) …
 		await page.getByRole('button', { name: 'Archived', exact: true }).click();
-		await page.getByLabel('Search code or email').fill(tag);
+		await searchOrders(page, tag);
 		await page.getByLabel(`Select row ${unpaid}`).check();
 		await page.getByRole('button', { name: 'Delete permanently' }).click();
 		await expect(page.getByRole('alertdialog')).toContainText('Permanently delete 1 order?');
