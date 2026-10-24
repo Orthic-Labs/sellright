@@ -25,7 +25,7 @@ limit. The architecture decides whether a page view costs one memory read or fiv
 
 ## 2. Where SellRight is today, per storefront page view
 
-Measured by reading the code (counts from the call trace in §5):
+Measured by reading the code (counts from the call traces in §6 and §7):
 
 | Cost line | Today | Why |
 |---|---|---|
@@ -150,7 +150,74 @@ Closing the gap is mostly subtraction: fewer calls per view, fewer transactions 
 checkout, fewer jobs in the request process. The additions (an in-memory catalogue, a stock map, cluster
 workers, a tuned Postgres) are small.
 
-<!-- STOREFRONT TABLE -->
+## 6. Storefront → API → Postgres, per journey
+
+Counted by reading handlers; each count includes BEGIN, `set_config`, COMMIT (3). **RL** is the
+6-statement rate-limit write on a second connection that precedes every `/v1/shop/cart/*` call. Unless
+noted, every API response and every storefront document or q-data response is `private, no-store`.
+Qwik runs layout and page loaders in parallel; awaits inside one loader are sequential.
+
+### Endpoint cost reference
+
+| Endpoint | SQL | Notes |
+|---|---|---|
+| `GET /v1/shop/identity`, `GET /v1/maintenance` | 0 | store cache, `existsSync` |
+| `GET /v1/shop/auth/me` | 5 signed in | joins the full `store.config` JSONB and `passwordHash`; **writes** `session.expires_at` on every call because the route passes `forceRenew = true` (`routes/auth.ts:683`, `auth/session.ts:142`) |
+| `GET /v1/shop/config` | 9–18 (+4 per NMI/Sezzle account) | resolves Stripe credentials three times in three transactions (`routes/shop-config.ts:52-60`); called by the CSP middleware on every SSR request on a 60 s cache miss (`entry.express.tsx:161`) and by four browser components |
+| `GET /catalog/products` (listing, home) | 5 | variant LEFT JOIN + GROUP BY + 3 correlated subqueries per row + COUNT (`catalog.ts:166-183`) |
+| `GET /collections/{slug}?pageSize=60` | 6 | products past 60 are silently dropped (`collections/[slug]/index.tsx:20`) |
+| `GET /catalog/products/{slug}` (PDP) | 8 | 5–30 KB with description HTML, options, assets and **live stock the storefront throws away** (`sellright/catalog.ts:76`) |
+| `…/{slug}/stock`, `…/{slug}/reviews`, `GET /seo/jsonld/products/{slug}` | 5, 6, 6 | the JSON-LD route re-reads the same product, variants, stock and images (`seo/queries.ts:122-170`) |
+| `POST /v1/shop/cart`, `GET /cart/{token}`, `PATCH /cart/{token}/lines` | RL+8, RL+12 (guest) / RL+16 (signed in), RL+17–19 | `cartResponse` resolves the customer twice (`cart.ts:112,435`); `pricingIntent=checkout` adds the promotion `FOR UPDATE` |
+| `POST /v1/shop/shipping-methods` | 11 | a read-only quote that still prices in checkout mode and locks every promotion (`shop-extra.ts:300`) |
+| `POST /v1/shop/checkout`, `POST /orders/{code}/payment-intent` | ~50 + 3/line in ≥2 txns, ~35–45 over ~6 txns | plus the advisory lock and the Stripe call |
+| `GET /orders/{code}` | ~21 (+8 and a Stripe call when reconciling) | loads every promotion for coupon display (`order-facts.ts:204`); polled 9× on confirmation |
+
+### Per journey
+
+| Journey | Calls | SQL (approx) | What hurts |
+|---|---|---|---|
+| Home, first visit | 5 SSR (`identity`, `maintenance`, org JSON-LD, products×4, collections) + `config` on a CSP miss | 9 (+9–18) | with spotlight/feature env set, +4 calls / +26 statements fetching full PDP detail for a name and a price |
+| Collection | 3–4 SSR + `cart/{token}` in the browser when a cart cookie exists | 6 (+18) | the browser cart read on **every document load** with a cart cookie, RL included |
+| PDP | SSR: snapshot read, then `products/{slug}` → `reviews?limit=1` sequential, JSON-LD in parallel; browser: `stock`, `reviews?limit=10` → `auth/me`, `config` | **~40–55** across ~7 calls | the same product/variant/stock/image rows read **three times** (detail, JSON-LD, stock), reviews twice, a full review fetched for the aggregate, `config` for one loyalty line |
+| `/shop` | with a valid snapshot: 0 API calls, but the snapshot file is re-read and re-parsed per request (`catalog-snapshot.ts:56-92`); **without**: `take=10000` becomes ceil(N/100) **sequential** OFFSET calls on the SSR critical path (`browse-catalog.ts:34`, `sellright/catalog.ts:146-163`) | 5 per 100 products | **the snapshot check defaults `storeSlug` to `'demo'`** (`catalog-snapshot.ts:7,42`), so a generic per-host image with no `VITE_SELLRIGHT_STORE_SLUG` rejects every real store's snapshot and always falls back to live; the whole catalogue (~400 B/product) is serialised into the HTML |
+| Search | plain GET form, no typeahead; `search?take=60` | 5 | a category filter asks `take=10000` and filters client-side (`search/categories.ts:15`) |
+| Add to cart → drawer | `POST cart` → `PATCH lines` sequential (the create-with-items form exists and is unused), then `shipping-methods` ∥ `config`; header open = `cart` ×1–2 → `shipping-methods` | 14 + 24, then 11 + 9–18 | every quantity change or coupon = `PATCH lines` + `shipping-methods` again (24 + 11); missing line names trigger one PDP call per line (`CartContents.tsx:103-120`) |
+| Checkout page | `cart` (bootstrap) ∥ `config` ∥ `cart` again → `cart` live, `shipping-methods` ×2–3, `auth/me` → account orders, loyalty; per address commit `cart?pricingIntent=checkout` + `shipping-methods`; shipping auto-select repeats both; place order = `cart` → `checkout` → `payment-intent` | **~450–600 per checkout** across ~20–25 calls | 3–5 cart reads, 2–4 shipping quotes, and every one of them in checkout mode takes `FOR UPDATE` on all promotions (`checkout/index.tsx:104-164,368-371`) |
+| Confirmation | SSR layout + browser `cart` ∥ `orders/{code}` **polled 9× at 1.5 s** → `cart/{token}/checkout` | ~20 + 9×21 (+ reconcile + Stripe) + 13 | the poll returns the full order (lines, addresses, payments) when only `state` is needed (`confirmation-data.ts:98-112`) |
+| Signed-in, any page or SPA navigation | `auth/me` on every SSR page and every navigation, with its UPDATE | 5 | `/account` calls it **three times** (layout loader, `account/layout.tsx:35`, `account/index.tsx:37`); ~8 calls / 55–70 statements per account view |
+| Prefetch | `<Link prefetch>` on every product card and the header Shop link (`ProductCard.tsx:156`, `header.tsx:85`) | ~25–40 per hovered card | pointer/focus fetches the PDP's q-data, which runs all its loaders server-side; q-data is `no-store` |
+
+Transport: SSR uses Node's global `fetch` with the default agent (implicit keep-alive, no per-origin cap,
+no HTTP/2); the browser's `/v1` calls go through admin nginx with no upstream keepalive, so **every
+browser API call opens a new TCP connection to the API** (`nginx.conf.template:20-28`). Images: every
+srcset candidate (`?preset=…&format=avif|webp`, `?w=&h=`) is the same full-size WebP under a different
+URL, the `avif` source serves WebP bytes, and the PDP preloads both variants (`LazyImage.tsx:47-61`,
+`product.ts:126`).
+
+### Storefront reductions, ranked (estimates)
+
+1. **Fix the snapshot store check and cache the parsed generation in memory.** `/shop` goes from
+   ceil(N/100) sequential calls to 0; PDP loses 2 calls / 14 statements and related products start working.
+2. **One PDP payload.** The detail route already has stock; add the review aggregate, build JSON-LD from
+   it, keep its stock. PDP SSR: −2 calls / −12 statements and one sequential hop gone.
+3. **Make `/v1/shop/config` cheap and single-flight.** Resolve Stripe credentials once (−6 statements,
+   −2 pool checkouts per call); share one promise across the CSP step and the four browser callers.
+4. **Return shipping methods from the cart read at checkout** and drop the duplicate entry reads:
+   −4–6 calls / −80–120 statements per checkout view, and no read-only `FOR UPDATE` on promotions.
+5. **No rate-limit write on cart reads**; in-memory bucket for mutations (audit A6).
+6. **`auth/me`: renew only inside the window, drop the config/passwordHash columns, and reuse the layout
+   loader's result** instead of three calls per account view: −1 UPDATE per SSR page and navigation.
+7. **Confirmation: slim order-state endpoint with backoff** (1, 2, 4 s), full order once: −6 calls /
+   −120–150 statements worst case.
+8. **`prefetch="js"` instead of data prefetch** on product cards: −25–40 speculative statements per hover.
+9. **Create the cart with its first line**: −1 call / −20 statements including RL.
+10. **Listing without the variant GROUP BY; a slim `(slug, inStock)` availability endpoint; no 100-row
+    OFFSET loops**: 1,000 products go from 10 sequential calls / 50 statements to 1 / 5.
+
+After rungs 1 to 3 of §4, items 1, 2, 8 and 10 above become moot for browse traffic (no API call at all)
+and the remaining cart and checkout items are what the database actually sees.
+
 
 ## 7. Admin → API → Postgres, per screen
 
