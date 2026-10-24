@@ -1,33 +1,38 @@
 /**
- * Single-leader guard for the setInterval job scheduler (OPS-2). The scheduler's
- * `running` flag in scheduler.ts only prevents intra-process overlap — it has no
- * cross-process coordination. Run two API instances (blue/green deploy, a stray
- * second process) and BOTH fire every job tick against the same DB. For a job
- * that isn't (yet) written to tolerate concurrent execution — e.g. the old
- * per-line-loop release-stale-allocations — that means the SAME stock release
- * is applied twice: real, silent inventory corruption.
+ * Single-leader guard for the job scheduler (OPS-2). The scheduler's in-process
+ * `running` flag only prevents overlap inside one process. Run two API
+ * instances (blue/green deploy, a stray second process) and BOTH would fire
+ * every job tick against the same DB — for a job not written to tolerate
+ * concurrent execution that means the SAME stock release applied twice.
  *
- * Fix: a Postgres session-level advisory lock. `pg_try_advisory_lock` is
- * non-blocking — the caller either becomes leader for this tick or backs off
- * immediately (no queueing, no thundering herd). Advisory locks are tied to the
- * *session* (the physical connection), NOT a transaction, so we must acquire and
- * release on the SAME `PoolClient` — never `pool.query()`, which hands back a
- * different connection per call and would try to unlock a lock some other
- * client holds (a silent no-op, not an error).
+ * Leadership is a row in `scheduler_lease` (migration 0112, #358): one short
+ * INSERT … ON CONFLICT claims the job's name when nobody holds it (or the
+ * holder's lease has expired), a timer renews it while the pass runs, and a
+ * DELETE gives it back. Each acquisition has its own random token, so a nested
+ * claim of the same name in the same process is refused exactly like a second
+ * process. The statements run on the small locks pool (db/client.ts) and no
+ * connection is held between them — the previous session advisory lock pinned
+ * one pooled connection idle for the whole pass, which is how the hourly tick
+ * exhausted the request pool (#358 / #360). A crashed holder is released when
+ * its lease expires (LEASE_TTL_MS) instead of when its TCP session dies.
  */
-import { pool } from '../db/client.js';
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
+import { locksPool } from '../db/client.js';
+import { err as logErr } from '../lib/logger.js';
+
+/** A holder that stops renewing (crash, frozen event loop) loses the lease after this long. */
+export const LEASE_TTL_MS = 60_000;
+/** Renewal cadence: three chances to renew before the lease can lapse. */
+export const LEASE_RENEW_MS = 15_000;
+const HOLDER = `${hostname()}:${process.pid}`;
 
 /**
- * Stable per-job advisory lock keys. `pg_try_advisory_lock(bigint)` takes a
- * single 64-bit key; we mint one per job name from a fixed namespace so
- * unrelated jobs never contend with each other, and the key is stable across
- * process restarts / deploys (it's derived from the literal job name, not a
- * random or environment-dependent value).
- *
- * Namespace: high 32 bits = 0x53525350 ("SRSP" — SellRight Scheduler), low 32
- * bits = a small per-job index. Kept in one map so every leader-locked job is
- * visible at a glance and two jobs can never accidentally collide on the same
- * key.
+ * The registry of engine leader-locked jobs: one entry per job name, so every
+ * leader-locked job is visible at a glance. The lease row is keyed by the name
+ * itself (plus `:<scope>` for per-store publishers). The numeric values are the
+ * advisory-lock keys of the pre-0112 scheme, kept so this list stays the single
+ * record of which numbers that scheme used.
  */
 const NAMESPACE = 0x53525350n << 32n;
 const JOB_KEYS = {
@@ -77,29 +82,43 @@ export type PluginLeaderLockedJob = `plugin:${string}`;
 export type LeaderLockedJob = EngineLeaderLockedJob | PluginLeaderLockedJob;
 
 /**
- * Run `fn` only if this process wins the advisory lock for `job`. If another
- * instance already holds it, this is a no-op (the caller is not the leader for
- * this tick) — that instance's own tick already covers the work. Acquire +
- * release happen on one dedicated client for the lock's lifetime; `fn` itself
- * still uses the shared `pool`/`withStore` for its actual queries.
+ * Run `fn` only if this process wins the lease for `job` (and `scope`, for
+ * per-store publishers). If another holder has it, this is a no-op (undefined):
+ * that holder's own pass already covers the work. `fn` runs with no connection
+ * held for the lease; its own queries use the pools as usual.
  */
 export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<T>, scope?: string): Promise<T | undefined> {
-  const isPluginJob = job.startsWith('plugin:');
-  const key = isPluginJob ? `${NAMESPACE}:${job}` : JOB_KEYS[job as EngineLeaderLockedJob];
-  const client = await pool.connect();
+  if (!job.startsWith('plugin:') && !(job in JOB_KEYS)) throw new Error(`unknown leader-locked job: ${job}`);
+  const name = scope === undefined ? job : `${job}:${scope}`;
+  const token = randomUUID();
+  const claimed = await locksPool.query(
+    `INSERT INTO scheduler_lease AS l (name, token, holder, expires_at)
+     VALUES ($1, $2, $3, now() + make_interval(secs => $4::double precision / 1000))
+     ON CONFLICT (name) DO UPDATE SET token = EXCLUDED.token, holder = EXCLUDED.holder,
+       acquired_at = now(), expires_at = EXCLUDED.expires_at
+     WHERE l.expires_at <= now()
+     RETURNING l.token`,
+    [name, token, HOLDER, LEASE_TTL_MS],
+  );
+  if (!claimed.rowCount) return undefined; // another holder leads this tick — skip
+  let lost = false;
+  const renew = setInterval(() => {
+    void locksPool.query(
+      'UPDATE scheduler_lease SET expires_at = now() + make_interval(secs => $3::double precision / 1000) WHERE name = $1 AND token = $2',
+      [name, token, LEASE_TTL_MS],
+    ).then((r) => {
+      if (!r.rowCount && !lost) {
+        lost = true;
+        logErr.error('scheduler lease lost while the pass is still running', undefined, { lease: name });
+      }
+    }, (e) => logErr.error('scheduler lease renewal failed (retrying)', e, { lease: name }));
+  }, LEASE_RENEW_MS);
+  renew.unref();
   try {
-    // Per-store publishers must not suppress unrelated stores on the same DB.
-    // Plugin jobs always hash (their key is a string, not a reserved bigint).
-    const lockKey = scope === undefined ? key : `${key}:${scope}`;
-    const expression = scope === undefined && !isPluginJob ? '$1' : 'hashtextextended($1, 0)';
-    const { rows } = await client.query<{ locked: boolean }>(`SELECT pg_try_advisory_lock(${expression}) AS locked`, [lockKey]);
-    if (!rows[0]?.locked) return undefined; // another instance is leader for this tick — skip
-    try {
-      return await fn();
-    } finally {
-      await client.query(`SELECT pg_advisory_unlock(${expression})`, [lockKey]);
-    }
+    return await fn();
   } finally {
-    client.release();
+    clearInterval(renew);
+    await locksPool.query('DELETE FROM scheduler_lease WHERE name = $1 AND token = $2', [name, token])
+      .catch((e) => logErr.error('scheduler lease release failed (it expires on its own)', e, { lease: name }));
   }
 }

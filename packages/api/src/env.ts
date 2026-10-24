@@ -31,6 +31,12 @@ const EnvSchema = z.object({
   // forever instead of failing fast. 5000ms gives pg time to acquire a client
   // under normal load while still bounding worst-case request latency.
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
+  // #358 / #360: scheduled jobs never draw from the request pool above. Their transactions run on their own small
+  // pool (a pass holds at most two connections, JOBS_CONCURRENCY passes run at once), and job leadership is a
+  // scheduler_lease row claimed through the short-statement locks pool (also the readiness probe), so a lease
+  // holds no connection while the job works. Payment workflow advisory locks keep their separate pool.
+  PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(4),
+  PGLOCKS_POOL_MAX: z.coerce.number().int().positive().default(4),
   PGAPPNAME: z.string().trim().min(1).default('sellright-api'),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   // Interface to bind. Default 0.0.0.0 (reverse proxies on a Docker bridge
@@ -280,6 +286,12 @@ const EnvSchema = z.object({
   // push sender: deliver queued pushes (default off — the outbox still fills,
   // so enabling it later doesn't lose the alerts already queued).
   JOBS_PUSH_ENABLED: z.enum(['0', '1']).optional(),
+  // Scheduler (#358): at most this many job passes run at once; the rest wait their turn (a waiting job's next
+  // tick is skipped, as an overlapping tick always was).
+  JOBS_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  // Scheduler (#358): a pass still running after this long is logged and gives its concurrency slot back. The pass
+  // itself cannot be cancelled: it keeps its lease (renewed) and the job's next tick waits until it settles.
+  JOBS_PASS_DEADLINE_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // auto-deliver job: actually transition Shipped→Delivered (default: dry-run log only).
   JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
   // auto-deliver job: age threshold in days before Shipped becomes Delivered.

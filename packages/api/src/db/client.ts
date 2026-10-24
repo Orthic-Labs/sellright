@@ -1,9 +1,11 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
 import { getEnv, type Env } from '../env.js';
 import { beginAfterCommit, discardAfterCommit, flushAfterCommit } from './after-commit.js';
+import { log } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
 // Pools are created by `initPools(env)` (createApp, plugin 2.1) — importing this
@@ -11,46 +13,79 @@ import { beginAfterCommit, discardAfterCommit, flushAfterCommit } from './after-
 // (operator scripts, the test runner) get an implicit init from the env
 // singleton on first use, exactly as before.
 //
-// Session-level advisory locks intentionally live on a separate, very small
-// pool. Payment/refund workflows hold these locks across external gateway I/O;
-// if they borrowed from the main transaction pool, enough concurrent gateway
-// calls could occupy every connection and starve the nested withStore() work.
-// Keeping lock waiters isolated preserves transaction capacity while retaining
-// the existing cross-process serialization semantics.
+// Four pools, each with a fixed budget, so no workload can take a connection
+// another one needs (#358 / #360):
+//   requests  PGPOOL_MAX        HTTP handlers (withStore, pool, unsafeUnscopedDb).
+//   jobs      PGJOBS_POOL_MAX   the same three names, resolved here while code
+//                               runs inside runInJobScope() (the scheduler wraps
+//                               every pass), so a background job can never queue
+//                               ahead of a shopper on the request pool.
+//   locks     PGLOCKS_POOL_MAX  short single statements only: scheduler_lease
+//                               claims/renewals (jobs/leader-lock.ts) and the
+//                               readiness probe. Nothing holds one while working.
+//   advisory  ceil(PGPOOL_MAX/4) session-level advisory locks. Payment/refund
+//                               workflows hold these across external gateway I/O;
+//                               keeping them apart preserves transaction capacity
+//                               and the cross-process serialization semantics.
+// The store-cache LISTEN session is a dedicated pg.Client (store-context.ts),
+// outside every pool.
 // ---------------------------------------------------------------------------
-interface Pools { pool: Pool; advisoryLockPool: Pool; db: Db }
+interface Pools { pool: Pool; jobsPool: Pool; locksPool: Pool; advisoryLockPool: Pool; db: Db; jobsDb: Db; gauge?: NodeJS.Timeout }
 let pools: Pools | undefined;
 let poolsClosed = false;
 
+const jobScope = new AsyncLocalStorage<true>();
+
+/** Run `fn` with `pool` / `withStore` / `unsafeUnscopedDb` resolving to the jobs pool (the scheduler wraps every pass). */
+export function runInJobScope<T>(fn: () => Promise<T>): Promise<T> {
+  return jobScope.run(true, fn);
+}
+
+/** True inside runInJobScope(). */
+export function inJobScope(): boolean {
+  return jobScope.getStore() === true;
+}
+
+/** Server-side session limits per pool, sent as startup options so they hold whatever the role defaults are. Jobs
+ *  may scan a whole store; advisory sessions wait on workflow locks by design, so they opt out of both timeouts. */
+const JOBS_SESSION = '-c statement_timeout=120000';
+const ADVISORY_SESSION = '-c statement_timeout=0 -c lock_timeout=0';
+
 export function initPools(e: Env = getEnv()): Pool {
   if (pools) throw new Error('database pools are already initialised in this process (one createApp per process)');
-  const pool = new Pool({
-    connectionString: e.DATABASE_URL,
-    application_name: e.PGAPPNAME,
-    max: e.PGPOOL_MAX,
-    idleTimeoutMillis: e.PGPOOL_IDLE_TIMEOUT_MS,
-    connectionTimeoutMillis: e.PGPOOL_CONNECTION_TIMEOUT_MS,
-  });
-  const advisoryLockPool = new Pool({
-    connectionString: e.DATABASE_URL,
-    application_name: `${e.PGAPPNAME}-locks`,
-    max: Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4))),
-    idleTimeoutMillis: e.PGPOOL_IDLE_TIMEOUT_MS,
-    connectionTimeoutMillis: e.PGPOOL_CONNECTION_TIMEOUT_MS,
-    allowExitOnIdle: true,
-  });
-  // 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
-  // — NOT on in-flight queries. Without this handler Node throws an EventEmitter
-  // "unhandled error" and exits; in-flight queries keep returning whatever they
-  // were doing, masking the silent-failure footgun. See DISPATCH.md §3a REL-5.
-  pool.on('error', (err) => {
-    console.error('[pg pool error]', err);
-  });
-  advisoryLockPool.on('error', (err) => {
-    console.error('[pg advisory-lock pool error]', err);
-  });
-  pools = { pool, advisoryLockPool, db: drizzle(pool, drizzleOpts) };
+  const make = (name: string, max: number, extra: Record<string, unknown> = {}) => {
+    const p = new Pool({
+      connectionString: e.DATABASE_URL,
+      application_name: name,
+      max,
+      idleTimeoutMillis: e.PGPOOL_IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: e.PGPOOL_CONNECTION_TIMEOUT_MS,
+      ...extra,
+    });
+    // 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
+    // — NOT on in-flight queries. Without this handler Node throws an EventEmitter
+    // "unhandled error" and exits; in-flight queries keep returning whatever they
+    // were doing, masking the silent-failure footgun. See DISPATCH.md §3a REL-5.
+    p.on('error', (err) => { console.error(`[pg pool error] ${name}`, err); });
+    return p;
+  };
+  const pool = make(e.PGAPPNAME, e.PGPOOL_MAX);
+  const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION });
+  const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true });
+  const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4))), { allowExitOnIdle: true, options: ADVISORY_SESSION });
+  pools = { pool, jobsPool, locksPool, advisoryLockPool, db: drizzle(pool, drizzleOpts), jobsDb: drizzle(jobsPool, drizzleOpts) };
   poolsClosed = false;
+  if (e.NODE_ENV !== 'test') {
+    // Saturation is logged before it turns into connect timeouts: a line every 30 s while any pool has waiters or
+    // is at 80 % of its budget, silent otherwise. Live numbers are on /v1/readyz.
+    const gauge = setInterval(() => {
+      const g = poolGauges();
+      const pressured = Object.values(g).some((p) => p.waiting > 0 || p.total - p.idle >= Math.ceil(p.max * 0.8));
+      if (pressured) log.warn('db pool pressure', { pools: g });
+    }, 30_000);
+    gauge.unref();
+    pools.gauge = gauge;
+  }
   return pool;
 }
 
@@ -66,19 +101,39 @@ export function poolsInitialised(): boolean {
   return pools !== undefined;
 }
 
-/** Close both pools (createApp shutdown, last step). Idempotent. */
+export interface PoolGauge { max: number; total: number; idle: number; waiting: number }
+
+/** Per-pool connection counts (readiness probe, pressure log). Empty before the pools exist; never creates them. */
+export function poolGauges(): Record<string, PoolGauge> {
+  if (!pools) return {};
+  const g = (p: Pool): PoolGauge => ({ max: p.options.max ?? 0, total: p.totalCount, idle: p.idleCount, waiting: p.waitingCount });
+  return { requests: g(pools.pool), jobs: g(pools.jobsPool), locks: g(pools.locksPool), advisory: g(pools.advisoryLockPool) };
+}
+
+/** Close every pool (createApp shutdown, last step). Idempotent. */
 export async function closePools(): Promise<void> {
   const p = pools;
   pools = undefined;
   poolsClosed = true;
   if (!p) return;
-  await Promise.allSettled([p.pool.end(), p.advisoryLockPool.end()]);
+  clearInterval(p.gauge);
+  await Promise.allSettled([p.pool.end(), p.jobsPool.end(), p.locksPool.end(), p.advisoryLockPool.end()]);
 }
 
 /** Test-only: forget the pools WITHOUT closing them (the test owns teardown). */
 export function _resetPoolsForTest(): void {
+  if (pools) clearInterval(pools.gauge);
   pools = undefined;
   poolsClosed = false;
+}
+
+/** pg-pool's error when no client frees up within PGPOOL_CONNECTION_TIMEOUT_MS. Maps to 503 + Retry-After (app.ts)
+ *  and to "skipped: pool busy" in the scheduler. */
+export function isPoolTimeout(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
+    if (e instanceof Error && e.message.includes('timeout exceeded when trying to connect')) return true;
+  }
+  return false;
 }
 
 /** Forward every operation to a lazily-resolved target (see `pool` / `unsafeUnscopedDb`). */
@@ -102,7 +157,11 @@ function lazyProxy<T extends object>(resolve: () => T, bindMethods: boolean): T 
 }
 
 /** The runtime pool. Lazy view over the pool createApp (or first use) created. */
-export const pool: Pool = lazyProxy(() => getPools().pool, true);
+/** The runtime pool. Lazy view over the pool createApp (or first use) created: the request pool, or the jobs pool
+ *  inside runInJobScope(). */
+export const pool: Pool = lazyProxy(() => (inJobScope() ? getPools().jobsPool : getPools().pool), true);
+/** Short single statements only (lease claims, readiness probe): never hold a client from it across other work. */
+export const locksPool: Pool = lazyProxy(() => getPools().locksPool, true);
 const advisoryLockPool: Pool = lazyProxy(() => getPools().advisoryLockPool, true);
 
 /**
@@ -152,7 +211,7 @@ const drizzleOpts = { schema, casing: 'snake_case' } as const;
  */
 type Db = ReturnType<typeof makeDb>;
 function makeDb(p: Pool) { return drizzle(p, drizzleOpts); }
-export const unsafeUnscopedDb: Db = lazyProxy(() => getPools().db, false);
+export const unsafeUnscopedDb: Db = lazyProxy(() => (inJobScope() ? getPools().jobsDb : getPools().db), false);
 
 // NOTE: the previous `export const db = ...` name has been removed. Any
 // remaining callers (migrations/jobs) were updated as part of WP1.3 to import

@@ -15262,6 +15262,14 @@ export interface paths {
                         "application/json": {
                             /** @enum {string} */
                             db: "ok";
+                            pools?: {
+                                [key: string]: {
+                                    idle: number;
+                                    max: number;
+                                    total: number;
+                                    waiting: number;
+                                };
+                            };
                             /** @enum {string} */
                             status: "ok";
                         };
@@ -15276,6 +15284,14 @@ export interface paths {
                         "application/json": {
                             /** @enum {string} */
                             db: "error";
+                            pools?: {
+                                [key: string]: {
+                                    idle: number;
+                                    max: number;
+                                    total: number;
+                                    waiting: number;
+                                };
+                            };
                             /** @enum {string} */
                             status: "unavailable";
                         };

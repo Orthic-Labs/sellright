@@ -86,6 +86,7 @@ const HAND_WRITTEN = [
   '0109_order_number_sequence.sql',
   '0110_admin_auth_challenge.sql',
   '0111_order_line_product_name.sql',
+  '0112_scheduler_lease.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

@@ -72,7 +72,7 @@ import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
 import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
 import { bodyLimit } from 'hono/body-limit';
-import { pool } from './db/client.js';
+import { isPoolTimeout, locksPool, poolGauges } from './db/client.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { CACHEABLE_EXCEPTIONS, cachePolicy, listRegisteredCacheableExceptions, validateCacheableExceptions, type CacheableException } from './cache-policy.js';
@@ -400,6 +400,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
             schema: z.object({
               status: z.literal('ok'),
               db: z.literal('ok'),
+              pools: z.record(z.string(), z.object({ max: z.number().int(), total: z.number().int(), idle: z.number().int(), waiting: z.number().int() })).optional(),
             }),
           },
         },
@@ -411,6 +412,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
             schema: z.object({
               status: z.literal('unavailable'),
               db: z.literal('error'),
+              pools: z.record(z.string(), z.object({ max: z.number().int(), total: z.number().int(), idle: z.number().int(), waiting: z.number().int() })).optional(),
             }),
           },
         },
@@ -419,15 +421,17 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   });
 
   app.openapi(readyzRoute, async (c) => {
+    // The probe runs on the small locks pool (#358 / #360), so it neither queues
+    // behind shoppers on a saturated request pool nor takes a connection from
+    // them, and it reports every pool's counts so saturation is visible before
+    // it turns into connect timeouts. 1 s ceiling; the timer is always cleared.
+    let timer: NodeJS.Timeout | undefined;
     try {
-      // Race SELECT 1 against a 1500ms ceiling — we never want a hung DB to
-      // make the readiness probe hang. The pool's connection timeout is a
-      // separate knob; this is the probe-level deadline.
       const result = await Promise.race([
-        pool.query('SELECT 1'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('readiness probe timeout')), 1500),
-        ),
+        locksPool.query('SELECT 1'),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('readiness probe timeout')), 1000);
+        }),
       ]);
       // pg.Result rowCount sanity — a healthy round-trip returns exactly
       // one row. Cheap canary against a buggy driver that resolves 0 rows.
@@ -435,14 +439,16 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       if (rowCount < 1) {
         // eslint-disable-next-line no-console
         console.error('[readyz] SELECT 1 returned no rows');
-        return c.json({ status: 'unavailable' as const, db: 'error' as const }, 503);
+        return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges() }, 503);
       }
-      return c.json({ status: 'ok' as const, db: 'ok' as const }, 200);
+      return c.json({ status: 'ok' as const, db: 'ok' as const, pools: poolGauges() }, 200);
     } catch (err) {
       // SEC-5 parity: log full detail server-side, never echo to client.
       // eslint-disable-next-line no-console
       console.error('[readyz] db ping failed', err);
-      return c.json({ status: 'unavailable' as const, db: 'error' as const }, 503);
+      return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges() }, 503);
+    } finally {
+      clearTimeout(timer);
     }
   });
 
@@ -473,6 +479,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // A malformed JSON body read with c.req.json() inside a handler is also the client's error.
     if (err instanceof SyntaxError && /JSON/i.test(err.message)) {
       return c.json(errorEnvelope(c, 'INVALID_JSON', 'request body is not valid JSON'), 400);
+    }
+
+    // #358 / #360: no pooled connection freed up in time. The request is fine and
+    // so is the API; the database is busy. Say so (503 + Retry-After) instead of
+    // a 500, so clients and proxies back off and retry.
+    if (isPoolTimeout(err)) {
+      c.header('Retry-After', '2');
+      return c.json(errorEnvelope(c, 'SERVICE_BUSY', 'the service is busy; retry shortly'), 503);
     }
 
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging

@@ -13,24 +13,28 @@
 import { requireDisposablePostgresUrl as assertTestDatabase } from './db/test-database-url.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
-import { pool } from './db/client.js';
+import { closePools } from './db/client.js';
 import { env } from './env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'app.readyz.db.test.ts');
 
 afterAll(async () => {
-  await pool.end();
+  await closePools();
 });
 
 describe('GET /v1/readyz (OBS-2)', () => {
   it('returns 200 + db:ok when the pool can answer SELECT 1', async () => {
     const app = createApp();
     const res = await app.request('/v1/readyz');
-    const body = await res.json() as { status: string; db: string };
+    const body = await res.json() as { status: string; db: string; pools: Record<string, { max: number; total: number; idle: number; waiting: number }> };
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ status: 'ok', db: 'ok' });
+    expect(body).toMatchObject({ status: 'ok', db: 'ok' });
+    // #358 / #360: the probe reports every pool and runs on the locks pool, never the request pool.
+    expect(Object.keys(body.pools).sort()).toEqual(['advisory', 'jobs', 'locks', 'requests']);
+    expect(body.pools.locks!.total).toBeGreaterThan(0);
+    expect(body.pools.requests!.total).toBe(0);
     expect(res.headers.get('content-type')).toMatch(/application\/json/);
   });
 });

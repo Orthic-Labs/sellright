@@ -1,7 +1,7 @@
 import { pool } from './db/client.js';
 import { env } from './env.js';
 import { log, err as logErr } from './lib/logger.js';
-import type { PoolClient } from 'pg';
+import { Client } from 'pg';
 
 export interface StoreCtx {
   id: string;
@@ -104,14 +104,13 @@ export function invalidateStoreCache(slug?: string, host?: string): void {
 // hostnames, payment config) can be immediate-sensitive. Postgres LISTEN/
 // NOTIFY gives instant, zero-poll propagation for free (no Redis, no new
 // table/column, no per-request round trip) — every API process opens ONE
-// dedicated long-lived connection (same pattern as jobs/leader-lock.ts's
-// dedicated advisory-lock client: LISTEN/NOTIFY is tied to the *session*,
-// not a pool-borrowed connection that could be handed to another caller
-// mid-listen) and reacts to notifications by calling the same
-// invalidateStoreCache() used locally.
+// dedicated long-lived connection (LISTEN/NOTIFY is tied to the *session*)
+// and reacts to notifications by calling the same invalidateStoreCache() used
+// locally. It is its own pg.Client, outside every pool (#358 / #360): borrowed
+// from the request pool it permanently cost shoppers one of its connections.
 const CHANNEL = 'store_cache_invalidate';
 const LISTENER_RETRY_MS = 5000;
-let listenerClient: PoolClient | undefined;
+let listenerClient: Client | undefined;
 
 interface InvalidationPayload { slug?: string; host?: string; }
 
@@ -150,30 +149,41 @@ export async function startStoreCacheInvalidationListener(): Promise<void> {
   return connectStoreCacheInvalidationListener();
 }
 
-/** Shutdown step 2 (createApp): release the LISTEN connection and stop reconnecting. */
+/** Shutdown step 2 (createApp): close the LISTEN connection and stop reconnecting. */
 export async function stopStoreCacheInvalidationListener(): Promise<void> {
   listenerStopped = true;
   if (!listenerClient) return;
   const client = listenerClient;
   listenerClient = undefined;
+  await closeListener(client);
+}
+
+async function closeListener(client: Client): Promise<void> {
   client.removeAllListeners('error');
   client.removeAllListeners('end');
-  client.release(true); // destroy: the session still has LISTEN active, never pool it
+  client.on('error', () => undefined); // a late socket error after end() must not crash the process
+  await client.end().catch(() => undefined);
 }
 
 async function connectStoreCacheInvalidationListener(): Promise<void> {
   if (listenerClient || listenerStopped) return;
-  let client: PoolClient;
+  const client = new Client({
+    connectionString: env.DATABASE_URL,
+    application_name: `${env.PGAPPNAME}-listen`,
+    connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
+  });
+  client.on('error', () => undefined); // replaced below once connected; connect() failures are handled by the catch
   try {
-    client = await pool.connect();
+    await client.connect();
   } catch (e) {
-    // A busy pool at boot (or a DB restart) must not leave the process on the
-    // 60s TTL fallback forever: retry until the LISTEN connection is up.
+    // A DB restart at boot must not leave the process on the 60s TTL
+    // fallback forever: retry until the LISTEN connection is up.
     logErr.error('store cache invalidation listener could not connect — retrying', e);
+    void closeListener(client);
     setTimeout(() => { void connectStoreCacheInvalidationListener(); }, LISTENER_RETRY_MS).unref();
     return;
   }
-  if (listenerStopped) { client.release(true); return; } // stop() ran while pool.connect() was pending
+  if (listenerStopped || listenerClient) { await closeListener(client); return; } // stop() (or a racing connect) won
   listenerClient = client;
   client.on('notification', (msg) => {
     if (msg.channel !== CHANNEL) return;
@@ -184,15 +194,24 @@ async function connectStoreCacheInvalidationListener(): Promise<void> {
       logErr.error('store cache invalidation payload parse failed', e);
     }
   });
+  let lost = false;
   const reconnect = (e?: unknown) => {
+    if (lost) return; // 'error' and 'end' both fire for one loss
+    lost = true;
     if (e) logErr.error('store cache invalidation listener connection lost — reconnecting', e);
     if (listenerClient === client) listenerClient = undefined;
-    client.release(true); // true: connection is unusable, don't return it to the pool
-    setTimeout(() => { void connectStoreCacheInvalidationListener(); }, 2000).unref();
+    void closeListener(client);
+    if (!listenerStopped) setTimeout(() => { void connectStoreCacheInvalidationListener(); }, 2000).unref();
   };
+  client.removeAllListeners('error');
   client.on('error', reconnect);
   client.on('end', () => reconnect());
-  await client.query(`LISTEN ${CHANNEL}`);
+  try {
+    await client.query(`LISTEN ${CHANNEL}`);
+  } catch (e) {
+    reconnect(e);
+    return;
+  }
   log.info('store cache invalidation listener active');
 }
 
@@ -201,9 +220,7 @@ export async function _stopStoreCacheInvalidationListenerForTest(): Promise<void
   if (!listenerClient) return;
   const client = listenerClient;
   listenerClient = undefined;
-  client.removeAllListeners('error');
-  client.removeAllListeners('end');
-  client.release();
+  await closeListener(client);
 }
 
 /** Test-only: peek at current cache sizes. Not part of the public surface. */

@@ -39,6 +39,7 @@ import { sheeridExpirySweep } from './sheerid-expiry.js';
 import { birthdayBonusSweep } from './birthday-bonus.js';
 import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
+import { isPoolTimeout, runInJobScope } from '../db/client.js';
 import { log, err as logErr } from '../lib/logger.js';
 import { publishCatalogManifest } from '../manifest/catalog.js';
 import { loadStalePendingManifestRegenerations, clearManifestRegenerationPending } from '../manifest/manifest-pending.js';
@@ -50,12 +51,23 @@ const HOUR = 3_600_000;
 const jobLog = (m: string) => log.info(m);
 
 /**
- * Run `fn` now and on an interval; never let an overlap or a throw kill the
- * loop. `running` only guards overlap WITHIN this process — it does nothing
- * for a second API instance running the same interval. `leaderJob` wraps the
- * pass in a cross-process Postgres advisory lock (see leader-lock.ts) so only
- * one instance actually executes a given tick; the rest see the lock held and
- * skip, cheaply, without racing the DB.
+ * Run `fn` once at startup (staggered) and then on its own schedule; never let
+ * an overlap or a throw kill the loop (#358 / #360):
+ *   - Each job's ticks sit at a fixed offset inside its interval, derived from
+ *     its name, plus 0–10 % jitter, so jobs whose intervals divide each other
+ *     no longer all wake in the same tick once an hour (the old setInterval
+ *     calls shared one base time, the process start).
+ *   - At most JOBS_CONCURRENCY passes run at once; a pass waiting for a slot
+ *     keeps its job's later ticks skipped, like an overlapping tick always was.
+ *   - Every pass runs inside runInJobScope(), so its queries use the jobs pool,
+ *     never the request pool, and its leadership is a lease row (leader-lock.ts)
+ *     that holds no connection.
+ *   - A pass still running after JOBS_PASS_DEADLINE_MS is logged and gives its
+ *     slot back; it cannot be cancelled, so the job's next tick waits for it.
+ *   - A pass that cannot get a connection logs "job skipped: pool busy" and
+ *     waits for its next tick instead of failing as an error.
+ * `running` only guards overlap WITHIN this process; the lease is what keeps a
+ * second API instance from running the same pass.
  */
 interface SchedulerState {
   stopped: boolean;
@@ -63,9 +75,55 @@ interface SchedulerState {
   inflight: Set<Promise<void>>;
   /** Names of every job registered this run (engine + plugin) — diagnostics for effective-config. */
   names: string[];
+  slots: Semaphore;
+  passDeadlineMs: number;
 }
 
-function every(state: SchedulerState, ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>, scope?: string): NodeJS.Timeout {
+/** Counting semaphore for the concurrent-pass cap. FIFO, so a job waits its turn behind earlier ticks. */
+export class Semaphore {
+  private free: number;
+  private readonly waiters: Array<() => void> = [];
+  constructor(size: number) { this.free = Math.max(1, size); }
+  async acquire(): Promise<() => void> {
+    if (this.free > 0) this.free--;
+    else await new Promise<void>((resolve) => this.waiters.push(resolve));
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiters.shift();
+      if (next) next();
+      else this.free++;
+    };
+  }
+}
+
+/** FNV-1a 32-bit: a stable, dependency-free hash for a job's name. */
+function fnv1a(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/** The job's fixed offset inside its interval, in whole seconds when the interval allows (so slots are readable). */
+export function jobOffsetMs(label: string, intervalMs: number): number {
+  const unit = intervalMs >= 60_000 ? 1_000 : 1;
+  return (fnv1a(label) % Math.max(1, Math.floor(intervalMs / unit))) * unit;
+}
+
+/** Delay from `now` to the job's next slot (offset + k·interval) plus 0–10 % jitter; never sooner than a tenth of
+ *  the interval, so a slot that falls just after the startup kick is not run twice back to back. */
+export function nextDelayMs(label: string, intervalMs: number, now: number, random: () => number = Math.random): number {
+  const offset = jobOffsetMs(label, intervalMs);
+  let delay = intervalMs - (((now - offset) % intervalMs) + intervalMs) % intervalMs;
+  if (delay < intervalMs / 10) delay += intervalMs;
+  return delay + Math.floor(random() * intervalMs * 0.1);
+}
+
+function every(state: SchedulerState, ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>, scope?: string): void {
   state.names.push(label);
   let running = false;
   const tick = async () => {
@@ -78,11 +136,22 @@ function every(state: SchedulerState, ms: number, label: string, leaderJob: Lead
     if (isMaintenanceOn()) return;
     running = true;
     const pass = (async () => {
+      const release = await state.slots.acquire();
+      let overdue: NodeJS.Timeout | undefined;
       try {
-        await withLeaderLock(leaderJob, fn, scope); // skip if another instance is leader for this tick
+        if (state.stopped) return;
+        overdue = setTimeout(() => {
+          log.warn('job pass over its deadline; slot released, pass still running', { job: label, deadlineMs: state.passDeadlineMs });
+          release();
+        }, state.passDeadlineMs);
+        overdue.unref?.();
+        await runInJobScope(() => withLeaderLock(leaderJob, fn, scope)); // skip if another instance leads this tick
       } catch (e) {
-        logErr.error('job failed', e, { job: label });
+        if (isPoolTimeout(e)) log.info('job skipped: pool busy', { job: label });
+        else logErr.error('job failed', e, { job: label });
       } finally {
+        clearTimeout(overdue);
+        release();
         running = false;
       }
     })();
@@ -90,17 +159,22 @@ function every(state: SchedulerState, ms: number, label: string, leaderJob: Lead
     void pass.finally(() => state.inflight.delete(pass));
     await pass;
   };
-  const t = setInterval(tick, ms);
-  state.timers.add(t);
-  t.unref?.(); // don't keep the event loop alive just for the scheduler
-  // Kick once at startup, staggered: every leader-locked pass holds two pooled
-  // connections (advisory lock + work), so firing all jobs in the same tick
-  // exhausted the pool on boot — requests and readiness probes timed out
-  // waiting for a connection until the first passes finished.
-  const kick = setTimeout(() => void tick(), state.names.length === 0 ? 0 : (state.names.length - 1) * STARTUP_STAGGER_MS);
+  const schedule = () => {
+    if (state.stopped) return;
+    const t = setTimeout(() => {
+      state.timers.delete(t);
+      schedule();
+      void tick();
+    }, nextDelayMs(label, ms, Date.now()));
+    state.timers.add(t);
+    t.unref?.(); // don't keep the event loop alive just for the scheduler
+  };
+  schedule();
+  // Kick once at startup, staggered so the first passes don't all queue for
+  // connections at boot.
+  const kick = setTimeout(() => { state.timers.delete(kick); void tick(); }, (state.names.length - 1) * STARTUP_STAGGER_MS);
   state.timers.add(kick);
   kick.unref?.();
-  return t;
 }
 
 /** Gap between the startup passes of consecutive jobs (see every()). */
@@ -130,7 +204,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     log.info('scheduler disabled', { hint: 'set JOBS_ENABLED=1 to enable' });
     return DISABLED;
   }
-  const state: SchedulerState = { stopped: false, timers: new Set(), inflight: new Set(), names: [] };
+  const state: SchedulerState = { stopped: false, timers: new Set(), inflight: new Set(), names: [], slots: new Semaphore(env.JOBS_CONCURRENCY ?? 2), passDeadlineMs: env.JOBS_PASS_DEADLINE_MS ?? 10 * 60_000 };
   const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY === '1';
   const autoDeliverDays = env.JOBS_AUTO_DELIVER_DAYS ?? 10;
   const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
@@ -173,7 +247,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     if (!env.CATALOG_DIR?.trim() || !env.STORE_SLUG?.trim()) {
       log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
     } else {
-      void withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG)
+      void runInJobScope(() => withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG))
         .catch((e) => logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }));
       // SELLRIGHT-ISSUES P1: durable-retry drain. onStockChanged's in-process
       // trailing-rerun state (stock-hook.ts) doesn't survive a crash between
@@ -281,7 +355,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     jobs: state.names,
     async stop(timeoutMs = 5_000) {
       state.stopped = true;
-      for (const t of state.timers) { clearInterval(t); clearTimeout(t); }
+      for (const t of state.timers) clearTimeout(t);
       state.timers.clear();
       if (state.inflight.size === 0) return;
       let timer: NodeJS.Timeout | undefined;

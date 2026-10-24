@@ -74,14 +74,12 @@ vi.mock('../db/client.js', async () => {
   const { PgDialect } = await import('drizzle-orm/pg-core');
   const dialect = new PgDialect();
   return {
-    pool: {
-      connect: async () => ({
-        query: async (text: string) => {
-          if (text.includes('pg_advisory_unlock')) h.unlocked = true;
-          return { rows: [{ locked: true }] };
-        },
-        release: () => { h.leaderReleased = true; },
-      }),
+    // The scheduler lease (jobs/leader-lock.ts): claimed with an INSERT, given back with a DELETE.
+    locksPool: {
+      query: async (text: string) => {
+        if (text.includes('DELETE FROM scheduler_lease')) { h.unlocked = true; h.leaderReleased = true; }
+        return { rowCount: 1, rows: [{ token: 'lease' }] };
+      },
     },
     runStoreTransaction: async (
       client: { release: () => void }, storeId: string,

@@ -10,8 +10,15 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../security/outbound-url.js', () => ({ safeOutboundFetch: mocks.fetch }));
 vi.mock('../db/client.js', () => ({
+  // The scheduler lease (jobs/leader-lock.ts): claimed with an INSERT, given back with a DELETE.
+  locksPool: {
+    query: async (text: string) => {
+      mocks.lockQuery(text);
+      if (text.includes('DELETE FROM scheduler_lease')) mocks.released();
+      return { rowCount: 1, rows: [{ token: 'lease' }] };
+    },
+  },
   pool: {
-    connect: async () => ({ query: mocks.lockQuery, release: mocks.released }),
     query: async () => ({ rows: [{ id: 'first', slug: 'first' }, { id: 'second', slug: 'second' }] }),
   },
   withStore: async (storeId: string, run: (tx: unknown) => Promise<unknown>) => run({
@@ -85,7 +92,7 @@ function expectClosed(ticks: number) {
   expect(mocks.active).toBe(0);
   expect(vi.getTimerCount()).toBe(0);
   expect(mocks.released).toHaveBeenCalledTimes(ticks);
-  expect(mocks.lockQuery.mock.calls.filter(([query]) => String(query).includes('pg_advisory_unlock'))).toHaveLength(ticks);
+  expect(mocks.lockQuery.mock.calls.filter(([query]) => String(query).includes('DELETE FROM scheduler_lease'))).toHaveLength(ticks);
 }
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] });

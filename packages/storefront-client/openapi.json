@@ -268,6 +268,32 @@
                       "enum": [
                         "ok"
                       ]
+                    },
+                    "pools": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "integer"
+                          },
+                          "idle": {
+                            "type": "integer"
+                          },
+                          "waiting": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "max",
+                          "total",
+                          "idle",
+                          "waiting"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -296,6 +322,32 @@
                       "enum": [
                         "error"
                       ]
+                    },
+                    "pools": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "max": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "integer"
+                          },
+                          "idle": {
+                            "type": "integer"
+                          },
+                          "waiting": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "max",
+                          "total",
+                          "idle",
+                          "waiting"
+                        ]
+                      }
                     }
                   },
                   "required": [
