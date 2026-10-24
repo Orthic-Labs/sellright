@@ -9,6 +9,7 @@ import { trackPurchaseOnce } from '~/platform/controllers/conversion';
 import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
 import { APP_STATE } from '~/constants';
 import { displayOrderCode } from '~/utils/order-code';
+import { orderLineLabel } from '~/utils/line-label';
 
 export { confirmationHead as head } from '~/platform/checkout';
 
@@ -193,7 +194,7 @@ const ConfirmationPage = component$(() => {
 						<h2 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-5">Your order</h2>
 						<ul class="divide-y divide-[#E5E0D8]">
 							{order.lines?.map((line) => {
-								const { productName, variantLabel } = parseLineName(line.name);
+								const { productName, variantLabel } = parseLineName(line.name, line.productName);
 
 								return (
 									<li key={line.sku} class="py-4 grid grid-cols-[64px_1fr_auto] gap-4 items-center">
@@ -205,7 +206,7 @@ const ConfirmationPage = component$(() => {
 													width={128}
 													height={160}
 													loading="lazy"
-													alt={line.name}
+													alt={orderLineLabel({ productName: line.productName, variantName: line.name })}
 												/>
 											) : (
 												<div class="w-full h-full flex items-center justify-center text-[#D8D1C7]">

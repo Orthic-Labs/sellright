@@ -3,6 +3,8 @@
  * produce a structured document (and printable HTML). No I/O, no money math
  * beyond formatting (the order already carries authoritative integer-cent totals).
  */
+import { orderLineLabel } from './line-label.js';
+
 export type InvoiceOrder = {
   code: string;
   currency: string;
@@ -16,7 +18,7 @@ export type InvoiceOrder = {
   shippingAddress: Record<string, unknown> | null;
   billingAddress: Record<string, unknown> | null;
 };
-export type InvoiceLine = { variantSku: string; variantName: string; quantity: number; unitPrice: number; lineTotal: number };
+export type InvoiceLine = { variantSku: string; variantName: string; productName?: string | null; quantity: number; unitPrice: number; lineTotal: number };
 export type InvoiceStore = { name: string; slug: string };
 
 const money = (cents: number, currency: string): string =>
@@ -58,7 +60,7 @@ export function buildInvoice(order: InvoiceOrder, lines: InvoiceLine[], store: I
     shipTo: addressLines(order.shippingAddress),
     currency: order.currency,
     lines: lines.map((l) => ({
-      sku: l.variantSku, name: l.variantName, quantity: l.quantity,
+      sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity,
       unitPrice: money(l.unitPrice, order.currency), lineTotal: money(l.lineTotal, order.currency),
     })),
     totals: {
@@ -87,7 +89,7 @@ export function buildPackingSlip(order: InvoiceOrder, lines: InvoiceLine[], stor
     date: (order.placedAt ?? order.createdAt).toISOString().slice(0, 10),
     store,
     shipTo: addressLines(order.shippingAddress),
-    lines: lines.map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity })),
+    lines: lines.map((l) => ({ sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity })),
   };
 }
 

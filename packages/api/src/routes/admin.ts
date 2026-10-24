@@ -40,6 +40,7 @@ import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
+import { orderLineLabel } from '../orders/line-label.js';
 
 export const admin = new OpenAPIHono();
 
@@ -474,7 +475,7 @@ admin.openapi(
         lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
           refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
           refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
-          id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
+          id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
         // `state` here is the individual PAYMENT record's wire state (Settled
         // -> captured — BREAKING, pre-1.0), distinct from the order-level
         // `paymentStatus` above. See orders/status.ts.

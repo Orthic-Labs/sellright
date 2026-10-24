@@ -42,8 +42,9 @@ describe('parseLineName', () => {
     expect(parseLineName('Stoneware Cup')).toEqual({ productName: 'Stoneware Cup', variantLabel: '' });
   });
 
-  it('prefers a known product name and skips the split entirely', () => {
-    expect(parseLineName('Studio Notebook / Sage', 'Studio Notebook')).toEqual({ productName: 'Studio Notebook', variantLabel: '' });
+  it('prefers the productName snapshot; the variant name becomes the option label', () => {
+    expect(parseLineName('Studio Notebook / Sage', 'Studio Notebook')).toEqual({ productName: 'Studio Notebook', variantLabel: 'Sage' });
+    expect(parseLineName('Medium - Midnight black', 'Short Sleeve Button-Up Shirt')).toEqual({ productName: 'Short Sleeve Button-Up Shirt', variantLabel: 'Medium · Midnight black' });
   });
 
   it('falls back to "Product" for an empty variant name', () => {

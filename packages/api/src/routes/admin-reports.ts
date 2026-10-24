@@ -92,7 +92,9 @@ adminReports.openapi(
     const { days } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const r = await tx.execute(sql`
-        select ol.variant_name as name, ol.variant_sku as sku, sum(ol.quantity)::int as qty, sum(ol.line_total)::int as revenue
+        select case when ol.product_name is null or ol.product_name = '' then ol.variant_name
+          when lower(ol.variant_name) = lower(ol.product_name) then ol.product_name
+          else ol.product_name || ' · ' || ol.variant_name end as name, ol.variant_sku as sku, sum(ol.quantity)::int as qty, sum(ol.line_total)::int as revenue
         from order_line ol join "order" o on o.id = ol.order_id
         where o.state = any(${PAID_STATES}) and o.deleted_at is null and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval and o.is_demo = false
         group by 1,2 order by revenue desc limit 15`);

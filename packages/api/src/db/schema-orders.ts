@@ -165,6 +165,9 @@ export const orderLine = pgTable('order_line', {
   variantId: uuid().references(() => productVariant.id),
   variantSku: text().notNull(), // snapshot at order time
   variantName: text().notNull(), // snapshot at order time
+  // Product name snapshot (#346), set by the order_line_snapshot_product_name trigger (0111) on insert and on a
+  // variant change. NULL for imported lines (their variant_name already names the product). Render with orderLineLabel.
+  productName: text(),
   metadata: jsonb(),
   quantity: integer().notNull(),
   unitPrice: integer().notNull(), // cents, snapshot at add

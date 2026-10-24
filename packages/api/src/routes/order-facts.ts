@@ -148,7 +148,10 @@ export async function loadOrderStatusFactsBatch(
 
 export interface OrderLineFact {
   sku: string;
+  /** Variant snapshot ("Medium - Midnight black"); imported lines carry the product inside it. */
   name: string;
+  /** Product snapshot (#346); null for imported lines and lines older than migration 0111 whose variant is gone. */
+  productName: string | null;
   quantity: number;
   unitPrice: number;
   lineTotal: number;
@@ -169,7 +172,7 @@ export interface OrderLineFact {
 export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLineFact[]> {
   const rows = await tx
     .select({
-      sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
+      sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
       productSlug: s.product.slug,

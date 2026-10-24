@@ -38,7 +38,7 @@ async function loadOrderForDoc(storeId: string, code: string) {
     const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
     if (!order) return null;
     const lines = await tx
-      .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
+      .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
       .from(s.orderLine)
       // Order editing (G13): a line edited down to 0 stays on the order (row preserved) but is not a document line.
       .where(and(eq(s.orderLine.orderId, order.id), gt(s.orderLine.quantity, 0)));

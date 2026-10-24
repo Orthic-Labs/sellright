@@ -11,6 +11,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { paymentStatusWithBalanceSql, fulfillmentStatusSql } from './status-sql.js';
 import { ORDER_STATUS_VALUES, ORDER_PAYMENT_FILTER_VALUES, ORDER_FULFILLMENT_STATUS_VALUES } from './status.js';
+import { orderLineLabel } from './line-label.js';
 
 export const EXPORT_ROW_CAP = 50_000;
 
@@ -36,7 +37,7 @@ type ExportRow = {
   payment_method: string | null; shipping_method_name: string | null; shipping_method_code: string | null; coupon: string | null;
   ship_name: string | null; ship_line1: string | null; ship_line2: string | null; ship_city: string | null;
   ship_region: string | null; ship_postal: string | null; ship_country: string | null; ship_phone: string | null;
-  line_sku: string | null; line_name: string | null; line_qty: number | null; line_unit: number | null; line_total: number | null; line_discount: number | null;
+  line_sku: string | null; line_name: string | null; line_product: string | null; line_qty: number | null; line_unit: number | null; line_total: number | null; line_discount: number | null;
 };
 
 type Cell = string | number;
@@ -75,7 +76,7 @@ export const EXPORT_COLUMNS: Col[] = [
   { key: 'country', label: 'Ship to country', group: 'Shipping', get: (r) => r.ship_country ?? '' },
   { key: 'phone', label: 'Ship to phone', group: 'Shipping', get: (r) => r.ship_phone ?? '' },
   { key: 'sku', label: 'SKU', group: 'Line item', lineOnly: true, get: (r) => r.line_sku ?? '' },
-  { key: 'item', label: 'Item', group: 'Line item', lineOnly: true, get: (r) => r.line_name ?? '' },
+  { key: 'item', label: 'Item', group: 'Line item', lineOnly: true, get: (r) => (r.line_name == null ? '' : orderLineLabel({ productName: r.line_product, variantName: r.line_name })) },
   { key: 'quantity', label: 'Quantity', group: 'Line item', lineOnly: true, get: (r) => r.line_qty ?? 0 },
   { key: 'unitPrice', label: 'Unit price', group: 'Line item', money: true, lineOnly: true, get: (r) => cents(r.line_unit) },
   { key: 'lineDiscount', label: 'Line discount', group: 'Line item', money: true, lineOnly: true, get: (r) => cents(r.line_discount) },
@@ -159,8 +160,8 @@ export function exportConditions(f: ExportFilters): SQL[] {
 export async function fetchExportRows(storeId: string, f: ExportFilters, mode: ExportMode): Promise<ExportRow[]> {
   const where = sql.join(exportConditions(f), sql` and `);
   const lineSelect = mode === 'line'
-    ? sql`ol.variant_sku as line_sku, ol.variant_name as line_name, ol.quantity as line_qty, ol.unit_price as line_unit, ol.line_total as line_total, ol.line_discount as line_discount`
-    : sql`null::text as line_sku, null::text as line_name, null::int as line_qty, null::int as line_unit, null::int as line_total, null::int as line_discount`;
+    ? sql`ol.variant_sku as line_sku, ol.variant_name as line_name, ol.product_name as line_product, ol.quantity as line_qty, ol.unit_price as line_unit, ol.line_total as line_total, ol.line_discount as line_discount`
+    : sql`null::text as line_sku, null::text as line_name, null::text as line_product, null::int as line_qty, null::int as line_unit, null::int as line_total, null::int as line_discount`;
   const lineJoin = mode === 'line' ? sql`join order_line ol on ol.order_id = "order"."id"` : sql``;
   const lineOrder = mode === 'line' ? sql`, ol.id` : sql``;
   return withStore(storeId, async (tx) => {

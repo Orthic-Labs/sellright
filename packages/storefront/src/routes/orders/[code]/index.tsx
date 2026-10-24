@@ -17,6 +17,7 @@ import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { INSTALLMENT_PROVIDER, continueToLabel } from '~/platform/payments/labels';
 import { displayOrderCode } from '~/utils/order-code';
+import { orderLineLabel } from '~/utils/line-label';
 
 /**
  * Order-balance pay page. The "balance due" email (sent after an admin edited
@@ -337,7 +338,7 @@ export default component$(() => {
 							<ul class="divide-y divide-[var(--color-card-border)] border-y border-[var(--color-card-border)]">
 								{order.lines.map((line) => (
 									<li key={line.sku} class="py-3 flex justify-between gap-4 text-[14px]">
-										<span class="min-w-0 truncate text-[var(--color-ink)]">{line.name} <span class="text-[var(--color-ink-soft)]">× {line.quantity}</span></span>
+										<span class="min-w-0 truncate text-[var(--color-ink)]">{orderLineLabel({ productName: line.productName, variantName: line.name })} <span class="text-[var(--color-ink-soft)]">× {line.quantity}</span></span>
 										<span class="tabular-nums text-[var(--color-ink)]">{formatPrice(line.lineTotal, currency)}</span>
 									</li>
 								))}

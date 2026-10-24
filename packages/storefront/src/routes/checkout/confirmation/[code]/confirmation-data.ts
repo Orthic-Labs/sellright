@@ -1,3 +1,5 @@
+import { variantLabel } from '~/utils/line-label';
+
 export type TimelineStep = { key: string; label: string };
 
 export const TIMELINE: TimelineStep[] = [
@@ -15,14 +17,14 @@ export const TIMELINE: TimelineStep[] = [
  * the literal " / " delimiter, not the last whitespace token. A last-word
  * split mangled multi-word option names, e.g. "Studio Notebook / Sage"
  * became productName "Studio Notebook /" (dropping only "Sage" and leaving a
- * stray trailing separator). Pass a real product name when one IS known
- * (e.g. the account-orders page, which fetches it separately) to skip the
- * split entirely. */
+ * stray trailing separator). Pass the line's productName snapshot when the API
+ * has one (#346): the variant name is then the option label (product prefix
+ * stripped, options joined by " · "). */
 export const parseLineName = (
   variantName: string,
   knownProductName?: string | null,
 ): { productName: string; variantLabel: string } => {
-  if (knownProductName) return { productName: knownProductName, variantLabel: '' };
+  if (knownProductName) return { productName: knownProductName, variantLabel: variantLabel({ productName: knownProductName, variantName }) };
   if (!variantName) return { productName: 'Product', variantLabel: '' };
   if (!variantName.includes(' / ')) return { productName: variantName, variantLabel: '' };
   const [productNamePart, ...optionParts] = variantName.split(' / ');

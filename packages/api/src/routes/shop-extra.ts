@@ -62,7 +62,7 @@ shopExtra.openapi(
       const fuls = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
       const lines = await tx
         .select({
-          sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
+          sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
           unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
           isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
           shipDateLabel: shippingLabelSql(s.productVariant.metafields),

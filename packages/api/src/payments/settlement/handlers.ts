@@ -29,6 +29,7 @@ import { runAuthorizeInvoiceEffect, runEntitlementReversal, runRevalidateForIssu
 import { PaymentPolicyUnavailableError } from '../policy/registry.js';
 import type { PolicyOrder } from '../policy/types.js';
 import { resolveHeldReviewTasks, validIssuanceApproval } from './issuance-approval.js';
+import { orderLineLabel } from '../../orders/line-label.js';
 import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap (kept local: no internal export just for this path). */
@@ -406,7 +407,7 @@ async function checkoutNotifications(tx: Tx, e: EffectRow, p: NotificationPayloa
   const recipient = normalizeEmail(cust?.email ?? p.guestEmail ?? '');
   if (!recipient) return;
   const lines = await tx
-    .select({ name: s.orderLine.variantName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey })
+    .select({ variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey })
     .from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));
   const appKey = pickEmailAppKey(lines.map((line) => line.appKey));
@@ -414,7 +415,7 @@ async function checkoutNotifications(tx: Tx, e: EffectRow, p: NotificationPayloa
   const storefrontUrl = env.STOREFRONT_URL_BY_APP ? parseAppFromMap(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL : env.STOREFRONT_URL;
   const rendered = orderConfirmationTpl(
     { name: store.name, currency: store.currency, storefrontUrl, fromEmail },
-    { code: order.code, grandTotal: order.grandTotal, currency: order.currency, lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })) },
+    { code: order.code, grandTotal: order.grandTotal, currency: order.currency, lines: lines.map((line) => ({ name: orderLineLabel(line), quantity: line.quantity, lineTotal: line.lineTotal })) },
   );
   await enqueueEmail(tx, e.storeId, {
     kind: 'order_confirmation', recipient,

@@ -45,6 +45,7 @@ import { paidOrderEffects, recordSettlementOperation, type SettlementOperation }
 import { executeEffectsNow } from '../payments/settlement/effects.js';
 import { err as logErr } from '../lib/logger.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { orderLineLabel } from '../orders/line-label.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
@@ -306,7 +307,7 @@ async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: bo
     const fulfillments = await tx.select().from(s.fulfillment).where(and(eq(s.fulfillment.orderId, o.id), sql`${s.fulfillment.state} <> 'Cancelled'`)).orderBy(desc(s.fulfillment.createdAt));
     const verdict = classifyTrackingRow(tracking, {
       state: o.state, deleted: !!o.deletedAt,
-      lines: lines.map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty })),
+      lines: lines.map((l) => ({ sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty })),
       fulfillments: fulfillments.map((f) => ({ state: f.state, trackingCode: f.trackingCode })),
     });
     // Guests have no customerId: contact email from checkout, else the account email.
@@ -474,7 +475,7 @@ adminOrderOps.openapi(
         total: cnt?.n ?? 0,
         items: orders.map((o) => ({
           code: o.code, placedAt: new Date(o.placed_at ?? o.created_at).toISOString(), isPreOrder: o.is_pre_order, email: o.email, name: o.name, country: o.country, fulfillmentStatus: o.fulfillment_status,
-          items: remainingItems(lines.filter((l) => l.orderId === o.id).map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty }))),
+          items: remainingItems(lines.filter((l) => l.orderId === o.id).map((l) => ({ sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty }))),
           shippedTracking: ful.filter((f) => f.orderId === o.id && f.trackingCode).map((f) => f.trackingCode),
         })),
       };

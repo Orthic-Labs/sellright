@@ -23,6 +23,7 @@ import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { orderLineLabel } from '../orders/line-label.js';
 
 export const accountReturns = new OpenAPIHono();
 
@@ -95,7 +96,7 @@ function view(l: Loaded): z.infer<typeof ReturnsOut> {
   for (const [lineId, n] of left) {
     const line = byLine.get(lineId)!;
     const cur = merged.get(line.variantSku);
-    if (cur) cur.quantity += n; else merged.set(line.variantSku, { sku: line.variantSku, name: line.variantName, quantity: n });
+    if (cur) cur.quantity += n; else merged.set(line.variantSku, { sku: line.variantSku, name: orderLineLabel(line), quantity: n });
   }
   return {
     returnable: [...merged.values()],
@@ -103,7 +104,7 @@ function view(l: Loaded): z.infer<typeof ReturnsOut> {
       id: r.id, status: r.status, reason: r.reason, createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString(),
       lines: l.requestLines.filter((rl) => rl.returnId === r.id).map((rl) => {
         const line = byLine.get(rl.orderLineId);
-        return { sku: line?.variantSku ?? '', name: line?.variantName ?? '', quantity: rl.quantity };
+        return { sku: line?.variantSku ?? '', name: line ? orderLineLabel(line) : '', quantity: rl.quantity };
       }),
     })),
   };

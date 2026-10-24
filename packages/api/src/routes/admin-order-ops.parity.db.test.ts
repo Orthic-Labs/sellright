@@ -147,7 +147,8 @@ describe('tracking import: preview, commit, history', () => {
     const b = (await res.json()) as { rows: Array<{ status: string; carrier: string | null; suggestion?: string; items: Array<{ sku: string; quantity: number }> }>; summary: { importable: number } };
     expect(b.rows.map((r) => r.status)).toEqual(['ready', 'unknown_order', 'missing_tracking', 'missing_code']);
     expect(b.rows[0]!.carrier).toBe('UPS');
-    expect(b.rows[0]!.items).toEqual([{ sku: 'SKU-A', name: 'Knife A', quantity: 2 }, { sku: 'SKU-B', name: 'Sheath B', quantity: 1 }]);
+    // #346: items name the product (fixture product 'P') and the variant.
+    expect(b.rows[0]!.items).toEqual([{ sku: 'SKU-A', name: 'P · Knife A', quantity: 2 }, { sku: 'SKU-B', name: 'P · Sheath B', quantity: 1 }]);
     expect(b.rows[1]!.suggestion).toBe('DD30284');
     expect(b.summary.importable).toBe(1);
     const n = await withStore(STORE, async (tx) => (await tx.execute(sql`SELECT count(*)::int AS n FROM fulfillment`)).rows[0] as { n: number });

@@ -1,12 +1,13 @@
 import type { SezzleSessionInput } from './sezzle.js';
 import type { GatewayAccount } from './gateway-account.js';
+import { orderLineLabel } from '../orders/line-label.js';
 
 type Snapshot = {
   code: string; receiptToken: string | null; currency: string;
   grandTotal: number; subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number;
   metadata: unknown; shippingAddress: unknown; billingAddress: unknown;
 };
-type Line = { variantName: string; variantSku: string; quantity: number; unitPrice: number };
+type Line = { variantName: string; productName?: string | null; variantSku: string; quantity: number; unitPrice: number };
 
 /** Validate everything local before recording an attempt that can move money. */
 export function prepareSezzleSession(input: {
@@ -50,7 +51,7 @@ export function prepareSezzleSession(input: {
   const lineItems = lines.map(line => {
     if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
         !Number.isSafeInteger(line.unitPrice) || line.unitPrice < 0) throw new Error('Invalid order line');
-    return { name: line.variantName, sku: line.variantSku, quantity: line.quantity,
+    return { name: orderLineLabel(line), sku: line.variantSku, quantity: line.quantity,
       price: { amount_in_cents: line.unitPrice, currency: order.currency } };
   });
   const subtotal = lineItems.reduce((sum, item) => sum + item.price.amount_in_cents * item.quantity, 0);

@@ -16445,6 +16445,7 @@ export interface paths {
                                 isPreOrder: boolean;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
                                 productSlug: string | null;
                                 quantity: number;
                                 reviewed: boolean;
@@ -21531,6 +21532,7 @@ export interface paths {
                                 isPreOrder: boolean;
                                 lineTotal: number;
                                 name: string;
+                                productName?: string | null;
                                 quantity: number;
                                 shipDate: string | null;
                                 shipDateLabel?: string | null;

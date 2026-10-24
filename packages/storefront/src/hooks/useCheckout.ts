@@ -13,6 +13,7 @@ import { CartService, ConvertedCartError } from '~/services/CartService';
 import { decideCheckoutStage, decideResumeStage, EMPTY_ORDER_STATE } from './checkout-stage';
 import { settleZeroDueProven } from './zero-due';
 import { PreSubmitStockError, refreshStockBeforeSubmit } from './pre-submit-stock';
+import { orderLineLabel } from '~/utils/line-label';
 
 /**
  * Native checkout flow — single state machine, single backend. There is no
@@ -233,7 +234,7 @@ export const useCheckout = () => {
 			srGetOrder(order.code, order.receiptToken || undefined)
 				.then((summary) => {
 					if (!isCurrent()) return;
-					state.resumeLines = (summary.lines ?? []).map((l) => ({ name: l.name, quantity: l.quantity }));
+					state.resumeLines = (summary.lines ?? []).map((l) => ({ name: orderLineLabel({ productName: l.productName, variantName: l.name }), quantity: l.quantity }));
 				})
 				.catch(() => {
 					/* the summary is a nicety: the order code and total are enough to pay */

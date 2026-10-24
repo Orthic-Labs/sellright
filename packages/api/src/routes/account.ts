@@ -271,7 +271,7 @@ account.openapi(
           state: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), updatedAt: z.string().nullable(),
         })),
         lines: z.array(z.object({
-          sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
+          sku: z.string(), name: z.string(), productName: z.string().nullable().optional(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
           image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
           productSlug: z.string().nullable(), reviewed: z.boolean(),
         })),

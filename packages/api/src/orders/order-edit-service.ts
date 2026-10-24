@@ -49,6 +49,7 @@ import { isMethodEligible, shippingRate, type ShippingCalculator } from '../ship
 import { reserveStockOrThrow, StockReservationError } from './stock-reservation.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
+import { orderLineLabel } from './line-label.js';
 import { normalizeEmail } from '../auth/email.js';
 import { loadImportedOrderHistory } from './imported-order-history.js';
 import { assertImportedEditAllowed, classifyImportedEditAdmission } from './imported-edit-admission.js';
@@ -703,7 +704,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   };
 
   return {
-    order, working, before, after, pricingOptions, ...(importedPricingBasis ? { importedPricingBasis } : {}), ...(legacyPricingSnapshot ? { legacyPricingSnapshot } : {}), lineDiffs: diffLines(snapLines, working.lines, priced), priced, stock, stockDeltas, balance, refundable, warnings, storedLines: dbLines,
+    order, working, before, after, pricingOptions, ...(importedPricingBasis ? { importedPricingBasis } : {}), ...(legacyPricingSnapshot ? { legacyPricingSnapshot } : {}), lineDiffs: await labelLineDiffs(tx, diffLines(snapLines, working.lines, priced), dbLines, variantRows), priced, stock, stockDeltas, balance, refundable, warnings, storedLines: dbLines,
     promotionRow, shipping: { amount: t.shippingTotal, base: baseShipping, override: shippingOverride, methodCode, methodName: methodCode ? methodsByCode.get(methodCode)?.name ?? null : null },
     address: { shipping: { changed: !sameAddress(beforeShip, afterShip), countryChanged: countryChanged(beforeShip, afterShip) }, billing: { changed: !sameAddress(beforeBill, afterBill) } },
     variantsById, isPreOrder: isPreOrderAfter, storeCtx, recipient, customerId: order.customerId, taxRate, taxInclusive, stack, storedFingerprint, previewAcceptanceHash, credit,
@@ -1067,6 +1068,17 @@ const fingerprintOf = (i: CommitInput) => createHash('sha256').update(JSON.strin
 const fmt = (cents: number, cur: string) => `${(Math.abs(cents) / 100).toFixed(2)} ${cur}`;
 
 /** Human change list for the customer email, from the line diff. */
+/** #346: line diffs (the preview and the customer "order updated" e-mail) name the product, not just the variant. The
+ *  stored lines carry their product_name snapshot; an added or swapped-in variant takes its current product's name. */
+async function labelLineDiffs(tx: Tx, diffs: LineDiff[], dbLines: Array<{ variantSku: string; productName: string | null }>, variants: VariantRow[]): Promise<LineDiff[]> {
+  const bySku = new Map<string, string>();
+  const productIds = [...new Set(variants.map((v) => v.productId))];
+  const products = productIds.length ? await tx.select({ id: s.product.id, name: s.product.name }).from(s.product).where(inArray(s.product.id, productIds)) : [];
+  for (const v of variants) { const name = products.find((p) => p.id === v.productId)?.name; if (name) bySku.set(v.sku, name); }
+  for (const l of dbLines) if (l.productName) bySku.set(l.variantSku, l.productName);
+  return diffs.map((d) => ({ ...d, name: orderLineLabel({ productName: bySku.get(d.sku), variantName: d.name }) }));
+}
+
 export function describeChanges(plan: Pick<EditPlan, 'lineDiffs' | 'before' | 'after' | 'address'>, currency: string): string[] {
   const out: string[] = [];
   for (const d of plan.lineDiffs) {
@@ -1601,7 +1613,7 @@ export async function loadEditContext(storeId: string, code: string) {
       code: o.code, state: o.state, currency: o.currency, couponCodes, pricingOptions: editPricingOptions({}),
       editable: { items: items && !unresolved, addressOnly: !items && address, address, blockedReason: importedFinancialReconciliationRequired(o.metadata) ? 'Imported financial history requires reconciliation before changing money.' : pending ? 'Resolve the prepared order edit before changing its economics.' : sourceAdmission.planRefusal?.message ?? (o.state === 'Cancelled' ? 'This order is cancelled.' : unresolved ? 'A payment on this order is unresolved — resolve it before editing items.' : protectedPricing ? 'This order supports address changes only; its saved pricing must remain intact.' : !items ? `A ${o.state} order can only have its address edited.` : null) },
       pendingEdit: pending ? pendingEditContext(pending) : null,
-      lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
+      lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, minQuantity: lockedQty(l) })),
       adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount, actor: a.actor, createdAt: a.createdAt.toISOString() })),
       shipping: { amount: o.shippingTotal, override: o.shippingOverride, methodCode: o.shippingMethodCode ?? meta.shipping?.methodCode ?? null },
       shippingMethods: methods.map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) })),

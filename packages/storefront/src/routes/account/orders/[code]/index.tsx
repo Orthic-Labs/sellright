@@ -10,6 +10,7 @@ import { createSEOHead } from '~/utils/seo';
 import { productPath } from '~/platform/product-path';
 import { reviewEntryPath } from '~/utils/rewards';
 import { canReviewLine, formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder } from '../order-display';
+import { orderLineLabel } from '~/utils/line-label';
 
 export default component$(() => {
 	const location = useLocation();
@@ -91,14 +92,14 @@ export default component$(() => {
 										height={100}
 										class="rounded-sm object-cover max-w-max h-full"
 										src={line.image || '/asset_placeholder.webp'}
-										alt={line.name || 'Product image'}
+										alt={orderLineLabel({ productName: line.productName, variantName: line.name }) || 'Product image'}
 										loading="lazy"
 										responsive="thumbnail"
 									/>
 								</div>
 								<div class="ml-4 flex-1 flex flex-col">
 									<div class="flex justify-between text-base font-medium">
-										<h3>{line.name}</h3>
+										<h3>{orderLineLabel({ productName: line.productName, variantName: line.name })}</h3>
 										<p class="ml-4">{formatPrice(line.lineTotal, o.currency)}</p>
 									</div>
 									<div class="flex-1 flex items-center justify-between text-sm text-gray-600">
