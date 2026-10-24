@@ -16,7 +16,10 @@ export default {
   hostedWorkflows: {
     policy: "declared-unrelated",
     files: {
-      "ci.yml": "Web and server CI: lint, typecheck, tests, the Postgres-backed API suite and the ghcr.io image push the deploy reads; its iOS job only runs swift test on copied model sources",
+      "ci.yml": {
+        reason: "Web and server CI: lint, typecheck, tests, the Postgres-backed API suite, and the release, verify-appliance and verify-update jobs that push server images to ghcr.io with GITHUB_TOKEN; its iOS job only runs swift test on copied model sources",
+        idToken: "cosign keyless signing of the server images pushed to ghcr.io (release, verify-update)",
+      },
       "codeql.yml": "CodeQL code scanning for the TypeScript packages",
       "refresh-dependencies.yml": "Manual pnpm dependency refresh: runs the web verify and audit, then commits refreshed manifests and lockfiles; touches nothing under ios/",
     },
