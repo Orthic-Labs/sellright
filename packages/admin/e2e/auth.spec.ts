@@ -50,7 +50,11 @@ test.describe('admin sign-in', () => {
 		await page.getByRole('button', { name: 'Sign out' }).click();
 		await loginDocument;
 		await page.waitForLoadState('load');
-		await page.goto('/orders', { waitUntil: 'commit' });
+		// Signed out, /orders must end on /login. The login page's own signed-out redirect can start a navigation to
+		// /login before /orders commits (CI, a708faf5); that interruption IS the redirect, so only it is tolerated.
+		await page.goto('/orders', { waitUntil: 'commit' }).catch((e: Error) => {
+			if (!/interrupted by another navigation to "[^"]*\/login"/.test(e.message)) throw e;
+		});
 		await expect(page).toHaveURL(/\/login$/);
 	});
 

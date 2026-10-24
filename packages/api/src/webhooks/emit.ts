@@ -7,7 +7,7 @@
 import { createHmac } from 'node:crypto';
 import { and, eq, lte, sql } from 'drizzle-orm';
 import { Client, Pool, type ClientConfig, type PoolConfig, type QueryConfig } from 'pg';
-import { runStoreTransaction, type Tx } from '../db/client.js';
+import { currentLeaseSignal, runStoreTransaction, type Tx } from '../db/client.js';
 import { getEnv } from '../env.js';
 import * as s from '../db/schema.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
@@ -189,8 +189,9 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
     const offset = count ? stores.rows[0]!.minuteOrdinal % count : 0;
     const queue = [...stores.rows.slice(offset), ...stores.rows.slice(0, offset)]
       .map((store) => ({ ...store, attempted: 0 }));
+    const leaseSignal = currentLeaseSignal(); // #360 L2: a lost lease stops admission of further stores
     const worker = async () => {
-      while (performance.now() < deadline) {
+      while (performance.now() < deadline && !leaseSignal?.aborted) {
         // Shift before awaiting: active stores are absent from the shared FIFO.
         const store = queue.shift();
         if (!store) return;

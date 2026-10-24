@@ -93,11 +93,12 @@ sets its own session limits per connection pool, so each limit bounds only the w
 | Pool | Env | Session settings |
 |---|---|---|
 | requests | `PGPOOL_MAX` (10) | role defaults above |
-| jobs (every background pass) | `PGJOBS_POOL_MAX` (4) | `statement_timeout = 120s` (a job may scan a whole store) |
-| locks (scheduler lease, readiness probe) | `PGLOCKS_POOL_MAX` (4) | role defaults above |
+| jobs (every background pass) | `PGJOBS_POOL_MAX` (6) | `statement_timeout = 120s` (a job may scan a whole store); client-side query ceiling 125 s |
+| locks (scheduler lease, readiness probe) | `PGLOCKS_POOL_MAX` (4) | role defaults above; client-side query ceiling 3 s |
 | advisory (payment/refund workflow locks) | `min(4, ceil(PGPOOL_MAX/4))` | `statement_timeout = 30s`, `lock_timeout = PGADVISORY_LOCK_WAIT_MS` (5 s) |
 
-A workflow that still holds its advisory locks after `PGADVISORY_WORKFLOW_ALARM_MS` (120 s) is logged as an error;
+Every pool uses TCP keepalive, so a half-open connection is detected instead of pinning a pool slot. A workflow that
+still holds its advisory locks after `PGADVISORY_WORKFLOW_ALARM_MS` (120 s) is logged as an error;
 its locks are never released early, because its gateway call may still be in flight.
 
 ## Connection budget (#360 N7)
@@ -106,11 +107,11 @@ One API process can open at most
 
     PGPOOL_MAX + PGJOBS_POOL_MAX + PGLOCKS_POOL_MAX + min(4, ceil(PGPOOL_MAX/4)) + 2 (tenant resolver) + 2 (webhook pass) + 1 (LISTEN)
 
-which is **26 at `PGPOOL_MAX=10`** and **37 at `PGPOOL_MAX=20`**. At boot the API logs this maximum (`db connection
+which is **28 at `PGPOOL_MAX=10`** and **39 at `PGPOOL_MAX=20`**. At boot the API logs this maximum (`db connection
 budget`) and warns when it exceeds `PG_CONNECTION_BUDGET`, the runtime role's connection limit, or
 `max_connections` minus `superuser_reserved_connections`. The sum over every process sharing the cluster must stay
 under `max_connections` with room for operations: on the Hetzner cluster (`max_connections = 100`) the three API
-processes (rh, dd, rightsites) at the default 26 use 78; three at `PGPOOL_MAX=20` would use 111. Set
+processes (rh, dd, rightsites) at the default 28 use 84; three at `PGPOOL_MAX=20` would use 117. Set
 `PG_CONNECTION_BUDGET=30` in each brand's API env so a raised pool is flagged at boot.
 
 **Release note (#358):** Rotten's API env carries `PGPOOL_MAX=20` as the 2026-10-24 stopgap for the hourly job
@@ -128,6 +129,9 @@ An old runner never sees leases, so:
    brand's single pm2 process; never run two API processes of one brand with `JOBS_ENABLED=1` across the switch.
 3. Rollback is the mirror image: stop the new process, then start the old one. Leave the table in place; leases
    expire on their own after 60 s.
+4. Release check, per brand database, as the owner after migrating (the API also logs an error at boot when it
+   fails): `SELECT has_table_privilege('<brand>_app', 'scheduler_lease', 'SELECT,INSERT,UPDATE,DELETE');` must be
+   `t` (`rh_app`, `dd_app`, `rs_app`). Grants come from the owner's default privileges, so migrate as the owner.
 
 ## Resolver role bootstrap (SR-01/SR-02 follow-up)
 

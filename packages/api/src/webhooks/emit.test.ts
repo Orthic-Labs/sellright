@@ -76,6 +76,7 @@ vi.mock('../db/client.js', async () => {
   return {
     // Lease fencing is exercised by db/pools.db.test.ts; here the fence is a pass-through.
     runWithLeaseFence: (_fence: unknown, fn: () => Promise<unknown>) => fn(),
+    currentLeaseSignal: () => undefined,
     LeaseLostError: class extends Error {},
     // The scheduler lease (jobs/leader-lock.ts): claimed with an INSERT, given back with a DELETE.
     locksPool: {

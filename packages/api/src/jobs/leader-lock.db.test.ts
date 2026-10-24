@@ -1,10 +1,13 @@
 import { afterAll, expect, it } from 'vitest';
-import { pool } from '../db/client.js';
+import { closePools, locksPool } from '../db/client.js';
 import { env } from '../env.js';
 import { withLeaderLock } from './leader-lock.js';
 
 if (!new URL(env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Leader lock fixture requires a *_test database');
-afterAll(() => pool.end());
+afterAll(async () => {
+  await locksPool.query("DELETE FROM scheduler_lease WHERE name IN ('catalog-manifest:fixture-a', 'catalog-manifest:fixture-b', 'auto-deliver')");
+  await closePools();
+});
 
 it('serializes same-store publishers without suppressing another store', async () => {
   await withLeaderLock('catalog-manifest', async () => {

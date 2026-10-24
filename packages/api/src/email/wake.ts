@@ -17,6 +17,8 @@
 import { getEnv } from '../env.js';
 import { err as logErr } from '../lib/logger.js';
 import { deliverEmails } from './outbox.js';
+import { detachFromPass } from '../db/client.js';
+import { jobAdmission } from '../jobs/admission.js';
 
 export const WAKE_DEBOUNCE_MS = 250;
 
@@ -96,7 +98,9 @@ export function setEmailWakeEnabledForTests(fn: (() => boolean) | null): void {
 }
 
 const sharedWaker = createEmailWaker({
-  drain: () => deliverEmails({ log: () => {} }),
+  // #360 H1/H2: wake() runs from after-commit hooks, possibly inside a job pass. The drain is detached from that pass
+  // (its lease and pool) and admitted as background work in the e-mail lane, like the scheduled 'emails' pass.
+  drain: () => detachFromPass(() => jobAdmission().run('emails', () => deliverEmails({ log: () => {} }))),
   enabled: () => (enabledOverride ? enabledOverride() : getEnv().JOBS_ENABLED === '1'),
   onError: (e) => logErr.error('email wake drain failed; 60 s poll will retry', e),
 });

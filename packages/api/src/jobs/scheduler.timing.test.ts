@@ -11,10 +11,12 @@ const JOBS: Array<[string, number]> = [
   ['birthday-bonus', HOUR], ['restock-notify', MIN], ['webhook-reaper', 5 * MIN], ['processed-event-reaper', HOUR],
   ['rate-limit-reaper', HOUR],
 ];
+// Sub-minute and plugin jobs: offsets and slots must hold for them too.
+const OTHER: Array<[string, number]> = [['pending-effects', 15_000], ['acme:sync', 5 * MIN], ['acme:nightly', HOUR]];
 
 describe('job slots', () => {
   it('gives every job a fixed offset inside its interval', () => {
-    for (const [label, interval] of JOBS) {
+    for (const [label, interval] of [...JOBS, ...OTHER]) {
       const offset = jobOffsetMs(label, interval);
       expect(offset).toBeGreaterThanOrEqual(0);
       expect(offset).toBeLessThan(interval);
@@ -37,7 +39,7 @@ describe('job slots', () => {
   });
 
   it('schedules the next pass at the slot plus at most 10 % jitter, never right after a pass', () => {
-    for (const [label, interval] of JOBS) {
+    for (const [label, interval] of [...JOBS, ...OTHER]) {
       for (const now of [0, 1_234_567, 1_790_000_000_000]) {
         const bare = nextDelayMs(label, interval, now, () => 0);
         expect(bare).toBeGreaterThanOrEqual(interval / 10);

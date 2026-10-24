@@ -15262,6 +15262,10 @@ export interface paths {
                         "application/json": {
                             /** @enum {string} */
                             db: "ok";
+                            jobs?: {
+                                active: number;
+                                overdue: number;
+                            };
                             pools?: {
                                 [key: string]: {
                                     idle: number;
@@ -15284,6 +15288,10 @@ export interface paths {
                         "application/json": {
                             /** @enum {string} */
                             db: "error";
+                            jobs?: {
+                                active: number;
+                                overdue: number;
+                            };
                             pools?: {
                                 [key: string]: {
                                     idle: number;

@@ -25,6 +25,12 @@ import { err as logErr } from '../lib/logger.js';
 export const LEASE_TTL_MS = 60_000;
 /** Renewal cadence: three chances to renew before the lease can lapse. */
 export const LEASE_RENEW_MS = 15_000;
+let timing = { ttlMs: LEASE_TTL_MS, renewMs: LEASE_RENEW_MS };
+
+/** Test-only: shorten the lease term and renewal cadence (null restores the defaults). */
+export function _setLeaseTimingForTest(t: { ttlMs: number; renewMs: number } | null): void {
+  timing = t ?? { ttlMs: LEASE_TTL_MS, renewMs: LEASE_RENEW_MS };
+}
 const HOLDER = `${hostname()}:${process.pid}`;
 
 /**
@@ -124,33 +130,37 @@ export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<
        acquired_at = now(), expires_at = EXCLUDED.expires_at
      WHERE l.expires_at <= now()
      RETURNING l.token`,
-    [name, token, HOLDER, LEASE_TTL_MS, legacy.key, legacy.hashed],
+    [name, token, HOLDER, timing.ttlMs, legacy.key, legacy.hashed],
   );
   if (!claimed.rowCount) return undefined; // another holder leads this tick — skip
   const abort = new AbortController();
-  const fence: LeaseFence = { name, token, lost: false, signal: abort.signal };
+  const fence: LeaseFence = { name, token, lost: false, released: false, signal: abort.signal };
+  const { ttlMs, renewMs } = timing;
   const markLost = (why: string) => {
-    if (fence.lost) return;
+    if (fence.lost || fence.released) return; // a renewal racing the pass's own release is not a loss (#360 L2)
     fence.lost = true;
     abort.abort(new LeaseLostError(name));
     logErr.error('scheduler lease lost while the pass is still running; its further commits are refused', undefined, { lease: name, why });
   };
   let renewedAt = Date.now();
   const renew = setInterval(() => {
-    if (Date.now() - renewedAt > LEASE_TTL_MS) markLost('renewal has not succeeded for a whole lease term');
+    if (Date.now() - renewedAt > ttlMs) markLost('renewal has not succeeded for a whole lease term');
     void locksPool.query(
       'UPDATE scheduler_lease SET expires_at = now() + make_interval(secs => $3::double precision / 1000) WHERE name = $1 AND token = $2 AND expires_at > clock_timestamp()',
-      [name, token, LEASE_TTL_MS],
+      [name, token, ttlMs],
     ).then((r) => {
       if (r.rowCount) renewedAt = Date.now();
       else markLost('the lease row expired or was taken over');
-    }, (e) => logErr.error('scheduler lease renewal failed (retrying)', e, { lease: name }));
-  }, LEASE_RENEW_MS);
+    }, (e) => { if (!fence.released) logErr.error('scheduler lease renewal failed (retrying)', e, { lease: name }); });
+  }, renewMs);
   renew.unref();
   try {
     return await runWithLeaseFence(fence, fn);
   } finally {
     clearInterval(renew);
+    // Before the DELETE: work this pass left running (it should have detached) may commit after the release, and a
+    // renewal already in flight must not report a loss (#360 H1, L2).
+    fence.released = true;
     await locksPool.query('DELETE FROM scheduler_lease WHERE name = $1 AND token = $2', [name, token])
       .catch((e) => logErr.error('scheduler lease release failed (it expires on its own)', e, { lease: name }));
   }

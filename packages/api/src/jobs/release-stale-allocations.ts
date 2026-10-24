@@ -28,7 +28,7 @@ import { importedFinancialReconciliationPath } from '../import/source-compatibil
  * fully processed in one UPDATE or not processed at all.
  */
 import { eq, sql } from 'drizzle-orm';
-import { pool, withStore } from '../db/client.js';
+import { currentLeaseSignal, pool, withStore } from '../db/client.js';
 import { LockSetUnstable, withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -113,6 +113,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
     let storeCount = 0;
     let storeReleased = 0;
     for (const orderId of ids) {
+      if (currentLeaseSignal()?.aborted) break; // #360 L2: lease lost — leave the rest to the new leader
       try {
         const res = await withLockedSet(st.id, { kind: 'order', orderId }, async (tx, held) => {
           const claimed = await tx.execute(

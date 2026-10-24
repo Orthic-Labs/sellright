@@ -7,7 +7,7 @@
 -- Global like processed_event (no store_id, so no RLS); runtime grants follow schema-owner default privileges.
 -- Additive: the previous image never reads the table. Rolling back to it restores advisory-lock leadership; the two
 -- schemes do not see each other, so never run an old and a new API process side by side with jobs enabled.
-CREATE TABLE "scheduler_lease" (
+CREATE TABLE IF NOT EXISTS "scheduler_lease" (
   "name" text PRIMARY KEY,
   "token" uuid NOT NULL,
   "holder" text NOT NULL,

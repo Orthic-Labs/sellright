@@ -40,7 +40,7 @@ import { birthdayBonusSweep } from './birthday-bonus.js';
 import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { isPoolTimeout } from '../db/client.js';
-import { jobAdmission } from './admission.js';
+import { AdmissionStoppedError, jobAdmission } from './admission.js';
 export { Semaphore } from './admission.js';
 import { log, err as logErr } from '../lib/logger.js';
 import { publishCatalogManifest } from '../manifest/catalog.js';
@@ -121,7 +121,8 @@ function every(state: SchedulerState, intervalMs: number, label: string, leaderJ
         if (state.stopped) return;
         await jobAdmission().run(label, () => withLeaderLock(leaderJob, fn, scope)); // skip if another instance leads this tick
       } catch (e) {
-        if (isPoolTimeout(e)) log.info('job skipped: pool busy', { job: label });
+        if (e instanceof AdmissionStoppedError) return; // shutting down
+        if (isPoolTimeout(e)) log.warn('job skipped: pool busy', { job: label });
         else logErr.error('job failed', e, { job: label });
       } finally {
         running = false;
@@ -220,7 +221,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
       log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
     } else {
       void jobAdmission().run('catalog-manifest:startup', () => withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG))
-        .catch((e) => logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }));
+        .catch((e) => { if (!(e instanceof AdmissionStoppedError)) logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }); });
       // SELLRIGHT-ISSUES P1: durable-retry drain. onStockChanged's in-process
       // trailing-rerun state (stock-hook.ts) doesn't survive a crash between
       // "stock changed" and "manifest republished" — catalog_manifest_pending
@@ -329,6 +330,9 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
       state.stopped = true;
       for (const t of state.timers) clearTimeout(t);
       state.timers.clear();
+      // #360 L1: queued passes (scheduled, startup and stock-triggered alike) are rejected and running ones waited
+      // for through the shared admission, which tracks every pass it admitted.
+      await jobAdmission().stop(timeoutMs);
       if (state.inflight.size === 0) return;
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });

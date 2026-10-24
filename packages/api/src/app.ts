@@ -73,6 +73,7 @@ import { env } from './env.js';
 import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
 import { bodyLimit } from 'hono/body-limit';
 import { isPoolTimeout, locksPool, poolGauges } from './db/client.js';
+import { admissionGauges } from './jobs/admission.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { CACHEABLE_EXCEPTIONS, cachePolicy, listRegisteredCacheableExceptions, validateCacheableExceptions, type CacheableException } from './cache-policy.js';
@@ -408,6 +409,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
               status: z.literal('ok'),
               db: z.literal('ok'),
               pools: z.record(z.string(), z.object({ max: z.number().int(), total: z.number().int(), idle: z.number().int(), waiting: z.number().int() })).optional(),
+              jobs: z.object({ active: z.number().int(), overdue: z.number().int() }).optional(),
             }),
           },
         },
@@ -420,6 +422,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
               status: z.literal('unavailable'),
               db: z.literal('error'),
               pools: z.record(z.string(), z.object({ max: z.number().int(), total: z.number().int(), idle: z.number().int(), waiting: z.number().int() })).optional(),
+              jobs: z.object({ active: z.number().int(), overdue: z.number().int() }).optional(),
             }),
           },
         },
@@ -449,14 +452,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       if (rowCount < 1) {
         // eslint-disable-next-line no-console
         console.error('[readyz] SELECT 1 returned no rows');
-        return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges() }, 503);
+        return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges(), jobs: admissionGauges() }, 503);
       }
-      return c.json({ status: 'ok' as const, db: 'ok' as const, pools: poolGauges() }, 200);
+      return c.json({ status: 'ok' as const, db: 'ok' as const, pools: poolGauges(), jobs: admissionGauges() }, 200);
     } catch (err) {
       // SEC-5 parity: log full detail server-side, never echo to client.
       // eslint-disable-next-line no-console
       console.error('[readyz] db ping failed', err);
-      return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges() }, 503);
+      return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges(), jobs: admissionGauges() }, 503);
     } finally {
       clearTimeout(timer);
     }
@@ -495,7 +498,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // so is the API; the database is busy. Say so (503 + Retry-After) instead of
     // a 500, so clients and proxies back off and retry.
     if (isPoolTimeout(err)) {
-      c.header('Retry-After', '2');
+      // Retry-After only where a blind retry is safe (#360 L4): a POST that timed out waiting for a connection never
+      // reached the database, but the client cannot know that, and its own idempotency rules decide.
+      if (c.req.method === 'GET' || c.req.method === 'HEAD') c.header('Retry-After', '2');
       return c.json(errorEnvelope(c, 'SERVICE_BUSY', 'the service is busy; retry shortly'), 503);
     }
 

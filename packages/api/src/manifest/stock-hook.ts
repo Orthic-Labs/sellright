@@ -60,7 +60,7 @@ import { env } from '../env.js';
 import { publishCatalogManifest } from './catalog.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
 import { _resetJobAdmissionForTest, jobAdmission } from '../jobs/admission.js';
-import { runInJobScope } from '../db/client.js';
+import { detachFromPass } from '../db/client.js';
 import { resolveStore } from '../store-context.js';
 import { markManifestRegenerationPending, clearManifestRegenerationPending } from './manifest-pending.js';
 import { log, err as logErr } from '../lib/logger.js';
@@ -118,8 +118,10 @@ export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
   if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) return;
   const st = stateFor(storeSlug);
   const scope: RegenScope = variantIds?.length ? new Set(variantIds) : 'full';
-  // #360 N4: background work from here on — its bookkeeping SQL uses the jobs pool, not the request pool.
-  void runInJobScope(() => enqueue(storeSlug, st, scope));
+  // #360 H1 / M2: detached from whatever called this (a request, or a job pass that may end — and give its lease
+  // back — before this finishes). The durable marker below is one short write on the caller's side of the pools
+  // (request pool from a request); the publication itself is admitted background work (jobs pool, capped).
+  void detachFromPass(() => enqueue(storeSlug, st, scope));
 }
 
 async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope): Promise<void> {

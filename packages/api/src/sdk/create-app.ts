@@ -21,7 +21,7 @@ import type { Server } from 'node:http';
 import { buildHttpApp } from '../app.js';
 import { SELLRIGHT_VERSION } from '../version.js';
 import { closeEnv, envOrigin, extendEnv, initEnv, type Env } from '../env.js';
-import { assertRuntimeRoleUnprivileged, checkConnectionBudget, closePools, initPools, poolsInitialised } from '../db/client.js';
+import { assertRuntimeRoleUnprivileged, checkConnectionBudget, checkSchedulerLeaseAccess, closePools, initPools, poolsInitialised } from '../db/client.js';
 import * as engineSchema from '../db/schema.js';
 import { closeEngineResources, markEngineClosed } from '../resources.js';
 import { startJobScheduler, type JobScheduler, type PluginJob } from '../jobs/scheduler.js';
@@ -307,6 +307,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
           // #360 N7: log this process's connection maximum; warn when it exceeds the configured budget, the role's
           // connection limit or the cluster's max_connections. Best-effort, never blocks startup.
           checkConnectionBudget(env).catch((e) => log.info('db connection budget check failed', { err: String(e) }));
+          if (scheduler.enabled) checkSchedulerLeaseAccess().catch((e) => log.info('scheduler_lease access check failed', { err: String(e) }));
           // SELLRIGHT-ISSUES P2: cross-process store-config cache invalidation (LISTEN side).
           // Best-effort: a failure leaves the 60s TTL as the fallback, so it never blocks startup.
           startStoreCacheInvalidationListener().catch((e) => log.info('store cache invalidation listener failed to start (60s TTL is the fallback)', { err: String(e) }));

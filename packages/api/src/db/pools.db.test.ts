@@ -2,14 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
-import { closePools, LeaseLostError, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
+import { checkConnectionBudget, closePools, currentLeaseSignal, inJobScope, LeaseLostError, LOCKS_QUERY_TIMEOUT_MS, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
+import { afterCommit } from './after-commit.js';
+import { emailWakeIdleForTests, setEmailWakeEnabledForTests, wakeEmailDelivery } from '../email/wake.js';
+import { deliverWebhooks } from '../webhooks/emit.js';
+import { log, err as logErr } from '../lib/logger.js';
+import { vi } from 'vitest';
 import { createApp } from '../app.js';
 import { env } from '../env.js';
-import { legacyAdvisoryKey, withLeaderLock } from '../jobs/leader-lock.js';
+import { _setLeaseTimingForTest, legacyAdvisoryKey, withLeaderLock } from '../jobs/leader-lock.js';
 
 // #358 / #360: jobs and shoppers draw from separate pools, and job leadership holds no connection.
 if (!new URL(env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Pool isolation fixture requires a *_test database');
-afterAll(() => closePools());
+afterAll(async () => {
+  await locksPool.query("DELETE FROM scheduler_lease WHERE name LIKE 'auto-deliver%' OR name LIKE 'fence-probe%' OR name = 'webhooks'");
+  await closePools();
+});
 afterEach(() => locksPool.query("DELETE FROM scheduler_lease WHERE name LIKE 'auto-deliver%' OR name LIKE 'fence-probe%'"));
 
 const busy = (name: string) => { const g = poolGauges()[name]!; return g.total - g.idle; };
@@ -157,4 +165,133 @@ describe('advisory workflow locks (#360 N1)', () => {
     await holder;
     expect(await withAdvisoryLocks(['pay:fence-probe'], async () => 'after')).toBe('after');
   }, 30_000);
+});
+
+describe('detached work escapes the pass (#360 H1)', () => {
+  const STORE = randomUUID();
+  const seedProbe = () => locksPool.query("INSERT INTO scheduler_lease (name, token, holder, expires_at) VALUES ('fence-probe', $1, 'probe', now() + interval '1 hour') ON CONFLICT (name) DO UPDATE SET holder = 'probe'", [randomUUID()]);
+
+  it('after-commit callbacks run outside the job scope and the lease fence', async () => {
+    let seen: { job: boolean; signal: AbortSignal | undefined } | undefined;
+    await runInJobScope(() => withLeaderLock('auto-deliver', () => withStore(STORE, async (tx) => {
+      expect(inJobScope()).toBe(true);
+      expect(currentLeaseSignal()).toBeDefined();
+      afterCommit(tx, () => { seen = { job: inJobScope(), signal: currentLeaseSignal() }; });
+    })));
+    expect(seen).toEqual({ job: false, signal: undefined });
+  });
+
+  it('work a pass started but did not await still commits after the pass released its lease', async () => {
+    await seedProbe();
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    let late!: Promise<unknown>;
+    await withLeaderLock('auto-deliver', async () => {
+      late = (async () => {
+        await gate;
+        return withStore(STORE, (tx) => tx.execute(sql`UPDATE scheduler_lease SET holder = 'late-commit' WHERE name = 'fence-probe'`));
+      })();
+    });
+    open(); // the lease row is gone by now
+    await expect(late).resolves.toBeDefined();
+    const probe = await locksPool.query<{ holder: string }>("SELECT holder FROM scheduler_lease WHERE name = 'fence-probe'");
+    expect(probe.rows[0]!.holder).toBe('late-commit');
+  });
+
+  it('wakeEmailDelivery from inside a pass drains after the pass ended, without lease errors', async () => {
+    const errors = vi.spyOn(logErr, 'error');
+    setEmailWakeEnabledForTests(() => true);
+    try {
+      await withLeaderLock('auto-deliver', async () => { wakeEmailDelivery(); });
+      await emailWakeIdleForTests();
+      expect(errors.mock.calls.filter(([msg]) => String(msg).includes('email wake drain failed'))).toEqual([]);
+    } finally {
+      setEmailWakeEnabledForTests(null);
+      errors.mockRestore();
+    }
+  });
+});
+
+describe('lease mechanics', () => {
+  afterEach(() => _setLeaseTimingForTest(null));
+
+  it('concurrent claims from separate connections: exactly one wins', async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const claims = Array.from({ length: 4 }, () => withLeaderLock('auto-deliver', async () => { await gate; return 'ran'; }));
+    await new Promise((r) => setTimeout(r, 200));
+    open();
+    const results = await Promise.all(claims);
+    expect(results.filter((r) => r === 'ran')).toHaveLength(1);
+  });
+
+  it('a pass longer than the lease term keeps its lease by renewing', async () => {
+    _setLeaseTimingForTest({ ttlMs: 600, renewMs: 150 });
+    const out = await withLeaderLock('auto-deliver', async () => {
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(currentLeaseSignal()!.aborted).toBe(false);
+      return withStore(randomUUID(), async () => 'committed');
+    });
+    expect(out).toBe('committed');
+  });
+
+  it('a renewal that finds the lease gone aborts the signal and refuses further commits', async () => {
+    _setLeaseTimingForTest({ ttlMs: 600, renewMs: 100 });
+    const out = await withLeaderLock('auto-deliver', async () => {
+      const signal = currentLeaseSignal()!;
+      await locksPool.query("UPDATE scheduler_lease SET token = $1, holder = 'other:3' WHERE name = 'auto-deliver'", [randomUUID()]);
+      await expect.poll(() => signal.aborted, { timeout: 2_000 }).toBe(true);
+      return withStore(randomUUID(), async () => 'committed').catch((e: unknown) => e);
+    });
+    expect(out).toBeInstanceOf(LeaseLostError);
+  });
+
+  it('the webhook pass\'s own delivery pool is fenced too', async () => {
+    const STORE = randomUUID();
+    await pool.query("INSERT INTO store (id, slug, name, currency) VALUES ($1, $2, 'Fence', 'USD')", [STORE, `fence-${STORE.slice(0, 8)}`]);
+    try {
+      const out = await withLeaderLock('webhooks', async () => {
+        await locksPool.query("UPDATE scheduler_lease SET expires_at = now() - interval '1 second' WHERE name = 'webhooks'");
+        return deliverWebhooks({ limit: 1 }).catch((e: unknown) => e);
+      });
+      expect(out).toBeInstanceOf(AggregateError);
+      expect((out as AggregateError).errors.some((e) => e instanceof LeaseLostError)).toBe(true);
+    } finally {
+      await pool.query('DELETE FROM store WHERE id = $1', [STORE]);
+    }
+  });
+});
+
+describe('bounded failure modes', () => {
+  it('a real pool acquire timeout answers 503; Retry-After only on GET', async () => {
+    const app = createApp();
+    app.get('/__fixture/db', async (c) => { await pool.query('SELECT 1'); return c.text('ok'); });
+    app.post('/__fixture/db', async (c) => { await pool.query('SELECT 1'); return c.text('ok'); });
+    const held = await holdAll(env.PGPOOL_MAX, () => pool.connect());
+    try {
+      const [get, post] = await Promise.all([app.request('/__fixture/db'), app.request('/__fixture/db', { method: 'POST' })]);
+      expect([get.status, post.status]).toEqual([503, 503]);
+      expect(get.headers.get('retry-after')).toBe('2');
+      expect(post.headers.get('retry-after')).toBeNull();
+    } finally {
+      for (const c of held) c.release();
+    }
+  }, 30_000);
+
+  it('a hung statement on the locks pool is abandoned at the client-side ceiling', async () => {
+    const started = Date.now();
+    await expect(locksPool.query('SELECT pg_sleep(30)')).rejects.toThrow(/timeout/i);
+    expect(Date.now() - started).toBeLessThan(LOCKS_QUERY_TIMEOUT_MS + 2_000);
+    await expect.poll(() => poolGauges().locks!.waiting).toBe(0);
+  }, 30_000);
+
+  it('the connection budget check warns past PG_CONNECTION_BUDGET', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    try {
+      await checkConnectionBudget({ ...env, PG_CONNECTION_BUDGET: 5 });
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes('db connection budget exceeded'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

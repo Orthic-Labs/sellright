@@ -63,9 +63,9 @@ services:
         ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
           GRANT EXECUTE ON FUNCTIONS TO sellright_app;
         -- #358 / #360: bound how long any runtime session can hold a connection
-        -- (values from docs/runbooks/postgres-app-role.md). The API overrides these per pool:
-        -- the jobs pool allows 120 s statements, and the advisory-lock pool waits
-        -- on workflow locks by design (statement and lock timeouts off).
+        -- (values from docs/runbooks/postgres-app-role.md). The API sets its own per pool:
+        -- the jobs pool allows 120 s statements, and the advisory-lock pool bounds a
+        -- workflow-lock wait by PGADVISORY_LOCK_WAIT_MS (5 s) and each statement by 30 s.
         ALTER ROLE sellright_app SET statement_timeout = '30s';
         ALTER ROLE sellright_app SET lock_timeout = '5s';
         ALTER ROLE sellright_app SET idle_in_transaction_session_timeout = '15s';
@@ -174,7 +174,7 @@ services:
       TRUSTED_PROXY_HEADER: x-real-ip
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
       PGPOOL_CONNECTION_TIMEOUT_MS: ${PGPOOL_CONNECTION_TIMEOUT_MS:-5000}
-      PGJOBS_POOL_MAX: ${PGJOBS_POOL_MAX:-4}
+      PGJOBS_POOL_MAX: ${PGJOBS_POOL_MAX:-6}
       PGLOCKS_POOL_MAX: ${PGLOCKS_POOL_MAX:-4}
       JOBS_CONCURRENCY: ${JOBS_CONCURRENCY:-2}
     volumes:

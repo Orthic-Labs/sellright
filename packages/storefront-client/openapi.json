@@ -294,6 +294,21 @@
                           "waiting"
                         ]
                       }
+                    },
+                    "jobs": {
+                      "type": "object",
+                      "properties": {
+                        "active": {
+                          "type": "integer"
+                        },
+                        "overdue": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "active",
+                        "overdue"
+                      ]
                     }
                   },
                   "required": [
@@ -348,6 +363,21 @@
                           "waiting"
                         ]
                       }
+                    },
+                    "jobs": {
+                      "type": "object",
+                      "properties": {
+                        "active": {
+                          "type": "integer"
+                        },
+                        "overdue": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "active",
+                        "overdue"
+                      ]
                     }
                   },
                   "required": [

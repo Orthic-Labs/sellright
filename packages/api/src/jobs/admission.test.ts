@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAdmission, Semaphore } from './admission.js';
+import { AdmissionStoppedError, createAdmission, Semaphore } from './admission.js';
 
 // #360 N3: actual active passes never exceed the cap, also after a pass outlives its deadline.
 describe('job admission', () => {
@@ -33,6 +33,38 @@ describe('job admission', () => {
     const admission = createAdmission({ concurrency: 1, deadlineMs: 1_000 });
     await expect(admission.run('boom', async () => { throw new Error('boom'); })).rejects.toThrow('boom');
     expect(await admission.run('next', async () => 'ran')).toBe('ran');
+    expect(admission.active).toBe(0);
+  });
+});
+
+describe('admission lanes and stop (#360 H2, L1)', () => {
+  it('settlement effects and e-mails run while two long passes hold every general slot', async () => {
+    const admission = createAdmission({ concurrency: 2, criticalConcurrency: 2, deadlineMs: 60_000 });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const long = [admission.run('listmonk-sync', () => gate), admission.run('catalog-manifest:stock', () => gate)];
+    const queued = admission.run('auto-deliver', async () => 'general'); // waits: the general lane is full
+    expect(await admission.run('pending-effects', async () => 'effects')).toBe('effects');
+    expect(await admission.run('emails', async () => 'emails')).toBe('emails');
+    expect(admission.active).toBe(2);
+    open();
+    await Promise.all(long);
+    expect(await queued).toBe('general');
+  });
+
+  it('stop() refuses new passes, rejects queued ones and waits for running ones', async () => {
+    const admission = createAdmission({ concurrency: 1, deadlineMs: 60_000 });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const running = admission.run('a', () => gate);
+    await expect.poll(() => admission.active).toBe(1); // 'a' is admitted and running
+    const queued = admission.run('b', async () => 'never');
+    const stopping = admission.stop(1_000);
+    await expect(queued).rejects.toBeInstanceOf(AdmissionStoppedError);
+    await expect(admission.run('c', async () => 'never')).rejects.toBeInstanceOf(AdmissionStoppedError);
+    open();
+    await running;
+    await stopping;
     expect(admission.active).toBe(0);
   });
 });

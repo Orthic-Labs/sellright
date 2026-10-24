@@ -32,10 +32,11 @@ const EnvSchema = z.object({
   // under normal load while still bounding worst-case request latency.
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
   // #358 / #360: scheduled jobs never draw from the request pool above. Their transactions run on their own small
-  // pool (a pass holds at most two connections, JOBS_CONCURRENCY passes run at once), and job leadership is a
+  // pool (a pass holds at most two connections; JOBS_CONCURRENCY + JOBS_CRITICAL_CONCURRENCY passes run at once,
+  // so the default 6 leaves headroom), and job leadership is a
   // scheduler_lease row claimed through the short-statement locks pool (also the readiness probe), so a lease
   // holds no connection while the job works. Payment workflow advisory locks keep their separate pool.
-  PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(4),
+  PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(6),
   PGLOCKS_POOL_MAX: z.coerce.number().int().positive().default(4),
   // Payment/refund workflow advisory locks (#360 N1): how long one waits for a workflow lock another request holds
   // (the lock wait is bounded by Postgres, the connection acquisition by PGPOOL_CONNECTION_TIMEOUT_MS), and when a
@@ -298,8 +299,12 @@ const EnvSchema = z.object({
   // Scheduler (#358): at most this many job passes run at once; the rest wait their turn (a waiting job's next
   // tick is skipped, as an overlapping tick always was).
   JOBS_CONCURRENCY: z.coerce.number().int().positive().default(2),
-  // Scheduler (#358): a pass still running after this long is logged and gives its concurrency slot back. The pass
-  // itself cannot be cancelled: it keeps its lease (renewed) and the job's next tick waits until it settles.
+  // Scheduler (#360 H2): settlement effects, gateway events, e-mails and webhooks have their own slots
+  // (jobs/admission.ts CRITICAL_JOBS), so they never wait behind other background work.
+  JOBS_CRITICAL_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  // Scheduler (#358 / #360 N3): a pass still running after this long raises an alarm (and every deadline after) and
+  // counts as overdue on /v1/readyz. It keeps its slot — it cannot be cancelled from outside, and freeing the slot
+  // would let active work exceed the caps — and the job's next tick waits until it settles.
   JOBS_PASS_DEADLINE_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // Test harnesses only: every job whose interval is one minute runs on this interval instead (the e2e suites use
   // 1000, so a spec sees an outbox drain in seconds). Unset in every real deployment.

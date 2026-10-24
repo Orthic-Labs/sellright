@@ -51,6 +51,9 @@ export function inJobScope(): boolean {
  *  PGADVISORY_LOCK_WAIT_MS (#360 N1 — never unbounded, matching the production roles' lock_timeout) and each
  *  statement by 30 s. */
 const JOBS_SESSION = '-c statement_timeout=120000';
+const JOBS_QUERY_TIMEOUT_MS = 125_000;
+/** Lease claims/renewals and the readiness probe are single trivial statements. */
+export const LOCKS_QUERY_TIMEOUT_MS = 3_000;
 const advisorySession = (e: Env) => `-c statement_timeout=30000 -c lock_timeout=${e.PGADVISORY_LOCK_WAIT_MS}`;
 
 export function initPools(e: Env = getEnv()): Pool {
@@ -62,6 +65,9 @@ export function initPools(e: Env = getEnv()): Pool {
       max,
       idleTimeoutMillis: e.PGPOOL_IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: e.PGPOOL_CONNECTION_TIMEOUT_MS,
+      // TCP keepalive (#360 M1): a half-open socket (peer gone without FIN) is detected by the kernel instead of
+      // pinning a pooled connection until the OS gives up minutes later.
+      keepAlive: true,
       ...extra,
     });
     // 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
@@ -72,8 +78,10 @@ export function initPools(e: Env = getEnv()): Pool {
     return p;
   };
   const pool = make(e.PGAPPNAME, e.PGPOOL_MAX);
-  const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION });
-  const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true });
+  // Client-side ceilings (#360 H2/M1) on top of the server's statement_timeout: a query on a hung connection is
+  // abandoned (and its client discarded) even when the server never answers.
+  const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION, query_timeout: JOBS_QUERY_TIMEOUT_MS });
+  const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true, query_timeout: LOCKS_QUERY_TIMEOUT_MS });
   const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, advisoryPoolMax(e), { allowExitOnIdle: true, options: advisorySession(e) });
   pools = { pool, jobsPool, locksPool, advisoryLockPool, db: drizzle(pool, drizzleOpts), jobsDb: drizzle(jobsPool, drizzleOpts) };
   poolsClosed = false;
@@ -160,15 +168,34 @@ export async function checkConnectionBudget(e: Env = getEnv()): Promise<void> {
   else log.info('db connection budget', fields);
 }
 
+/** Boot check (createApp, best-effort; #360 L5): job leadership needs the runtime role to read and write
+ *  scheduler_lease. A missing grant (a migration run as a role whose default privileges don't cover the app role)
+ *  would make every scheduled pass fail; say so once, loudly, at boot. */
+export async function checkSchedulerLeaseAccess(): Promise<void> {
+  const { rows } = await locksPool.query<{ ok: boolean | null }>(
+    "SELECT CASE WHEN to_regclass('public.scheduler_lease') IS NULL THEN NULL ELSE has_table_privilege(current_user, 'public.scheduler_lease', 'SELECT,INSERT,UPDATE,DELETE') END AS ok",
+  );
+  const ok = rows[0]?.ok;
+  if (ok === null) logErr.error('scheduler_lease is missing (migration 0112 not applied): every leader-locked job will fail');
+  else if (!ok) logErr.error('the runtime role lacks SELECT/INSERT/UPDATE/DELETE on scheduler_lease: every leader-locked job will fail; grant it as the owner');
+}
+
 /** #360 N2: a scheduler lease the current job pass holds (jobs/leader-lock.ts). While one is in scope, every store
  *  transaction re-checks it, row-locked, right before COMMIT, so a worker whose lease expired or was taken over can
  *  never commit; `signal` aborts when renewal finds the lease gone. */
-export interface LeaseFence { name: string; token: string; lost: boolean; readonly signal: AbortSignal }
+export interface LeaseFence { name: string; token: string; lost: boolean; released: boolean; readonly signal: AbortSignal }
 const leaseScope = new AsyncLocalStorage<readonly LeaseFence[]>();
 
 /** Run `fn` with `fence` added to the leases every store transaction it starts must still hold at COMMIT. */
 export function runWithLeaseFence<T>(fence: LeaseFence, fn: () => Promise<T>): Promise<T> {
   return leaseScope.run([...(leaseScope.getStore() ?? []), fence], fn);
+}
+
+/** Run `fn` outside any job pass: no job scope (its SQL uses the request pool) and no lease fence. Every point where
+ *  a pass starts work it does not await (after-commit callbacks, stock-change hooks, the email waker) goes through
+ *  this, so the detached work neither borrows the pass's pool nor dies with its lease (#360 H1). */
+export function detachFromPass<T>(fn: () => T): T {
+  return jobScope.exit(() => leaseScope.exit(fn));
 }
 
 /** The abort signal of the innermost lease in scope (undefined outside a leader-locked pass). */
@@ -183,6 +210,9 @@ export class LeaseLostError extends Error {
 async function assertLeasesHeld(client: PoolClient, fences: readonly LeaseFence[]): Promise<void> {
   for (const f of fences) {
     if (f.lost) throw new LeaseLostError(f.name);
+    // A fence still in scope after its pass ended belongs to detached work that escaped detachFromPass(); the pass
+    // gave the lease back on purpose, so that work is not refused (#360 H1). Only a LOST lease refuses commits.
+    if (f.released) continue;
     // FOR SHARE: a competing claim (INSERT … ON CONFLICT DO UPDATE) waits for this COMMIT, so the lease cannot change
     // hands between this check and the commit. clock_timestamp(), not now(): the transaction may be old.
     const r = await client.query(
@@ -193,11 +223,14 @@ async function assertLeasesHeld(client: PoolClient, fences: readonly LeaseFence[
   }
 }
 
-/** pg-pool's error when no client frees up within PGPOOL_CONNECTION_TIMEOUT_MS. Maps to 503 + Retry-After (app.ts)
- *  and to "skipped: pool busy" in the scheduler. */
+/** No connection in time: pg-pool's acquire timeout (no client freed up within PGPOOL_CONNECTION_TIMEOUT_MS), a
+ *  connect that timed out, or the server refusing with too_many_connections (53300). Maps to 503 (app.ts) and to
+ *  "skipped: pool busy" in the scheduler. */
 export function isPoolTimeout(err: unknown): boolean {
   for (let e: unknown = err, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
-    if (e instanceof Error && e.message.includes('timeout exceeded when trying to connect')) return true;
+    if (e instanceof Error && (e.message.includes('timeout exceeded when trying to connect')
+      || e.message.includes('Connection terminated due to connection timeout'))) return true;
+    if ((e as { code?: unknown }).code === '53300') return true; // too_many_connections: the server's own limit
   }
   return false;
 }
@@ -330,7 +363,7 @@ export async function runStoreTransaction<T>(
       if (timeoutError) throw timeoutError;
       await client.query('COMMIT');
       if (timeoutError) throw timeoutError;
-      flushAfterCommit(client);
+      detachFromPass(() => flushAfterCommit(client)); // after-commit work is never part of a job pass (#360 H1)
       return result;
     })());
   } catch (err) {
