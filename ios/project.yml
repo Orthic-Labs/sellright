@@ -80,6 +80,10 @@ targets:
           - webcredentials:api.orthiclabs.com
           - webcredentials:admin.orthiclabs.com?mode=developer
           - webcredentials:api.orthiclabs.com?mode=developer
+          - webcredentials:rottenhand.com
+          - webcredentials:rottenhand.com?mode=developer
+          - webcredentials:www.damneddesigns.com
+          - webcredentials:www.damneddesigns.com?mode=developer
           - webcredentials:admin.sellright.cc?mode=developer
         # 'development' routes to the APNs SANDBOX host, which is what a
         # Debug/dev-signed build's token is valid for. The App Store Connect export
