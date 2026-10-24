@@ -364,8 +364,24 @@ export class CartService {
     });
   }
 
+  /** The boot read in flight, if any (#362): a fresh checkout document booted the cart twice at once (the provider's
+   *  qinit and the checkout entry's loadCartIfNeeded). Callers that overlap one boot share it; once it settles the next
+   *  boot reads again. This only joins two boot reads: the locked live checks (cart open, checkout entry, pre-submit)
+   *  call refresh()/readFresh() themselves and never join it. Object-property holder so the minifier cannot fold it. */
+  private static boot: { inFlight?: Promise<CartMutationResult> } = {};
+
   /** Legacy work needs a write lock; ordinary native boot retains its read-only browser fallback. */
   static bootstrap(): Promise<CartMutationResult> {
+    const shared = this.boot.inFlight;
+    if (shared) return shared;
+    const run = this.bootstrapOnce();
+    this.boot.inFlight = run;
+    const clear = () => { if (this.boot.inFlight === run) this.boot.inFlight = undefined; };
+    run.then(clear, clear);
+    return run;
+  }
+
+  private static bootstrapOnce(): Promise<CartMutationResult> {
     this.syncToCookie();
     this.restoreIntent();
     if (!this.hasLegacyIntent() && !this.pendingIntentMigration) return this.refresh();

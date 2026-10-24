@@ -118,12 +118,15 @@ export default component$(() => {
 		isLoading: boolean;
 		error: string | null;
 		lastCheckedCountry: string;
+		/** Inputs of the last successful quote while the drawer is open ('' = none). */
+		quoteKey: string;
 	}>({
 		selectedMethod: null,
 		methods: [],
 		isLoading: false,
 		error: null,
 		lastCheckedCountry: '',
+		quoteKey: '',
 	});
 
 	// Reactive shipping calculation — drives shippingState on every track change.
@@ -139,13 +142,19 @@ export default component$(() => {
 		if (!cartVisible || !countryCode || items.length === 0) {
 			shippingState.methods = [];
 			shippingState.selectedMethod = null;
+			shippingState.quoteKey = '';
 			return;
 		}
+		// The cart-open live read replaces the lines array with the same items, which re-ran this quote. Quote again only
+		// when the destination, items or coupons changed while the drawer stayed open (#362); each open quotes afresh.
+		const quoteKey = JSON.stringify([countryCode, items, couponCodes]);
+		if (quoteKey === shippingState.quoteKey) return;
 
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
 		const { method: selectedShippingMethod, freeShipping } = await fetchCartShipping(countryCode, items, couponCodes);
 		if (cancelled) return;
+		shippingState.quoteKey = quoteKey;
 		appState.freeShipping = freeShipping;
 
 		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];

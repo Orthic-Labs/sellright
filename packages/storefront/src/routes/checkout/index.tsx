@@ -90,6 +90,8 @@ const CheckoutContent = component$(() => {
   // eligible, matching the displayed rate). POST /checkout 409s
   // 'method_required' for physical carts when this is absent.
   const shippingMethod = useSignal<ShopShippingMethod | null>(null);
+  // Inputs of the last successful shipping quote on this page ('' = none): see the quote task below.
+  const shippingQuoteKey = useSignal('');
   // Public runtime config — decides whether the Stripe Payment Element mounts
   // once the order reaches PendingPayment.
   const shopConfig = useSignal<ShopConfig | null>(null);
@@ -108,10 +110,16 @@ const CheckoutContent = component$(() => {
     const couponCodes = track(() => [...(localCart.cart.couponCodes ?? [])]);
 
     if (!countryCode) {
+      shippingQuoteKey.value = '';
       shippingCents.value = null;
       shippingMethod.value = null;
       return;
     }
+
+    // Every live cart read replaces the mirror's lines array, which re-runs this task with the same items. Re-quote only
+    // when the destination, items or coupons actually changed since the last successful quote on this page (#362).
+    const quoteKey = JSON.stringify([countryCode, items, couponCodes]);
+    if (quoteKey === shippingQuoteKey.value) return;
 
     let cancelled = false;
     cleanup(() => { cancelled = true; });
@@ -120,6 +128,7 @@ const CheckoutContent = component$(() => {
       // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
       const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
       if (cancelled) return;
+      shippingQuoteKey.value = quoteKey;
       appState.freeShipping = freeShipping;
       if (!methods.length) {
         shippingCents.value = null;
@@ -289,6 +298,8 @@ const CheckoutContent = component$(() => {
 
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
   const loadNormalCheckout = $(async (gen: number) => {
+    // A guest (no session the root layout could resolve for this request) has no profile to read: no /auth/me (#362).
+    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID;
     const [customerData, countriesData] = await Promise.all([
       signedIn ? getMe().catch(() => null) : null,
       CountryService.getAvailableCountries().catch(() => []),
@@ -298,8 +309,6 @@ const CheckoutContent = component$(() => {
     if (countriesData && countriesData.length > 0) {
       appState.availableCountries = countriesData;
     }
-    // A guest (no session the root layout could resolve for this request) has no profile to read: no /auth/me (#362).
-    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID;
 
     if (customerData) {
       // appState.customer's field names are the CheckoutAddresses form
