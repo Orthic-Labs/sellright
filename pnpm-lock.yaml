@@ -52,8 +52,8 @@ importers:
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.13)(zod@4.6.7)
       '@rightkit/legal':
-        specifier: 0.6.1
-        version: 0.6.1
+        specifier: 0.6.3
+        version: 0.6.3
       '@simplewebauthn/server':
         specifier: 14.0.3
         version: 14.0.3
@@ -1467,9 +1467,14 @@ packages:
     resolution: {integrity: sha512-yXMiBFYJbP5JOaxPzx2tJhK+v8h2Wu2uhad1Ro6GzVT8E3F4GcQ7sbLPJ9w4zvGjfxroD0bIh5B0pDtnLV/qUA==}
     engines: {node: '>=18.17.0', npm: '>=9.5.0'}
 
-  '@rightkit/legal@0.6.1':
-    resolution: {integrity: sha512-owvODgGe12V0U4svDPnP41mvYEmH5lTvnfKIiqzOlgNKT35jMmFpfz7HwVFLyYMNvh7lm1i/bGBC5Hc2jtCSAQ==}
+  '@rightkit/legal@0.6.3':
+    resolution: {integrity: sha512-GZDGl0BGAjsvJc+ncUTFlaEoCTL7wVeIWXzWTl0MdaNx7gO86HM3wKELLy789RAt6+GlVyhOOM2ACkVmGrauvw==}
     hasBin: true
+    peerDependencies:
+      '@rightkit/release': ^0.4.1 || ^0.5.0 || ^0.6.0
+    peerDependenciesMeta:
+      '@rightkit/release':
+        optional: true
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     resolution: {integrity: sha512-aWR+XKH9+rW7m5fWq/5360J3mHycrx/o6xZM2DQFdJnTMdyP7/WzxPjhtLbVWdKo2y612/4U1bWqb3HQhiF7vg==}
@@ -5937,7 +5942,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rightkit/legal@0.6.1': {}
+  '@rightkit/legal@0.6.3': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     optional: true
