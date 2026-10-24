@@ -26,7 +26,7 @@ export default function Products() {
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['products', store?.slug, q, status, page],
-    queryFn: () => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, status, page: String(page), pageSize: '25' })}`),
+    queryFn: ({ signal }) => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, status, page: String(page), pageSize: '25' })}`, { signal }),
     placeholderData: keepPreviousData,
   });
 

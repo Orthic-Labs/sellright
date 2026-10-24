@@ -36,7 +36,7 @@ export default function Inventory() {
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['inventory', store?.slug, q, low, page],
-    queryFn: () => api.get<Page<InventoryRow>>(`/inventory?${new URLSearchParams({ q, lowStock: low ? '1' : '', page: String(page), pageSize: '50' })}`),
+    queryFn: ({ signal }) => api.get<Page<InventoryRow>>(`/inventory?${new URLSearchParams({ q, lowStock: low ? '1' : '', page: String(page), pageSize: '50' })}`, { signal }),
     placeholderData: keepPreviousData,
   });
   const save = useMutation({

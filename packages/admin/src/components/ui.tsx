@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { MoreHorizontal, AlertCircle, CheckCircle2, Info, AlertTriangle, RefreshCw, X } from 'lucide-react';
+import { SEARCH_DEBOUNCE_MS } from '../lib/debounce';
 export { Field, FormSection, KpiCard, Pagination } from './ui-forms';
 
 /* ------------------------------------------------------------------ *
@@ -273,15 +274,31 @@ export function ResourceToolbar({ left, right }: { left?: ReactNode; right?: Rea
   );
 }
 
+/** Search box for list pages. Typing updates the box at once; `onChange` (which drives the page's query) fires only after
+ *  the typing pauses (SEARCH_DEBOUNCE_MS), so one search is one request, not one per keystroke (#362). A value set from
+ *  outside (e.g. "Clear search") replaces the text immediately. */
 export function SearchInput({ value, onChange, placeholder = 'Search', className = 'w-64' }: {
   value: string; onChange: (v: string) => void; placeholder?: string; className?: string;
 }) {
+  const [draft, setDraft] = useState(value);
+  const emitted = useRef(value);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  // An outside change (not our own debounced emit) wins over the draft.
+  useEffect(() => {
+    if (value !== emitted.current) { emitted.current = value; setDraft(value); }
+  }, [value]);
+  useEffect(() => {
+    if (draft === emitted.current) return;
+    const timer = setTimeout(() => { emitted.current = draft; onChangeRef.current(draft); }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draft]);
   return (
     <div className={`relative ${className}`}>
       <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" /><path d="m20 20-3-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>
-      <input className="input pl-9" placeholder={placeholder} aria-label={placeholder} value={value} onChange={(e) => onChange(e.target.value)} />
+      <input className="input pl-9" placeholder={placeholder} aria-label={placeholder} value={draft} onChange={(e) => setDraft(e.target.value)} />
     </div>
   );
 }

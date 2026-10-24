@@ -55,7 +55,7 @@ export default function Orders() {
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['orders', store?.slug, paramsKey, page],
-    queryFn: () => api.get<Page<OrderRow>>(`/orders?${filtersToApiQuery(filters, page)}`),
+    queryFn: ({ signal }) => api.get<Page<OrderRow>>(`/orders?${filtersToApiQuery(filters, page)}`, { signal }),
     placeholderData: keepPreviousData,
   });
 

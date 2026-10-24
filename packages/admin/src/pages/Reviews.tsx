@@ -71,7 +71,7 @@ export default function ReviewsPage() {
   const key = ['reviews', store?.slug, status, q, page];
   const { data, isLoading, error } = useQuery({
     queryKey: key, placeholderData: keepPreviousData,
-    queryFn: () => api.get<ReviewPage>(`/reviews?${new URLSearchParams({ status, q, page: String(page), pageSize: '20' })}`),
+    queryFn: ({ signal }) => api.get<ReviewPage>(`/reviews?${new URLSearchParams({ status, q, page: String(page), pageSize: '20' })}`, { signal }),
   });
   const refresh = () => { qc.invalidateQueries({ queryKey: ['reviews', store?.slug] }); };
   const act = useMutation({

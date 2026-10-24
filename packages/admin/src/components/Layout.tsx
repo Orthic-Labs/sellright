@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
 import { api } from '../api';
 import { initials } from '../lib/format';
+import { useDebouncedValue } from '../lib/debounce';
 import { ThemeMenu } from '../theme';
 import { AppErrorBoundary } from './ErrorBoundary';
 
@@ -123,9 +124,11 @@ function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
   const { data } = useQuery({
-    queryKey: ['global-search', q],
-    queryFn: () => api.get<{ orders: any[]; products: any[]; customers: any[] }>(`/search?q=${encodeURIComponent(q)}`),
-    enabled: q.trim().length > 1,
+    queryKey: ['global-search', settled],
+    queryFn: ({ signal }) => api.get<{ orders: any[]; products: any[]; customers: any[] }>(`/search?q=${encodeURIComponent(settled)}`, { signal }),
+    enabled: settled.trim().length > 1,
+  // One request per pause in typing, and a superseded one is aborted (#362).
+  const settled = useDebouncedValue(q);
   });
   const go = (path: string) => { setQ(''); setOpen(false); nav(path); };
   const has = data && (data.orders.length || data.products.length || data.customers.length);

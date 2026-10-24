@@ -21,7 +21,7 @@ export default function Customers() {
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['customers', store?.slug, q, page],
-    queryFn: () => api.get<Page<CustomerRow>>(`/customers?${new URLSearchParams({ q, page: String(page), pageSize: '25' })}`),
+    queryFn: ({ signal }) => api.get<Page<CustomerRow>>(`/customers?${new URLSearchParams({ q, page: String(page), pageSize: '25' })}`, { signal }),
     placeholderData: keepPreviousData,
   });
   const create = useMutation({

@@ -135,16 +135,18 @@ export function CommandPalette() {
     const q = query.trim();
     if (q.length < 2) { setSearchData(null); return; }
     let aborted = false;
+    const ctl = new AbortController();
     debounceRef.current = setTimeout(() => {
       void (async () => {
         try {
-          const res = await api.get<SearchResult>(`/search?q=${encodeURIComponent(q)}`);
+          const res = await api.get<SearchResult>(`/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
           if (!aborted) setSearchData(res);
         } catch { if (!aborted) setSearchData(null); }
       })();
     }, 200);
     return () => {
       aborted = true;
+      ctl.abort(); // a superseded search stops on the wire too (#362)
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [query]);

@@ -29,7 +29,7 @@ export default function TrackingGrid() {
 
   const open = useQuery({
     queryKey: ['open-orders', store?.slug, q],
-    queryFn: () => api.get<{ items: OpenOrder[]; total: number }>(`/fulfillment/open-orders?${new URLSearchParams({ q, limit: '200' })}`),
+    queryFn: ({ signal }) => api.get<{ items: OpenOrder[]; total: number }>(`/fulfillment/open-orders?${new URLSearchParams({ q, limit: '200' })}`, { signal }),
     placeholderData: keepPreviousData,
   });
   const orders = open.data?.items ?? [];

@@ -36,7 +36,7 @@ function apiError(status: number, json: Record<string, unknown> | null | undefin
   return err;
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   // QA mock short-circuit — gated by VITE_QA_MOCK + ?qa=1 in qa-mocks.ts.
   // Mutations always pass through so we don't accidentally let QA mode write
   // to the real DB. The mock is at the network boundary, NOT inside pages.
@@ -52,7 +52,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
-  const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
   if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
@@ -61,7 +61,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
-  get: <T>(p: string) => req<T>('GET', p),
+  /** `signal`: pass React Query's (`queryFn: ({ signal }) => …`) so a superseded or unmounted read is aborted. */
+  get: <T>(p: string, opts?: { signal?: AbortSignal }) => req<T>('GET', p, undefined, opts?.signal),
   post: <T>(p: string, b?: unknown) => req<T>('POST', p, b ?? {}),
   patch: <T>(p: string, b?: unknown) => req<T>('PATCH', p, b ?? {}),
   put: <T>(p: string, b?: unknown) => req<T>('PUT', p, b ?? {}),
