@@ -15,6 +15,8 @@ push.
 
 - TestFlight release through RightKit's shared iOS recipe (`targets.ios` in `right-release.config.mjs`), version 0.2.0.
 - Debug-only demo store (`-SellRightDemo` launch argument) for rendered checks; compiled out of Release.
+- Added screenshot journeys to existing UI-test target: generic demo dashboard, orders, catalog unavailable states & account settings (#351, #344).
+- Pinned `@rightkit/release` 0.6.4 with `pnpm release:doctor`, explicit unrelated hosted-workflow declarations & Swift-only release switch inventory (#351, #344).
 
 ### Changed
 

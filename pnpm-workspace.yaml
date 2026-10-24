@@ -4,6 +4,11 @@ packages:
   # installs independently so its React deps can't disturb the api/shared build.
   - "!packages/admin"
 
+# Keep root release devtools out of API optional-peer resolution.
+resolvePeersFromWorkspaceRoot: false
+autoInstallPeers: false
+dedupePeerDependents: false
+
 # Supply-chain hardening (ra-017). pnpm 10 settings: refuse to install packages
 # from non-trusted registries or via exotic transitive sources. The other two
 # candidates (minimumReleaseAge, trustPolicy: no-downgrade) would block the
@@ -28,6 +33,8 @@ onlyBuiltDependencies:
   - sharp
 
 overrides:
+  # GHSA-mrhx-c7xc-m3w5: rc.3 includes Qwik #8898 Zod 4 compatibility.
+  '@qwik.dev/router@2.0.0-rc.3>zod': 4.6.7
   # GHSA-82fw-gwwq-j7x9: keep the test runner and its mocker on the patched release.
   vitest: 4.1.12
   '@vitest/mocker': 4.1.12
@@ -61,3 +68,4 @@ minimumReleaseAgeExclude:
   - nodemailer@10.1.0 || 10.1.7
   - prettier@3.9.10
   - '@rightkit/legal@0.6.3'
+  - '@rightkit/release@0.6.4'
