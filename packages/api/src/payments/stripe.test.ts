@@ -5,7 +5,7 @@
  * only piece that needs a sandbox key.
  */
 import { describe, expect, it } from 'vitest';
-import { verifyIntent, stripeRefundState, type IntentLike } from './stripe.js';
+import { verifyIntent, stripeRefundState, stripeConfiguredFromCreds, stripePublishableFromCreds, type IntentLike } from './stripe.js';
 import { manualProvider, codProvider } from './provider.js';
 
 const base = { orderCode: 'SR-ABC', amount: 2100, currency: 'usd' };
@@ -91,5 +91,22 @@ describe('manual/cod refund no-ops', () => {
   it('cod refundPayment is a Settled no-op', async () => {
     expect(await codProvider.refundPayment!({ providerRef: null, amount: 100, currency: 'usd' }))
       .toEqual({ state: 'Settled', providerRef: null });
+  });
+});
+
+// #362: the credential gates over already-resolved creds — the same rules the resolve* wrappers apply.
+describe('Stripe gates over resolved credentials', () => {
+  it('a secret key counts only when it is a secret/restricted key of this mode', () => {
+    expect(stripeConfiguredFromCreds({ secretKey: 'sk_test_1' }, 'test')).toBe(true);
+    expect(stripeConfiguredFromCreds({ secretKey: 'rk_live_1' }, 'live')).toBe(true);
+    expect(stripeConfiguredFromCreds({ secretKey: 'sk_test_1' }, 'live')).toBe(false);
+    expect(stripeConfiguredFromCreds({ secretKey: 'pk_test_1' }, 'test')).toBe(false);
+    expect(stripeConfiguredFromCreds({}, 'test')).toBe(false);
+  });
+  it('a publishable key is offered only when it is a pk_ of this mode', () => {
+    expect(stripePublishableFromCreds({ publishableKey: 'pk_test_1' }, 'test')).toBe('pk_test_1');
+    expect(stripePublishableFromCreds({ publishableKey: 'pk_test_1' }, 'live')).toBeNull();
+    expect(stripePublishableFromCreds({ publishableKey: 'sk_test_1' }, 'test')).toBeNull();
+    expect(stripePublishableFromCreds({}, 'test')).toBeNull();
   });
 });

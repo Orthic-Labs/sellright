@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { resolveStoreFromCtx } from './store-context.js';
 import { resolveConfiguredGatewayAccount, nmiEnvironment } from '../payments/gateway-account.js';
 import { isPaymentMethodEnabled } from '../payments/provider.js';
-import { stripeModeFromConfig, resolveStripePublishableForClient, resolveStripeUsable } from '../payments/stripe.js';
+import { stripeModeFromConfig, resolveStripeClientConfig, resolveStripePublishableForClient } from '../payments/stripe.js';
 import { loyaltySettingsFromConfig } from '../money/loyalty.js';
 import { PublicLoyaltySettings, publicLoyalty } from './loyalty.js';
 import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../store-publish.js';
@@ -60,6 +60,8 @@ shopConfig.openapi(
     } } catch { /* An unavailable account is not advertised to shoppers. */ }
     try { if (isPaymentMethodEnabled(st.config, 'sezzle')) { await resolveConfiguredGatewayAccount(st.id, 'sezzle', st.config); sezzle = true; } } catch { /* fail closed */ }
     const loyalty = loyaltySettingsFromConfig(st.config);
+    // One credential resolution for both Stripe fields (#362); the usable gate is the same one payment-intent applies.
+    const stripe = await resolveStripeClientConfig(st.id, mode);
     return c.json({
       gateways: { nmi, sezzle },
       loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
@@ -69,8 +71,8 @@ shopConfig.openapi(
         appleServicesId: appleServicesId(st.config),
       },
       stripeMode: mode,
-      stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
-      stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),
+      stripePublishableKey: stripe.publishableKey,
+      stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && stripe.usable,
     }, 200);
   },
 );

@@ -94,13 +94,31 @@ export async function resolveStripeClient(storeId: string, mode: StripeMode): Pr
  *  (`sk_`/`rk_`) AND embeds this mode — so a test key in the live slot, or a
  *  publishable key pasted into the secret slot, reads as NOT configured. */
 export async function resolveStripeConfigured(storeId: string, mode: StripeMode): Promise<boolean> {
-  const sk = (await resolveStripeCreds(storeId, mode)).secretKey;
-  return !!sk && (sk.startsWith('sk_') || sk.startsWith('rk_')) && keyMatchesMode(sk, mode);
+  return stripeConfiguredFromCreds(await resolveStripeCreds(storeId, mode), mode);
 }
 
 export async function resolveStripePublishableForClient(storeId: string, mode: StripeMode): Promise<string | null> {
-  const pk = (await resolveStripeCreds(storeId, mode)).publishableKey;
+  return stripePublishableFromCreds(await resolveStripeCreds(storeId, mode), mode);
+}
+
+/** resolveStripeConfigured over already-resolved credentials (no DB read). */
+export function stripeConfiguredFromCreds(creds: Pick<StripeCreds, 'secretKey'>, mode: StripeMode): boolean {
+  const sk = creds.secretKey;
+  return !!sk && (sk.startsWith('sk_') || sk.startsWith('rk_')) && keyMatchesMode(sk, mode);
+}
+
+/** resolveStripePublishableForClient over already-resolved credentials (no DB read). */
+export function stripePublishableFromCreds(creds: Pick<StripeCreds, 'publishableKey'>, mode: StripeMode): string | null {
+  const pk = creds.publishableKey;
   return pk && pk.startsWith('pk_') && keyMatchesMode(pk, mode) ? pk : null;
+}
+
+/** The storefront's view of one mode — publishable key and the usable gate — from ONE credential resolution (#362):
+ *  /v1/shop/config used to resolve (and decrypt) the same credentials three times per request. */
+export async function resolveStripeClientConfig(storeId: string, mode: StripeMode): Promise<{ publishableKey: string | null; usable: boolean }> {
+  const creds = await resolveStripeCreds(storeId, mode);
+  const publishableKey = stripePublishableFromCreds(creds, mode);
+  return { publishableKey, usable: stripeConfiguredFromCreds(creds, mode) && !!publishableKey };
 }
 
 /** A customer can complete a Stripe payment in this mode: both a valid secret
@@ -108,7 +126,7 @@ export async function resolveStripePublishableForClient(storeId: string, mode: S
  *  This is the single gate the storefront (/shop/config) and the payment-intent
  *  endpoint both use, so they can never disagree. */
 export async function resolveStripeUsable(storeId: string, mode: StripeMode): Promise<boolean> {
-  return (await resolveStripeConfigured(storeId, mode)) && !!(await resolveStripePublishableForClient(storeId, mode));
+  return (await resolveStripeClientConfig(storeId, mode)).usable;
 }
 
 /** All store ids, for the inbound-webhook signature-matching fallback (below).
