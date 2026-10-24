@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
@@ -12,6 +12,7 @@ import { initials } from '../lib/format';
 import { useDebouncedValue } from '../lib/debounce';
 import { ThemeMenu } from '../theme';
 import { AppErrorBoundary } from './ErrorBoundary';
+import { Loading } from './ui';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
 interface NavItem { to: string; label: string; icon: IconType; end?: boolean }
@@ -114,7 +115,10 @@ function SectionedOutlet({ children }: { children?: ReactNode }) {
   const label = sectionLabelFor(loc.pathname);
   return (
     <AppErrorBoundary key={loc.pathname} sectionLabel={label || undefined}>
-      {children ?? <Outlet />}
+      {/* Route pages are lazy chunks (main.tsx): the shell stays up while one loads. */}
+      <Suspense fallback={<div className="py-16 grid place-items-center"><Loading label="Loading" /></div>}>
+        {children ?? <Outlet />}
+      </Suspense>
     </AppErrorBoundary>
   );
 }
@@ -123,12 +127,12 @@ function GlobalSearch() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
+  // One request per pause in typing, and a superseded one is aborted (#362).
+  const settled = useDebouncedValue(q);
   const { data } = useQuery({
     queryKey: ['global-search', settled],
     queryFn: ({ signal }) => api.get<{ orders: any[]; products: any[]; customers: any[] }>(`/search?q=${encodeURIComponent(settled)}`, { signal }),
     enabled: settled.trim().length > 1,
-  // One request per pause in typing, and a superseded one is aborted (#362).
-  const settled = useDebouncedValue(q);
   });
   const go = (path: string) => { setQ(''); setOpen(false); nav(path); };
   const has = data && (data.orders.length || data.products.length || data.customers.length);

@@ -26,7 +26,7 @@ const retryAfterOf = (e: unknown): number | null => {
 
 
 export default function Login() {
-  const { me, refresh } = useAuth();
+  const { me } = useAuth();
   const [step, setStep] = useState<Step>({ kind: 'credentials' });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -46,7 +46,7 @@ export default function Login() {
   async function finish(r: LoginResp) {
     // Same post-login path for every method (a pending 2FA enrolment is handled by the app shell after load).
     auth.store = r.stores?.[0]?.slug ?? null;
-    await refresh();
+    // The full load below boots the shell, whose AuthProvider reads /me once: no separate /me first (#362).
     location.assign(adminHref('/'));
   }
 
