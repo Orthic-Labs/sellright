@@ -133,7 +133,7 @@ export function createOrderCases(fixture: Fixture): MatrixCase[] {
     const body = await json(response);
     proof.equal({ type: body.type, number: body.number, shipTo: body.shipTo }, { type: document === 'invoice' ? 'invoice' : 'packing_slip', number: `${document === 'invoice' ? 'INV' : 'PS'}-${seed.code}`, shipTo: ['Matrix Recipient', '1 Matrix St', 'Austin, TX, 78701', 'US'] }, 'document identity and recipient');
     proof.equal(body.store.slug, fixture.storeSlug, 'document belongs to selected store');
-    proof.equal(body.lines, document === 'invoice' ? [{ sku: seed.sku, name: 'Matrix variant', quantity: 2, unitPrice: '$25.00', lineTotal: '$50.00' }] : [{ sku: seed.sku, name: 'Matrix variant', quantity: 2 }], 'document line snapshot');
+    proof.equal(body.lines, document === 'invoice' ? [{ sku: seed.sku, name: `${seed.productName} · Matrix variant`, quantity: 2, unitPrice: '$25.00', lineTotal: '$50.00' }] : [{ sku: seed.sku, name: `${seed.productName} · Matrix variant`, quantity: 2 }], 'document line snapshot');
     if (document === 'invoice') proof.equal(body.totals, { subtotal: '$50.00', discount: '$0.00', shipping: '$0.00', tax: '$0.00', grand: '$50.00' }, 'invoice monetary totals');
   } }));
   add('POST /v1/admin/orders/{code}/notes', 'write', false, async seed => ({ url: `${path(seed)}/notes`, body: { note: `Matrix note ${seed.code}` }, async verify(response: Response, proof: MatrixProof) {
