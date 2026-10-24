@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum CustomerNavigationRoute: Hashable {
+    case customer(String)
+    case order(String)
+}
+
 @MainActor
 struct CustomersListView: View {
     @Environment(AppSession.self) private var session
@@ -12,7 +17,7 @@ struct CustomersListView: View {
     var body: some View {
         List {
             ForEach(list.items) { customer in
-                NavigationLink(value: customer.id) {
+                NavigationLink(value: CustomerNavigationRoute.customer(customer.id)) {
                     CustomerRow(customer: customer, currency: session.activeStore?.currency ?? "USD")
                 }
             }
@@ -29,8 +34,13 @@ struct CustomersListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Customers")
-        .navigationDestination(for: String.self) { id in
-            CustomerDetailView(customerId: id)
+        .navigationDestination(for: CustomerNavigationRoute.self) { route in
+            switch route {
+            case .customer(let id):
+                CustomerDetailView(customerId: id)
+            case .order(let code):
+                OrderDetailView(code: code)
+            }
         }
         .searchable(text: $searchText, prompt: "Name or email")
         .overlay {

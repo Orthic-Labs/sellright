@@ -76,11 +76,28 @@ test('a 2FA-required account enrols a passkey (recommended, first) and reaches t
 	const me = await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).json());
 	expect(me).toMatchObject({ email, totpEnabled: false, passkeyEnabled: true, totpEnrollmentRequired: false });
 
-	// sign out; the passkey alone (autofill on the email field) signs back in — no password, no code
+	// Reload stays signed out: only an explicit click starts the passkey ceremony, with no password or code.
 	await page.getByRole('button', { name: 'Sign out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
+	const passkeyRequests: string[] = [];
+	page.on('request', request => {
+		const path = new URL(request.url()).pathname;
+		if (request.method() === 'POST' && /^\/v1\/admin\/passkeys\/login\/(options|verify)$/.test(path)) passkeyRequests.push(path);
+	});
 	await page.reload();
+	const passkeySignIn = page.getByRole('button', { name: 'Sign in with a passkey', exact: true });
+	await expect(passkeySignIn).toBeVisible();
+	await expect(page).toHaveURL(/\/login$/);
+	await expect(page.getByRole('navigation', { name: 'Primary' })).toBeHidden();
+	await expect(field(page, 'Email')).toHaveValue('');
+	await expect(field(page, 'Password')).toHaveValue('');
+	expect(await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).status)).toBe(401);
+	expect(passkeyRequests).toEqual([]);
+	await passkeySignIn.click();
 	await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15_000 });
+	expect(passkeyRequests).toEqual(['/v1/admin/passkeys/login/options', '/v1/admin/passkeys/login/verify']);
+	const passkeyMe = await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).json());
+	expect(passkeyMe).toMatchObject({ email, totpEnabled: false, passkeyEnabled: true, totpEnrollmentRequired: false });
 
 	// the password alone is no longer enough for this account: step 2 offers the passkey or a recovery code
 	const step1 = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: PASSWORD }) });

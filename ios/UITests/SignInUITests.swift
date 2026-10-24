@@ -42,7 +42,7 @@ final class SignInUITests: XCTestCase {
         app.launchArguments = ["-SellRightDemo", "-pushRegistrations.v1", ""]
         app.launch()
 
-        let settingsTab = app.buttons["Settings"]
+        let settingsTab = app.buttons["Settings"].firstMatch
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 10))
         settingsTab.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
@@ -63,6 +63,7 @@ final class SignInUITests: XCTestCase {
     }
 
     private func attachScreenshot(_ name: String, _ app: XCUIApplication) {
+        Thread.sleep(forTimeInterval: 0.6)
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways

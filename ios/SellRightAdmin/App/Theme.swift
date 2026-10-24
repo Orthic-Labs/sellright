@@ -7,8 +7,8 @@ import SwiftUI
 /// each WCAG AA verified there. Do NOT hand-tune these: fix the generator, then
 /// re-transcribe, so web and mobile never drift into two different palettes.
 ///
-/// SellRight has no locked Right Suite brand identity yet, so Vermillion is the
-/// default here exactly as it is on the web.
+/// SellRight auth uses the approved green vertical mark and accessible native
+/// system rounded wordmark; operational theme palettes remain selectable.
 enum ThemeName: String, CaseIterable, Identifiable {
     case vermillion, graphite, porcelain, carbon
     var id: String { rawValue }

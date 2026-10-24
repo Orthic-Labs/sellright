@@ -12,13 +12,22 @@ push.
 ### Added
 
 - Saved server/account profiles with separate Keychain sessions & account switching (#352).
+- Added an opt-in live visual UI journey against `demo.sellright.cc`, enabled
+  by forwarding `SELLRIGHT_LIVE_VISUAL=1` to the test runner. XCTest captures
+  are attached to the result bundle; this journey uses the public demo service.
 
-- TestFlight release through RightKit's shared iOS recipe (`targets.ios` in `right-release.config.mjs`), version 0.2.0.
 - Debug-only demo store (`-SellRightDemo` launch argument) for rendered checks; compiled out of Release.
 - Added screenshot journeys to existing UI-test target: generic demo dashboard, orders, catalog unavailable states & account settings (#351, #344).
 - Pinned `@rightkit/release` 0.6.4 with `pnpm release:doctor`, explicit unrelated hosted-workflow declarations & Swift-only release switch inventory (#351, #344).
 
+### Fixed
+
+- Routed customer-to-order navigation through a typed route so nested customer screens no longer collide on String destinations.
+
 ### Changed
+
+- Updated sign-in presentation with the approved green vertical mark, accessible
+  system rounded wordmark, and compact focused state.
 
 - Store address comes before email/password; existing 2FA follows credential verification (#352).
 - Profile switching resets account views, push registration & selected store independently.
@@ -40,6 +49,13 @@ push.
 
 - The app icon catalog now ships the complete RGB iOS icon set generated from
   the selected SellRight mark.
+
+## [0.2.0]
+
+### Added
+
+- TestFlight release through RightKit's shared iOS recipe (`targets.ios` in
+  `right-release.config.mjs`), version 0.2.0.
 
 ## 2026-07-17
 

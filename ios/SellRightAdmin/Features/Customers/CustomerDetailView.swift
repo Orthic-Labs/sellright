@@ -45,7 +45,7 @@ struct CustomerDetailView: View {
                 if !customer.orders.isEmpty {
                     Section("Orders") {
                         ForEach(customer.orders) { order in
-                            NavigationLink(value: order.code) {
+                            NavigationLink(value: CustomerNavigationRoute.order(order.code)) {
                                 OrderRow(order: order)
                             }
                         }
@@ -59,9 +59,6 @@ struct CustomerDetailView: View {
         }
         .navigationTitle(customer?.displayName ?? "Customer")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: String.self) { code in
-            OrderDetailView(code: code)
-        }
         .refreshable { await load() }
         .task { await load() }
     }

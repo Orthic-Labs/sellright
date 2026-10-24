@@ -35,146 +35,162 @@ struct LoginView: View {
         self.onCancel = onCancel
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var brandGreen: Color {
+        colorScheme == .dark ? Color(red: 69/255, green: 212/255, blue: 131/255) : Color(red: 22/255, green: 116/255, blue: 66/255)
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                if let challenge {
-                    codeStep(challenge: challenge)
-                } else if addressAccepted {
-                    Section {
-                        LabeledContent("Store", value: acceptedHost)
-                        Button("Change store address", systemImage: "arrow.left") { returnToAddress() }
-                            .disabled(busy)
-                    } header: {
-                        Text("Store server")
-                    }
-                    Section("Sign in") {
-                        TextField("Email", text: $email)
-                            .keyboardType(.emailAddress)
-                            .textContentType(.username)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .accessibilityIdentifier("login.email")
-                            .focused($focus, equals: .email)
-                            .submitLabel(.next)
-                            .onSubmit { focus = .password }
-                        SecureField("Password", text: $password)
-                            .textContentType(.password)
-                            .accessibilityIdentifier("login.password")
-                            .focused($focus, equals: .password)
-                            .submitLabel(.go)
-                            .onSubmit { Task { await submitPassword() } }
-                    }
-                } else {
-                    Section {
-                        TextField("yourstore.com", text: $serverAddress)
-                            .keyboardType(.URL)
-                            .textContentType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .accessibilityIdentifier("login.serverAddress")
-                            .focused($focus, equals: .server)
-                            .submitLabel(.continue)
-                            .onSubmit(acceptAddress)
-                    } header: {
-                        Text("Store server")
-                    } footer: {
-                        Text("Enter your store's admin address, for example yourstore.com.")
-                    }
-                    profileSwitcher
-                }
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: focus == nil ? 22 : 10) {
+                        Spacer(minLength: focus == nil ? 10 : 0)
+                        VStack(spacing: focus == nil ? 11 : 4) {
+                            Image("BrandMark").resizable().scaledToFit().frame(width: focus == nil ? 88 : 46, height: focus == nil ? 88 : 46)
+                                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous)).accessibilityHidden(true)
+                            (Text("Sell") + Text("Right").foregroundColor(brandGreen))
+                                .font(.system(focus == nil ? .largeTitle : .title2, design: .rounded).weight(.bold))
+                                .accessibilityElement(children: .ignore).accessibilityLabel("SellRight")
+                            if focus == nil {
+                                Text(challenge != nil ? "Enter the code for \(email) to continue." :
+                                     addressAccepted ? "Sign in to \(acceptedHost)." :
+                                     addingAccount ? "Connect another store account." :
+                                     "Connect to your store's admin to manage orders, products, and more.")
+                                    .font(.subheadline).foregroundStyle(palette.textMuted)
+                                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 340)
+                            }
+                        }.frame(maxWidth: .infinity).padding(.bottom, focus == nil ? 3 : 0)
 
-                if let message = errorMessage ?? session.profileError {
-                    Section {
-                        Label(message, systemImage: "exclamationmark.circle")
-                            .foregroundStyle(palette.danger)
-                            .accessibilityIdentifier("login.error")
+                        if let challenge { codeStep(challenge: challenge) }
+                        else if addressAccepted { credentialForm }
+                        else { serverForm }
+
+                        if let message = errorMessage ?? session.profileError {
+                            Label(message, systemImage: "exclamationmark.circle.fill").font(.subheadline).foregroundStyle(palette.danger)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                                .background(palette.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                                .accessibilityIdentifier("login.error")
+                        }
+                        primaryButton
+                        profileSwitcher
+                        Spacer(minLength: 10)
                     }
+                    .frame(maxWidth: 420).frame(maxWidth: .infinity).frame(minHeight: geometry.size.height)
+                    .padding(.horizontal, 24).padding(.vertical, focus == nil ? 16 : 6)
                 }
+                .scrollDismissesKeyboard(.interactively).background(palette.bg.ignoresSafeArea())
             }
-            .navigationTitle(challenge != nil ? "Verify it's you" : addingAccount ? "Add account" : "SellRight")
+            .tint(brandGreen)
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if addingAccount {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel", role: .cancel) { cancel() }
-                            .accessibilityIdentifier("login.cancel")
+                        Button("Cancel", role: .cancel) { cancel() }.accessibilityIdentifier("login.cancel")
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { primaryButton }
-            .animation(.default, value: challenge)
-            .interactiveDismissDisabled(busy)
-            .onDisappear {
-                if !loginSucceeded && switchingProfile == nil { session.cancelLogin() }
-            }
+            .animation(.default, value: challenge).interactiveDismissDisabled(busy)
+            .onDisappear { if !loginSucceeded && switchingProfile == nil { session.cancelLogin() } }
             .onChange(of: session.activeProfileID) { _, id in
                 guard let profile = session.profiles.first(where: { $0.id == id }) else { return }
-                serverAddress = profile.serverURLString
-                email = profile.email
-                addressAccepted = false
-                resetCredentials()
+                serverAddress = profile.serverURLString; email = profile.email; addressAccepted = false; resetCredentials()
             }
         }
     }
 
+    private var serverForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Store server").font(.headline).foregroundStyle(palette.text)
+            TextField("yourstore.com", text: $serverAddress)
+                .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .accessibilityIdentifier("login.serverAddress").accessibilityLabel("Store admin address").focused($focus, equals: .server).submitLabel(.continue).onSubmit(acceptAddress)
+                .padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(focus == .server ? brandGreen : palette.borderStrong, lineWidth: focus == .server ? 2 : 1))
+            Text("Enter your store's admin address, for example yourstore.com.")
+                .font(.footnote).foregroundStyle(palette.textMuted).fixedSize(horizontal: false, vertical: true)
+        }.padding(18).background(palette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
+    }
+
+    private var credentialForm: some View {
+        VStack(alignment: .leading, spacing: focus == nil ? 15 : 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Store").font(.caption.weight(.semibold)).foregroundStyle(palette.textMuted)
+                    Text(acceptedHost).font(.subheadline.weight(.semibold)).foregroundStyle(palette.text).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Button("Change") { returnToAddress() }.disabled(busy).accessibilityLabel("Change store address")
+            }
+            Divider().overlay(palette.border)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Email").font(.subheadline.weight(.semibold)).foregroundStyle(palette.text)
+                TextField("name@example.com", text: $email).keyboardType(.emailAddress).textContentType(.username)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("login.email")
+                    .focused($focus, equals: .email).submitLabel(.next).onSubmit { focus = .password }
+                    .padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(focus == .email ? brandGreen : palette.borderStrong, lineWidth: focus == .email ? 2 : 1))
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Password").font(.subheadline.weight(.semibold)).foregroundStyle(palette.text)
+                SecureField("Password", text: $password).textContentType(.password).accessibilityIdentifier("login.password")
+                    .focused($focus, equals: .password).submitLabel(.go).onSubmit { Task { await submitPassword() } }
+                    .padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(focus == .password ? brandGreen : palette.borderStrong, lineWidth: focus == .password ? 2 : 1))
+            }
+        }.padding(18).background(palette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
+    }
+
     @ViewBuilder
     private var profileSwitcher: some View {
-        if !session.profiles.isEmpty {
-            Section("Saved accounts") {
+        if challenge == nil, !addressAccepted, !session.profiles.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Saved accounts").font(.headline).foregroundStyle(palette.text)
                 ForEach(session.profiles) { profile in
-                    Button {
-                        Task { await activate(profile) }
-                    } label: {
-                        HStack {
+                    Button { Task { await activate(profile) } } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "building.2.crop.circle").font(.title3).foregroundStyle(brandGreen)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(profileTitle(profile)).foregroundStyle(palette.text)
-                                Text(profile.email).font(.caption).foregroundStyle(palette.textMuted)
+                                Text(profileTitle(profile)).font(.subheadline.weight(.semibold)).foregroundStyle(palette.text).lineLimit(1)
+                                Text(profile.email).font(.caption).foregroundStyle(palette.textMuted).lineLimit(1)
                             }
-                            Spacer()
+                            Spacer(minLength: 4)
                             if switchingProfile == profile.id { ProgressView() }
-                        }
-                    }
-                    .disabled(busy || switchingProfile != nil)
-                    .accessibilityIdentifier("login.profile.\(profile.id.uuidString)")
+                            else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(palette.textMuted) }
+                        }.padding(14).background(palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
+                    }.buttonStyle(.plain).disabled(busy || switchingProfile != nil)
+                        .accessibilityIdentifier("login.profile.\(profile.id.uuidString)")
                 }
-            }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     @ViewBuilder
     private func codeStep(challenge: String) -> some View {
-        Section {
-            TextField(usesRecovery ? "Recovery code" : "6-digit code", text: $code)
-                .keyboardType(usesRecovery ? .asciiCapable : .numberPad)
-                .textContentType(.oneTimeCode)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.title3.monospacedDigit())
-                .accessibilityIdentifier("login.code")
-                .focused($focus, equals: .code)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Two-factor authentication").font(.headline).foregroundStyle(palette.text)
+            Text(usesRecovery ? "Recovery code" : "Authenticator code").font(.subheadline.weight(.semibold)).foregroundStyle(palette.text)
+            TextField(usesRecovery ? "Enter recovery code" : "6-digit code", text: $code)
+                .keyboardType(usesRecovery ? .asciiCapable : .numberPad).textContentType(.oneTimeCode)
+                .textInputAutocapitalization(.never).autocorrectionDisabled().font(.title3.monospacedDigit())
+                .accessibilityIdentifier("login.code").focused($focus, equals: .code)
                 .onAppear { focus = .code }
-                .onChange(of: code) { _, new in
-                    if !usesRecovery, new.count == 6, new.allSatisfy(\.isNumber) { Task { await submitCode() } }
-                }
-        } header: {
-            Text("Two-factor authentication")
-        } footer: {
-            Text(usesRecovery
-                ? "Enter one of the recovery codes you saved when you set up two-factor authentication."
-                : "Enter the code from your authenticator app for \(email).")
-        }
-        Section {
+                .onChange(of: code) { _, new in if !usesRecovery, new.count == 6, new.allSatisfy(\.isNumber) { Task { await submitCode() } } }
+                .padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(focus == .code ? brandGreen : palette.borderStrong, lineWidth: focus == .code ? 2 : 1))
+            Text(usesRecovery ? "Enter one of the recovery codes you saved when you set up two-factor authentication." :
+                 "Enter the code from your authenticator app for \(email).")
+                .font(.footnote).foregroundStyle(palette.textMuted).fixedSize(horizontal: false, vertical: true)
             if methods.contains("recovery_code") {
-                Button(usesRecovery ? "Use an authenticator code" : "Use a recovery code") {
-                    usesRecovery.toggle()
-                    code = ""
-                    focus = .code
-                }
-                .disabled(busy)
+                Button(usesRecovery ? "Use an authenticator code" : "Use a recovery code") { usesRecovery.toggle(); code = ""; focus = .code }.disabled(busy)
             }
-            Button("Back to sign in", role: .cancel) { resetCredentials() }
-                .disabled(busy)
-        }
+            Button("Back to sign in", role: .cancel) { resetCredentials() }.disabled(busy)
+        }.padding(18).background(palette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(palette.border, lineWidth: 1))
     }
 
     private var primaryButton: some View {
@@ -183,18 +199,15 @@ struct LoginView: View {
             else if addressAccepted { Task { await submitPassword() } }
             else { acceptAddress() }
         } label: {
+            let actionInk = colorScheme == .dark
+                ? Color(red: 16/255, green: 26/255, blue: 20/255)
+                : Color.white
             Group {
-                if busy || switchingProfile != nil { ProgressView() }
-                else { Text(challenge != nil ? "Verify" : addressAccepted ? "Sign in" : "Continue") }
-            }
-            .frame(maxWidth: .infinity, minHeight: 32)
-        }
-        .glassProminentIfAvailable()
-        .controlSize(.large)
-        .disabled(busy || switchingProfile != nil || !canSubmit)
-        .padding(.horizontal)
-        .padding(.bottom, 8)
-        .accessibilityIdentifier(challenge != nil ? "login.verify" : addressAccepted ? "login.signIn" : "login.continue")
+                if busy || switchingProfile != nil { ProgressView().tint(actionInk) }
+                else { Text(challenge != nil ? "Verify" : addressAccepted ? "Sign in" : "Continue").foregroundStyle(actionInk) }
+            }.frame(maxWidth: .infinity, minHeight: 32)
+        }.glassProminentIfAvailable().controlSize(.large).disabled(busy || switchingProfile != nil || !canSubmit)
+            .accessibilityIdentifier(challenge != nil ? "login.verify" : addressAccepted ? "login.signIn" : "login.continue")
     }
 
     private var canSubmit: Bool {
@@ -203,9 +216,7 @@ struct LoginView: View {
         return !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var acceptedHost: String {
-        AppSession.normalizedServerURL(serverAddress)?.host() ?? serverAddress
-    }
+    private var acceptedHost: String { AppSession.normalizedServerURL(serverAddress)?.host() ?? serverAddress }
 
     private func acceptAddress() {
         guard let url = AppSession.normalizedServerURL(serverAddress) else {

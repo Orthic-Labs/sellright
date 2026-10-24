@@ -37,8 +37,33 @@ Or open the generated `SellRightAdmin.xcodeproj` (gitignored) in Xcode and run. 
 `0.8.1`) resolves over your git credentials — `-scmProvider system`
 makes xcodebuild use system git instead of Xcode's own SCM store.
 
-Rendered checks without a server: launch a Debug build with `-SellRightDemo`
-(sample Example Store, no network, compiled out of Release).
+Deterministic presentation checks without a server: launch a Debug build with
+`-SellRightDemo` (synthetic Example Store, no network, compiled out of Release).
+These checks cover the sample UI only; they do not validate live store data or
+server-backed workflows.
+
+## Live visual journey
+
+The opt-in UI journey uses the public demo service at `demo.sellright.cc` and
+keeps XCTest screenshots as result attachments. It is skipped unless
+`SELLRIGHT_LIVE_VISUAL=1` reaches the test runner. Forward it with
+`TEST_RUNNER_SELLRIGHT_LIVE_VISUAL=1` when invoking xcodebuild. Run it on an
+installed iPad Simulator; replace the destination placeholder with that
+simulator's UDID:
+
+```sh
+cd ios
+TEST_RUNNER_SELLRIGHT_LIVE_VISUAL=1 xcodebuild -project SellRightAdmin.xcodeproj \
+  -scheme SellRightAdmin \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -only-testing:SellRightAdminUITests/LiveDemoVisualJourney test
+```
+
+The journey covers address validation, sign-in, and live dashboard, order,
+product, customer, and account screens in light and dark appearance. An iPad
+landscape run also checks accessibility-sized text. It depends on the public
+demo being reachable and is separate from the synthetic `-SellRightDemo`
+presentation checks.
 
 ## TestFlight
 
@@ -113,13 +138,14 @@ Don't hand-tune colors here — fix the web generator and re-transcribe.
 
 Wired: auth + session restore (Keychain), standard username/password fields
 for manual password-manager selection, dashboard KPIs, orders (search,
-state filter, pagination, detail, fulfill with tracking, refunds — full,
-per-line, or amount override — with restock, cancel), products (list, detail,
-variant price/sale-price/enabled
-editing, on-hand stock for physical variants), customers (list, detail with
-lifetime stats/addresses/orders), saved account profiles & multi-store switching.
+state filter, pagination, detail, fulfill with tracking, refunds, restock,
+cancel), products (list, detail, variant price/sale-price/enabled editing,
+on-hand stock for physical variants), customers (list, detail with lifetime
+stats/addresses/orders), saved account profiles & multi-store switching.
+
+Sign-in uses the approved green vertical mark and an accessible system rounded
+wordmark. Four operational themes (Vermillion, Graphite, Porcelain, Carbon)
+remain selectable in Settings.
 
 Not yet built: draft orders, returns approve/reject, marketing/promotions,
-reports, blog CMS, licenses/subscriptions admin, asset upload, and the SellRight
-brand identity (the theme system is ported from the web admin, but the Right
-Suite wordmark/typography is still TBD — Tanker per suite rules once locked).
+reports, blog CMS, licenses/subscriptions admin, and asset upload.
