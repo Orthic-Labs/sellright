@@ -1,0 +1,20 @@
+{
+  "exceptions": [
+    {
+      "capability": "dependency-allowlist",
+      "package": "RightKit dependency allowlist",
+      "path": "package.json",
+      "owner": "sellright",
+      "reason": "@typescript/typescript6 is the server workspace's TypeScript compiler; it never enters the iOS app, which is what right-release builds from this repository.",
+      "date": "2026-10-24"
+    },
+    {
+      "capability": "theme.math.relative-luminance",
+      "package": "@rightkit/theme",
+      "path": "ios/Tests/ThemeTests.swift",
+      "owner": "sellright",
+      "reason": "Test-only WCAG contrast check of the transcribed admin palette; @rightkit/theme is JavaScript and RightKitSwift has no Swift owner for this formula. Remove when one exists.",
+      "date": "2026-10-24"
+    }
+  ]
+}
