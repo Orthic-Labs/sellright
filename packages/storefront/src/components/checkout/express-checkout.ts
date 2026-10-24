@@ -73,8 +73,10 @@ export const EXPRESS_WALLET_METHODS = { applePay: 'auto', googlePay: 'auto', lin
 
 /** Express Checkout Element create options. The wallet always collects email, phone and a shipping address (checkout prices
  *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. `walletsOnly` keeps
- *  just Apple Pay / Google Pay in a single one-button row (no Link or Klarna, no overflow menu). */
-export function expressElementOptions(o: { buttonHeight?: number | null; walletsOnly?: boolean } = {}) {
+ *  just Apple Pay / Google Pay in a single one-button row (no Link or Klarna, no overflow menu). `singleRow` (PDP buy-now,
+ *  #347) keeps every method side by side in ONE row (extra methods go to Stripe's overflow menu), so no button becomes a
+ *  full-width bar under ADD TO CART. */
+export function expressElementOptions(o: { buttonHeight?: number | null; walletsOnly?: boolean; singleRow?: boolean } = {}) {
 	const buttonHeight = expressButtonHeight(o.buttonHeight);
 	return {
 		emailRequired: true,
@@ -82,7 +84,7 @@ export function expressElementOptions(o: { buttonHeight?: number | null; wallets
 		shippingAddressRequired: true,
 		paymentMethods: o.walletsOnly ? EXPRESS_WALLET_METHODS : EXPRESS_PAYMENT_METHODS,
 		buttonType: { applePay: 'buy', googlePay: 'buy' },
-		...(o.walletsOnly ? { layout: { maxColumns: 1, maxRows: 1, overflow: 'never' as const } } : {}),
+		...(o.walletsOnly ? { layout: { maxColumns: 1, maxRows: 1, overflow: 'never' as const } } : o.singleRow ? { layout: { maxColumns: 0, maxRows: 1 } } : {}),
 		...(buttonHeight ? { buttonHeight } : {}),
 	} as const;
 }
@@ -90,6 +92,13 @@ export function expressElementOptions(o: { buttonHeight?: number | null; wallets
 /** The gateway's `ready` report, reduced to: does this device have a payment method the express row shows. */
 export function hasExpressMethod(available: Partial<Record<'applePay' | 'googlePay' | 'link' | 'klarna' | 'paypal' | 'amazonPay', boolean>> | null | undefined): boolean {
 	return !!available && !!(available.applePay || available.googlePay || available.link || available.klarna);
+}
+
+/** The methods the gateway's `ready` report offers on this device, in display order (#347: a brand lays out a lone Link
+ *  button differently). */
+export function expressMethods(available: Partial<Record<string, boolean>> | null | undefined): string[] {
+	if (!available) return [];
+	return (['applePay', 'googlePay', 'link', 'klarna'] as const).filter((m) => available[m]);
 }
 
 /** PDP buy-now: exactly one unit of the selected variant, or nothing when no complete variant is selected. */

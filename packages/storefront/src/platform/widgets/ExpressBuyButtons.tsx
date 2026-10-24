@@ -18,6 +18,11 @@ export interface ExpressBuyButtonsProps {
 	walletsOnly?: boolean;
 }
 
+// Layout (#347): without walletsOnly the buttons sit side by side in ONE row (never a lone full-width bar). While visible,
+// the inner .checkout-express carries data-express-methods (e.g. "link" when Link is the only method on this device), so a
+// brand can place a lone button beside its ADD TO CART with CSS alone, e.g.
+//   .buy-row:has(.checkout-express[data-express-methods="link"]) { display: flex; }
+
 export const ExpressBuyButtons = component$<ExpressBuyButtonsProps>((props) => (
 	<ExpressBuyNow sku={props.sku} currency={props.currency} buttonHeight={props.buttonHeight} walletsOnly={props.walletsOnly} />
 ));

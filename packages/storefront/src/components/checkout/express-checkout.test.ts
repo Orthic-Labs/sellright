@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExpressQuote } from '~/sellright/types/checkout';
 import {
+	EXPRESS_PAYMENT_METHODS,
+	expressMethods,
 	buyNowItems,
 	expressButtonHeight,
 	expressCheckoutOptions,
@@ -157,6 +159,22 @@ describe('expressElementOptions', () => {
 		const o = expressElementOptions({ walletsOnly: true, buttonHeight: 48 });
 		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'never', klarna: 'never', paypal: 'never', amazonPay: 'never' });
 		expect(o).toMatchObject({ layout: { maxColumns: 1, maxRows: 1, overflow: 'never' }, buttonHeight: 48, shippingAddressRequired: true });
+	});
+	it('singleRow keeps every method in one row (PDP buy-now, #347); walletsOnly wins over it', () => {
+		const o = expressElementOptions({ singleRow: true, buttonHeight: 53 });
+		expect(o.paymentMethods).toEqual(EXPRESS_PAYMENT_METHODS);
+		// Stripe refuses overflow 'never' together with maxRows > 0, so overflow stays at its default.
+		expect(o).toMatchObject({ layout: { maxColumns: 0, maxRows: 1 }, buttonHeight: 53 });
+		expect((o as { layout?: object }).layout).not.toHaveProperty('overflow');
+		expect(expressElementOptions({ singleRow: true, walletsOnly: true })).toMatchObject({ layout: { maxColumns: 1, maxRows: 1, overflow: 'never' } });
+	});
+});
+
+describe('expressMethods (#347)', () => {
+	it('lists the offered methods in display order', () => {
+		expect(expressMethods(undefined)).toEqual([]);
+		expect(expressMethods({ link: true })).toEqual(['link']);
+		expect(expressMethods({ link: true, applePay: true, paypal: true, klarna: false })).toEqual(['applePay', 'link']);
 	});
 });
 

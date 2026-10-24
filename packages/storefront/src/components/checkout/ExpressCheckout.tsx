@@ -3,6 +3,7 @@ import { loadStripe, type StripeElements, type StripeExpressCheckoutElement } fr
 import { getExpressQuote } from '~/providers/shop/checkout/checkout';
 import {
 	expressElementOptions,
+	expressMethods,
 	hasExpressMethod,
 	isChargeableQuote,
 	runExpressConfirm,
@@ -40,6 +41,8 @@ export interface ExpressCheckoutProps {
 	buttonHeight?: number;
 	/** Apple Pay / Google Pay only, one button, no overflow (a slot with room for one button). Read once at mount. */
 	walletsOnly?: boolean;
+	/** Every method side by side in one row (PDP buy-now, #347). Read once at mount. */
+	singleRow?: boolean;
 	/** A small heading above the buttons (checkout: "Express checkout"); hidden with the buttons. */
 	label?: string;
 	/** The "Or continue below" line: only where a payment form follows (checkout). */
@@ -52,6 +55,8 @@ export interface ExpressCheckoutProps {
 export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 	const hostRef = useSignal<HTMLElement>();
 	const walletAvailable = useSignal(false);
+	// The methods the gateway offers on this device (expressMethods), exposed as data-express-methods while visible.
+	const methods = useSignal<string[]>([]);
 	const quoted = useSignal(false);
 	const elementsRef = useSignal<unknown>(null);
 	// The quote for the page's destination (what the button opens with) and the one the open sheet shows.
@@ -117,13 +122,14 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 			// Deferred intent: the amount here is display only; the intent is minted server-side for the order's amount due.
 			const elements = stripe.elements({ mode: 'payment', amount: baseQuote.value?.grandTotal || 100, currency: options.currency });
 			// Checkout prices tax (and shipping) by the destination, so the wallet always supplies one — as the form does.
-			const ece = elements.create('expressCheckout', expressElementOptions({ buttonHeight: props.buttonHeight, walletsOnly: props.walletsOnly }));
+			const ece = elements.create('expressCheckout', expressElementOptions({ buttonHeight: props.buttonHeight, walletsOnly: props.walletsOnly, singleRow: props.singleRow }));
 			element = ece;
 			const fail = (message: string) => { void props.onError$(message); };
 
 			ece.on('ready', (ev) => {
 				if (disposed) return;
 				walletAvailable.value = hasExpressMethod(ev.availablePaymentMethods);
+				methods.value = expressMethods(ev.availablePaymentMethods);
 				void props.onAvailability$?.(walletAvailable.value);
 			});
 			ece.on('loaderror', () => {
@@ -205,8 +211,11 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 
 	const visible = !!props.cartToken && walletAvailable.value && quoted.value;
 	return (
-		// Kept mounted (not display:none) while hidden so the gateway can still report wallet availability.
+		// Kept mounted (not display:none) while hidden so the gateway can still report wallet availability. While visible,
+		// data-express-methods names the offered methods (e.g. "link" alone), so a brand can lay a lone button out beside
+		// its ADD TO CART instead of under it (#347).
 		<div class="checkout-express" data-testid={props.testId ?? 'checkout-express'} aria-hidden={!visible}
+			data-express-methods={visible ? methods.value.join(' ') : undefined}
 			style={visible ? { marginBottom: props.continueHint ? '16px' : '0' } : { visibility: 'hidden', height: '0', overflow: 'hidden', pointerEvents: 'none' }}>
 			{props.label && <p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.7;margin:0 0 8px;">{props.label}</p>}
 			<div ref={hostRef} />

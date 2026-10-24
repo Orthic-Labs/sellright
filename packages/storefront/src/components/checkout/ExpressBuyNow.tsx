@@ -88,6 +88,7 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 				cartKey={cartToken.value ?? ''}
 				buttonHeight={props.buttonHeight}
 				walletsOnly={props.walletsOnly}
+				singleRow={!props.walletsOnly}
 				onAvailability$={onAvailability$}
 				onPlaceOrder$={onPlaceOrder$}
 				onError$={onError$}
