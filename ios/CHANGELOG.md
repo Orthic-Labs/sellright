@@ -13,6 +13,8 @@ push.
 
 - TestFlight release through RightKit's shared iOS recipe (`targets.ios` in `right-release.config.mjs`), version 0.2.0.
 - Debug-only demo store (`-SellRightDemo` launch argument) for rendered checks; compiled out of Release.
+- RightKit QA lane: a `SellRightAdminUITests` XCUITest bundle (`ios/project.yml`) with the screens journey (`ios/UITests/SellRightScreensJourney.swift`), as Pulse's iOS app has.
+- The release runs through `@rightkit/release` 0.6.4 (root devDependency, `pnpm release:doctor`). `right-release.config.mjs` declares the web and server workflows as unrelated to the iOS release (`hostedWorkflows: declared-unrelated`), declares no Rust (`releaseSwitches.rust: false`), and `switches.json` is the app's switch inventory (empty: the iOS sources read no environment switch).
 
 ### Changed
 
