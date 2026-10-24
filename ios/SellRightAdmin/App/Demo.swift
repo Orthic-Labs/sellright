@@ -17,9 +17,9 @@ enum Demo {
     static func body(for path: String) -> String? {
         switch path {
         case "/v1/admin/me":
-            return #"{"email":"owner@rottenhand.com","stores":[{"storeId":"st_1","slug":"rotten","name":"Rotten Hand","currency":"USD","role":"owner"}]}"#
+            return #"{"email":"owner@example.com","stores":[{"storeId":"st_1","slug":"example","name":"Example Store","currency":"USD","role":"owner"}]}"#
         case "/v1/admin/dashboard":
-            return #"{"store":{"slug":"rotten","name":"Rotten Hand","currency":"USD"},"revenue":1846500,"orders":231,"aov":7994,"pendingFulfillment":4,"customers":198,"lowStock":2,"recentOrders":\#(recentOrdersJSON)}"#
+            return #"{"store":{"slug":"example","name":"Example Store","currency":"USD"},"revenue":1846500,"orders":231,"aov":7994,"pendingFulfillment":4,"customers":198,"lowStock":2,"recentOrders":\#(recentOrdersJSON)}"#
         case "/v1/admin/orders":
             return #"{"items":\#(recentOrdersJSON),"total":8,"page":1,"pageSize":25}"#
         default:
@@ -28,10 +28,10 @@ enum Demo {
     }
 
     private static let orders: [(String, String, Int, String)] = [
-        ("RH-1042", "Paid", 7500, "maya@example.com"), ("RH-1041", "Paid", 15500, "jon@example.com"),
-        ("RH-1040", "Shipped", 8000, "ana@example.com"), ("RH-1039", "Delivered", 7500, "sam@example.com"),
-        ("RH-1038", "Paid", 16000, "lee@example.com"), ("RH-1037", "Refunded", 7500, "kit@example.com"),
-        ("RH-1036", "Delivered", 8000, "ola@example.com"), ("RH-1035", "Cancelled", 7500, "ravi@example.com"),
+        ("EX-1042", "Paid", 7500, "maya@example.com"), ("EX-1041", "Paid", 15500, "jon@example.com"),
+        ("EX-1040", "Shipped", 8000, "ana@example.com"), ("EX-1039", "Delivered", 7500, "sam@example.com"),
+        ("EX-1038", "Paid", 16000, "lee@example.com"), ("EX-1037", "Refunded", 7500, "kit@example.com"),
+        ("EX-1036", "Delivered", 8000, "ola@example.com"), ("EX-1035", "Cancelled", 7500, "ravi@example.com"),
     ]
 
     private static var recentOrdersJSON: String {

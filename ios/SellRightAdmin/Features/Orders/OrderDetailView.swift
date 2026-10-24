@@ -140,16 +140,18 @@ struct OrderDetailView: View {
             }
         }
         .sheet(isPresented: $showFulfillSheet) {
-            FulfillSheet(code: code) { await load() }
+            let identity = session.sessionIdentity
+            FulfillSheet(code: code) { await load(expectedIdentity: identity) }
         }
         .sheet(isPresented: $showRefundSheet) {
             if let order, session.canWrite {
+                let identity = session.sessionIdentity
                 RefundSheet(
                     code: code,
                     currency: order.currency,
                     grandTotal: order.grandTotal,
                     lines: order.lines
-                ) { await load() }
+                ) { await load(expectedIdentity: identity) }
             }
         }
         .confirmationDialog("Cancel order \(code)?", isPresented: $showCancelConfirm, titleVisibility: .visible) {
@@ -190,15 +192,21 @@ struct OrderDetailView: View {
 
     private func cancelOrder() async {
         guard session.canWrite else { return }
+        let client = session.api
+        let identity = session.sessionIdentity
         do {
-            let _: CancelResponse = try await session.api.post(
+            let _: CancelResponse = try await client.post(
                 "/v1/admin/orders/\(code)/cancel", body: CancelRequest(reason: nil)
             )
             Diagnostics.record("order_cancelled")
+            guard session.sessionIdentity == identity else { return }
             // Cancelled is terminal — take it off the lock screen.
-            await OrderActivityController.update(orderCode: code, status: "Cancelled", trackingCode: nil)
-            await load()
+            await OrderActivityController.update(orderCode: code, status: "Cancelled", trackingCode: nil,
+                                                 isCurrent: { session.sessionIdentity == identity })
+            guard session.sessionIdentity == identity else { return }
+            await load(expectedIdentity: identity)
         } catch {
+            guard session.sessionIdentity == identity else { return }
             actionError = error.localizedDescription
         }
     }
@@ -210,11 +218,17 @@ struct OrderDetailView: View {
         return event.action
     }
 
-    private func load() async {
+    private func load(expectedIdentity: String? = nil) async {
+        let identity = expectedIdentity ?? session.sessionIdentity
+        guard session.sessionIdentity == identity else { return }
+        let client = session.api
         errorMessage = nil
         do {
-            order = try await session.api.get("/v1/admin/orders/\(code)")
+            let loaded: OrderDetail = try await client.get("/v1/admin/orders/\(code)")
+            guard session.sessionIdentity == identity else { return }
+            order = loaded
         } catch {
+            guard session.sessionIdentity == identity else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -268,29 +282,39 @@ struct FulfillSheet: View {
 
     private func submit() async {
         guard session.canWrite else { return }
+        let client = session.api
+        let identity = session.sessionIdentity
+        let fulfillmentState = state
+        let fulfillmentTracking = trackingCode.isEmpty ? nil : trackingCode
+        let fulfillmentCarrier = carrier.isEmpty ? nil : carrier
         busy = true
         errorMessage = nil
-        defer { busy = false }
+        defer { if session.sessionIdentity == identity { busy = false } }
         do {
-            let _: FulfillResponse = try await session.api.post(
+            let _: FulfillResponse = try await client.post(
                 "/v1/admin/orders/\(code)/fulfill",
                 body: FulfillRequest(
-                    state: state,
-                    trackingCode: trackingCode.isEmpty ? nil : trackingCode,
-                    carrier: carrier.isEmpty ? nil : carrier
+                    state: fulfillmentState,
+                    trackingCode: fulfillmentTracking,
+                    carrier: fulfillmentCarrier
                 )
             )
-            Diagnostics.record("order_fulfilled", ["state": state])
+            Diagnostics.record("order_fulfilled", ["state": fulfillmentState])
+            guard session.sessionIdentity == identity else { return }
             // Move this order's Live Activity forward (or end it on Delivered) so
             // the Island reflects what the operator just did.
             await OrderActivityController.update(
                 orderCode: code,
-                status: state,
-                trackingCode: trackingCode.isEmpty ? nil : trackingCode
+                status: fulfillmentState,
+                trackingCode: fulfillmentTracking,
+                isCurrent: { session.sessionIdentity == identity }
             )
+            guard session.sessionIdentity == identity else { return }
             await onDone()
+            guard session.sessionIdentity == identity else { return }
             dismiss()
         } catch {
+            guard session.sessionIdentity == identity else { return }
             errorMessage = error.localizedDescription
         }
     }

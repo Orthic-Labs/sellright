@@ -38,7 +38,7 @@ Or open the generated `SellRightAdmin.xcodeproj` (gitignored) in Xcode and run. 
 makes xcodebuild use system git instead of Xcode's own SCM store.
 
 Rendered checks without a server: launch a Debug build with `-SellRightDemo`
-(sample Rotten Hand store, no network, compiled out of Release).
+(sample Example Store, no network, compiled out of Release).
 
 ## TestFlight
 
@@ -63,6 +63,27 @@ right-release upload --platform ios --release <sealed-id> --apply
 - Point the login screen at any SellRight store (`yourstore.com`; https is
   added). Plain http works only for a local dev server (`http://localhost:3300`),
   which the Info.plist ATS exception allows.
+
+The app connects to any merchant's SellRight server. It has no built-in store
+domains or associated-domain entitlements. Choose saved credentials through your
+password manager; no AASA setup is required for this flow.
+
+## Saved accounts
+
+Enter a store address, continue to email/password, then complete 2FA if enabled.
+Settings → Accounts → Add account saves another server/account without signing
+out of the current one. Use Accounts in Settings or Saved accounts on sign-in
+to switch. Each profile retains its own selected store & Keychain token; passwords
+are never saved by the app. Signing out removes only that profile's session.
+
+Upgrading from the original single-account app imports account details & asks
+for one fresh sign-in. Its old session is retired to clear push registrations
+that predate profile tracking; cleanup retries after reconnecting if needed.
+
+Push registration follows the active account & store. Switching accounts clears
+previous account screens, notifications & Live Activities. Existing unscoped
+order notifications open the app without jumping into an order, because their
+payload does not identify its originating server/account.
 
 ## Push + Live Activity
 
@@ -90,14 +111,13 @@ Don't hand-tune colors here — fix the web generator and re-transcribe.
 
 ## Status / next steps
 
-Wired: auth + session restore (Keychain), Password AutoFill (webcredentials
-entitlement; the server must publish `/.well-known/apple-app-site-association`
-— `AASA_APP_IDS` env on the API serves it), dashboard KPIs, orders (search,
+Wired: auth + session restore (Keychain), standard username/password fields
+for manual password-manager selection, dashboard KPIs, orders (search,
 state filter, pagination, detail, fulfill with tracking, refunds — full,
 per-line, or amount override — with restock, cancel), products (list, detail,
 variant price/sale-price/enabled
 editing, on-hand stock for physical variants), customers (list, detail with
-lifetime stats/addresses/orders), multi-store switching.
+lifetime stats/addresses/orders), saved account profiles & multi-store switching.
 
 Not yet built: draft orders, returns approve/reject, marketing/promotions,
 reports, blog CMS, licenses/subscriptions admin, asset upload, and the SellRight

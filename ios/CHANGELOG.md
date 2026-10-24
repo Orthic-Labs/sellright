@@ -11,10 +11,17 @@ push.
 
 ### Added
 
+- Saved server/account profiles with separate Keychain sessions & account switching (#352).
+
 - TestFlight release through RightKit's shared iOS recipe (`targets.ios` in `right-release.config.mjs`), version 0.2.0.
 - Debug-only demo store (`-SellRightDemo` launch argument) for rendered checks; compiled out of Release.
 
 ### Changed
+
+- Store address comes before email/password; existing 2FA follows credential verification (#352).
+- Profile switching resets account views, push registration & selected store independently.
+  Expired sessions invalidate only their originating profile. Unscoped notification taps open
+  the app without navigating into a potentially different account's order.
 
 - Sign-in follows the two-step admin login (#333): email + password first, then the authenticator or recovery
   code only for an account with a second factor. The old single-form login could not sign in a 2FA account.
@@ -24,13 +31,11 @@ push.
   pinned exactly at 0.8.1 (`bogusyogi/rightkit`); the session token now lives in RightKit's shared `SecretsStore`.
 - iOS 26/27 design: TabView `Tab` API with the sidebar-adaptable iPad layout, tab bar that minimizes on scroll,
   Liquid Glass sign-in button.
-- Password AutoFill works in release/TestFlight builds (#343): plain `webcredentials` entries for
-  `admin.orthiclabs.com` and `api.orthiclabs.com` (every entry was `?mode=developer`, which release builds
-  ignore). `api.spoares.com` is dropped; `admin.sellright.cc` stays dev-only behind Cloudflare Access.
+- Removed all built-in store domains & associated-domain entitlements (#352). Merchants
+  enter their own server address & choose credentials through their password manager.
 - iPad supports every orientation (App Store validation requires it for multitasking).
 - `NSSupportsLiveActivities` is declared on the app, which the order Live Activity needs.
 
-- The `webcredentials` associated domain for the browser admin is now `admin.sellright.cc` (was `admin.spoares.com`).
 - The app icon catalog now ships the complete RGB iOS icon set generated from
   the selected SellRight mark.
 

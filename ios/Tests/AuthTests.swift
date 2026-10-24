@@ -4,13 +4,31 @@ import XCTest
 @MainActor
 final class AuthTests: XCTestCase {
     func testServerAddressAcceptsBareHostAndForcesHTTPS() {
-        XCTAssertEqual(AppSession.normalizedServerURL("rottenhand.com")?.absoluteString, "https://rottenhand.com")
-        XCTAssertEqual(AppSession.normalizedServerURL(" https://admin.orthiclabs.com/ ")?.absoluteString, "https://admin.orthiclabs.com")
+        XCTAssertEqual(AppSession.normalizedServerURL("example.com")?.absoluteString, "https://example.com")
+        XCTAssertEqual(AppSession.normalizedServerURL(" https://admin.example.com/ ")?.absoluteString, "https://admin.example.com")
         XCTAssertNil(AppSession.normalizedServerURL(""))
         // Plain http only for a local dev server; never for a public host.
-        XCTAssertNil(AppSession.normalizedServerURL("http://rottenhand.com"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://example.com"))
         XCTAssertNotNil(AppSession.normalizedServerURL("http://localhost:3300"))
         XCTAssertNotNil(AppSession.normalizedServerURL("http://192.168.1.16:3300"))
+    }
+
+    func testServerAddressRejectsCredentialAndLookalikeHostsAndNormalizesOrigin() {
+        XCTAssertNil(AppSession.normalizedServerURL("https://user:password@merchant.example"))
+        XCTAssertNil(AppSession.normalizedServerURL("https://merchant.example?server=other.example"))
+        XCTAssertNil(AppSession.normalizedServerURL("https://merchant.example#account"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://10.attacker.example"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://10.0.0.1.attacker.example"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://10.evil.0.0.1"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://+10.0.0.1"))
+        XCTAssertNil(AppSession.normalizedServerURL("https://merchant..example"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://10..0.0.1"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://192.168.attacker.example"))
+        XCTAssertNil(AppSession.normalizedServerURL("http://172.32.1.2"))
+        XCTAssertNotNil(AppSession.normalizedServerURL("http://172.16.1.2:3300"))
+        XCTAssertNotNil(AppSession.normalizedServerURL("http://[::1]:3300"))
+        XCTAssertEqual(AppSession.normalizedServerURL("https://MERCHANT.example:443/admin/orders/")?.absoluteString,
+                       "https://merchant.example")
     }
 
     func testStepOneChallengeDecodes() throws {

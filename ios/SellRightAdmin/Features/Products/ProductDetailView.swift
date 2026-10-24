@@ -39,7 +39,8 @@ struct ProductDetailView: View {
         .navigationTitle(productName)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editingVariant) { variant in
-            VariantEditSheet(variant: variant, currency: currency) { await load() }
+            let identity = session.sessionIdentity
+            VariantEditSheet(variant: variant, currency: currency) { await load(expectedIdentity: identity) }
         }
         .refreshable { await load() }
         .task { await load() }
@@ -47,11 +48,17 @@ struct ProductDetailView: View {
 
     private var currency: String { session.activeStore?.currency ?? "USD" }
 
-    private func load() async {
+    private func load(expectedIdentity: String? = nil) async {
+        let identity = expectedIdentity ?? session.sessionIdentity
+        guard session.sessionIdentity == identity else { return }
+        let client = session.api
         errorMessage = nil
         do {
-            product = try await session.api.get("/v1/admin/products/\(productId)")
+            let loaded: ProductDetail = try await client.get("/v1/admin/products/\(productId)")
+            guard session.sessionIdentity == identity else { return }
+            product = loaded
         } catch {
+            guard session.sessionIdentity == identity else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -164,9 +171,12 @@ struct VariantEditSheet: View {
 
     private func submit() async {
         guard session.canWrite else { return }
+        let client = session.api
+        let identity = session.sessionIdentity
+        let onHand = Int(onHandText)
         busy = true
         errorMessage = nil
-        defer { busy = false }
+        defer { if session.sessionIdentity == identity { busy = false } }
         do {
             let newPrice = Money.parseCents(priceText)
             let newSale = salePriceText.isEmpty ? nil : Money.parseCents(salePriceText)
@@ -177,15 +187,18 @@ struct VariantEditSheet: View {
             }
             if enabled != variant.enabled { patch.enabled = enabled }
             if patch.hasChanges {
-                let _: VariantPatchResponse = try await session.api.patch("/v1/admin/variants/\(variant.id)", body: patch)
+                let _: VariantPatchResponse = try await client.patch("/v1/admin/variants/\(variant.id)", body: patch)
             }
-            if variant.fulfillmentType == "physical", let onHand = Int(onHandText), onHand != variant.onHand, onHand >= 0 {
-                let _: StockPatchResponse = try await session.api.patch("/v1/admin/variants/\(variant.id)/stock", body: StockPatch(onHand: onHand))
+            if variant.fulfillmentType == "physical", let onHand, onHand != variant.onHand, onHand >= 0 {
+                let _: StockPatchResponse = try await client.patch("/v1/admin/variants/\(variant.id)/stock", body: StockPatch(onHand: onHand))
             }
             Diagnostics.record("variant_updated")
+            guard session.sessionIdentity == identity else { return }
             await onDone()
+            guard session.sessionIdentity == identity else { return }
             dismiss()
         } catch {
+            guard session.sessionIdentity == identity else { return }
             errorMessage = error.localizedDescription
         }
     }

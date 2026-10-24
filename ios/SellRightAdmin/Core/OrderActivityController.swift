@@ -11,13 +11,21 @@ import Foundation
 /// Known limitation: an order fulfilled from the WEB admin does not move this
 /// phone's activity; it ages out at the 8h dismissal-date. Closing that needs
 /// per-activity update tokens registered server-side. Documented in ios/README.
-/// Nonisolated: the activity is read and updated in one region, so it never has
-/// to be sent across actors (Swift 6 region isolation).
+/// Capture an activity ID on MainActor while its originating session is current.
+/// Keep ActivityKit objects inside one nonisolated update region across awaits.
 enum OrderActivityController {
     /// Advance (or end) the activity for one order after the operator acts on it.
-    static func update(orderCode: String, status: String, trackingCode: String?) async {
+    @MainActor
+    static func update(orderCode: String, status: String, trackingCode: String?,
+                       isCurrent: @MainActor () -> Bool) async {
+        guard isCurrent(), let activityID = Activity<OrderActivityAttributes>.activities
+            .first(where: { $0.attributes.orderCode == orderCode })?.id else { return }
+        await update(activityID: activityID, status: status, trackingCode: trackingCode)
+    }
+
+    private nonisolated static func update(activityID: String, status: String, trackingCode: String?) async {
         guard let activity = Activity<OrderActivityAttributes>.activities
-            .first(where: { $0.attributes.orderCode == orderCode }) else { return }
+            .first(where: { $0.id == activityID }) else { return }
 
         var state = activity.content.state
         state.status = status

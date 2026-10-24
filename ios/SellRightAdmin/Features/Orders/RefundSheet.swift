@@ -127,9 +127,12 @@ struct RefundSheet: View {
 
     private func submit() async {
         guard session.canWrite else { return }
+        let client = session.api
+        let identity = session.sessionIdentity
+        let refundMode = mode
         busy = true
         errorMessage = nil
-        defer { busy = false }
+        defer { if session.sessionIdentity == identity { busy = false } }
         let body: RefundRequest
         switch mode {
         case .full:
@@ -140,11 +143,14 @@ struct RefundSheet: View {
             body = RefundRequest(lines: nil, amount: Money.parseCents(amountText), restock: restock, reason: reasonOrNil)
         }
         do {
-            let _: RefundResponse = try await session.api.post("/v1/admin/orders/\(code)/refund", body: body)
-            Diagnostics.record("order_refunded", ["mode": mode.rawValue])
+            let _: RefundResponse = try await client.post("/v1/admin/orders/\(code)/refund", body: body)
+            Diagnostics.record("order_refunded", ["mode": refundMode.rawValue])
+            guard session.sessionIdentity == identity else { return }
             await onDone()
+            guard session.sessionIdentity == identity else { return }
             dismiss()
         } catch {
+            guard session.sessionIdentity == identity else { return }
             errorMessage = error.localizedDescription
         }
     }

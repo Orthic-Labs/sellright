@@ -1,3 +1,6 @@
 # Decisions
 
 - 2026-10-19: For [#270](https://github.com/Orthic-Labs/sellright/issues/270), filter only Vite-generated `VITE_USER_NODE_ENV` from public-prefixed loader results. Preserve runtime `NODE_ENV` & strict brand schema checks. Legion selected this bounded fix under Adrian’s release-readiness/deployment authorization; real-Vite counterfactual confirmed generation occurs only when legacy NODE_ENV is present.
+
+- 2026-10-24: Adrian confirmed SellRight Admin is a public product for any merchant, not his personal app. Under [#352](https://github.com/Orthic-Labs/sellright/issues/352), enter store address before credentials, save independent server/account profiles, & use ordinary password-manager selection. Remove all built-in store domains; no per-merchant AASA requirement. This supersedes #343 finding 2 & cancels its CDN release gate.
+- 2026-10-24: Under #352's profile-isolation scope, Legion chose one-time reauthentication when upgrading the original single-session app. Retire its session through a durable secure cleanup receipt before enabling replacement push registrations, preserving account metadata. Existing server notifications carry no origin & older app versions stored no device receipts; this bounds migration safely without adding a server API. Approved under Adrian's #352 implementation request.

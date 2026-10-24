@@ -28,6 +28,10 @@ struct APIClient: Sendable {
     var baseURL: URL
     var token: String?
     var storeSlug: String?
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    var transport: Transport? = nil
+    /// Captures the originating profile + credential revision, never live UI state.
+    var onUnauthorized: (@Sendable () async -> Void)? = nil
 
     private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
@@ -85,6 +89,8 @@ struct APIClient: Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        // Native authentication is bearer-only; do not share browser/session cookies across profiles.
+        request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let storeSlug { request.setValue(storeSlug, forHTTPHeaderField: "x-store-slug") }
@@ -96,13 +102,19 @@ struct APIClient: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await Self.urlSession.data(for: request)
+            if let transport {
+                (data, response) = try await transport(request)
+            } else {
+                (data, response) = try await Self.urlSession.data(for: request)
+            }
         } catch {
             throw APIError.transport(error)
         }
 
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
+            // Login/2FA clients have no token, so their 401 never expires a profile.
+            if status == 401, token != nil { await onUnauthorized?() }
             let message = (try? Self.decoder.decode(APIErrorBody.self, from: data))?.error ?? "Request failed"
             throw APIError.http(status: status, message: message)
         }
