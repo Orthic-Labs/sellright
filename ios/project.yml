@@ -121,12 +121,28 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
         PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin.tests
+  # One rendered-evidence journey (RightKit QA lane): launches the Debug app with -SellRightDemo (fixture data
+  # compiled only into Debug, SellRightAdmin/App/Demo.swift). A separate test bundle: no QA code in the app target.
+  SellRightAdminUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: SellRightAdmin
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin.uitests
+        TEST_TARGET_NAME: SellRightAdmin
 schemes:
   SellRightAdmin:
     build:
       targets:
         SellRightAdmin: all
         SellRightAdminTests: [test]
+        SellRightAdminUITests: [test]
     test:
       targets:
         - SellRightAdminTests
+        - SellRightAdminUITests
