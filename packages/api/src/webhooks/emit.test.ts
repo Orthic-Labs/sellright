@@ -74,6 +74,9 @@ vi.mock('../db/client.js', async () => {
   const { PgDialect } = await import('drizzle-orm/pg-core');
   const dialect = new PgDialect();
   return {
+    // Lease fencing is exercised by db/pools.db.test.ts; here the fence is a pass-through.
+    runWithLeaseFence: (_fence: unknown, fn: () => Promise<unknown>) => fn(),
+    LeaseLostError: class extends Error {},
     // The scheduler lease (jobs/leader-lock.ts): claimed with an INSERT, given back with a DELETE.
     locksPool: {
       query: async (text: string) => {

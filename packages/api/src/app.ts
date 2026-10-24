@@ -110,6 +110,13 @@ export interface HttpAppOptions {
   admit?: () => boolean;
 }
 
+/** The one readiness query in flight in this process (#360 N6); probes that arrive meanwhile share it. */
+let inflightReadiness: Promise<{ rowCount: number | null }> | undefined;
+function readinessProbe(): Promise<{ rowCount: number | null }> {
+  inflightReadiness ??= locksPool.query('SELECT 1').finally(() => { inflightReadiness = undefined; });
+  return inflightReadiness;
+}
+
 /**
  * The API is typed REST: every route declares a zod schema, which generates
  * both the OpenAPI contract (/v1/openapi.json) and typed clients for consumers.
@@ -424,11 +431,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // The probe runs on the small locks pool (#358 / #360), so it neither queues
     // behind shoppers on a saturated request pool nor takes a connection from
     // them, and it reports every pool's counts so saturation is visible before
-    // it turns into connect timeouts. 1 s ceiling; the timer is always cleared.
+    // it turns into connect timeouts. At most ONE probe query is in flight per
+    // process (#360 N6): a probe that times out keeps running and every probe
+    // until it settles shares it, so repeated probes against a stuck database
+    // never pile up waiters. 1 s ceiling per request; the timer is always cleared.
     let timer: NodeJS.Timeout | undefined;
     try {
       const result = await Promise.race([
-        locksPool.query('SELECT 1'),
+        readinessProbe(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('readiness probe timeout')), 1000);
         }),

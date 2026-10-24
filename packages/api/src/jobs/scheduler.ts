@@ -39,7 +39,9 @@ import { sheeridExpirySweep } from './sheerid-expiry.js';
 import { birthdayBonusSweep } from './birthday-bonus.js';
 import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
-import { isPoolTimeout, runInJobScope } from '../db/client.js';
+import { isPoolTimeout } from '../db/client.js';
+import { jobAdmission } from './admission.js';
+export { Semaphore } from './admission.js';
 import { log, err as logErr } from '../lib/logger.js';
 import { publishCatalogManifest } from '../manifest/catalog.js';
 import { loadStalePendingManifestRegenerations, clearManifestRegenerationPending } from '../manifest/manifest-pending.js';
@@ -57,13 +59,12 @@ const jobLog = (m: string) => log.info(m);
  *     its name, plus 0–10 % jitter, so jobs whose intervals divide each other
  *     no longer all wake in the same tick once an hour (the old setInterval
  *     calls shared one base time, the process start).
- *   - At most JOBS_CONCURRENCY passes run at once; a pass waiting for a slot
- *     keeps its job's later ticks skipped, like an overlapping tick always was.
- *   - Every pass runs inside runInJobScope(), so its queries use the jobs pool,
- *     never the request pool, and its leadership is a lease row (leader-lock.ts)
+ *   - Every pass goes through the shared admission (admission.ts): at most
+ *     JOBS_CONCURRENCY passes run at once, each in the jobs pool's scope, and a
+ *     pass past JOBS_PASS_DEADLINE_MS is alarmed but keeps its slot. A pass
+ *     waiting for a slot keeps its job's later ticks skipped, like an
+ *     overlapping tick always was. Leadership is a lease row (leader-lock.ts)
  *     that holds no connection.
- *   - A pass still running after JOBS_PASS_DEADLINE_MS is logged and gives its
- *     slot back; it cannot be cancelled, so the job's next tick waits for it.
  *   - A pass that cannot get a connection logs "job skipped: pool busy" and
  *     waits for its next tick instead of failing as an error.
  * `running` only guards overlap WITHIN this process; the lease is what keeps a
@@ -75,27 +76,6 @@ interface SchedulerState {
   inflight: Set<Promise<void>>;
   /** Names of every job registered this run (engine + plugin) — diagnostics for effective-config. */
   names: string[];
-  slots: Semaphore;
-  passDeadlineMs: number;
-}
-
-/** Counting semaphore for the concurrent-pass cap. FIFO, so a job waits its turn behind earlier ticks. */
-export class Semaphore {
-  private free: number;
-  private readonly waiters: Array<() => void> = [];
-  constructor(size: number) { this.free = Math.max(1, size); }
-  async acquire(): Promise<() => void> {
-    if (this.free > 0) this.free--;
-    else await new Promise<void>((resolve) => this.waiters.push(resolve));
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const next = this.waiters.shift();
-      if (next) next();
-      else this.free++;
-    };
-  }
 }
 
 /** FNV-1a 32-bit: a stable, dependency-free hash for a job's name. */
@@ -137,22 +117,13 @@ function every(state: SchedulerState, intervalMs: number, label: string, leaderJ
     if (isMaintenanceOn()) return;
     running = true;
     const pass = (async () => {
-      const release = await state.slots.acquire();
-      let overdue: NodeJS.Timeout | undefined;
       try {
         if (state.stopped) return;
-        overdue = setTimeout(() => {
-          log.warn('job pass over its deadline; slot released, pass still running', { job: label, deadlineMs: state.passDeadlineMs });
-          release();
-        }, state.passDeadlineMs);
-        overdue.unref?.();
-        await runInJobScope(() => withLeaderLock(leaderJob, fn, scope)); // skip if another instance leads this tick
+        await jobAdmission().run(label, () => withLeaderLock(leaderJob, fn, scope)); // skip if another instance leads this tick
       } catch (e) {
         if (isPoolTimeout(e)) log.info('job skipped: pool busy', { job: label });
         else logErr.error('job failed', e, { job: label });
       } finally {
-        clearTimeout(overdue);
-        release();
         running = false;
       }
     })();
@@ -205,7 +176,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     log.info('scheduler disabled', { hint: 'set JOBS_ENABLED=1 to enable' });
     return DISABLED;
   }
-  const state: SchedulerState = { stopped: false, timers: new Set(), inflight: new Set(), names: [], slots: new Semaphore(env.JOBS_CONCURRENCY ?? 2), passDeadlineMs: env.JOBS_PASS_DEADLINE_MS ?? 10 * 60_000 };
+  const state: SchedulerState = { stopped: false, timers: new Set(), inflight: new Set(), names: [] };
   const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY === '1';
   const autoDeliverDays = env.JOBS_AUTO_DELIVER_DAYS ?? 10;
   const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
@@ -248,7 +219,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     if (!env.CATALOG_DIR?.trim() || !env.STORE_SLUG?.trim()) {
       log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
     } else {
-      void runInJobScope(() => withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG))
+      void jobAdmission().run('catalog-manifest:startup', () => withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG))
         .catch((e) => logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }));
       // SELLRIGHT-ISSUES P1: durable-retry drain. onStockChanged's in-process
       // trailing-rerun state (stock-hook.ts) doesn't survive a crash between

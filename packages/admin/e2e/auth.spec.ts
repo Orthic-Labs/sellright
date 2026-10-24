@@ -44,8 +44,12 @@ test.describe('admin sign-in', () => {
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
+		// logout() clears the session state (the route guard soft-navigates to /login at once) and THEN does a full
+		// location.assign('/login'): wait for that document, or the goto below races it and is interrupted.
+		const loginDocument = page.waitForResponse((r) => r.request().resourceType() === 'document' && /\/login$/.test(new URL(r.url()).pathname));
 		await page.getByRole('button', { name: 'Sign out' }).click();
-		await page.waitForURL(/\/login$/, { waitUntil: 'load' });
+		await loginDocument;
+		await page.waitForLoadState('load');
 		await page.goto('/orders', { waitUntil: 'commit' });
 		await expect(page).toHaveURL(/\/login$/);
 	});

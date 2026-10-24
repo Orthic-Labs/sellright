@@ -18,7 +18,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { locksPool } from '../db/client.js';
+import { LeaseLostError, locksPool, runWithLeaseFence, type LeaseFence } from '../db/client.js';
 import { err as logErr } from '../lib/logger.js';
 
 /** A holder that stops renewing (crash, frozen event loop) loses the lease after this long. */
@@ -81,41 +81,74 @@ export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;
 export type PluginLeaderLockedJob = `plugin:${string}`;
 export type LeaderLockedJob = EngineLeaderLockedJob | PluginLeaderLockedJob;
 
+/** The pre-0112 advisory-lock key of a job (and scope), so a lease is never claimed while an old-protocol runner holds
+ *  that lock (#360 N11). `hashed` keys went through hashtextextended(text, 0); the rest are the literal bigint. */
+export function legacyAdvisoryKey(job: LeaderLockedJob, scope?: string): { key: string; hashed: boolean } {
+  const isPluginJob = job.startsWith('plugin:');
+  const base = isPluginJob ? `${NAMESPACE}:${job}` : String(JOB_KEYS[job as EngineLeaderLockedJob]);
+  return scope === undefined && !isPluginJob ? { key: base, hashed: false } : { key: scope === undefined ? base : `${base}:${scope}`, hashed: true };
+}
+
 /**
  * Run `fn` only if this process wins the lease for `job` (and `scope`, for
  * per-store publishers). If another holder has it, this is a no-op (undefined):
  * that holder's own pass already covers the work. `fn` runs with no connection
  * held for the lease; its own queries use the pools as usual.
+ *
+ * Fencing (#360 N2): `fn` runs inside the lease's fence, so every store
+ * transaction it opens re-checks the lease (row-locked) right before COMMIT and
+ * rolls back if the lease expired or changed hands. Renewal that finds the lease
+ * gone, or that has not succeeded for a whole TTL, marks it lost and aborts the
+ * fence's signal (currentLeaseSignal() in db/client.ts) for work that can stop.
+ *
+ * Rollout (#360 N11): the claim is refused while an old-protocol runner (pre-0112
+ * image) holds this job's advisory lock. An old runner does not see leases, so
+ * the release order still matters: stop the old API before the new one starts,
+ * and stop the new one before a rollback starts the old one.
  */
 export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<T>, scope?: string): Promise<T | undefined> {
   if (!job.startsWith('plugin:') && !(job in JOB_KEYS)) throw new Error(`unknown leader-locked job: ${job}`);
   const name = scope === undefined ? job : `${job}:${scope}`;
   const token = randomUUID();
+  const legacy = legacyAdvisoryKey(job, scope);
   const claimed = await locksPool.query(
-    `INSERT INTO scheduler_lease AS l (name, token, holder, expires_at)
-     VALUES ($1, $2, $3, now() + make_interval(secs => $4::double precision / 1000))
+    `WITH legacy AS (SELECT CASE WHEN $6::boolean THEN hashtextextended($5, 0) ELSE $5::bigint END AS k)
+     INSERT INTO scheduler_lease AS l (name, token, holder, expires_at)
+     SELECT $1, $2, $3, now() + make_interval(secs => $4::double precision / 1000)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM pg_locks, legacy
+       WHERE locktype = 'advisory' AND objsubid = 1
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+         AND classid = ((legacy.k >> 32) & 4294967295)::oid AND objid = (legacy.k & 4294967295)::oid)
      ON CONFLICT (name) DO UPDATE SET token = EXCLUDED.token, holder = EXCLUDED.holder,
        acquired_at = now(), expires_at = EXCLUDED.expires_at
      WHERE l.expires_at <= now()
      RETURNING l.token`,
-    [name, token, HOLDER, LEASE_TTL_MS],
+    [name, token, HOLDER, LEASE_TTL_MS, legacy.key, legacy.hashed],
   );
   if (!claimed.rowCount) return undefined; // another holder leads this tick — skip
-  let lost = false;
+  const abort = new AbortController();
+  const fence: LeaseFence = { name, token, lost: false, signal: abort.signal };
+  const markLost = (why: string) => {
+    if (fence.lost) return;
+    fence.lost = true;
+    abort.abort(new LeaseLostError(name));
+    logErr.error('scheduler lease lost while the pass is still running; its further commits are refused', undefined, { lease: name, why });
+  };
+  let renewedAt = Date.now();
   const renew = setInterval(() => {
+    if (Date.now() - renewedAt > LEASE_TTL_MS) markLost('renewal has not succeeded for a whole lease term');
     void locksPool.query(
-      'UPDATE scheduler_lease SET expires_at = now() + make_interval(secs => $3::double precision / 1000) WHERE name = $1 AND token = $2',
+      'UPDATE scheduler_lease SET expires_at = now() + make_interval(secs => $3::double precision / 1000) WHERE name = $1 AND token = $2 AND expires_at > clock_timestamp()',
       [name, token, LEASE_TTL_MS],
     ).then((r) => {
-      if (!r.rowCount && !lost) {
-        lost = true;
-        logErr.error('scheduler lease lost while the pass is still running', undefined, { lease: name });
-      }
+      if (r.rowCount) renewedAt = Date.now();
+      else markLost('the lease row expired or was taken over');
     }, (e) => logErr.error('scheduler lease renewal failed (retrying)', e, { lease: name }));
   }, LEASE_RENEW_MS);
   renew.unref();
   try {
-    return await fn();
+    return await runWithLeaseFence(fence, fn);
   } finally {
     clearInterval(renew);
     await locksPool.query('DELETE FROM scheduler_lease WHERE name = $1 AND token = $2', [name, token])

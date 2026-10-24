@@ -26,6 +26,7 @@ vi.mock('../db/client.js', () => ({
   initPools: () => ({}),
   poolsInitialised: () => false,
   assertRuntimeRoleUnprivileged: vi.fn(async () => {}),
+  checkConnectionBudget: vi.fn(async () => {}),
   closePools: mocks.closePools,
 }));
 vi.mock('../db/schema.js', () => ({}));

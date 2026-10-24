@@ -59,6 +59,8 @@
 import { env } from '../env.js';
 import { publishCatalogManifest } from './catalog.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
+import { _resetJobAdmissionForTest, jobAdmission } from '../jobs/admission.js';
+import { runInJobScope } from '../db/client.js';
 import { resolveStore } from '../store-context.js';
 import { markManifestRegenerationPending, clearManifestRegenerationPending } from './manifest-pending.js';
 import { log, err as logErr } from '../lib/logger.js';
@@ -116,7 +118,8 @@ export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
   if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) return;
   const st = stateFor(storeSlug);
   const scope: RegenScope = variantIds?.length ? new Set(variantIds) : 'full';
-  void enqueue(storeSlug, st, scope);
+  // #360 N4: background work from here on — its bookkeeping SQL uses the jobs pool, not the request pool.
+  void runInJobScope(() => enqueue(storeSlug, st, scope));
 }
 
 async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope): Promise<void> {
@@ -141,11 +144,13 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
   st.trailing = null;
   try {
     const variantIds = scope === 'full' ? undefined : [...scope];
-    const result = await withLeaderLock(
+    // #360 N4: an HTTP request triggered this, but the publication is background work: it goes through the shared
+    // job admission (jobs pool, concurrency cap), never the request pool the shopper's request is using.
+    const result = await jobAdmission().run('catalog-manifest:stock', () => withLeaderLock(
       'catalog-manifest',
       () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug, variantIds }),
       storeSlug,
-    );
+    ));
     if (result) log.info('catalog manifest regenerated on stock change', { storeSlug, products: result.products, scope: scope === 'full' ? 'full' : `${scope.size} product-scoped variant(s)` });
     // Only clear the durable marker on an ACTUAL publish. `withLeaderLock`
     // returns undefined when another instance held the lock for this tick —
@@ -167,4 +172,5 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
 /** Test-only: drop all in-memory generation state between cases. */
 export function _resetStockHookStateForTest(): void {
   states.clear();
+  _resetJobAdmissionForTest(); // a test that leaves a publication hanging must not hold the shared slots
 }

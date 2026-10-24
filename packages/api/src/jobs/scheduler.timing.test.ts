@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jobOffsetMs, nextDelayMs, Semaphore } from './scheduler.js';
+import { jobOffsetMs, nextDelayMs } from './scheduler.js';
 
 // #358 / #360: the engine jobs and their intervals, as registered by startJobScheduler().
 const MIN = 60_000;
@@ -47,32 +47,5 @@ describe('job slots', () => {
         expect(jittered - bare).toBeLessThan(interval * 0.1);
       }
     }
-  });
-});
-
-describe('Semaphore', () => {
-  it('admits at most `size` holders, FIFO, and ignores a double release', async () => {
-    const slots = new Semaphore(2);
-    const a = await slots.acquire();
-    const b = await slots.acquire();
-    const order: string[] = [];
-    const c = slots.acquire().then((release) => { order.push('c'); return release; });
-    const d = slots.acquire().then((release) => { order.push('d'); return release; });
-    await Promise.resolve();
-    expect(order).toEqual([]);
-    a();
-    a(); // idempotent: must not admit two waiters
-    const releaseC = await c;
-    await Promise.resolve();
-    expect(order).toEqual(['c']);
-    b();
-    const releaseD = await d;
-    expect(order).toEqual(['c', 'd']);
-    releaseC();
-    releaseD();
-    const e = await slots.acquire();
-    const f = await slots.acquire();
-    e();
-    f();
   });
 });

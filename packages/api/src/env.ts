@@ -37,6 +37,15 @@ const EnvSchema = z.object({
   // holds no connection while the job works. Payment workflow advisory locks keep their separate pool.
   PGJOBS_POOL_MAX: z.coerce.number().int().positive().default(4),
   PGLOCKS_POOL_MAX: z.coerce.number().int().positive().default(4),
+  // Payment/refund workflow advisory locks (#360 N1): how long one waits for a workflow lock another request holds
+  // (the lock wait is bounded by Postgres, the connection acquisition by PGPOOL_CONNECTION_TIMEOUT_MS), and when a
+  // workflow that still holds its lock is reported as stuck. The lock is never released while its workflow runs.
+  PGADVISORY_LOCK_WAIT_MS: z.coerce.number().int().positive().default(5000),
+  PGADVISORY_WORKFLOW_ALARM_MS: z.coerce.number().int().positive().default(120_000),
+  // #360 N7: this process's share of the cluster's connections. At boot the API logs its maximum (all pools, the
+  // tenant resolver, the webhook pass and the LISTEN session) and warns when that exceeds this budget, the role's
+  // connection limit, or max_connections minus the superuser reserve.
+  PG_CONNECTION_BUDGET: z.coerce.number().int().positive().optional(),
   PGAPPNAME: z.string().trim().min(1).default('sellright-api'),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   // Interface to bind. Default 0.0.0.0 (reverse proxies on a Docker bridge

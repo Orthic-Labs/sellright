@@ -5,7 +5,7 @@ import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
 import { getEnv, type Env } from '../env.js';
 import { beginAfterCommit, discardAfterCommit, flushAfterCommit } from './after-commit.js';
-import { log } from '../lib/logger.js';
+import { log, err as logErr } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
 // Pools are created by `initPools(env)` (createApp, plugin 2.1) — importing this
@@ -46,10 +46,12 @@ export function inJobScope(): boolean {
   return jobScope.getStore() === true;
 }
 
-/** Server-side session limits per pool, sent as startup options so they hold whatever the role defaults are. Jobs
- *  may scan a whole store; advisory sessions wait on workflow locks by design, so they opt out of both timeouts. */
+/** Server-side session limits sent as startup options, so they hold whatever the role defaults are. Jobs may scan a
+ *  whole store (120 s statements). Advisory sessions only run lock/unlock statements: a lock wait is bounded by
+ *  PGADVISORY_LOCK_WAIT_MS (#360 N1 — never unbounded, matching the production roles' lock_timeout) and each
+ *  statement by 30 s. */
 const JOBS_SESSION = '-c statement_timeout=120000';
-const ADVISORY_SESSION = '-c statement_timeout=0 -c lock_timeout=0';
+const advisorySession = (e: Env) => `-c statement_timeout=30000 -c lock_timeout=${e.PGADVISORY_LOCK_WAIT_MS}`;
 
 export function initPools(e: Env = getEnv()): Pool {
   if (pools) throw new Error('database pools are already initialised in this process (one createApp per process)');
@@ -72,7 +74,7 @@ export function initPools(e: Env = getEnv()): Pool {
   const pool = make(e.PGAPPNAME, e.PGPOOL_MAX);
   const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION });
   const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true });
-  const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4))), { allowExitOnIdle: true, options: ADVISORY_SESSION });
+  const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, advisoryPoolMax(e), { allowExitOnIdle: true, options: advisorySession(e) });
   pools = { pool, jobsPool, locksPool, advisoryLockPool, db: drizzle(pool, drizzleOpts), jobsDb: drizzle(jobsPool, drizzleOpts) };
   poolsClosed = false;
   if (e.NODE_ENV !== 'test') {
@@ -125,6 +127,70 @@ export function _resetPoolsForTest(): void {
   if (pools) clearInterval(pools.gauge);
   pools = undefined;
   poolsClosed = false;
+}
+
+const advisoryPoolMax = (e: Env) => Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4)));
+
+/** #360 N7: the most connections one API process can open, by consumer. The tenant resolver
+ *  (payments/tenant-resolution.ts) and the per-pass webhook pool (webhooks/emit.ts) are fixed at 2 each. */
+export function connectionBudget(e: Env = getEnv()): { total: number; parts: Record<string, number> } {
+  const parts = {
+    requests: e.PGPOOL_MAX, jobs: e.PGJOBS_POOL_MAX, locks: e.PGLOCKS_POOL_MAX, advisory: advisoryPoolMax(e),
+    tenantResolution: 2, webhookPass: 2, listener: 1,
+  };
+  return { total: Object.values(parts).reduce((a, b) => a + b, 0), parts };
+}
+
+/** Boot check (createApp, best-effort): log this process's connection maximum and warn when it exceeds
+ *  PG_CONNECTION_BUDGET, the runtime role's connection limit, or max_connections minus the superuser reserve. */
+export async function checkConnectionBudget(e: Env = getEnv()): Promise<void> {
+  const { total, parts } = connectionBudget(e);
+  const { rows } = await locksPool.query<{ max: number; reserved: number; connlimit: number }>(
+    `SELECT current_setting('max_connections')::int AS max,
+            current_setting('superuser_reserved_connections')::int AS reserved,
+            (SELECT rolconnlimit FROM pg_roles WHERE rolname = current_user) AS connlimit`,
+  );
+  const r = rows[0]!;
+  const limits: Array<[string, number]> = [['max_connections minus reserve', r.max - r.reserved]];
+  if (r.connlimit >= 0) limits.push(['role connection limit', r.connlimit]);
+  if (e.PG_CONNECTION_BUDGET) limits.push(['PG_CONNECTION_BUDGET', e.PG_CONNECTION_BUDGET]);
+  const over = limits.filter(([, limit]) => total > limit);
+  const fields = { maxConnections: total, parts, limits: Object.fromEntries(limits) };
+  if (over.length) log.warn('db connection budget exceeded: this process alone can open more connections than allowed', { ...fields, exceeded: over.map(([name]) => name) });
+  else log.info('db connection budget', fields);
+}
+
+/** #360 N2: a scheduler lease the current job pass holds (jobs/leader-lock.ts). While one is in scope, every store
+ *  transaction re-checks it, row-locked, right before COMMIT, so a worker whose lease expired or was taken over can
+ *  never commit; `signal` aborts when renewal finds the lease gone. */
+export interface LeaseFence { name: string; token: string; lost: boolean; readonly signal: AbortSignal }
+const leaseScope = new AsyncLocalStorage<readonly LeaseFence[]>();
+
+/** Run `fn` with `fence` added to the leases every store transaction it starts must still hold at COMMIT. */
+export function runWithLeaseFence<T>(fence: LeaseFence, fn: () => Promise<T>): Promise<T> {
+  return leaseScope.run([...(leaseScope.getStore() ?? []), fence], fn);
+}
+
+/** The abort signal of the innermost lease in scope (undefined outside a leader-locked pass). */
+export function currentLeaseSignal(): AbortSignal | undefined {
+  return leaseScope.getStore()?.at(-1)?.signal;
+}
+
+export class LeaseLostError extends Error {
+  constructor(name: string) { super(`scheduler lease "${name}" is no longer held; the transaction was rolled back`); }
+}
+
+async function assertLeasesHeld(client: PoolClient, fences: readonly LeaseFence[]): Promise<void> {
+  for (const f of fences) {
+    if (f.lost) throw new LeaseLostError(f.name);
+    // FOR SHARE: a competing claim (INSERT … ON CONFLICT DO UPDATE) waits for this COMMIT, so the lease cannot change
+    // hands between this check and the commit. clock_timestamp(), not now(): the transaction may be old.
+    const r = await client.query(
+      'SELECT 1 FROM scheduler_lease WHERE name = $1 AND token = $2 AND expires_at > clock_timestamp() FOR SHARE',
+      [f.name, f.token],
+    );
+    if (!r.rowCount) { f.lost = true; throw new LeaseLostError(f.name); }
+  }
 }
 
 /** pg-pool's error when no client frees up within PGPOOL_CONNECTION_TIMEOUT_MS. Maps to 503 + Retry-After (app.ts)
@@ -236,6 +302,7 @@ export async function runStoreTransaction<T>(
   let broken = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timeoutError: Error | undefined;
+  const fences = leaseScope.getStore();
   let closing: Promise<void> | undefined;
   const deadline = options.timeoutMs === undefined ? undefined : new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -258,6 +325,8 @@ export async function runStoreTransaction<T>(
       await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
       if (timeoutError) throw timeoutError;
       const result = await fn(makeTx(client));
+      if (timeoutError) throw timeoutError;
+      if (fences?.length) await assertLeasesHeld(client, fences);
       if (timeoutError) throw timeoutError;
       await client.query('COMMIT');
       if (timeoutError) throw timeoutError;
@@ -317,6 +386,7 @@ export async function withAdvisoryLocks<T>(
   const witness: AdvisoryWitness = { keys: new Set(keys), active: true, used: false };
   advisoryWitnesses.set(held, witness);
   let broken = false;
+  let alarm: ReturnType<typeof setTimeout> | undefined;
   try {
     for (const key of keys) {
       try {
@@ -327,8 +397,13 @@ export async function withAdvisoryLocks<T>(
         throw error;
       }
     }
+    // #360 N1: a workflow still holding its locks after PGADVISORY_WORKFLOW_ALARM_MS is reported, never released:
+    // its gateway call may still be in flight, and releasing would let a second workflow write over it.
+    alarm = setTimeout(() => logErr.error('advisory-locked workflow is still running past its alarm; locks stay held until it settles', undefined, { keys, alarmMs: getEnv().PGADVISORY_WORKFLOW_ALARM_MS }), getEnv().PGADVISORY_WORKFLOW_ALARM_MS);
+    alarm.unref?.();
     return await fn(held);
   } finally {
+    clearTimeout(alarm);
     witness.active = false;
     // A callback can return/throw without awaiting its accepted operation. Drain
     // it before releasing locks; awaited failures still reach the callback.

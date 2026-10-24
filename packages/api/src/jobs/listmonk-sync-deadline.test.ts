@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../security/outbound-url.js', () => ({ safeOutboundFetch: mocks.fetch }));
 vi.mock('../db/client.js', () => ({
+  // Lease fencing is exercised by db/pools.db.test.ts; here the fence is a pass-through.
+  runWithLeaseFence: (_fence: unknown, fn: () => Promise<unknown>) => fn(),
+  LeaseLostError: class extends Error {},
   // The scheduler lease (jobs/leader-lock.ts): claimed with an INSERT, given back with a DELETE.
   locksPool: {
     query: async (text: string) => {
