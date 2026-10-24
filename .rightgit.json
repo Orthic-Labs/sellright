@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "compile": "github-actions-only",
+  "lanes": ["ci"]
+}

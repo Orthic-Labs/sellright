@@ -3,6 +3,9 @@ const team = "6KLGD3LLKF";
 export default {
   schema: 1,
   app: "sellright",
+  // The only right-release target is the iOS admin app, so the release version is its MARKETING_VERSION
+  // (ios/project.yml); keep the two in step. The server packages deploy through their own scripts.
+  version: "0.2.0",
   packageManager: "pnpm",
   deps: { workdirs: [".", "packages/admin"] },
   targets: {

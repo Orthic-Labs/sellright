@@ -1,0 +1,7 @@
+{
+  "allow": "build-test-publish",
+  "repository": "Orthic-Labs/sellright",
+  "grantedBy": "Adrian D'Souza",
+  "grantedOn": "2026-10-24",
+  "reason": "The native iOS admin app archives, signs and uploads to TestFlight locally on the Mac (RightKit iOS recipe needs the GUI signing session); CI stays the gate for the server packages."
+}
