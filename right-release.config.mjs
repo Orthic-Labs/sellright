@@ -10,6 +10,9 @@ export default {
   deps: { workdirs: [".", "packages/admin"] },
   // Everything the iOS archive reads: the XcodeGen spec, sources, widget, shared code and assets live under ios/.
   buildInputs: { include: ["ios/**", "right-release.config.mjs"], required: ["ios/project.yml", "right-release.config.mjs"] },
+  // The iOS admin app is Swift only: no Cargo manifest, so the release feature closure has nothing to resolve.
+  // Its environment reads are inventoried in switches.json (the iOS source walk covers ios/).
+  releaseSwitches: { rust: false },
   // The hosted workflows are the web and server pipeline, not the iOS app's: the iOS app builds, signs and uploads only
   // through right-release on the Mac. right-release refuses any of them that reaches a secret but GITHUB_TOKEN, runs
   // release machinery or names the IPA or archive (@rightkit/release hosted-workflow-policy.mjs).
