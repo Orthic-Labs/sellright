@@ -123,8 +123,9 @@ export function nextDelayMs(label: string, intervalMs: number, now: number, rand
   return delay + Math.floor(random() * intervalMs * 0.1);
 }
 
-function every(state: SchedulerState, ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>, scope?: string): void {
+function every(state: SchedulerState, intervalMs: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>, scope?: string): void {
   state.names.push(label);
+  const ms = intervalMs === 60_000 && env.JOBS_FAST_INTERVAL_MS ? env.JOBS_FAST_INTERVAL_MS : intervalMs;
   let running = false;
   const tick = async () => {
     if (state.stopped) return; // shutdown step 2: no new passes after stop()

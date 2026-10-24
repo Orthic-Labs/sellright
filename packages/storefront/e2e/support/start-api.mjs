@@ -129,6 +129,9 @@ const child = spawn(process.execPath, ['--import', join(SUPPORT_DIR, 'preload.mj
     E2E_HOOK_HOST: HOOK_SENTINEL.host,
     E2E_HOOK_PORT: String(HOOK_SENTINEL.port),
     E2E_JOB_INTERVAL_MS: '1000',
+    // The scheduler's one-minute passes (emails, webhooks, gateway events…) run every second (#358: the scheduler
+    // schedules with setTimeout now, so the preload's setInterval hook no longer reaches it).
+    JOBS_FAST_INTERVAL_MS: '1000',
     // Real outbox + webhook + gateway-event workers, just fast. Gateway auto-recovery stays off (it would race specs
     // that deliberately leave an attempt pending).
     JOBS_ENABLED: '1',

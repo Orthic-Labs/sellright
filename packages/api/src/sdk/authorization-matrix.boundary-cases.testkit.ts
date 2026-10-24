@@ -12,7 +12,11 @@ export function createBoundaryCases(fixture: Fixture): MatrixCase[] {
     })),
   });
   publicRead('/v1/health', (body: Record<string, any>, proof: MatrixProof) => { proof.equal(body.status, 'ok', 'public health'); proof.ok(typeof body.version === 'string' && body.version.length > 0, 'engine version'); });
-  publicRead('/v1/readyz', (body: Record<string, any>, proof: MatrixProof) => { proof.equal(body, { status: 'ok', db: 'ok' }, 'actual database readiness'); });
+  publicRead('/v1/readyz', (body: Record<string, any>, proof: MatrixProof) => {
+    proof.equal({ status: body.status, db: body.db }, { status: 'ok', db: 'ok' }, 'actual database readiness');
+    // #358 / #360: per-pool connection counts ride along with the readiness answer.
+    proof.equal(Object.keys(body.pools ?? {}).sort(), ['advisory', 'jobs', 'locks', 'requests'], 'readiness pool gauges');
+  });
   publicRead('/v1/maintenance', (body: Record<string, any>, proof: MatrixProof) => { proof.equal(body, { maintenance: false }, 'no maintenance fixture'); });
   publicRead('/v1/shop/cache-version', (body: Record<string, any>, proof: MatrixProof) => { proof.ok(typeof body.version === 'string' && body.version.length > 0, 'store invalidation version'); });
   cases.push({ key: 'GET /v1/openapi.json', contract: 'admin', cells: cells(principal => {

@@ -292,6 +292,9 @@ const EnvSchema = z.object({
   // Scheduler (#358): a pass still running after this long is logged and gives its concurrency slot back. The pass
   // itself cannot be cancelled: it keeps its lease (renewed) and the job's next tick waits until it settles.
   JOBS_PASS_DEADLINE_MS: z.coerce.number().int().positive().default(10 * 60_000),
+  // Test harnesses only: every job whose interval is one minute runs on this interval instead (the e2e suites use
+  // 1000, so a spec sees an outbox drain in seconds). Unset in every real deployment.
+  JOBS_FAST_INTERVAL_MS: z.coerce.number().int().positive().optional(),
   // auto-deliver job: actually transition Shipped→Delivered (default: dry-run log only).
   JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
   // auto-deliver job: age threshold in days before Shipped becomes Delivered.
