@@ -45,7 +45,7 @@ test.describe('admin sign-in', () => {
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
 		await page.getByRole('button', { name: 'Sign out' }).click();
-		await expect(page).toHaveURL(/\/login$/);
+		await page.waitForURL(/\/login$/, { waitUntil: 'load' });
 		await page.goto('/orders', { waitUntil: 'commit' });
 		await expect(page).toHaveURL(/\/login$/);
 	});
