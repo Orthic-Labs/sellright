@@ -28,9 +28,11 @@
     "deps:audit": "pnpm audit && pnpm --dir packages/admin audit",
     "deps:update": "pnpm up -r && pnpm --dir packages/admin up",
     "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest",
-    "test:sdk-packed": "pnpm --filter @sellright/sample-plugin test"
+    "test:sdk-packed": "pnpm --filter @sellright/sample-plugin test",
+    "release:doctor": "right-release doctor"
   },
   "devDependencies": {
+    "@rightkit/release": "0.6.4",
     "@typescript-eslint/parser": "8.71.2",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "10.13.0",
