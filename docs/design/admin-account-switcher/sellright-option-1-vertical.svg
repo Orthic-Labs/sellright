@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="SellRight vertical currency mark">
+  <title>SellRight — external currency stems</title>
+  <defs>
+    <filter id="glow" x="0" y="0" width="512" height="512" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="48"/></filter>
+    <mask id="s-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="black"/>
+      <path d="M136 202 C152 202 164 226 180 226 H376 V334 C360 334 348 310 332 310 H136 Z" fill="white"/>
+      <path d="M392 90 H276 L132 214 Q116 224 116 244 Q116 256 140 256" stroke="white" stroke-width="108" stroke-linecap="butt" stroke-linejoin="round"/>
+      <circle cx="392" cy="90" r="54" fill="white"/>
+      <path d="M372 280 Q396 280 396 292 Q396 312 380 322 L236 446 H120" stroke="white" stroke-width="108" stroke-linecap="butt" stroke-linejoin="round"/>
+      <circle cx="120" cy="446" r="54" fill="white"/>
+      <circle cx="150" cy="214" r="16" fill="white"/>
+      <circle cx="362" cy="322" r="16" fill="white"/>
+    </mask>
+    <mask id="mark-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="black"/>
+      <g transform="translate(61.44 61.44) scale(.76)">
+        <path d="M136 202 C152 202 164 226 180 226 H376 V334 C360 334 348 310 332 310 H136 Z" fill="white"/>
+        <path d="M392 90 H276 L132 214 Q116 224 116 244 Q116 256 140 256" stroke="white" stroke-width="108" stroke-linecap="butt" stroke-linejoin="round"/>
+        <circle cx="392" cy="90" r="54" fill="white"/>
+        <path d="M372 280 Q396 280 396 292 Q396 312 380 322 L236 446 H120" stroke="white" stroke-width="108" stroke-linecap="butt" stroke-linejoin="round"/>
+        <circle cx="120" cy="446" r="54" fill="white"/>
+        <circle cx="150" cy="214" r="16" fill="white"/>
+        <circle cx="362" cy="322" r="16" fill="white"/>
+      </g>
+      <path d="M256 58 V118" stroke="white" stroke-width="82.08" stroke-linecap="round"/>
+      <path d="M256 394 V454.96" stroke="white" stroke-width="82.08" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="#101A14"/>
+  <ellipse cx="256" cy="268" rx="182" ry="218" fill="#45D483" opacity=".12" filter="url(#glow)"/>
+  <rect width="512" height="512" fill="#45D483" mask="url(#mark-mask)"/>
+</svg>
