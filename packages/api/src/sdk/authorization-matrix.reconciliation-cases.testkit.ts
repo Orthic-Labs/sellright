@@ -29,6 +29,7 @@ function specs(f: MatrixReconciliationFixture): Spec[] {
     const p = await f.seedProduct(), orderId = randomUUID(), lineId = randomUUID(), paymentId = randomUUID();
     const orderCode = 'MATRIX-' + randomUUID().toUpperCase(), providerRef = 'matrix-settled-' + randomUUID();
     const sku = (await one('SELECT sku FROM product_variant WHERE id=$1', [p.variantId])).sku;
+    const productName = (await one('SELECT name FROM product WHERE id=$1', [p.productId])).name;
     if (license) await query("UPDATE product_variant SET fulfillment_type='license',app_key='matrix-recovery' WHERE id=$1", [p.variantId]);
     await query('UPDATE stock SET on_hand=20,allocated=2 WHERE variant_id=$1', [p.variantId]);
     await query(`INSERT INTO "order"(id,store_id,code,state,currency,subtotal,grand_total,placed_at,metadata)
@@ -37,7 +38,7 @@ function specs(f: MatrixReconciliationFixture): Spec[] {
       VALUES($1,$2,$3,$4,$5,'Matrix recovery line',2,2500,5000,5000)`, [lineId, f.storeId, orderId, p.variantId, sku]);
     if (state === 'Paid') await query(`INSERT INTO payment(id,store_id,order_id,amount,method,state,currency,provider_ref,gateway_account,gateway_mode)
       VALUES($1,$2,$3,5000,'nmi','Settled','USD',$4,'matrix-account','test')`, [paymentId, f.storeId, orderId, providerRef]);
-    return { ...p, orderId, code: orderCode, lineId, paymentId, providerRef, sku };
+    return { ...p, orderId, code: orderCode, lineId, paymentId, providerRef, sku, productName };
   }
   async function heldEffect() {
     const o = await order('Paid', true), effectId = randomUUID(), editId = randomUUID();
@@ -159,7 +160,7 @@ function specs(f: MatrixReconciliationFixture): Spec[] {
         proof.equal(b.summary, { total: 1, importable: 1, byStatus: { ready: 1 } }, 'real paid order is importable');
         proof.equal(b.rows[0].code, o.code, 'preview references store A order');
         proof.equal(b.rows[0].tracking, tracking, 'preview tracking');
-        proof.equal(b.rows[0].items, [{ sku: o.sku, name: 'Matrix recovery line', quantity: 2 }], 'preview shippable units');
+        proof.equal(b.rows[0].items, [{ sku: o.sku, name: `${o.productName} · Matrix recovery line`, quantity: 2 }], 'preview shippable units');
         proof.equal((await query('SELECT id FROM fulfillment WHERE order_id=$1', [o.orderId])).length, 0, 'preview creates no fulfillment', 'state');
         proof.equal((await one('SELECT fulfilled_qty FROM order_line WHERE id=$1', [o.lineId])).fulfilled_qty, 0, 'preview preserves line quantity', 'state');
         proof.equal(await one('SELECT on_hand,allocated FROM stock WHERE variant_id=$1', [o.variantId]), { on_hand: 20, allocated: 2 }, 'preview preserves stock', 'state');
