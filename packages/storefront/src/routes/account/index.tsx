@@ -1,4 +1,4 @@
-import { $, component$, useContext, useOnDocument, useSignal } from '@qwik.dev/core';
+import { $, component$, useContext, useOnDocument, useSignal, useTask$ } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { Button, HighlightedButton, ErrorMessage, PencilSquareIcon, ShieldCheckIcon, SustainabilityBadgeView, hasView, platformAction } from '~/platform/gateway';
 import { Modal } from '~/components/modal/Modal';
@@ -8,13 +8,9 @@ import {
 	requestEmailChange,
 	updateProfile,
 } from '~/providers/shop/account/account';
-import {
-	getMeCached,
-	getOrders,
-} from '~/services/customer';
+import { getOrders } from '~/services/customer';
 import { ActiveCustomer } from '~/types';
 import { createSEOHead } from '~/utils/seo';
-import { sanitizePhoneNumber } from '~/utils/validation';
 
 // A17 mount point: a badge beside the loyalty balance. No base fallback: absent slot renders nothing.
 const hasSustainabilityBadge = hasView('account.sustainability-badge');
@@ -33,19 +29,13 @@ export default component$(() => {
 	};
 
 	// T17: Load account data on qinit
+	// The profile itself is read once, by the account layout (#362): this page only seeds the email field from it.
+	useTask$(({ track }) => {
+		const email = track(() => appState.customer.emailAddress);
+		if (!isEditing.value) newEmail.value = email ?? '';
+	});
+
 	useOnDocument('qinit', $(async () => {
-		const activeCustomer = await getMeCached();
-		if (activeCustomer) {
-			appState.customer = {
-				title: '',
-				firstName: activeCustomer.firstName ?? '',
-				id: activeCustomer.id,
-				lastName: activeCustomer.lastName ?? '',
-				emailAddress: activeCustomer.email,
-				phoneNumber: sanitizePhoneNumber(activeCustomer.phone ?? ''),
-			};
-			newEmail.value = activeCustomer.email;
-		}
 
 		// Real total from the API's own pagination — never the page length.
 		const orders = await getOrders({ limit: 1 });

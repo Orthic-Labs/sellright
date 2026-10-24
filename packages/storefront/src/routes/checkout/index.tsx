@@ -1,6 +1,6 @@
 import { $, component$, useContext, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
-import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
+import { APP_STATE, COUNTRY_COOKIE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
@@ -290,7 +290,7 @@ const CheckoutContent = component$(() => {
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
   const loadNormalCheckout = $(async (gen: number) => {
     const [customerData, countriesData] = await Promise.all([
-      getMe().catch(() => null),
+      signedIn ? getMe().catch(() => null) : null,
       CountryService.getAvailableCountries().catch(() => []),
     ]);
     if (!isCurrentView(paymentInit, gen)) return;
@@ -298,6 +298,8 @@ const CheckoutContent = component$(() => {
     if (countriesData && countriesData.length > 0) {
       appState.availableCountries = countriesData;
     }
+    // A guest (no session the root layout could resolve for this request) has no profile to read: no /auth/me (#362).
+    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID;
 
     if (customerData) {
       // appState.customer's field names are the CheckoutAddresses form

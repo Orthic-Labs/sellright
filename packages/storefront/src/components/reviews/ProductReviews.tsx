@@ -1,5 +1,5 @@
-import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import { getMe } from '~/services/customer';
+import { $, component$, useContext, useSignal, useVisibleTask$ } from '@qwik.dev/core';
+import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getProductReviews, submitProductReview } from '~/providers/shop/rewards/rewards';
 import { SellRightError } from '~/platform/errors';
 import type { ReviewList } from '~/sellright/types/rewards';
@@ -25,10 +25,13 @@ const FIELD =
  * guest path needs a purchase proof + bot check this form does not collect.
  */
 export const ProductReviews = component$<{ slug: string; productName: string }>(({ slug, productName }) => {
+	const appState = useContext(APP_STATE);
 	const data = useSignal<ReviewList | null>(null);
 	const loadError = useSignal(false);
-	/** null until the session check resolves — avoids flashing "Sign in" at signed-in shoppers. */
-	const signedIn = useSignal<boolean | null>(null);
+	/** The session the root layout already resolved with the API for this request (useAuthLoader), kept current by the
+	 *  sign-in modal: no extra /auth/me read per product page, and none at all for a guest (#362). A session that expired
+	 *  since is refused by the review submit itself. */
+	const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID;
 	/** The shopper arrived through a review entry (?review=1 / #write-review), e.g. from an order page. */
 	const writeOnly = useSignal(false);
 	const returnPath = useSignal('');
@@ -51,7 +54,6 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 		const first = await getProductReviews(slug, { limit: PAGE }).catch(() => null);
 		if (first) data.value = first;
 		else loadError.value = true;
-		signedIn.value = await getMe().then((me) => !!me, () => false);
 	}, { strategy: 'document-ready' });
 
 	const more = $(async () => {
@@ -171,13 +173,13 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 
 			{!done.value && (
 				<div class="flex flex-wrap items-center gap-3 mt-5">
-					{signedIn.value === true && !formOpen.value && (
+					{signedIn && !formOpen.value && (
 						<button type="button" class={BTN} onClick$={() => { formOpen.value = true; }}>Write a review</button>
 					)}
-					{signedIn.value === false && (
+					{!signedIn && (
 						<p class="text-[14px]"><a class="underline" href={returnPath.value ? signInHref(returnPath.value) : '/sign-in'}>Sign in</a> to write a review.</p>
 					)}
-					{signedIn.value === true && d.bonusPoints > 0 && !formOpen.value && (
+					{signedIn && d.bonusPoints > 0 && !formOpen.value && (
 						<span class="text-[14px] text-[var(--mid)]">Earn {pointsLabel(d.bonusPoints)} when your review is approved.</span>
 					)}
 				</div>

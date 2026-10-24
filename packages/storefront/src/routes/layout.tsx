@@ -108,7 +108,7 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
 export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus(), { serializationStrategy: 'always' });
 
 /** Resolve imported credentials before SSR can paint a signed-out account state. */
-export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
+export const useAuthLoader = routeLoader$(async ({ cookie, headers, url, sharedMap }) => {
 	const countryCode = cookie.get(COUNTRY_COOKIE)?.value;
 	const hasLegacyTransport = !!(cookie.get('authToken')?.value || cookie.get('__vendure_session')?.value);
 	if (theme.isDemo || (!cookie.get(AUTH_TOKEN)?.value && !hasLegacyTransport)) {
@@ -119,7 +119,7 @@ export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
 		cookie.set('sr_legacy_cart', '1', { path: '/', maxAge: 3600, sameSite: 'lax', secure: url.protocol === 'https:' });
 	}
 	try {
-		const data = await bootstrapCustomer(headers);
+		const data = await bootstrapCustomer(headers, sharedMap);
 		return { isAuthenticated: true, countryCode, customer: {
 			id: data.id, firstName: data.firstName ?? '', lastName: data.lastName ?? '', emailAddress: data.email,
 		} };

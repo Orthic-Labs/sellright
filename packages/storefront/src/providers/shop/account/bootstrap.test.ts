@@ -24,4 +24,16 @@ describe('SSR customer adoption before rendering', () => {
     await expect(bootstrapCustomer({ append })).rejects.toThrow('Empty auth bootstrap response');
     expect(append).not.toHaveBeenCalled();
   });
+  it('shares one read per request through the request sharedMap, and only within it', async () => {
+    api.get.mockResolvedValue({ data: { id: 'c1' }, response: { headers: { getSetCookie: () => ['sr_cust=x; Path=/'] } } });
+    const append = vi.fn();
+    const request = new Map<string, unknown>();
+    const [a, b] = await Promise.all([bootstrapCustomer({ append }, request), bootstrapCustomer({ append }, request)]);
+    expect(a).toEqual({ id: 'c1' });
+    expect(b).toBe(a);
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(append).toHaveBeenCalledTimes(1);
+    await bootstrapCustomer({ append }, new Map());
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
 });

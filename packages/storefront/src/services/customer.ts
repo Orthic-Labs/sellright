@@ -60,15 +60,6 @@ export async function getMe(): Promise<AuthCustomer | null> {
 	}
 }
 
-export async function getMeCached(): Promise<AuthCustomer | null> {
-	const cacheKey = 'me';
-	const cached = getCached<AuthCustomer | null>(cacheKey);
-	if (cached !== null) return cached;
-	const result = await getMe();
-	setCached(cacheKey, result);
-	return result;
-}
-
 export async function getAddresses(): Promise<Address[]> {
 	try {
 		const { data } = await sellright().GET('/v1/shop/account/addresses');
