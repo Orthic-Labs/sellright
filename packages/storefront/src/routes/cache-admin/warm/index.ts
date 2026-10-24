@@ -2,6 +2,10 @@ import type { RequestHandler } from '@qwik.dev/router';
 import { requireCacheAdminToken } from '~/utils/cache-admin-auth';
 import { productPath } from '~/platform/product-path';
 
+/** API page-size maximum for /v1/shop/catalog/products, and how many product pages one warm run visits. */
+const CATALOG_PAGE = 100;
+const WARM_PRODUCT_LIMIT = 500;
+
 export const onPost: RequestHandler = async ({ request, json }) => {
 	const auth = requireCacheAdminToken(request);
 	if (!auth.ok) {
@@ -24,15 +28,20 @@ export const onPost: RequestHandler = async ({ request, json }) => {
 
         // Fetch dynamic product slugs to warm — SellRight REST catalog (generic,
         // works for any store via x-store-slug; no legacy /shop-api in this stack).
+        // The API caps a page at 100 and rejects a larger limit (it never clamps), so the old single `limit=500` read
+        // failed and warmed no product page (#362). Page through, up to the same 500 products.
         try {
-                const response = await fetch(`${apiUrl}/v1/shop/catalog/products?limit=500`, {
-                        headers: { 'x-store-slug': storeSlug, accept: 'application/json' },
-                });
-                const resJson = await response.json();
-                const items = resJson?.items || [];
-                items.forEach((item: { slug: string }) => {
-                        pathsToWarm.push(productPath(item.slug));
-                });
+                for (let offset = 0; offset < WARM_PRODUCT_LIMIT; offset += CATALOG_PAGE) {
+                        const response = await fetch(`${apiUrl}/v1/shop/catalog/products?limit=${CATALOG_PAGE}&offset=${offset}`, {
+                                headers: { 'x-store-slug': storeSlug, accept: 'application/json' },
+                        });
+                        if (!response.ok) throw new Error(`catalog page ${offset} answered ${response.status}`);
+                        const items: { slug: string }[] = (await response.json())?.items || [];
+                        items.forEach((item) => {
+                                pathsToWarm.push(productPath(item.slug));
+                        });
+                        if (items.length < CATALOG_PAGE) break;
+                }
         } catch (error) {
                 console.error('Failed to fetch product slugs for local warming:', error);
         }

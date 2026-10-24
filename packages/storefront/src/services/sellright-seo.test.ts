@@ -40,14 +40,23 @@ describe('SellRight SEO proxies', () => {
   });
 
   it('serves the IndexNow key file only when the requested filename matches the configured key', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('abc123', { status: 200 })));
-    expect(await indexNowKeyFile('abc123.txt')).toEqual({ status: 200, body: 'abc123' });
-    expect(await indexNowKeyFile('wrong.txt')).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('abcdef0123456789', { status: 200 })));
+    expect(await indexNowKeyFile('abcdef0123456789.txt')).toEqual({ status: 200, body: 'abcdef0123456789' });
+    expect(await indexNowKeyFile('abcdef0123456780.txt')).toBeNull();
+  });
+
+  it('never asks the API for a path that cannot be a key file (bot probes)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('abcdef0123456789', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    for (const probe of ['wp-login.php', '.env', 'wrong.txt', 'abc123.txt', 'ABCDEF0123456789.txt', 'abcdef0123456789']) {
+      expect(await indexNowKeyFile(probe)).toBeNull();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns null when IndexNow is not configured on the store', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 404 })));
-    expect(await indexNowKeyFile('anything.txt')).toBeNull();
+    expect(await indexNowKeyFile('abcdef0123456789.txt')).toBeNull();
   });
 
   it('getIndexNowKey reads the key value from the backend, never an env var', async () => {

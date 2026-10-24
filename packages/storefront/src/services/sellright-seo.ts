@@ -58,7 +58,12 @@ export const robotsHandler: RequestHandler = async ({ send, headers }) => {
 /** GET /{key}.txt IndexNow key-file — key value/existence is entirely backend
  *  config (`config.indexNowKey` on the store row); this route never hardcodes
  *  a key. Returns null when IndexNow isn't configured or the path doesn't match. */
+/** The only file names a key can have: the API accepts 8-128 hex characters and serves the key lower-cased. */
+const INDEXNOW_KEY_FILE = /^[a-f0-9]{8,128}\.txt$/;
+
 export async function indexNowKeyFile(requestedFile: string): Promise<{ status: number; body: string } | null> {
+  // Any other single-segment path (bot probes like /wp-login.php, /.env) cannot be the key file: no API call (#362).
+  if (!INDEXNOW_KEY_FILE.test(requestedFile)) return null;
   const { status, body } = await proxy('/v1/shop/seo/indexnow-key.txt');
   if (status !== 200 || !body.trim()) return null;
   const key = body.trim();

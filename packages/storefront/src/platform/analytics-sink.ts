@@ -117,6 +117,8 @@ export const sinkPost: RequestHandler = async ({ request, headers, json, send, u
 	if (limited(clientIp(request))) throw json(429, { error: 'Too many events' });
 	const event = parseSinkEvent(body.event, url.host);
 	if (!event || event === 'purchase') throw json(400, { error: 'Invalid ecommerce event' });
-	await forwardToGa4(event, { id: process.env.GA4_MEASUREMENT_ID, secret: process.env.GA4_API_SECRET });
+	// 202 Accepted at once: the GA4 copy finishes on its own (bounded by its timeout, never throws), so the beacon request
+	// is not held open for up to OUTBOUND_TIMEOUT_MS waiting on Google (#362).
+	void forwardToGa4(event, { id: process.env.GA4_MEASUREMENT_ID, secret: process.env.GA4_API_SECRET });
 	throw json(202, { success: true });
 };
