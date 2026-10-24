@@ -80,8 +80,7 @@ final class PushManager: NSObject {
         handler(code)
     }
 
-    fileprivate func handle(userInfo: [AnyHashable: Any]) {
-        guard let code = userInfo["orderCode"] as? String else { return }
+    fileprivate func handle(orderCode code: String) {
         Diagnostics.record("push_opened")
         if let handler = onOrderOpened {
             handler(code)
@@ -153,8 +152,9 @@ extension PushManager: UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        let userInfo = response.notification.request.content.userInfo
-        await MainActor.run { PushManager.shared.handle(userInfo: userInfo) }
+        // Pull the Sendable order code out here; the userInfo dictionary can't cross to the main actor.
+        guard let code = response.notification.request.content.userInfo["orderCode"] as? String else { return }
+        await MainActor.run { PushManager.shared.handle(orderCode: code) }
     }
 }
 

@@ -1,45 +1,23 @@
 import Foundation
-import Security
+import RightKitCredentials
 
-/// Minimal Keychain wrapper for the admin session token. The token is the only
-/// secret the app persists; server URL and store slug live in UserDefaults.
+/// The admin session token, on RightKit's shared SecretsStore (the Keychain owner
+/// every Orthic app uses). The token is the only secret the app persists; server
+/// URL and store slug live in UserDefaults.
 enum Keychain {
-    private static let service = "app.sellright.ios.admin"
+    private static let store = try? SecretsStore(namespace: "app.sellright.ios.admin")
 
     static func set(_ value: String, for key: String) {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(attributes as CFDictionary, nil)
+        do { try store?.setString(key, value) } catch {
+            Diagnostics.record("keychain_error", ["op": "set", "message": "\(error)"])
+        }
     }
 
     static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        try? store?.getString(key)
     }
 
     static func delete(_ key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
+        _ = try? store?.delete(key)
     }
 }

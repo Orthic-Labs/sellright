@@ -4,12 +4,11 @@ import XCTest
 final class ModelsTests: XCTestCase {
     private func decoder() -> JSONDecoder {
         let d = JSONDecoder()
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
+        let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let plain = Date.ISO8601FormatStyle()
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
-            if let date = fractional.date(from: s) ?? plain.date(from: s) { return date }
+            if let date = (try? fractional.parse(s)) ?? (try? plain.parse(s)) { return date }
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "bad date \(s)"))
         }
         return d

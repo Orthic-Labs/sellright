@@ -47,3 +47,7 @@ artifacts/
 
 # agent-memory tooling, not source
 **/.claude-flow/
+
+# iOS release (RightKit iOS recipe): receipts/markers, archive + export (ios/.gitignore covers the XcodeGen output)
+.right-release/
+build/ios/

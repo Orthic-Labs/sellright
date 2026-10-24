@@ -19,23 +19,26 @@ struct RootView: View {
         case .loggedOut:
             LoginView()
         case .loggedIn:
+            // Tab API: a tab bar on iPhone, a sidebar the operator can toggle on iPad.
             TabView(selection: $tab) {
-                NavigationStack { DashboardView() }
-                    .tabItem { Label("Home", systemImage: "house.fill") }
-                    .tag(Tab.home)
-                NavigationStack(path: $ordersPath) { OrdersListView() }
-                    .tabItem { Label("Orders", systemImage: "shippingbox.fill") }
-                    .tag(Tab.orders)
-                NavigationStack { ProductsListView() }
-                    .tabItem { Label("Products", systemImage: "tag.fill") }
-                    .tag(Tab.products)
-                NavigationStack { CustomersListView() }
-                    .tabItem { Label("Customers", systemImage: "person.2.fill") }
-                    .tag(Tab.customers)
-                NavigationStack { SettingsView() }
-                    .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-                    .tag(Tab.settings)
+                SwiftUI.Tab("Home", systemImage: "house", value: Tab.home) {
+                    NavigationStack { DashboardView() }
+                }
+                SwiftUI.Tab("Orders", systemImage: "shippingbox", value: Tab.orders) {
+                    NavigationStack(path: $ordersPath) { OrdersListView() }
+                }
+                SwiftUI.Tab("Products", systemImage: "tag", value: Tab.products) {
+                    NavigationStack { ProductsListView() }
+                }
+                SwiftUI.Tab("Customers", systemImage: "person.2", value: Tab.customers) {
+                    NavigationStack { CustomersListView() }
+                }
+                SwiftUI.Tab("Settings", systemImage: "gearshape", value: Tab.settings) {
+                    NavigationStack { SettingsView() }
+                }
             }
+            .tabViewStyle(.sidebarAdaptable)
+            .minimizingTabBarOnScroll()
             // A tapped notification sets session.pendingOrderCode (buffered
             // through a cold launch by PushManager); navigate whenever one lands.
             .onChange(of: session.pendingOrderCode) { _, code in
@@ -64,5 +67,17 @@ struct RootView: View {
         // a stack of orders the operator has to unwind.
         ordersPath = [code]
         PushManager.shared.clearBadge()
+    }
+}
+
+private extension View {
+    /// iOS 26+: the tab bar shrinks while a list scrolls down, giving the content the screen.
+    @ViewBuilder
+    func minimizingTabBarOnScroll() -> some View {
+        if #available(iOS 26.0, *) {
+            tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            self
+        }
     }
 }

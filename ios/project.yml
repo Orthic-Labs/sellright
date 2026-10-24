@@ -1,22 +1,27 @@
+# SellRight Admin (iPhone + iPad): dashboard, orders, products, customers, push + Live Activity.
+# Generated project is XcodeGen output (gitignored): cd ios && xcodegen generate
+# Ships to TestFlight through RightKit's shared iOS recipe (targets.ios in right-release.config.mjs).
+# RightKitSwift pin: git URL at the released tag, never a path dep (docs/RIGHTKIT-SHARED-PACKAGES.md).
 name: SellRightAdmin
 options:
   bundleIdPrefix: app.sellright
   deploymentTarget:
-    # 17.2 (not 17.0) is the floor for Live Activity push-to-start: starting an
-    # activity from a server push, rather than only from the foreground app,
-    # arrived in 17.2. Without it a new order could never light up the Dynamic
-    # Island unless the operator already had the app open — which defeats it.
-    iOS: "17.2"
+    # Live Activity push-to-start needs 17.2; the floor follows the other Orthic apps (Pulse) at 18.0
+    # for the TabView Tab API and the sidebar-adaptable iPad layout.
+    iOS: "18.0"
+  createIntermediateGroups: true
 settings:
   base:
     ALWAYS_SEARCH_USER_PATHS: "NO"
-    SWIFT_VERSION: "5.0"
+    SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 6KLGD3LLKF
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "1"
 packages:
   RightKitSwift:
-    url: https://github.com/bogusyogi/rightkit-swift
-    from: 0.1.0
+    url: https://github.com/bogusyogi/rightkit
+    exactVersion: "0.8.1"
 targets:
   SellRightAdmin:
     type: application
@@ -26,22 +31,35 @@ targets:
       - path: Shared
     dependencies:
       - package: RightKitSwift
-        products:
-          - RightKitDiagnostics
+        product: RightKitDiagnostics
+      # Session token in the Keychain (SecretsStore), the same owner every Orthic app uses.
+      - package: RightKitSwift
+        product: RightKitCredentials
+      # Liquid Glass with the shared accessibility and older-OS fallback.
+      - package: RightKitSwift
+        product: RightKitUI
       - target: SellRightWidgets
     info:
       path: SellRightAdmin/Info.plist
       properties:
         CFBundleDisplayName: SellRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
+        # The order Live Activity (lock screen + Dynamic Island) needs this on the app, not only the widget.
+        NSSupportsLiveActivities: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # iPad multitasking requires every orientation (App Store validation rejects an iPad build without them).
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Dev convenience only: allows http://localhost / LAN dev servers.
         # Production builds talk to https and this exception never applies.
         NSAppTransportSecurity:
@@ -59,8 +77,8 @@ targets:
           - webcredentials:api.orthiclabs.com?mode=developer
           - webcredentials:admin.orthiclabs.com?mode=developer
         # 'development' routes to the APNs SANDBOX host, which is what a
-        # Debug/dev-signed build's token is valid for. TestFlight/App Store
-        # builds need this flipped to 'production' (see docs/IOS-PUSH-SETUP.md);
+        # Debug/dev-signed build's token is valid for. The App Store Connect export
+        # signs TestFlight/App Store builds with 'production' (see docs/IOS-PUSH-SETUP.md);
         # the app reports its own environment at registration so the server picks
         # the matching APNs host either way.
         aps-environment: development
@@ -69,6 +87,7 @@ targets:
         PRODUCT_NAME: SellRightAdmin
         PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   SellRightWidgets:
     type: app-extension
     platform: iOS
@@ -79,6 +98,9 @@ targets:
       path: SellRightWidgets/Info.plist
       properties:
         CFBundleDisplayName: SellRight
+        # The recipe requires one version identity across the app and every extension.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -98,6 +120,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin.tests
 schemes:
   SellRightAdmin:
     build:

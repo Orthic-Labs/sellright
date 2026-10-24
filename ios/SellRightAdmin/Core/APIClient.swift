@@ -33,12 +33,12 @@ struct APIClient: Sendable {
         let d = JSONDecoder()
         // The API emits Date.toISOString() — fractional seconds — but be
         // lenient and accept plain ISO8601 too.
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
+        // Format styles are Sendable, so the @Sendable decoding closure can hold them.
+        let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let plain = Date.ISO8601FormatStyle()
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
-            if let date = fractional.date(from: s) ?? plain.date(from: s) { return date }
+            if let date = (try? fractional.parse(s)) ?? (try? plain.parse(s)) { return date }
             throw DecodingError.dataCorrupted(.init(
                 codingPath: decoder.codingPath,
                 debugDescription: "Unrecognized date: \(s)"
@@ -46,6 +46,13 @@ struct APIClient: Sendable {
         }
         return d
     }()
+
+    private static var urlSession: URLSession {
+        #if DEBUG
+        if Demo.isOn { return Demo.urlSession }
+        #endif
+        return .shared
+    }
 
     func get<Out: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> Out {
         try await send(path: path, method: "GET", query: query, body: nil as Never?)
@@ -89,7 +96,7 @@ struct APIClient: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await Self.urlSession.data(for: request)
         } catch {
             throw APIError.transport(error)
         }

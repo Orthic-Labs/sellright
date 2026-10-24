@@ -27,7 +27,7 @@ final class AppSession {
     var pendingOrderCode: String?
 
     var serverURLString: String =
-        UserDefaults.standard.string(forKey: "serverURL") ?? "http://localhost:3300"
+        UserDefaults.standard.string(forKey: "serverURL") ?? ""
 
     private var token: String?
 
@@ -40,8 +40,16 @@ final class AppSession {
     }
 
     func bootstrap() async {
+        #if DEBUG
+        if Demo.isOn {
+            serverURLString = Demo.serverURL
+            token = Demo.token
+            if let me: MeResponse = try? await api.get("/v1/admin/me") { apply(admin: me.admin, stores: me.stores) }
+            return
+        }
+        #endif
         guard let stored = Keychain.get("adminToken"),
-              URL(string: serverURLString) != nil else {
+              Self.normalizedServerURL(serverURLString) != nil else {
             phase = .loggedOut
             return
         }
@@ -56,24 +64,63 @@ final class AppSession {
         }
     }
 
-    func login(email: String, password: String, totp: String?) async throws {
-        guard let url = URL(string: serverURLString), url.scheme?.hasPrefix("http") == true else {
-            throw APIError.invalidURL
-        }
+    /// What step 1 of the sign-in left to do.
+    enum LoginStep: Equatable {
+        case signedIn
+        /// The password was right; the account has a second factor. Redeem `challenge` once with a code.
+        case needsCode(challenge: String, methods: [String])
+    }
+
+    /// Step 1 (#333): email + password. An account with a second factor gets a
+    /// single-use challenge instead of a session; `completeLogin` redeems it.
+    func login(email: String, password: String) async throws -> LoginStep {
+        guard let url = Self.normalizedServerURL(serverURLString) else { throw APIError.invalidURL }
+        serverURLString = url.absoluteString
         UserDefaults.standard.set(serverURLString, forKey: "serverURL")
         var client = api
         client.token = nil
         let res: LoginResponse = try await client.post(
             "/v1/admin/login",
-            body: LoginRequest(email: email, password: password, totp: totp?.isEmpty == true ? nil : totp)
+            body: LoginRequest(email: email, password: password)
         )
+        if res.twoFactorRequired == true, let challenge = res.challengeToken {
+            return .needsCode(challenge: challenge, methods: res.methods ?? ["totp", "recovery_code"])
+        }
+        try finishLogin(res)
+        return .signedIn
+    }
+
+    /// Step 2: the authenticator or recovery code against the step-1 challenge.
+    func completeLogin(challenge: String, code: String) async throws {
+        var client = api
+        client.token = nil
+        let res: LoginResponse = try await client.post(
+            "/v1/admin/login/2fa",
+            body: LoginSecondStepRequest(challengeToken: challenge, code: code)
+        )
+        try finishLogin(res)
+    }
+
+    private func finishLogin(_ res: LoginResponse) throws {
         guard let newToken = res.token, let admin = res.admin else {
-            throw APIError.http(status: 401, message: "invalid email, password, or 2FA code")
+            throw APIError.http(status: 401, message: "Sign-in didn't complete. Try again.")
         }
         token = newToken
         Keychain.set(newToken, for: "adminToken")
         apply(admin: admin, stores: res.stores ?? [])
         Diagnostics.record("login", ["server": serverURLString])
+    }
+
+    /// Accepts "admin.example.com" as well as a full URL; plain http only for local dev hosts.
+    static func normalizedServerURL(_ raw: String) -> URL? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while s.hasSuffix("/") { s.removeLast() }
+        guard !s.isEmpty else { return nil }
+        if !s.contains("://") { s = "https://" + s }
+        guard let url = URL(string: s), let scheme = url.scheme?.lowercased(), let host = url.host(), !host.isEmpty else { return nil }
+        if scheme == "https" { return url }
+        let local = host == "localhost" || host.hasSuffix(".local") || host.hasPrefix("192.168.") || host.hasPrefix("10.") || host == "127.0.0.1"
+        return scheme == "http" && local ? url : nil
     }
 
     func logout() async {
@@ -124,6 +171,9 @@ final class AppSession {
         let lastSlug = UserDefaults.standard.string(forKey: "storeSlug")
         self.activeStore = stores.first(where: { $0.slug == lastSlug }) ?? stores.first
         phase = .loggedIn
+        #if DEBUG
+        if Demo.isOn { return } // no notification prompt over the demo store
+        #endif
 
         // Push setup runs after auth, never before: registration needs a session,
         // and prompting for notifications on the login screen (before the

@@ -11,7 +11,8 @@ import Foundation
 /// Known limitation: an order fulfilled from the WEB admin does not move this
 /// phone's activity; it ages out at the 8h dismissal-date. Closing that needs
 /// per-activity update tokens registered server-side. Documented in ios/README.
-@MainActor
+/// Nonisolated: the activity is read and updated in one region, so it never has
+/// to be sent across actors (Swift 6 region isolation).
 enum OrderActivityController {
     /// Advance (or end) the activity for one order after the operator acts on it.
     static func update(orderCode: String, status: String, trackingCode: String?) async {

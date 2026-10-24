@@ -32,8 +32,20 @@ struct LoginResponse: Decodable {
     var token: String?
     var csrfToken: String?
     var twoFactorRequired: Bool?
+    /// Step 1 of an account with a second factor (#333): redeemed once at /v1/admin/login/2fa.
+    var challengeToken: String?
+    var expiresInSeconds: Int?
+    var methods: [String]?
+    var totpEnrollmentRequired: Bool?
     var admin: AdminIdentity?
     var stores: [StoreAccess]?
+}
+
+/// Step 2: the challenge from step 1 plus a TOTP or recovery code.
+struct LoginSecondStepRequest: Encodable {
+    let challengeToken: String
+    let code: String
+    var returnToken: Bool = true
 }
 
 struct AdminIdentity: Codable, Hashable {

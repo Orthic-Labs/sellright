@@ -32,20 +32,37 @@ xcodebuild -project SellRightAdmin.xcodeproj -scheme SellRightAdmin \
   -destination 'generic/platform=iOS Simulator' -scmProvider system build
 ```
 
-Or open the generated `SellRightAdmin.xcodeproj` in Xcode and run. The
-`RightKitSwift` package (`github.com/bogusyogi/rightkit-swift`, pinned
-`from: 0.1.0`) resolves over your git credentials — `-scmProvider system`
+Or open the generated `SellRightAdmin.xcodeproj` (gitignored) in Xcode and run. The
+`RightKitSwift` package (`github.com/bogusyogi/rightkit`, pinned exactly at
+`0.8.1`) resolves over your git credentials — `-scmProvider system`
 makes xcodebuild use system git instead of Xcode's own SCM store.
+
+Rendered checks without a server: launch a Debug build with `-SellRightDemo`
+(sample Rotten Hand store, no network, compiled out of Release).
+
+## TestFlight
+
+RightKit's shared iOS recipe (`targets.ios` in the root `right-release.config.mjs`).
+Archive and export run from the logged-in desktop session on the Mac (an SSH
+session is refused); the upload uses the shared App Store Connect key in the Mac
+Keychain and adds the build to the `Internal` group.
+
+```sh
+right-release build --platform ios
+right-release upload --platform ios --release <sealed-id> --apply
+```
 
 ## Server contract
 
-- `POST /v1/admin/login` `{email, password, totp?}` → `{token, admin, stores}`;
-  the token goes in `Authorization: Bearer` and is stored in the Keychain.
+- `POST /v1/admin/login` `{email, password, returnToken: true}` → `{token, admin, stores}`,
+  or for an account with a second factor `{twoFactorRequired, challengeToken, methods}`;
+  then `POST /v1/admin/login/2fa` `{challengeToken, code, returnToken: true}` → `{token, admin, stores}`.
+  The token goes in `Authorization: Bearer` and is stored in the Keychain (RightKit `SecretsStore`).
 - Store selection is the `x-store-slug` header (same as the web admin).
 - All money values are integer cents; `Money.format` divides only at display.
-- Point the login screen at any SellRight API (`http://localhost:3300` in dev —
-  local networking is allowed by the Info.plist ATS exception; production
-  servers must be https).
+- Point the login screen at any SellRight store (`yourstore.com`; https is
+  added). Plain http works only for a local dev server (`http://localhost:3300`),
+  which the Info.plist ATS exception allows.
 
 ## Push + Live Activity
 
