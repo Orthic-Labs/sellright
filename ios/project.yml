@@ -69,13 +69,18 @@ targets:
       properties:
         # Password AutoFill: iOS fetches /.well-known/apple-app-site-association
         # from these domains to offer saved admin credentials on the login form.
-        # ?mode=developer applies to dev-signed builds on Developer Mode devices;
-        # release builds need the plain entries + Apple CDN visibility.
+        # Release/TestFlight builds use ONLY the plain entries, fetched through Apple's
+        # CDN (Orthic-Labs/sellright#343: every entry was ?mode=developer, so autofill
+        # never worked outside dev builds). ?mode=developer entries are read only by
+        # dev-signed builds on Developer Mode devices, straight from the host.
+        # admin.sellright.cc stays dev-only: it sits behind Cloudflare Access, so
+        # Apple's CDN can't fetch it (#331 keeps it until the alias retires).
         com.apple.developer.associated-domains:
-          - webcredentials:api.spoares.com?mode=developer
-          - webcredentials:admin.sellright.cc?mode=developer
-          - webcredentials:api.orthiclabs.com?mode=developer
+          - webcredentials:admin.orthiclabs.com
+          - webcredentials:api.orthiclabs.com
           - webcredentials:admin.orthiclabs.com?mode=developer
+          - webcredentials:api.orthiclabs.com?mode=developer
+          - webcredentials:admin.sellright.cc?mode=developer
         # 'development' routes to the APNs SANDBOX host, which is what a
         # Debug/dev-signed build's token is valid for. The App Store Connect export
         # signs TestFlight/App Store builds with 'production' (see docs/IOS-PUSH-SETUP.md);

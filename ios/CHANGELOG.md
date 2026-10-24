@@ -24,6 +24,9 @@ push.
   pinned exactly at 0.8.1 (`bogusyogi/rightkit`); the session token now lives in RightKit's shared `SecretsStore`.
 - iOS 26/27 design: TabView `Tab` API with the sidebar-adaptable iPad layout, tab bar that minimizes on scroll,
   Liquid Glass sign-in button.
+- Password AutoFill works in release/TestFlight builds (#343): plain `webcredentials` entries for
+  `admin.orthiclabs.com` and `api.orthiclabs.com` (every entry was `?mode=developer`, which release builds
+  ignore). `api.spoares.com` is dropped; `admin.sellright.cc` stays dev-only behind Cloudflare Access.
 - iPad supports every orientation (App Store validation requires it for multitasking).
 - `NSSupportsLiveActivities` is declared on the app, which the order Live Activity needs.
 
