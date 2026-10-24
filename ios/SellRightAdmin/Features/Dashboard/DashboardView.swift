@@ -2,11 +2,16 @@ import SwiftUI
 
 struct DashboardView: View {
     @Environment(AppSession.self) private var session
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var dashboard: Dashboard?
     @State private var errorMessage: String?
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
+    private var columns: [GridItem] {
+        dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible()), GridItem(.flexible())]
+    }
 
     var body: some View {
         ScrollView {
@@ -82,24 +87,45 @@ private struct KPICard: View {
 
 struct OrderRow: View {
     @Environment(\.palette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let order: OrderSummary
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(order.code).font(.subheadline.weight(.medium)).foregroundStyle(palette.text)
-                if let email = order.email {
-                    Text(email).font(.caption).foregroundStyle(palette.textMuted).lineLimit(1)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 6) {
+                    identity
+                    summary
                 }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(Money.format(cents: order.grandTotal, currency: order.currency))
-                    .font(.subheadline.weight(.semibold))
-                StatusBadge(text: order.state)
+            } else {
+                HStack {
+                    identity
+                    Spacer()
+                    summary
+                }
             }
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    private var identity: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(order.code).font(.subheadline.weight(.medium)).foregroundStyle(palette.text)
+            if let email = order.email {
+                Text(email)
+                    .font(.caption)
+                    .foregroundStyle(palette.textMuted)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+            }
+        }
+    }
+
+    private var summary: some View {
+        VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 3) {
+            Text(Money.format(cents: order.grandTotal, currency: order.currency))
+                .font(.subheadline.weight(.semibold))
+            StatusBadge(text: order.state)
+        }
     }
 }

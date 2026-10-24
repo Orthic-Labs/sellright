@@ -33,6 +33,9 @@ struct OrdersListView: View {
         .navigationDestination(for: String.self) { code in
             OrderDetailView(code: code)
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            OrdersSearchControls()
+        }
         .searchable(text: $searchText, prompt: "Order code or email")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -89,5 +92,27 @@ struct OrdersListView: View {
         if !searchText.isEmpty { query.append(URLQueryItem(name: "q", value: searchText)) }
         if let stateFilter { query.append(URLQueryItem(name: "state", value: stateFilter)) }
         return try await session.api.get("/v1/admin/orders", query: query)
+    }
+}
+
+private struct OrdersSearchControls: View {
+    @Environment(\.isSearching) private var isSearching
+    @Environment(\.dismissSearch) private var dismissSearch
+
+    var body: some View {
+        if isSearching {
+            HStack {
+                Spacer()
+                Button {
+                    dismissSearch()
+                } label: {
+                    Text("Done")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityIdentifier("orders.search.done")
+            }
+            .padding(.horizontal)
+            .background(.bar)
+        }
     }
 }

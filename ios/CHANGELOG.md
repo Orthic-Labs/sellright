@@ -22,7 +22,9 @@ push.
 
 ### Fixed
 
+- Orders Search shows Done above results to dismiss search before opening an order on iPad.
 - Routed customer-to-order navigation through a typed route so nested customer screens no longer collide on String destinations.
+- Dashboard cards and order rows use single-column, vertical layouts at accessibility text sizes.
 
 ### Changed
 

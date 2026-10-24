@@ -60,6 +60,33 @@ final class LiveDemoVisualJourney: XCTestCase {
         try runJourney(theme: "light", accessibilityText: true)
     }
 
+    func testLiveOrdersDetailBeforeSearch() {
+        launch(theme: "light")
+        let address = app.textFields["login.serverAddress"]
+        wait(address)
+        address.tap()
+        address.typeText(Self.configuredLiveBaseURL!.absoluteString)
+        app.buttons["login.continue"].tap()
+        let email = app.textFields["login.email"]
+        let password = app.secureTextFields["login.password"]
+        wait(email)
+        wait(password)
+        email.tap()
+        email.typeText("admin")
+        password.tap()
+        password.typeText("admin")
+        app.buttons["login.signIn"].tap()
+        handleNotificationPromptIfPresent()
+        wait(app.staticTexts["Revenue"], timeout: 30)
+
+        selectTab("Orders")
+        wait(app.navigationBars["Orders"])
+        let paidOrder = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Paid")).firstMatch
+        wait(paidOrder, timeout: 30).tap()
+        wait(app.staticTexts["Items"], timeout: 30)
+        shot("baseline-orders-detail-before-search")
+    }
+
     func testLiveAddressValidation() {
         launch(theme: "light")
         let address = app.textFields["login.serverAddress"]
@@ -108,24 +135,29 @@ final class LiveDemoVisualJourney: XCTestCase {
         XCTAssertFalse(app.staticTexts["Couldn't load orders"].exists)
         shot("\(theme)-06-orders-populated")
         let search = app.searchFields["Order code or email"]
-        wait(search).tap()
+        let searchWasCollapsed = !search.waitForExistence(timeout: 2)
+        if searchWasCollapsed {
+            wait(app.buttons["Search"], timeout: 5).tap()
+        }
+        wait(search, timeout: 10).tap()
         let noResultQuery = "zzzz-live-visual-no-result"
         search.typeText(noResultQuery)
         wait(app.staticTexts["No Results"], timeout: 20)
         shot("\(theme)-07-orders-search-no-result")
         search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: noResultQuery.count))
-        let closeSearch = app.buttons["Close"]
-        let cancelSearch = app.buttons["Cancel"]
-        if closeSearch.waitForExistence(timeout: 2) && closeSearch.isHittable {
-            closeSearch.tap()
-        } else if cancelSearch.waitForExistence(timeout: 2) && cancelSearch.isHittable {
-            cancelSearch.tap()
-        } else {
-            XCTFail("Search dismissal control is not visible or hittable.")
-        }
+        let doneSearch = app.buttons["orders.search.done"]
+        wait(doneSearch, timeout: 5)
+        XCTAssertTrue(doneSearch.isHittable, "Orders Search Done control is not hittable.")
+        doneSearch.tap()
+        let searchEnded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: doneSearch)
+        XCTAssertEqual(XCTWaiter.wait(for: [searchEnded], timeout: 5), .completed, "Orders Search remained active after Done.")
         let keyboard = app.keyboards.firstMatch
         let keyboardGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
         XCTAssertEqual(XCTWaiter.wait(for: [keyboardGone], timeout: 5), .completed, "Search keyboard remained visible after dismissal.")
+        if searchWasCollapsed {
+            wait(app.buttons["Search"], timeout: 5)
+        }
+        dumpHierarchy("\(theme)-orders-search-dismissed")
         shot("\(theme)-orders-search-dismissed")
         wait(paidOrder, timeout: 30)
         paidOrder.tap()
@@ -163,7 +195,7 @@ final class LiveDemoVisualJourney: XCTestCase {
         app.buttons["Cancel"].tap()
         wait(app.navigationBars.element(boundBy: 0))
         shot("\(theme)-09-refund-cancelled")
-        app.navigationBars.buttons.firstMatch.tap()
+        navigateBack(to: "Orders")
 
         selectTab("Products")
         wait(app.navigationBars["Products"])
@@ -183,7 +215,7 @@ final class LiveDemoVisualJourney: XCTestCase {
         shot("\(theme)-12-variant-edit-sheet")
         app.buttons["Cancel"].tap()
         wait(app.navigationBars[productTitle], timeout: 10)
-        app.navigationBars.buttons.firstMatch.tap()
+        navigateBack(to: "Products")
 
         selectTab("Customers")
         wait(app.navigationBars["Customers"])
@@ -240,20 +272,61 @@ final class LiveDemoVisualJourney: XCTestCase {
         app.launch()
     }
 
+    private func navigateBack(to destination: String) {
+        let backButton = app.navigationBars.buttons.matching(NSPredicate(
+            format: "identifier == %@ AND label == %@", "BackButton", destination
+        )).firstMatch
+        wait(backButton, timeout: 10)
+        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: backButton)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 5), .completed, "Back button to \(destination) is not hittable.")
+        backButton.tap()
+        wait(app.navigationBars[destination], timeout: 10)
+    }
+
     private func selectTab(_ name: String) {
         let tabButton = app.tabBars.buttons.matching(NSPredicate(format: "label == %@", name)).firstMatch
-        wait(tabButton, timeout: 10)
+        let symbolIdentifiers = [
+            "Home": "house",
+            "Orders": "shippingbox",
+            "Products": "tag",
+            "Customers": "person.2",
+            "Settings": "gearshape",
+        ]
+        let topButton = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier == %@", name, symbolIdentifiers[name] ?? ""
+        )).firstMatch
+        let sidebarCell = app.collectionViews.cells.matching(NSPredicate(format: "label == %@", name)).firstMatch
+        let control: XCUIElement
+        if tabButton.waitForExistence(timeout: 2), tabButton.isHittable {
+            control = tabButton
+        } else {
+            let hasTopButton = topButton.waitForExistence(timeout: 2)
+            let nextPage = app.buttons["Next Page"]
+            let clippedByOverflow = hasTopButton && nextPage.exists && topButton.frame.intersects(nextPage.frame)
+            if hasTopButton && topButton.isHittable && !clippedByOverflow {
+                control = topButton
+            } else if sidebarCell.waitForExistence(timeout: 1), sidebarCell.isHittable {
+                control = sidebarCell
+            } else {
+                let sidebarToggle = app.buttons.matching(NSPredicate(format: "identifier == %@", "ToggleSideBar")).firstMatch
+                wait(sidebarToggle, timeout: 10)
+                XCTAssertTrue(sidebarToggle.isHittable, "Sidebar toggle is not hittable.\n\(app.debugDescription)")
+                sidebarToggle.tap()
+                wait(sidebarCell, timeout: 10)
+                control = sidebarCell
+            }
+        }
         dumpHierarchy("before-tab-\(name)")
 
-        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: tabButton)
+        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: control)
         XCTAssertEqual(
             XCTWaiter.wait(for: [hittable], timeout: 5),
             .completed,
-            "Tab bar button is not hittable; inspect UI obstruction before selecting \(name).\n\(app.debugDescription)"
+            "Tab or sidebar item is not hittable; inspect UI obstruction before selecting \(name).\n\(app.debugDescription)"
         )
-        tabButton.tap()
+        control.tap()
 
-        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: tabButton)
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: control)
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "Tab did not become selected: \(name)")
         dumpHierarchy("after-tab-\(name)")
         shot("after-tab-\(name)")
@@ -294,7 +367,7 @@ final class LiveDemoVisualJourney: XCTestCase {
 
     private func shot(_ name: String) {
         Thread.sleep(forTimeInterval: 0.6)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
