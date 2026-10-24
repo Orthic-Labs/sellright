@@ -4,11 +4,11 @@ import { api, ApiError, auth, type LoginResp, type SecondFactorMethod } from '..
 import { useAuth } from '../auth';
 import { AuthAlert, AuthField, AuthShell, AuthSpinner, CodeInput, formatWait, useCountdown } from '../components/auth/AuthShell';
 import { adminHref } from '../lib/base-path';
-import { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill, capabilities, loginWithPasskey, passkeyErrorMessage } from '../lib/passkeys';
+import { browserSupportsWebAuthn, capabilities, loginWithPasskey, passkeyErrorMessage } from '../lib/passkeys';
 
 /**
  * Admin sign-in (issue #333), the standard two-step flow:
- *  1. email + password only (passkey autofill on the email field, "Sign in with a passkey" as the secondary action);
+ *  1. email + password only ("Sign in with a passkey" as the secondary action; modal only, no autofill ceremony);
  *  2. ONLY when the password was right AND the account has a second factor, the API answers a short-lived single-use
  *     challenge and this screen asks for the 6-digit code (auto-submits at 6 digits), a recovery code, or the passkey.
  * No code field is ever shown to an account without 2FA. The server keeps the password-verified state; nothing here
@@ -23,6 +23,7 @@ const retryAfterOf = (e: unknown): number | null => {
   const m = /in (\d+)s/.exec(e.message);
   return m ? Number(m[1]) : 60;
 };
+
 
 export default function Login() {
   const { me, refresh } = useAuth();
@@ -49,7 +50,8 @@ export default function Login() {
     location.assign(adminHref('/'));
   }
 
-  // Passkey conditional mediation: the browser offers saved passkeys in the email field's autofill (username webauthn).
+  // Passkeys are modal only, like GitHub: the button starts the one ceremony. No conditional (autofill) ceremony runs in
+  // the background, because aborting it to start the button's ceremony breaks extension-based passkey providers.
   useEffect(() => {
     let live = true;
     (async () => {
@@ -57,11 +59,6 @@ export default function Login() {
       const caps = await capabilities();
       if (!live || !caps.passkeys) return;
       setPk(true);
-      try {
-        if (!(await browserSupportsWebAuthnAutofill())) return;
-        const r = await loginWithPasskey({ useBrowserAutofill: true });
-        if (live) await finish(r);
-      } catch { /* conditional UI is best-effort; the button and password form remain */ }
     })();
     return () => { live = false; };
     // eslint-disable-next-line
@@ -123,7 +120,7 @@ export default function Login() {
 
   async function passkeyLogin() {
     setFieldErr(null); setFormErr(null); setNotice(null); setBusy(true);
-    try { await finish(await loginWithPasskey({ useBrowserAutofill: false })); }
+    try { await finish(await loginWithPasskey()); }
     catch (e) {
       const retry = retryAfterOf(e);
       if (retry) setLockedUntil(Date.now() + retry * 1000);
@@ -183,7 +180,7 @@ export default function Login() {
       {rateAlert}
       {formErr && <AuthAlert tone="danger">{formErr}</AuthAlert>}
       <form onSubmit={submitCredentials} noValidate style={{ display: 'contents' }}>
-        <AuthField label="Email" type="email" name="email" autoComplete="username webauthn" autoFocus inputMode="email" autoCapitalize="none" spellCheck={false}
+        <AuthField label="Email" type="email" name="email" autoComplete="username" autoFocus inputMode="email" autoCapitalize="none" spellCheck={false}
           value={email} onChange={(e) => setEmail(e.target.value)} required error={missing.email} />
         <AuthField label="Password" name="password" toggle autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required error={missing.password ?? fieldErr}
           aside={<Link className="auth-link is-small" to="/forgot-password">Forgot password?</Link>} />

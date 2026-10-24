@@ -15,12 +15,11 @@ describe('sign-in page: passkey button gating', () => {
 		expect(page).toMatch(/loginWithPasskey\(\);\s*if \(result\.ok\) \{\s*navigate\(signInDestination\(\)\)/);
 	});
 
-	it('starts conditional UI only on the sign-in view with autofill support, and tags the email field', () => {
-		expect(page).toContain("if (!track(() => passkeysEnabled.value) || current !== 'signin') return;");
-		expect(page).toContain('browserSupportsWebAuthnAutofill()');
-		expect(page).toContain('loginWithPasskey({ useBrowserAutofill: true })');
-		expect(page).toContain('"username webauthn"');
-		expect(page).toContain("if (!('cancelled' in result)) error.value = result.message;"); // a dismissed prompt stays silent
+	it('never starts a background (conditional/autofill) ceremony; the button starts the one modal ceremony', () => {
+		expect(page).not.toContain('useBrowserAutofill');
+		expect(page).not.toContain('browserSupportsWebAuthnAutofill');
+		expect(page).not.toContain('webauthn"');
+		expect(page.match(/loginWithPasskey\(/g)).toHaveLength(1);
 	});
 });
 

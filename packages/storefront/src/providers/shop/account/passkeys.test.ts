@@ -46,10 +46,10 @@ describe('passkeys provider', () => {
 		});
 		startAuthentication.mockResolvedValue({ id: 'cred' });
 		const { loginWithPasskey } = await import('./passkeys');
-		const r = await loginWithPasskey({ useBrowserAutofill: true });
+		const r = await loginWithPasskey();
 		expect(r).toEqual({ ok: true, customer: expect.objectContaining({ id: 'c1' }) });
 		expect(calls.map((c) => c.path)).toEqual(['/v1/shop/auth/passkey/login/options', '/v1/shop/auth/passkey/login/verify']);
-		expect(startAuthentication).toHaveBeenCalledWith({ optionsJSON: OPTIONS, useBrowserAutofill: true });
+		expect(startAuthentication).toHaveBeenCalledWith({ optionsJSON: OPTIONS }); // modal, never autofill
 		expect(calls[1].body).toEqual({ response: { id: 'cred' } });
 		expect(calls[1].headers.get('x-csrf-token')).toBe('csrf-1');
 	});

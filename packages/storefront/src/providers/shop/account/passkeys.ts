@@ -102,13 +102,14 @@ export function describePasskeyError(e: unknown): PasskeyFailure {
 
 const P = '/v1/shop/auth/passkey';
 
-/** Passkey sign-in. `useBrowserAutofill` starts a conditional-UI ceremony (the browser offers the passkey in the email
- *  field's autofill list); calling it again aborts the previous pending ceremony. A cancelled prompt returns
- *  `cancelled: true` so the page can stay quiet. */
-export async function loginWithPasskey(opts: { useBrowserAutofill?: boolean } = {}): Promise<PasskeyLoginResult> {
+/** Modal passkey sign-in, started from a click. No conditional (autofill) ceremony runs in the background: aborting a
+ *  pending one to start this modal one breaks extension-based passkey providers (NordPass, 1Password, Bitwarden), which
+ *  keep answering the aborted request. Options are fetched here, at click time, so the challenge always matches the nonce
+ *  cookie the same request sets. A cancelled prompt returns `cancelled: true` so the page can stay quiet. */
+export async function loginWithPasskey(): Promise<PasskeyLoginResult> {
 	try {
 		const { options } = await call<{ options: PublicKeyCredentialRequestOptionsJSON }>('POST', `${P}/login/options`, {});
-		const response = await startAuthentication({ optionsJSON: options, useBrowserAutofill: opts.useBrowserAutofill === true });
+		const response = await startAuthentication({ optionsJSON: options });
 		const data = await call<{ customer: AuthCustomer }>('POST', `${P}/login/verify`, { response });
 		return { ok: true, customer: data.customer };
 	} catch (e) {

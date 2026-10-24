@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { routeLoader$, useNavigate } from '@qwik.dev/router';
-import { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill } from '@simplewebauthn/browser';
+import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
@@ -71,9 +71,6 @@ export default component$(() => {
 	/** Passkeys: the store has them on (GET /v1/shop/config auth.passkeys) AND this browser can use them. Both must hold. */
 	const passkeysEnabled = useSignal(false);
 	const passkeySupported = useSignal(false);
-	/** Bumped to start a fresh conditional-UI (autofill) ceremony, e.g. after a manual passkey attempt ended. */
-	const autofillAttempt = useSignal(0);
-
 	const resetChallenge = $(() => {
 		turnstileToken.value = '';
 		if (widgetId.value) (window as any).turnstile?.reset(widgetId.value);
@@ -112,6 +109,8 @@ export default component$(() => {
 		if (loading.value) return;
 		error.value = '';
 		loading.value = true;
+		// Modal only, like GitHub: no conditional (autofill) ceremony runs in the background, because aborting it to start
+		// this one breaks extension-based passkey providers (NordPass, 1Password, Bitwarden).
 		const result = await loginWithPasskey();
 		if (result.ok) {
 			navigate(signInDestination());
@@ -119,22 +118,6 @@ export default component$(() => {
 		}
 		error.value = result.message;
 		loading.value = false;
-		autofillAttempt.value++;
-	});
-
-	// Conditional UI: the browser offers saved passkeys in the email field's autofill list while the sign-in view is
-	// showing. A cancelled or aborted ceremony stays silent; a real failure is shown.
-	useVisibleTask$(async ({ track }) => {
-		const current = track(() => view.value);
-		track(() => autofillAttempt.value);
-		if (!track(() => passkeysEnabled.value) || current !== 'signin') return;
-		if (!(await browserSupportsWebAuthnAutofill())) return;
-		const result = await loginWithPasskey({ useBrowserAutofill: true });
-		if (result.ok) {
-			navigate(signInDestination());
-			return;
-		}
-		if (!('cancelled' in result)) error.value = result.message;
 	});
 
 	const appleUnavailable = useSignal(false);
@@ -332,7 +315,7 @@ export default component$(() => {
 									<label class="block text-sm font-medium text-gray-700">Email address</label>
 									<input
 										type="email"
-										autoComplete={passkeysEnabled.value ? "username webauthn" : "email"}
+										autoComplete="email"
 										autoFocus
 										value={email.value}
 										onInput$={(_, el) => (email.value = el.value)}

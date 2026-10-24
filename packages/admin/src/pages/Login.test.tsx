@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 // Issue #333: standard two-step sign-in. Step 1 is email + password only; the code step appears ONLY after the API
-// verified the password of an account with 2FA; passkey autofill + a secondary passkey button.
+// verified the password of an account with 2FA; a modal-only secondary passkey button (no autofill ceremony).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
-const caps = vi.fn(); let webauthn = true; let autofill = false;
+const caps = vi.fn(); let webauthn = true;
 const post = vi.fn();
 const loginWithPasskey = vi.fn();
 class ApiError extends Error {
@@ -16,8 +16,8 @@ class ApiError extends Error {
 vi.mock('../api', () => ({ api: { post: (...a: unknown[]) => post(...a), get: async () => ({ storeName: 'Damned Designs', logoUrl: null, theme: null, fontFaces: [] }) }, auth: { store: null }, ApiError }));
 vi.mock('../auth', () => ({ useAuth: () => ({ me: null, refresh: vi.fn() }) }));
 vi.mock('../lib/passkeys', () => ({
-  browserSupportsWebAuthn: () => webauthn, browserSupportsWebAuthnAutofill: async () => autofill,
-  capabilities: () => caps(), loginWithPasskey: (...a: unknown[]) => loginWithPasskey(...a), passkeyErrorMessage: (e: Error) => e.message,
+  browserSupportsWebAuthn: () => webauthn,
+  capabilities: () => caps(), loginWithPasskey: (...a: unknown[]) => loginWithPasskey(...a), passkeyErrorMessage: (e: Error) => e.message
 }));
 const { default: Login } = await import('./Login');
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
@@ -45,7 +45,7 @@ async function signIn(c: HTMLElement, email = 'owner@store.test', password = 'ri
   await flush(); await flush();
 }
 
-beforeEach(() => { webauthn = true; autofill = false; caps.mockReset(); post.mockReset(); loginWithPasskey.mockReset(); caps.mockResolvedValue({ passkeys: false }); });
+beforeEach(() => { webauthn = true; caps.mockReset(); post.mockReset(); loginWithPasskey.mockReset(); caps.mockResolvedValue({ passkeys: false }); });
 
 describe('step 1: email and password only', () => {
   it('shows only email + password (with the right autocomplete), forgot link and a show/hide toggle — never a code field', async () => {
@@ -53,7 +53,7 @@ describe('step 1: email and password only', () => {
     expect(container.querySelectorAll('input:not([hidden])').length).toBe(2);
     expect(codeField(container)).toBeNull();
     expect(container.textContent).not.toMatch(/Optional|Authentication code/);
-    expect(container.querySelector('input[type="email"]')!.getAttribute('autocomplete')).toBe('username webauthn');
+    expect(container.querySelector('input[type="email"]')!.getAttribute('autocomplete')).toBe('username');
     const pw = container.querySelector('input[autocomplete="current-password"]') as HTMLInputElement;
     expect(pw.type).toBe('password');
     act(() => { (container.querySelector('button[aria-label="Show password"]') as HTMLButtonElement).click(); });
@@ -186,11 +186,19 @@ describe('passkeys', () => {
     expect(buttons(container).find((b) => b.textContent === 'Sign in with a passkey')!.className).toContain('auth-btn-secondary');
     done();
   });
-  it('starts conditional mediation (autofill) when the browser supports it', async () => {
-    caps.mockResolvedValue({ passkeys: true }); autofill = true;
-    loginWithPasskey.mockReturnValue(new Promise(() => {}));
+  it('never starts a background (conditional) ceremony on load', async () => {
+    caps.mockResolvedValue({ passkeys: true });
     const { done } = await render();
-    expect(loginWithPasskey).toHaveBeenCalledWith({ useBrowserAutofill: true });
+    expect(loginWithPasskey).not.toHaveBeenCalled();
+    done();
+  });
+  it('the button starts the one modal ceremony', async () => {
+    caps.mockResolvedValue({ passkeys: true });
+    loginWithPasskey.mockReturnValue(new Promise(() => {}));
+    const { container, done } = await render();
+    act(() => { buttons(container).find((b) => b.textContent === 'Sign in with a passkey')!.click(); });
+    expect(loginWithPasskey).toHaveBeenCalledTimes(1);
+    expect(loginWithPasskey).toHaveBeenCalledWith();
     done();
   });
   it('hidden when capability off', async () => {

@@ -56,7 +56,7 @@ test.describe('admin sign-in', () => {
 		await expect(page.locator('input:visible')).toHaveCount(2);
 		await expect(page.locator('input[autocomplete="one-time-code"]')).toHaveCount(0);
 		await expect(page.getByText(/Optional|Authentication code/)).toHaveCount(0);
-		await expect(field(page, 'Email')).toHaveAttribute('autocomplete', 'username webauthn');
+		await expect(field(page, 'Email')).toHaveAttribute('autocomplete', 'username');
 		await expect(field(page, 'Password')).toHaveAttribute('autocomplete', 'current-password');
 		await field(page, 'Email').fill(a.email);
 		await field(page, 'Password').fill(a.password);
@@ -88,7 +88,7 @@ test.describe('admin sign-in', () => {
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 	});
 
-	test('#333: passkey sign-in through autofill (conditional mediation) with a Chromium virtual authenticator', async ({ page, api, browserName }) => {
+	test('#333: passkey sign-in from the button (modal only, no background ceremony) with a Chromium virtual authenticator', async ({ page, api, browserName }) => {
 		test.skip(browserName !== 'chromium', 'virtual authenticator is a Chromium CDP feature');
 		test.setTimeout(120_000);
 		const a = await makeAccount(api, 'pk', true);
@@ -119,9 +119,10 @@ test.describe('admin sign-in', () => {
 		await page.getByRole('button', { name: 'Sign out' }).click();
 		await expect(page).toHaveURL(/\/login$/);
 
-		// back on /login the email field carries "username webauthn" and the page has started a conditional request;
-		// the virtual authenticator answers it, so the admin signs in with no password and no code.
+		// back on /login no conditional (autofill) request runs in the background (unit-tested in Login.test.tsx); the button
+		// opens the modal prompt and the virtual authenticator answers it, so the admin signs in with no password and no code.
 		await page.reload();
+		await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 		expect((await page.evaluate(async () => (await fetch('/v1/admin/me', { credentials: 'include' })).json())).email).toBe(a.email);

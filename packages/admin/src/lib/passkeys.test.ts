@@ -6,7 +6,7 @@ vi.mock('../api', () => ({ api: { get: (p: string) => get(p), post: (p: string, 
 const startAuthentication = vi.fn(); const startRegistration = vi.fn();
 vi.mock('@simplewebauthn/browser', () => ({
   startAuthentication: (a: unknown) => startAuthentication(a), startRegistration: (a: unknown) => startRegistration(a),
-  browserSupportsWebAuthn: () => true, browserSupportsWebAuthnAutofill: async () => true,
+  browserSupportsWebAuthn: () => true,
 }));
 
 const pk = await import('./passkeys');
@@ -24,13 +24,13 @@ describe('passkeys client', () => {
     expect(get).toHaveBeenCalledWith('/capabilities');
   });
 
-  it('login: options -> start (with autofill flag) -> verify', async () => {
+  it('login: options -> modal start (never autofill) -> verify', async () => {
     const order: string[] = [];
     post.mockImplementation(async (p: string) => { order.push(p); return p.endsWith('options') ? { options: { challenge: 'c' } } : { csrfToken: 't', stores: [] }; });
     startAuthentication.mockImplementation(async () => { order.push('start'); return { id: 'cred' }; });
-    const r = await pk.loginWithPasskey({ useBrowserAutofill: true });
+    const r = await pk.loginWithPasskey();
     expect(order).toEqual(['/passkeys/login/options', 'start', '/passkeys/login/verify']);
-    expect(startAuthentication).toHaveBeenCalledWith({ optionsJSON: { challenge: 'c' }, useBrowserAutofill: true });
+    expect(startAuthentication).toHaveBeenCalledWith({ optionsJSON: { challenge: 'c' } });
     expect(post).toHaveBeenLastCalledWith('/passkeys/login/verify', { response: { id: 'cred' } });
     expect(r.csrfToken).toBe('t');
   });

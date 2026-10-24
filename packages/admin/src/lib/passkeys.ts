@@ -1,7 +1,7 @@
-import { startAuthentication, startRegistration, browserSupportsWebAuthn, browserSupportsWebAuthnAutofill } from '@simplewebauthn/browser';
+import { startAuthentication, startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { api, ApiError, type LoginResp } from '../api';
 
-export { browserSupportsWebAuthn, browserSupportsWebAuthnAutofill };
+export { browserSupportsWebAuthn };
 
 export interface PasskeyRow { id: string; label: string; deviceType: string; backedUp: boolean; createdAt: string; lastUsedAt: string | null }
 export interface Capabilities { passkeys: boolean }
@@ -61,9 +61,13 @@ export async function capabilities(): Promise<Capabilities> {
 type Opts = { options: Parameters<typeof startAuthentication>[0]['optionsJSON'] };
 type RegOpts = { options: Parameters<typeof startRegistration>[0]['optionsJSON'] };
 
-export async function loginWithPasskey({ useBrowserAutofill = false }: { useBrowserAutofill?: boolean } = {}): Promise<LoginResp> {
+/** Modal passkey sign-in, started from a click. No conditional (autofill) ceremony runs in the background: aborting a
+ *  pending one to start this modal one breaks extension-based passkey providers (NordPass, 1Password, Bitwarden), which
+ *  keep answering the aborted request. Options are fetched here, at click time, so the challenge always matches the
+ *  nonce cookie the same request sets. */
+export async function loginWithPasskey(): Promise<LoginResp> {
   const { options } = await api.post<Opts>('/passkeys/login/options', {});
-  const response = await ceremony(() => startAuthentication({ optionsJSON: options, useBrowserAutofill }));
+  const response = await ceremony(() => startAuthentication({ optionsJSON: options }));
   return api.post<LoginResp>('/passkeys/login/verify', { response });
 }
 
