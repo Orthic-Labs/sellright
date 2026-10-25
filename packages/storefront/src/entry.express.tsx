@@ -15,6 +15,7 @@ import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { snapshotGuard } from"./utils/snapshot-guard";
+import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { socialSignInIdsForHost } from "./utils/social-sign-in.server";
@@ -59,6 +60,8 @@ const { router, notFound } = createQwikRouter({
 const app = express();
 // No framework banner header (the license-flow buy pages never sent one; nothing reads it).
 app.disable('x-powered-by');
+// #364: first in the chain so every 404 and 5xx (static, guard, router, notFound) is named in the log (utils/error-path-log.ts).
+app.use(createErrorPathLog());
 
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both
