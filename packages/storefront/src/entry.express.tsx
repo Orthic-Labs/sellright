@@ -23,7 +23,8 @@ import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/can
 import { buildCsp } from"./utils/csp";
 import { theme } from"./theme/theme.config";
 import { analyticsCsp } from"./platform/head-analytics";
-import { BRAND_HEAD } from"./platform/brand-data";
+import { BRAND_HEAD, BRAND_REDIRECTS } from"./platform/brand-data";
+import { createLegacyRedirects } from "./platform/legacy-redirects";
 import { getRouterOrigin, validatedRequestHost } from"./utils/trusted-request.server";
 
 declare global {
@@ -257,6 +258,9 @@ app.use((_req, res, next) => {
 // URL canonicalisation for public sections (STOREFRONT_CANONICAL_SECTIONS, default OFF). It sits after the snapshot guard
 // (documents and route data skip the static handlers above and are never redirected: they carry a file extension) and after
 // every asset handler, and it inherits the no-store default above. Only page GET/HEAD requests are ever redirected.
+// routes.json redirects: legacy URLs 301 to their live page (platform/legacy-redirects.ts), before canonicalisation and routing.
+app.use(createLegacyRedirects(BRAND_REDIRECTS));
+
 app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS)));
 
 // Use Qwik Router's page and endpoint request handler

@@ -6,6 +6,8 @@ import type { DeclaredContent } from '~/platform/content-routes';
 
 export interface BrandRoutes {
 	version: 1;
+	/** Legacy path -> live path, 301 (platform/legacy-redirects.ts): an exact path, or a prefix ending in `/*`. */
+	redirects?: Record<string, string>;
 	content?: DeclaredContent[];
 	/** Exact paths rendered by route.content; absent selects all supported content mounts. */
 	contentViewPaths?: string[];
@@ -52,6 +54,7 @@ export interface DetailProduct {
 
 export const BRAND_HEAD: BrandHeadSpec = (brandHead as BrandHeadSpec | null) ?? {};
 export const BRAND_ROUTES: BrandRoutes | null = (brandRoutes as BrandRoutes | null) ?? null;
+export const BRAND_REDIRECTS: Readonly<Record<string, string>> = BRAND_ROUTES?.redirects ?? {};
 export const DECLARED_CONTENT: readonly DeclaredContent[] = BRAND_ROUTES?.content ?? [];
 export const DETAIL_PRODUCTS: readonly DetailProduct[] = BRAND_ROUTES?.shop?.detailProducts ?? [];
 export const BRAND_COPY: NonNullable<BrandRoutes['copy']> = BRAND_ROUTES?.copy ?? {};
