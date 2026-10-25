@@ -169,6 +169,7 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 				<>
 					{resolved.favicon.svg && <link rel="icon" href={resolved.favicon.svg} type="image/svg+xml" />}
 					{resolved.favicon.ico && <link rel="icon" href={resolved.favicon.ico} sizes="any" />}
+					{resolved.favicon.appleTouch && <link rel="apple-touch-icon" href={resolved.favicon.appleTouch} />}
 				</>
 			) : (
 				<link rel="icon" href="/favicon/favicon.svg" type="image/svg+xml" />

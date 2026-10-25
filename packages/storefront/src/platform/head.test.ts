@@ -117,8 +117,8 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 	});
 
 	it('exactly one favicon spec is returned (the base icon is replaced, never both)', () => {
-		const r = resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources({ favicon: { svg: '/brand/f.svg', ico: '/brand/f.ico' } }));
-		expect(r.favicon).toEqual({ svg: '/brand/f.svg', ico: '/brand/f.ico' });
+		const r = resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources({ favicon: { svg: '/brand/f.svg', ico: '/brand/f.ico', appleTouch: '/brand/a.png' } }));
+		expect(r.favicon).toEqual({ svg: '/brand/f.svg', ico: '/brand/f.ico', appleTouch: '/brand/a.png' });
 	});
 
 	it('googleFontsPreconnect true is surfaced; default is off (the base imports no Google font)', () => {

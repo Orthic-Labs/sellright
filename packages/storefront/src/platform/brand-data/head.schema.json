@@ -19,7 +19,8 @@
       "additionalProperties": false,
       "properties": {
         "svg": { "type": "string", "pattern": "^/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" },
-        "ico": { "type": "string", "pattern": "^/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" }
+        "ico": { "type": "string", "pattern": "^/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" },
+        "appleTouch": { "type": "string", "pattern": "^/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" }
       }
     },
     "fontPreloads": {

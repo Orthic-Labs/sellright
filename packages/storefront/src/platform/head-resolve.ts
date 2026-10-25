@@ -17,7 +17,8 @@ export interface BrandHeadSpec {
 	titleTemplate?: '%s | {store}' | '%s';
 	defaultDescription?: string;
 	canonical?: { lowercase: boolean; trailingSlash: 'keep' | 'always' };
-	favicon?: { svg?: string; ico?: string };
+	/** `appleTouch`: the 180x180 PNG iOS uses for home-screen and share icons (else it probes /apple-touch-icon.png). */
+	favicon?: { svg?: string; ico?: string; appleTouch?: string };
 	/** `paths`: exact paths, or a prefix ending in `*` (`/blog/*` is every path under /blog/, /blog/ included). */
 	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[] }[];
 	imagePreloads?: {
@@ -130,7 +131,7 @@ export interface ResolvedHead {
 	/** The head to render: the input object itself when nothing is declared (so today's bytes are untouched). */
 	head: ResolvedDocumentHead;
 	/** Replaces the base `<link rel=icon>` when set. */
-	favicon: { svg?: string; ico?: string } | null;
+	favicon: { svg?: string; ico?: string; appleTouch?: string } | null;
 	/** The canonical to render instead of the default, or null to keep the default / route canonical. */
 	canonical: string | null;
 	/** Brand preloads for this path that the route did not already preload. */

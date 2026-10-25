@@ -36,7 +36,7 @@ describe('head.json (head sanitisation)', () => {
 		expect(head({})).toEqual([]);
 		expect(head({
 			titleTemplate: '%s | {store}', defaultDescription: 'D', canonical: { lowercase: true, trailingSlash: 'always' },
-			favicon: { svg: '/favicon/favicon.svg', ico: '/favicon.ico' },
+			favicon: { svg: '/favicon/favicon.svg', ico: '/favicon.ico', appleTouch: '/favicon/apple-touch-icon.png' },
 			fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2', paths: ['/', '/shop/'] }],
 			imagePreloads: [{ paths: ['/'], type: 'image/avif', fetchpriority: 'high', srcset: [{ href: '/brand/hero-640.avif', width: 640 }, { href: '/brand/hero-1024.avif', width: 1024 }], sizes: '(max-width: 640px) 100vw, 640px' }],
 			googleFontsPreconnect: false, verification: { facebookDomain: 'abcdefghij1234567890' },
@@ -56,6 +56,7 @@ describe('head.json (head sanitisation)', () => {
 			expect(head({ fontPreloads: [{ href, type: 'font/woff2' }] }).length, href).toBeGreaterThan(0);
 		}
 		expect(head({ favicon: { svg: '//evil.example/f.svg' } }).length).toBeGreaterThan(0);
+		expect(head({ favicon: { appleTouch: '//evil.example/a.png' } }).length).toBeGreaterThan(0);
 		expect(head({ imagePreloads: [{ paths: ['/'], type: 'image/avif', srcset: [{ href: '//evil.example/x.avif', width: 10 }], sizes: '100vw' }] }).length).toBeGreaterThan(0);
 		expect(head({ imagePreloads: [{ paths: ['/'], type: 'image/avif', srcset: [{ href: '/other/x.avif', width: 10 }], sizes: '100vw' }] }).length, 'image srcset must live under /brand/').toBeGreaterThan(0);
 	});
