@@ -5,7 +5,7 @@
  * app (the gateway-payment route accepts the token alone).
  */
 import { describe, expect, it, vi } from 'vitest';
-import { collectJsSrc, loadCollectJs, prepareCardTokenization, FIELDS_INIT_TIMEOUT_MS, type NmiCollectJs } from './NmiCollect';
+import { collectJsSrc, loadCollectJs, prepareCardTokenization, FIELDS_INIT_TIMEOUT_MS, isCardFieldMessage, type NmiCollectJs } from './NmiCollect';
 
 describe('collectJsSrc', () => {
   it('uses the merchant host for existing-account test mode', () => {
@@ -233,5 +233,14 @@ describe('prepareCardTokenization', () => {
 		await expect(
 			prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' })(),
 		).rejects.toThrow('timed out');
+	});
+});
+
+describe('isCardFieldMessage', () => {
+	it('matches only the card-field messages', () => {
+		expect(isCardFieldMessage('Check the expiry date (MM / YY) and try again.')).toBe(true);
+		expect(isCardFieldMessage('Check the card number and try again.')).toBe(true);
+		expect(isCardFieldMessage('The card was declined. Please try a different card.')).toBe(false);
+		expect(isCardFieldMessage('Card validation timed out — try again.')).toBe(false);
 	});
 });

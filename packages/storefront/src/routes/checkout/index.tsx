@@ -23,6 +23,7 @@ import { validateBillingSection, validateCustomerSection, validateShippingSectio
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
 import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
+import { isCardFieldMessage } from '~/services/NmiCollect';
 import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/view-generation';
 import type { ResumeQueue } from '~/components/checkout/resume-selection';
 import { beginResumeFlow, cancelResumeFlow } from '~/components/checkout/resume-flow';
@@ -738,6 +739,14 @@ const CheckoutContent = component$(() => {
   const onPaymentError$ = $(async (_errorMessage: string, mountGen?: number) => {
     // A callback from a payment component that is no longer the current view says nothing about the current one.
     if (!acceptsMount(paymentInit, mountGen)) return;
+    // An invalid card field is caught before any charge: name the field instead of the generic decline message.
+    if (isCardFieldMessage(_errorMessage)) {
+      showProcessingModal.value = false;
+      isOrderProcessing.value = false;
+      if (srState.resume !== 'none') srState.paymentError = _errorMessage;
+      else state.error = _errorMessage;
+      return;
+    }
     if (srState.resume !== 'none') {
       await recoverResumePaymentError();
       return;

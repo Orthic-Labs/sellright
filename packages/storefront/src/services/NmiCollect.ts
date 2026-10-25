@@ -77,6 +77,8 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
 
 const FIELD_NAMES: Record<string, string> = { ccnumber: 'card number', ccexp: 'expiry date (MM / YY)', cvv: 'security code' };
 const invalidMessage = (field: string): string => `Check the ${FIELD_NAMES[field] ?? 'card details'} and try again.`;
+/** True for the card-field messages above: raised before any charge, so no order-state check is needed to show them. */
+export const isCardFieldMessage = (message: string): boolean => /^Check the .+ and try again\.$/.test(message);
 
 /** Collect.js internals (verified in the live secure.nmi.com/token/Collect.js, 2026-10-25): startPaymentRequest
  *  sets inSubmission and arms responseTimeout; only a token or that timer clears them, never an invalid field. */
