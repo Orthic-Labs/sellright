@@ -52,8 +52,11 @@ export interface AdminPrincipal {
   stores: AdminStoreAccess[];
   /** The session row this request authenticated with (admin sessions only). */
   sessionId?: string;
-  /** When that session was created (issue #333: a freshly signed-in, not-yet-enrolled session enrols without re-entry). */
+  /** When that session was created (issue #333: a freshly signed-in, not-yet-enrolled session enrols without re-entry).
+   *  Absent for a session minted by a hub handoff (#355): its creation proved no credential. */
   sessionCreatedAt?: Date;
+  /** #355: the hub client a handoff-minted session belongs to, else null. */
+  handoffClientId?: string | null;
   /** P1b: the admin has a TOTP secret enrolled. Absent for agents. */
   totpEnabled?: boolean;
   /** Issue #333: the admin has at least one passkey — a second factor on its own. Absent for agents. */
@@ -199,6 +202,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       securityEpoch: s.adminUser.securityEpoch,
       sessionId: s.session.id,
       sessionCreatedAt: s.session.createdAt,
+      handoffClientId: s.session.handoffClientId,
       lastSeenAt: sql<Date>`coalesce(${s.session.lastSeenAt}, ${s.session.createdAt})`,
       apiTokenId: s.session.apiTokenId,
       tokenAdminUserId: s.adminApiToken.adminUserId,
@@ -260,7 +264,9 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
   if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
   if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
-  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stepUpEpoch: first.stepUpEpoch ?? null, securityEpoch: first.securityEpoch, stores, sessionId: first.sessionId, sessionCreatedAt: first.sessionCreatedAt };
+  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stepUpEpoch: first.stepUpEpoch ?? null, securityEpoch: first.securityEpoch, stores, sessionId: first.sessionId,
+    // #355: a hub session proved no credential when it was minted, so its age never counts as a fresh sign-in.
+    sessionCreatedAt: first.handoffClientId ? undefined : first.sessionCreatedAt, handoffClientId: first.handoffClientId ?? null };
   if (kind === 'human') {
     principal.totpEnabled = first.totpEnabled === true;
     principal.passkeyEnabled = first.passkeyEnabled === true;

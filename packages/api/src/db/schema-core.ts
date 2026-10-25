@@ -234,6 +234,19 @@ export const adminAuthChallenge = pgTable('admin_auth_challenge', {
   createdAt: ts(),
 }, (t) => [index('admin_auth_challenge_admin').on(t.adminUserId, t.kind), index('admin_auth_challenge_expires').on(t.expiresAt)]);
 
+// #355 phase 1 (0113): one-use sign-in handoff codes for a registered hub client (auth/admin-handoff.ts).
+export const adminHandoffCode = pgTable('admin_handoff_code', {
+  codeHash: text().primaryKey(),
+  clientId: text().notNull(),
+  redirectUri: text().notNull(),
+  codeChallenge: text().notNull(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  sessionId: uuid().notNull().references((): import('drizzle-orm/pg-core').AnyPgColumn => session.id, { onDelete: 'cascade' }),
+  epoch: integer().notNull(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  createdAt: ts(),
+}, (t) => [index('admin_handoff_code_expires').on(t.expiresAt)]);
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),
@@ -251,6 +264,8 @@ export const session = pgTable('session', {
   // 0108: the owner's security_epoch when this session last stepped up; NULL (incl. rows written by an older engine) means
   // the step-up cannot authorize passkey management or any epoch-aware consumer (routes/admin-helpers.ts requireStepUpEpoch).
   stepUpEpoch: integer(),
+  // #355 (0113): set when the session was minted by a hub handoff redemption (auth/admin-handoff.ts); NULL = a real sign-in.
+  handoffClientId: text(),
   apiTokenId: uuid().references(() => adminApiToken.id, { onDelete: 'cascade' }),
   // 0098: last use of an ADMIN session (touched at most once a minute) for the idle timeout; null = created_at.
   lastSeenAt: timestamp({ withTimezone: true }),

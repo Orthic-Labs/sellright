@@ -44,6 +44,7 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
     'POST /v1/admin/passkeys/register/options', 'POST /v1/admin/passkeys/register/verify', 'DELETE /v1/admin/passkeys/:id', 'PATCH /v1/admin/passkeys/:id', 'POST /v1/admin/passkeys/review',
     'POST /v1/admin/step-up/passkey/options', 'POST /v1/admin/step-up/passkey/verify',
     'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
+    'POST /v1/admin/handoff/authorize', // #355: hands this account's session to another admin client
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook',
     'POST /v1/admin/payments/settings/stripe/:mode/payment-method-domains', // wallet domain registration on the store's Stripe account (express checkout)
     'PUT /v1/admin/email/settings',
@@ -68,6 +69,7 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
   'POST /v1/admin/password/forgot', // issue #333: pre-session; only e-mails a link to the account's own address
   'POST /v1/admin/password/reset', // issue #333: pre-session; the e-mailed single-use token is the whole authority
   'POST /v1/admin/password/reset/check', // issue #333: pre-session read of a reset link's liveness; changes nothing
+  'POST /v1/admin/handoff/token', // #355: pre-session, server to server; the hub's client secret + PKCE verifier are the authority
 ]);
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.

@@ -1,5 +1,5 @@
 {
-  "count": 377,
+  "count": 379,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -236,6 +236,8 @@
     "POST /v1/admin/draft-orders",
     "POST /v1/admin/email/settings/test-send",
     "POST /v1/admin/gift-cards",
+    "POST /v1/admin/handoff/authorize",
+    "POST /v1/admin/handoff/token",
     "POST /v1/admin/import-tracking",
     "POST /v1/admin/import-tracking/preview",
     "POST /v1/admin/jobs/auto-deliver",

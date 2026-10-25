@@ -8,6 +8,7 @@ import { verifyPassword } from '../auth/password.js';
 import { issuePasswordReset } from '../auth/admin-auth-challenge.js';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
 import { adminUserHandle } from '../auth/passkeys-core.js';
+import { env } from '../env.js';
 import { adminAuthenticator, adminLoginAssertion, enrolAdminPasskey, passkeyNonceCookie, stepUp, withCookie } from './authorization-matrix.passkey.testkit.js';
 import { type MatrixCase, type MatrixCell, type MatrixPrincipal, type MatrixProof } from './authorization-matrix.testkit.js';
 
@@ -281,6 +282,39 @@ export function createIdentityCases(fixture: MatrixIdentityFixture): MatrixCase[
       proof.ok(await verifyPassword(next, after.password_hash), 'new password committed for the token\'s account', 'state');
       proof.equal(after.totp, true, 'second factor untouched', 'state');
       proof.equal(await global('SELECT id FROM session WHERE admin_user_id=$1', [target.id]), [], 'every session of the account signed out', 'state');
+    } };
+  }, { contract: 'public' });
+
+  // ── #355 phase 1: saved-account hub handoff (target side). Enabled for these cases with a matrix-only client. ──
+  const HUB_SECRET = 'matrix-hub-secret-' + randomBytes(16).toString('hex'), HUB_CALLBACK = 'https://hub.matrix.invalid/v1/hub/callback';
+  const handoffOn = () => {
+    env.ADMIN_HANDOFF_ISSUER = 'https://target.matrix.invalid';
+    env.ADMIN_HANDOFF_CLIENTS = JSON.stringify([{ id: 'matrix-hub', redirectUri: HUB_CALLBACK, secretSha256: digest(HUB_SECRET) }]);
+  };
+  const pkcePair = () => { const verifier = randomBytes(48).toString('base64url'); return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') }; };
+  const authorizeBody = (challenge: string) => ({ clientId: 'matrix-hub', redirectUri: HUB_CALLBACK, state: 'matrix-state-' + randomBytes(8).toString('hex'), codeChallenge: challenge, codeChallengeMethod: 'S256' });
+  add('POST /v1/admin/handoff/authorize', HUMAN, async (principal, allow) => {
+    // A freshly signed-in human gets a one-use code for the registered client only; agents hit the credentials boundary.
+    handoffOn();
+    const target = allow ? await fixture.freshIdentity(principal) : fixture.identityFor('owner');
+    return { url: '/v1/admin/handoff/authorize', body: authorizeBody(pkcePair().challenge), ...(allow ? { headers: identityHeaders(target) } : {}), async verify(response: Response, proof: MatrixProof) {
+      const to = new URL((await json(response)).redirectTo);
+      proof.equal(to.origin + to.pathname, HUB_CALLBACK, 'only the registered callback');
+      proof.equal(await global('SELECT client_id, admin_user_id FROM admin_handoff_code WHERE code_hash=$1', [digest(to.searchParams.get('code')!)]), [{ client_id: 'matrix-hub', admin_user_id: target.id }], 'hashed code bound to the calling admin', 'state');
+    } };
+  }, { group: 'credentials' });
+  add('POST /v1/admin/handoff/token', PUBLIC, async () => {
+    // Server to server: the client secret + PKCE verifier select the account; a supplied principal grants nothing.
+    handoffOn();
+    const target = await targetHuman(), { verifier, challenge } = pkcePair();
+    const issued = await fixture.request('/v1/admin/handoff/authorize', { method: 'POST', headers: identityHeaders(target), body: JSON.stringify(authorizeBody(challenge)) }, peer());
+    assert.equal(issued.status, 200, 'real authorize prerequisite');
+    const code = new URL(((await issued.json()) as { redirectTo: string }).redirectTo).searchParams.get('code')!;
+    return { url: '/v1/admin/handoff/token', body: { grantType: 'authorization_code', clientId: 'matrix-hub', clientSecret: HUB_SECRET, redirectUri: HUB_CALLBACK, code, codeVerifier: verifier }, async verify(response: Response, proof: MatrixProof) {
+      const body = await json(response);
+      proof.equal(body.admin, { id: target.id, email: target.email }, 'code selects the account that authorized it');
+      proof.equal(await global('SELECT admin_user_id, handoff_client_id FROM session WHERE token_hash=$1', [digest(body.token)]), [{ admin_user_id: target.id, handoff_client_id: 'matrix-hub' }], 'hub session minted and marked', 'state');
+      proof.equal(await global('SELECT 1 FROM admin_handoff_code WHERE code_hash=$1', [digest(code)]), [], 'code spent (single use)', 'state');
     } };
   }, { contract: 'public' });
 

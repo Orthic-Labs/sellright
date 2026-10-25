@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseHandoffClients, parseHandoffIssuer } from './auth/admin-handoff-config.js';
 import { isIP } from 'node:net';
 import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
 import { assertAllowedSenders, parseSenderDomainList } from './email/sender-policy.js';
@@ -379,6 +380,12 @@ const EnvSchema = z.object({
   // timeout: a session unused for ADMIN_SESSION_IDLE_HOURS is refused (0 disables).
   ADMIN_SESSION_TTL_DAYS: z.coerce.number().positive().default(14),
   ADMIN_SESSION_IDLE_HOURS: z.coerce.number().nonnegative().default(12),
+  // #355 phase 1: saved-account sign-in handoff to registered hub clients (auth/admin-handoff.ts). Off unless both are
+  // set. ISSUER is this server's public HTTPS origin, echoed as `iss` on the callback and in the token response so the
+  // hub can reject a code from the wrong server. CLIENTS is a JSON array of {"id","redirectUri","secretSha256"}: the
+  // exact callback URL (no prefix or wildcard match) and the hex sha256 of the client secret.
+  ADMIN_HANDOFF_ISSUER: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  ADMIN_HANDOFF_CLIENTS: optionalEnvString,
   // P2: request body cap for the whole API (bytes); the admin asset upload has its own larger cap.
   API_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   // P2: exact extra origins allowed to call /v1/admin cross-origin (comma-separated, scheme://host[:port]).
@@ -432,6 +439,15 @@ const EnvSchema = z.object({
   // without a literal slug in routes/apps.ts. Unset (default): an unknown
   // appKey 404s, exactly as today.
   APPS_FALLBACK_STORE_SLUG: optionalEnvString,
+}).superRefine((raw, ctx) => {
+  // #355: a malformed handoff registry fails the boot, never a request (auth/admin-handoff-config.ts).
+  const production = raw.NODE_ENV === 'production';
+  for (const [path, check] of [
+    ['ADMIN_HANDOFF_CLIENTS', () => parseHandoffClients(raw.ADMIN_HANDOFF_CLIENTS, production)],
+    ['ADMIN_HANDOFF_ISSUER', () => raw.ADMIN_HANDOFF_ISSUER && parseHandoffIssuer(raw.ADMIN_HANDOFF_ISSUER, production)],
+  ] as const) {
+    try { check(); } catch (e) { ctx.addIssue({ code: 'custom', path: [path], message: (e as Error).message }); }
+  }
 }).transform((raw) => {
   const smtpUser = raw.SMTP_USER ?? raw.GMAIL_USER;
   return {

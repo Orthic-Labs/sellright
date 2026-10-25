@@ -15,6 +15,7 @@ import { accountReturns } from './routes/account-returns.js';
 import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
+import { adminHandoff } from './routes/admin-handoff.js';
 import { setup } from './routes/setup.js';
 import { adminSystem } from './routes/admin-system.js';
 import { adminSystemInfo } from './routes/admin-system-info.js';
@@ -234,7 +235,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       // Passkeys (0108): pre-session ceremony + capability probe, treated exactly like /v1/admin/login.
       || p === '/v1/admin/capabilities' || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify'
       // Issue #333: sign-in step 2, the sign-in screens' store branding and the forgot/reset password pair — same posture.
-      || p === '/v1/admin/login/2fa' || p === '/v1/admin/branding' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check';
+      || p === '/v1/admin/login/2fa' || p === '/v1/admin/branding' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check'
+      // #355: the hub's server-to-server code redemption authenticates with its client secret + PKCE verifier.
+      || p === '/v1/admin/handoff/token';
     // A credential means a parsable Bearer token or the session cookie — not any Authorization header (e.g. Basic).
     const hasCredential = !!bearer(c.req.header('authorization')) || !!cookie(c, SESSION_COOKIE)
       || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
@@ -300,7 +303,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       const machineCachePurge = m === 'POST' && new URL(c.req.url).pathname === '/v1/admin/cache/purge';
       const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept' || machineCachePurge
         || p === '/v1/admin/passkeys/login/options' || p === '/v1/admin/passkeys/login/verify' // passkeys (0108): pre-session, no CSRF cookie yet
-        || p === '/v1/admin/login/2fa' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check'; // #333: pre-session
+        || p === '/v1/admin/login/2fa' || p === '/v1/admin/password/forgot' || p === '/v1/admin/password/reset' || p === '/v1/admin/password/reset/check' // #333: pre-session
+        || p === '/v1/admin/handoff/token'; // #355: server to server, authenticated by client secret + PKCE verifier
       if (!exempt && !csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
     }
     await next();
@@ -550,6 +554,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
+  app.route('/', adminHandoff); // #355: saved-account hub sign-in handoff (target side)
   app.route('/', setup); // one-click install: pre-auth claim (404s once claimed)
   app.route('/', adminSystem); // one-click install: setup checklist, Publish readiness, recovery-kit download
   app.route('/', adminSystemInfo); // read-only build-info + effective-config (config/v1) — owner only

@@ -15702,6 +15702,252 @@
         }
       }
     },
+    "/v1/admin/handoff/authorize": {
+      "post": {
+        "summary": "Saved accounts (#355): issue a one-use, 60-second code for a registered hub client. Needs a human session signed in or stepped up in the last 10 minutes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "clientId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "redirectUri": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "state": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "codeChallenge": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "codeChallengeMethod": {
+                    "type": "string",
+                    "enum": [
+                      "S256"
+                    ]
+                  }
+                },
+                "required": [
+                  "clientId",
+                  "redirectUri",
+                  "state",
+                  "codeChallenge",
+                  "codeChallengeMethod"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Navigate to redirectTo (the registered callback with code, state and iss)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "redirectTo": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "redirectTo"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown client/callback or malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent, API token, stale sign-in, or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handoff not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/handoff/token": {
+      "post": {
+        "summary": "Saved accounts (#355): the hub redeems a handoff code once, server to server, for a new admin session (bearer)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grantType": {
+                    "type": "string",
+                    "enum": [
+                      "authorization_code"
+                    ]
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "clientSecret": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "redirectUri": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "code": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "codeVerifier": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "grantType",
+                  "clientId",
+                  "clientSecret",
+                  "redirectUri",
+                  "code",
+                  "codeVerifier"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A new admin session for the hub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "tokenType": {
+                      "type": "string",
+                      "enum": [
+                        "Bearer"
+                      ]
+                    },
+                    "expiresInSeconds": {
+                      "type": "integer"
+                    },
+                    "admin": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "email"
+                      ]
+                    },
+                    "issuer": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "tokenType",
+                    "expiresInSeconds",
+                    "admin",
+                    "issuer"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_grant: unknown, used, expired or mismatched code, wrong verifier, or the issuing sign-in ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handoff not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/setup/status": {
       "get": {
         "summary": "Whether this installation still needs claiming",

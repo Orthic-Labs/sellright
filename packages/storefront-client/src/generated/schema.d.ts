@@ -4058,6 +4058,185 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/admin/handoff/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Saved accounts (#355): issue a one-use, 60-second code for a registered hub client. Needs a human session signed in or stepped up in the last 10 minutes */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        clientId: string;
+                        codeChallenge: string;
+                        /** @enum {string} */
+                        codeChallengeMethod: "S256";
+                        redirectUri: string;
+                        state: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Navigate to redirectTo (the registered callback with code, state and iss) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            redirectTo: string;
+                        };
+                    };
+                };
+                /** @description Unknown client/callback or malformed request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agent, API token, stale sign-in, or CSRF */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Handoff not enabled */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/handoff/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Saved accounts (#355): the hub redeems a handoff code once, server to server, for a new admin session (bearer) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        clientId: string;
+                        clientSecret: string;
+                        code: string;
+                        codeVerifier: string;
+                        /** @enum {string} */
+                        grantType: "authorization_code";
+                        redirectUri: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description A new admin session for the hub */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            admin: {
+                                email: string;
+                                id: string;
+                            };
+                            expiresInSeconds: number;
+                            issuer: string;
+                            token: string;
+                            /** @enum {string} */
+                            tokenType: "Bearer";
+                        };
+                    };
+                };
+                /** @description invalid_grant: unknown, used, expired or mismatched code, wrong verifier, or the issuing sign-in ended */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description invalid_client */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Handoff not enabled */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/import-tracking": {
         parameters: {
             query?: never;
