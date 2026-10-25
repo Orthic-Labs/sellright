@@ -98,6 +98,19 @@ describe('prepareCardTokenization hosted-field initialisation', () => {
 		vi.useRealTimers();
 	});
 
+	it('Collect timing out before the fields ever loaded is an initialisation failure at once, reported once', () => {
+		vi.useFakeTimers();
+		let options: any;
+		const collect = { configure: (opts: any) => { options = opts; }, startPaymentRequest: vi.fn() };
+		const onInitError = vi.fn();
+		prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError);
+		options.timeoutCallback();
+		expect(onInitError).toHaveBeenCalledWith('Card fields timed out loading.');
+		vi.advanceTimersByTime(FIELDS_INIT_TIMEOUT_MS * 2);
+		expect(onInitError).toHaveBeenCalledTimes(1);
+		vi.useRealTimers();
+	});
+
 	it('fields that report ready never raise an initialisation failure, and a stray timeout does not either', () => {
 		vi.useFakeTimers();
 		let options: any;

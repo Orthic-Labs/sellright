@@ -107,7 +107,7 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
     if (token) request.resolve(token);
     else request.reject(new Error(error ?? 'Card validation failed — check the details and try again.'));
   };
-  // timeoutCallback only follows a submission, so field loading gets its own timer.
+  // Field loading has its own timer as well: not every Collect.js failure to load ends in timeoutCallback.
   let ready = false;
   const initTimer = setTimeout(() => { if (!ready) onInitError?.('Card fields timed out loading.'); }, FIELDS_INIT_TIMEOUT_MS);
   collect.configure({
@@ -131,6 +131,9 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
         if (pending && resetSubmission(collect)) done(null, invalidMessage(field));
       },
       timeoutCallback: () => {
+        // Before the fields ever reported available and with no submission open, Collect timing out means the hosted
+        // fields failed to load: surface the recoverable init error now instead of waiting for our own timer.
+        if (!ready && !pending) { clearTimeout(initTimer); onInitError?.('Card fields timed out loading.'); return; }
         const first = invalid.keys().next();
         done(null, first.done ? 'Card validation timed out — try again.' : invalidMessage(first.value));
       },
