@@ -137,7 +137,9 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
   });
   return () => new Promise<string>((resolve, reject) => {
     if (pending) { reject(new Error('Card validation is already in progress')); return; }
-    // Always let Collect re-check the fields: a cached invalid state can be stale (autofill without a blur).
+    // Always let Collect re-check the fields: a cached invalid state can be stale (autofill without a blur), so
+    // only what this submission reports names the field in an error.
+    invalid.clear();
     pending = { resolve, reject };
     try { collect.startPaymentRequest(); }
     catch { done(null, 'Card validation could not start — try again.'); }
