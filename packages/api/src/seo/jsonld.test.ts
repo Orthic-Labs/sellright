@@ -49,7 +49,7 @@ describe('productSchema', () => {
       name: 'Widget',
       url: 'https://acme.example.com/products/widget/',
       sku: 'WIDGET-1',
-      image: ['img/widget.webp'],
+      image: ['https://acme.example.com/assets/img/widget.webp'],
     });
     expect(schema!.offers).toEqual({
       '@type': 'Offer', url: 'https://acme.example.com/products/widget/', priceCurrency: 'USD', price: '19.99', availability: 'https://schema.org/InStock',

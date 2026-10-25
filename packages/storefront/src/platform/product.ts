@@ -17,6 +17,7 @@ import { theme, siteUrl } from '~/theme/theme.config';
 import { stripHtml } from '~/utils/sanitize';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
+import { withAbsoluteImages } from '~/platform/product-jsonld';
 import { hasView } from '~/platform/gateway';
 
 /** The page reads these loaders in the browser too (render and head refresh). With the router's default ('never') each
@@ -143,7 +144,7 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
     // The API's Product JSON-LD carries offers but no review aggregate; add
     // AggregateRating from the manifest only when the product has approved
     // reviews (never an empty/zero rating).
-    schemas.push(withAggregateRating(productJsonLd, loaderResult?.rating));
+    schemas.push(withAggregateRating(withAbsoluteImages(productJsonLd, siteUrl), loaderResult?.rating));
   }
 
   // routes.json productPage.content: the product's Q&A as FAQPage (plain text, validated at build).

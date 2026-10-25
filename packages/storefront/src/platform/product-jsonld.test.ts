@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveVariant, selectionFromQuery, type ModelProduct } from '~/platform/controllers/product-model';
-import { absoluteOn, productGroupSchema, productOgMeta, skuStem, withProductFacts } from './product-jsonld';
+import { absoluteOn, productGroupSchema, productOgMeta, skuStem, withAbsoluteImages, withProductFacts } from './product-jsonld';
 import type { JsonLdSchema } from '~/types/seo.types';
 
 const ORIGIN = 'https://shop.example';
@@ -30,6 +30,14 @@ describe('product JSON-LD', () => {
 		expect(absoluteOn(ORIGIN, 'https://cdn.example/x.png')).toBe('https://cdn.example/x.png');
 		expect(absoluteOn(ORIGIN, '/assets/x.png')).toBe(`${ORIGIN}/assets/x.png`);
 		expect(absoluteOn(ORIGIN, 'uuid/media/x.png')).toBe(`${ORIGIN}/assets/uuid/media/x.png`);
+	});
+
+	it('withAbsoluteImages: bare asset keys (the API Product image list) become site URLs, other fields kept (#366)', () => {
+		const out = withAbsoluteImages({ '@type': 'Product', name: 'P', image: ['uuid/media/preview/79/a__preview.jpg', 'https://cdn.example/b.jpg'] } as never, ORIGIN) as Record<string, unknown>;
+		expect(out.image).toEqual([`${ORIGIN}/assets/uuid/media/preview/79/a__preview.jpg`, 'https://cdn.example/b.jpg']);
+		expect(out.name).toBe('P');
+		expect((withAbsoluteImages({ '@type': 'Product', image: 'k.jpg' } as never, ORIGIN) as Record<string, unknown>).image).toBe(`${ORIGIN}/assets/k.jpg`);
+		expect('image' in (withAbsoluteImages({ '@type': 'Product' } as never, ORIGIN) as object)).toBe(false);
 	});
 
 	it('skuStem: the shared stem, or null', () => {

@@ -14,6 +14,13 @@ function centsToDecimal(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** An image as an absolute URL: asset keys are served from the storefront's /assets mount, and a bare key would be resolved
+ *  by crawlers against the product page (#366). */
+function absoluteImage(siteUrl: string, ref: string): string {
+  if (/^https?:\/\//.test(ref)) return ref;
+  return ref.startsWith('/') ? `${siteUrl}${ref}` : `${siteUrl}/assets/${ref}`;
+}
+
 export function organizationSchema(config: SeoConfig): Record<string, unknown> | null {
   if (!config.siteUrl) return null;
   const schema: Record<string, unknown> = {
@@ -39,8 +46,9 @@ export function websiteSchema(config: SeoConfig): Record<string, unknown> | null
 }
 
 export function productSchema(config: SeoConfig, product: ProductAvailability): Record<string, unknown> | null {
-  if (!config.siteUrl) return null;
-  const url = `${config.siteUrl}${productPath(config, product.slug)}`;
+  const siteUrl = config.siteUrl;
+  if (!siteUrl) return null;
+  const url = `${siteUrl}${productPath(config, product.slug)}`;
   const schema: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type': 'Product',
@@ -48,7 +56,7 @@ export function productSchema(config: SeoConfig, product: ProductAvailability): 
     url,
   };
   if (product.description) schema.description = product.description;
-  if (product.images.length > 0) schema.image = product.images;
+  if (product.images.length > 0) schema.image = product.images.map((key) => absoluteImage(siteUrl, key));
   if (product.sku) schema.sku = product.sku;
   if (product.price != null) {
     schema.offers = {

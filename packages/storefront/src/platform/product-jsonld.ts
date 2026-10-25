@@ -25,6 +25,14 @@ export function absoluteOn(siteOrigin: string, ref: string): string {
 	return `${siteOrigin}/assets/${ref}`;
 }
 
+/** The schema with its `image` (a string or a list) as absolute URLs on the site; crawlers resolve a bare key against the page. */
+export function withAbsoluteImages(schema: JsonLdSchema, siteOrigin: string): JsonLdSchema {
+	const image = (schema as Record<string, unknown>).image;
+	if (typeof image === 'string') return { ...schema, image: absoluteOn(siteOrigin, image) } as JsonLdSchema;
+	if (Array.isArray(image)) return { ...schema, image: image.map((i) => (typeof i === 'string' ? absoluteOn(siteOrigin, i) : i)) } as JsonLdSchema;
+	return schema;
+}
+
 const decimal = (cents: number) => (cents / 100).toFixed(2);
 
 /** Catalog HTML as plain text: tags dropped, the text entities decoded (`&lt;`/`&gt;` stay encoded: never a raw `<` in a script). */
@@ -103,10 +111,8 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
  * colour and size lists from the model, a plain-text description and absolute image URLs. Offers (price, availability) are untouched.
  */
 export function withProductFacts(schema: JsonLdSchema, model: ModelProduct, ctx: { siteOrigin: string; brandName: string; facts?: ProductFacts }): JsonLdSchema {
-	const s = { ...(schema as Record<string, unknown>) };
+	const s = { ...(withAbsoluteImages(schema, ctx.siteOrigin) as Record<string, unknown>) };
 	if (typeof s.description === 'string' && s.description.includes('<')) s.description = plainText(s.description);
-	if (typeof s.image === 'string') s.image = absoluteOn(ctx.siteOrigin, s.image);
-	else if (Array.isArray(s.image)) s.image = s.image.map((i) => (typeof i === 'string' ? absoluteOn(ctx.siteOrigin, i) : i));
 	if (ctx.facts?.material) s.material = ctx.facts.material;
 	if (!s.itemCondition) s.itemCondition = NEW;
 	const names = optionNames(model);
