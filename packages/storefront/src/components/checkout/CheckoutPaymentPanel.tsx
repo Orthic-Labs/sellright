@@ -44,7 +44,8 @@ export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 	return methods;
 }
 
-export const METHOD_LABEL = PROVIDER_LABELS;
+// Shopper-facing: card gateways read as "Card", never the processor's name.
+export const METHOD_LABEL: Readonly<Record<keyof typeof PROVIDER_LABELS, string>> = { ...PROVIDER_LABELS, stripe: 'Card', nmi: 'Card' };
 
 export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
 	const methods = availableMethods(props.shopConfig.value);

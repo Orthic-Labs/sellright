@@ -24,9 +24,12 @@ export interface NmiCollectFields {
 export interface NmiCollectJs {
   configure(opts: {
     variant?: 'inline' | 'lightbox';
-    fields?: Record<string, { selector: string; title?: string }>;
+    fields?: Record<string, { selector: string; title?: string; placeholder?: string }>;
     styleSniffer?: boolean;
     customCss?: Record<string, string>;
+    placeholderCss?: Record<string, string>;
+    invalidCss?: Record<string, string>;
+    timeoutDuration?: number;
     validationCallback?: (field: string, valid: boolean, message: string) => void;
     timeoutCallback?: () => void;
     fieldsAvailableCallback?: () => void;
@@ -72,9 +75,15 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
   return inflight.promise;
 }
 
+const FIELD_NAMES: Record<string, string> = { ccnumber: 'card number', ccexp: 'expiry date (MM / YY)', cvv: 'security code' };
+const invalidMessage = (field: string): string => `Check the ${FIELD_NAMES[field] ?? 'card details'} and try again.`;
+
 /** Configure before card entry; reconfiguring on Pay redraws the hosted fields. */
 export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void, onInitError?: (message: string) => void): () => Promise<string> {
   let pending: { resolve: (token: string) => void; reject: (error: Error) => void } | null = null;
+  // Collect.js never calls `callback` while a hosted field is invalid: it reports each field through
+  // validationCallback instead. Without tracking that, Pay on a bad expiry or card number did nothing at all.
+  const invalid = new Map<string, string>();
   const done = (token: string | null, error?: string) => {
     const request = pending;
     pending = null;
@@ -85,9 +94,20 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
   collect.configure({
       variant: 'inline',
       fields: {
-        ccnumber: { selector: fields.ccnumber, title: 'Card Number' },
-        ccexp: { selector: fields.ccexp, title: 'Expiration' },
-        cvv: { selector: fields.cvv, title: 'Security Code' },
+        ccnumber: { selector: fields.ccnumber, title: 'Card Number', placeholder: 'Card number' },
+        ccexp: { selector: fields.ccexp, title: 'Expiration', placeholder: 'MM / YY' },
+        cvv: { selector: fields.cvv, title: 'Security Code', placeholder: 'CVC' },
+      },
+      // 16px keeps iOS Safari from zooming into the hosted inputs.
+      customCss: { 'font-size': '16px', color: '#111110', 'background-color': 'transparent' },
+      placeholderCss: { color: '#8a8178' },
+      invalidCss: { color: '#b3261e' },
+      // A tokenization that never answers ends in timeoutCallback (a retryable error), not an endless "Processing".
+      timeoutDuration: 20000,
+      validationCallback: (field, valid, message) => {
+        if (valid) invalid.delete(field);
+        else invalid.set(field, message);
+        if (!valid && pending) done(null, invalidMessage(field));
       },
       // No tokenization pending = the hosted fields themselves never initialised: surface it, don't stay silently not-ready.
       timeoutCallback: () => {
@@ -99,6 +119,8 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
   });
   return () => new Promise<string>((resolve, reject) => {
     if (pending) { reject(new Error('Card validation is already in progress')); return; }
+    const first = invalid.keys().next();
+    if (!first.done) { reject(new Error(invalidMessage(first.value))); return; }
     pending = { resolve, reject };
     try { collect.startPaymentRequest(); }
     catch { done(null, 'Card validation could not start — try again.'); }

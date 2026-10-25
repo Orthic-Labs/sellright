@@ -147,6 +147,33 @@ describe('prepareCardTokenization', () => {
 		).rejects.toThrow('Card validation failed');
 	});
 
+	it('shows placeholders so the shopper can tell the hosted fields apart', () => {
+		let configured: any;
+		prepareCardTokenization({ configure: (opts) => { configured = opts; }, startPaymentRequest: () => {} }, { ccnumber: '#a', ccexp: '#b', cvv: '#c' });
+		expect(configured.fields.ccnumber.placeholder).toBe('Card number');
+		expect(configured.fields.ccexp.placeholder).toBe('MM / YY');
+		expect(configured.fields.cvv.placeholder).toBe('CVC');
+		expect(configured.customCss['font-size']).toBe('16px');
+	});
+
+	it('an invalid field during payment rejects at once instead of hanging', async () => {
+		const collect = collectWith((opts) => opts.validationCallback('ccexp', false, 'Expiration date is invalid'));
+		await expect(
+			prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' })(),
+		).rejects.toThrow('Check the expiry date (MM / YY)');
+	});
+
+	it('a field already reported invalid blocks Pay with its message; fixing it lets Pay through', async () => {
+		let options: any;
+		const start = vi.fn(() => options.callback({ token: 'tok' }));
+		const tokenize = prepareCardTokenization({ configure: (opts) => { options = opts; }, startPaymentRequest: start }, { ccnumber: '#a', ccexp: '#b', cvv: '#c' });
+		options.validationCallback('ccnumber', false, 'Card number is invalid');
+		await expect(tokenize()).rejects.toThrow('Check the card number');
+		expect(start).not.toHaveBeenCalled();
+		options.validationCallback('ccnumber', true, 'Success');
+		expect(await tokenize()).toBe('tok');
+	});
+
 	it('timeout produces a retryable error', async () => {
 		const collect = collectWith((opts) => opts.timeoutCallback());
 		await expect(

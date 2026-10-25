@@ -118,16 +118,16 @@ export const NMI = component$<NMIProps>((props) => {
 	return (
 		<div class="nmi-card-form" style="display:flex;flex-direction:column;gap:12px;">
 			<div>
-				<label for={`${idPrefix.value}-number`} class="sr-only">Card number</label>
+				<label for={`${idPrefix.value}-number`} class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Card number</label>
 				<div id={`${idPrefix.value}-number`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
 			</div>
 			<div style="display:flex;gap:12px;">
 				<div style="flex:1;">
-					<label for={`${idPrefix.value}-exp`} class="sr-only">Expiration</label>
+					<label for={`${idPrefix.value}-exp`} class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Expiration</label>
 					<div id={`${idPrefix.value}-exp`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
 				</div>
 				<div style="flex:1;">
-					<label for={`${idPrefix.value}-cvv`} class="sr-only">Security code</label>
+					<label for={`${idPrefix.value}-cvv`} class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Security code</label>
 					<div id={`${idPrefix.value}-cvv`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
 				</div>
 			</div>
