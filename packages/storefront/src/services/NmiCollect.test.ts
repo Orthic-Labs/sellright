@@ -5,7 +5,7 @@
  * app (the gateway-payment route accepts the token alone).
  */
 import { describe, expect, it, vi } from 'vitest';
-import { collectJsSrc, loadCollectJs, prepareCardTokenization, type NmiCollectJs } from './NmiCollect';
+import { collectJsSrc, loadCollectJs, prepareCardTokenization, FIELDS_INIT_TIMEOUT_MS, type NmiCollectJs } from './NmiCollect';
 
 describe('collectJsSrc', () => {
   it('uses the merchant host for existing-account test mode', () => {
@@ -88,13 +88,27 @@ describe('loadCollectJs failure and retry', () => {
 });
 
 describe('prepareCardTokenization hosted-field initialisation', () => {
-	it('a timeout with no tokenization pending reports an initialisation failure', () => {
+	it('fields that never report ready within the init timeout are an initialisation failure', () => {
+		vi.useFakeTimers();
+		const collect = { configure: () => {}, startPaymentRequest: vi.fn() };
+		const onInitError = vi.fn();
+		prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError);
+		vi.advanceTimersByTime(FIELDS_INIT_TIMEOUT_MS);
+		expect(onInitError).toHaveBeenCalledWith('Card fields timed out loading.');
+		vi.useRealTimers();
+	});
+
+	it('fields that report ready never raise an initialisation failure, and a stray timeout does not either', () => {
+		vi.useFakeTimers();
 		let options: any;
 		const collect = { configure: (opts: any) => { options = opts; }, startPaymentRequest: vi.fn() };
 		const onInitError = vi.fn();
 		prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError);
+		options.fieldsAvailableCallback();
 		options.timeoutCallback();
-		expect(onInitError).toHaveBeenCalledWith('Card fields timed out loading.');
+		vi.advanceTimersByTime(FIELDS_INIT_TIMEOUT_MS * 2);
+		expect(onInitError).not.toHaveBeenCalled();
+		vi.useRealTimers();
 	});
 
 	it('a timeout during a tokenization is a card error, not an initialisation failure', async () => {
@@ -156,22 +170,62 @@ describe('prepareCardTokenization', () => {
 		expect(configured.customCss['font-size']).toBe('16px');
 	});
 
-	it('an invalid field during payment rejects at once instead of hanging', async () => {
-		const collect = collectWith((opts) => opts.validationCallback('ccexp', false, 'Expiration date is invalid'));
-		await expect(
-			prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' })(),
-		).rejects.toThrow('Check the expiry date (MM / YY)');
+	// Models the live Collect.js: startPaymentRequest is ignored while inSubmission; an invalid field reports through
+	// validationCallback and leaves inSubmission set until a token or the response timer clears it.
+	const realisticCollect = (fieldsValid: () => boolean) => {
+		let options: any;
+		const c: any = {
+			inSubmission: false, responseTimeout: undefined,
+			configure: (opts: any) => { options = opts; },
+			startPaymentRequest: vi.fn(() => {
+				if (c.inSubmission) return;
+				c.inSubmission = true;
+				c.responseTimeout = setTimeout(() => { c.inSubmission = false; options.timeoutCallback(); }, options.timeoutDuration);
+				if (fieldsValid()) { clearTimeout(c.responseTimeout); c.inSubmission = false; options.callback({ token: 'tok' }); }
+				else options.validationCallback('ccexp', false, 'Expiration date is invalid');
+			}),
+		};
+		return { c, opts: () => options };
+	};
+
+	it('Pay on an invalid field rejects at once, and the corrected retry goes through without waiting', async () => {
+		vi.useFakeTimers();
+		let valid = false;
+		const onInitError = vi.fn();
+		const { c, opts } = realisticCollect(() => valid);
+		const tokenize = prepareCardTokenization(c, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, onInitError);
+		opts().fieldsAvailableCallback();
+		await expect(tokenize()).rejects.toThrow('Check the expiry date (MM / YY)');
+		expect(c.inSubmission).toBe(false);
+		valid = true;
+		opts().validationCallback('ccexp', true, 'Success');
+		expect(await tokenize()).toBe('tok');
+		vi.advanceTimersByTime(60000);
+		expect(onInitError).not.toHaveBeenCalled();
+		vi.useRealTimers();
 	});
 
-	it('a field already reported invalid blocks Pay with its message; fixing it lets Pay through', async () => {
+	it('without resettable internals an invalid field ends at the response timeout with the field message', async () => {
+		vi.useFakeTimers();
+		let options: any;
+		const collect = {
+			configure: (opts: any) => { options = opts; },
+			startPaymentRequest: () => { options.validationCallback('ccnumber', false, 'Card number is invalid'); setTimeout(() => options.timeoutCallback(), options.timeoutDuration); },
+		};
+		const p = prepareCardTokenization(collect, { ccnumber: '#a', ccexp: '#b', cvv: '#c' })();
+		const assertion = expect(p).rejects.toThrow('Check the card number');
+		vi.advanceTimersByTime(20000);
+		await assertion;
+		vi.useRealTimers();
+	});
+
+	it('a field once reported invalid never blocks Pay by itself: Collect re-checks every time', async () => {
 		let options: any;
 		const start = vi.fn(() => options.callback({ token: 'tok' }));
 		const tokenize = prepareCardTokenization({ configure: (opts) => { options = opts; }, startPaymentRequest: start }, { ccnumber: '#a', ccexp: '#b', cvv: '#c' });
 		options.validationCallback('ccnumber', false, 'Card number is invalid');
-		await expect(tokenize()).rejects.toThrow('Check the card number');
-		expect(start).not.toHaveBeenCalled();
-		options.validationCallback('ccnumber', true, 'Success');
 		expect(await tokenize()).toBe('tok');
+		expect(start).toHaveBeenCalledOnce();
 	});
 
 	it('timeout produces a retryable error', async () => {

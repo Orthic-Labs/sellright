@@ -78,11 +78,25 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
 const FIELD_NAMES: Record<string, string> = { ccnumber: 'card number', ccexp: 'expiry date (MM / YY)', cvv: 'security code' };
 const invalidMessage = (field: string): string => `Check the ${FIELD_NAMES[field] ?? 'card details'} and try again.`;
 
+/** Collect.js internals (verified in the live secure.nmi.com/token/Collect.js, 2026-10-25): startPaymentRequest
+ *  sets inSubmission and arms responseTimeout; only a token or that timer clears them, never an invalid field. */
+type CollectInternals = { inSubmission?: boolean; responseTimeout?: ReturnType<typeof setTimeout> };
+const resetSubmission = (collect: NmiCollectJs): boolean => {
+  const c = collect as NmiCollectJs & CollectInternals;
+  if (typeof c.inSubmission !== 'boolean') return false;
+  if (c.responseTimeout !== undefined) clearTimeout(c.responseTimeout);
+  c.inSubmission = false;
+  return true;
+};
+
+/** Hosted fields that never report ready within this long count as failed to load. */
+export const FIELDS_INIT_TIMEOUT_MS = 30000;
+
 /** Configure before card entry; reconfiguring on Pay redraws the hosted fields. */
 export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void, onInitError?: (message: string) => void): () => Promise<string> {
   let pending: { resolve: (token: string) => void; reject: (error: Error) => void } | null = null;
   // Collect.js never calls `callback` while a hosted field is invalid: it reports each field through
-  // validationCallback instead. Without tracking that, Pay on a bad expiry or card number did nothing at all.
+  // validationCallback instead. Without handling that, Pay on a bad expiry or card number did nothing at all.
   const invalid = new Map<string, string>();
   const done = (token: string | null, error?: string) => {
     const request = pending;
@@ -91,6 +105,9 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
     if (token) request.resolve(token);
     else request.reject(new Error(error ?? 'Card validation failed — check the details and try again.'));
   };
+  // timeoutCallback only follows a submission, so field loading gets its own timer.
+  let ready = false;
+  const initTimer = setTimeout(() => { if (!ready) onInitError?.('Card fields timed out loading.'); }, FIELDS_INIT_TIMEOUT_MS);
   collect.configure({
       variant: 'inline',
       fields: {
@@ -105,22 +122,22 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
       // A tokenization that never answers ends in timeoutCallback (a retryable error), not an endless "Processing".
       timeoutDuration: 20000,
       validationCallback: (field, valid, message) => {
-        if (valid) invalid.delete(field);
-        else invalid.set(field, message);
-        if (!valid && pending) done(null, invalidMessage(field));
+        if (valid) { invalid.delete(field); return; }
+        invalid.set(field, message);
+        // During a submission: fail now when Collect can be returned to idle (so the corrected retry starts a fresh
+        // request); otherwise its timeout ends this attempt with the same message.
+        if (pending && resetSubmission(collect)) done(null, invalidMessage(field));
       },
-      // No tokenization pending = the hosted fields themselves never initialised: surface it, don't stay silently not-ready.
       timeoutCallback: () => {
-        if (pending) done(null, 'Card validation timed out — try again.');
-        else onInitError?.('Card fields timed out loading.');
+        const first = invalid.keys().next();
+        done(null, first.done ? 'Card validation timed out — try again.' : invalidMessage(first.value));
       },
       callback: (response) => done(response?.token ?? null),
-      fieldsAvailableCallback: onReady,
+      fieldsAvailableCallback: () => { ready = true; clearTimeout(initTimer); onReady?.(); },
   });
   return () => new Promise<string>((resolve, reject) => {
     if (pending) { reject(new Error('Card validation is already in progress')); return; }
-    const first = invalid.keys().next();
-    if (!first.done) { reject(new Error(invalidMessage(first.value))); return; }
+    // Always let Collect re-check the fields: a cached invalid state can be stale (autofill without a blur).
     pending = { resolve, reject };
     try { collect.startPaymentRequest(); }
     catch { done(null, 'Card validation could not start — try again.'); }
