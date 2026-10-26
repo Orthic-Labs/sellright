@@ -186,7 +186,7 @@ describe('POST /v1/admin/orders/{code}/fulfillments — partial fulfillment', ()
     expect(row.on_hand).toBe(3);
   });
 
-  it('notifyCustomer=false skips the customer email but the fulfillment still ships (webhook still fires)', async () => {
+  it('notifyCustomer=false from an old client is ignored: the customer is still emailed and the row records true (#380)', async () => {
     const { lineA } = await seedPaidOrder('PF-7');
     const res = await createFulfillment('PF-7', { lines: [{ orderLineId: lineA, quantity: 1 }], notifyCustomer: false });
     expect(res.status).toBe(200);
@@ -194,15 +194,15 @@ describe('POST /v1/admin/orders/{code}/fulfillments — partial fulfillment', ()
       const r = await tx.execute(sql`SELECT count(*)::int AS n FROM email_outbox WHERE recipient = 'shopper@partial-fulfillment.test'`);
       return (r.rows[0] as { n: number }).n;
     });
-    expect(emails).toBe(0);
+    expect(emails).toBe(1);
     const fulfillment = await withStore(STORE, async (tx) => {
       const r = await tx.execute(sql`SELECT notify_customer FROM fulfillment WHERE order_id = (SELECT id FROM "order" WHERE code = 'PF-7')`);
       return r.rows[0] as { notify_customer: boolean };
     });
-    expect(fulfillment.notify_customer).toBe(false);
+    expect(fulfillment.notify_customer).toBe(true);
   });
 
-  it('notifyCustomer=true (default) enqueues exactly one customer email per fulfillment', async () => {
+  it('enqueues exactly one customer email per fulfillment', async () => {
     const { lineA, lineB } = await seedPaidOrder('PF-8');
     await createFulfillment('PF-8', { lines: [{ orderLineId: lineA, quantity: 1 }] });
     await createFulfillment('PF-8', { lines: [{ orderLineId: lineB, quantity: 1 }] });

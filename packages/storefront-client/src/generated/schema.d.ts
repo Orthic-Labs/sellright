@@ -4265,8 +4265,6 @@ export interface paths {
                         }[];
                     } & {
                         fileName?: string;
-                        /** @default true */
-                        notify?: boolean;
                         /**
                          * @default paste
                          * @enum {string}
@@ -4289,6 +4287,27 @@ export interface paths {
                                 code: string;
                                 error: string;
                             }[];
+                            parse?: {
+                                columns: {
+                                    carrier: string | null;
+                                    order: string;
+                                    tracking: string;
+                                };
+                                header: string[] | null;
+                                skipped: {
+                                    amazon: number;
+                                    blank: number;
+                                    duplicate: number;
+                                };
+                                skippedRows: {
+                                    code: string;
+                                    line: number;
+                                    /** @enum {string} */
+                                    reason: "blank" | "amazon" | "duplicate";
+                                    tracking: string;
+                                }[];
+                                titleSkipped: boolean;
+                            } | null;
                             rows: {
                                 carrier: string | null;
                                 /** @enum {string} */
@@ -6828,8 +6847,6 @@ export interface paths {
                         }[];
                         /** Format: uuid */
                         locationId?: string;
-                        /** @default true */
-                        notifyCustomer?: boolean;
                         trackingCode?: string;
                     };
                 };

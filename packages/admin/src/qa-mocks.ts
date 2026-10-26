@@ -226,8 +226,8 @@ export function maybeMock(path: string, qs: URLSearchParams, init?: RequestInit)
   try { pageQs = new URLSearchParams(location.search); } catch { /* noop */ }
   const scenario = pageQs.get('scenario') || qs.get('qaScenario') || '';
   const m = init?.method?.toUpperCase() ?? 'GET';
-  // Only mock GETs in v1. Writes still hit the real network.
-  if (m !== 'GET') return null;
+  // Only GETs and the read-only dry-run POST (api.ts READ_ONLY_POSTS). Writes still hit the real network.
+  if (m !== 'GET' && !(m === 'POST' && path === '/import-tracking/preview')) return null;
   try {
     if (path === '/me') return { data: {
       email: 'owner@demo.test',
@@ -240,6 +240,28 @@ export function maybeMock(path: string, qs: URLSearchParams, init?: RequestInit)
     if (path.startsWith('/orders/') && path.endsWith('/invoice')) return null; // passthrough
     if (path.startsWith('/orders/') && !path.endsWith('/fulfill') && !path.endsWith('/cancel') && !path.endsWith('/refund') && !path.endsWith('/bulk-fulfill')) {
       return { data: makeOrderDetail(path.split('/').pop() || 'ORD-MOCK') };
+    }
+    // #380 fulfilment pages: open orders for Manual; the dry run of the real Avid sample (one Amazon order, left out),
+    // the response the API returns for it (admin-order-ops.parity.db.test.ts).
+    if (path === '/fulfillment/open-orders') return { data: { total: 4, items: [
+      { code: 'DD30362', placedAt: '2026-10-24T15:02:00Z', isPreOrder: false, email: 'jordan@example.com', name: 'Jordan Lee', state: 'Paid', country: 'US', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
+      { code: 'DD30364', placedAt: '2026-10-25T09:41:00Z', isPreOrder: false, email: 'sam@example.com', name: 'Sam Rivera', state: 'Paid', country: 'US', fulfillmentStatus: 'partially_fulfilled', items: [], shippedTracking: [] },
+      { code: 'DD30366', placedAt: '2026-10-25T18:20:00Z', isPreOrder: true, email: 'alex@example.com', name: 'Alex Chen', state: 'Paid', country: 'CA', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
+      { code: 'DD30367', placedAt: '2026-10-26T11:05:00Z', isPreOrder: false, email: 'casey@example.com', name: null, state: 'Paid', country: 'US', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
+    ] } };
+    if (path === '/import-tracking/recent') return { data: { items: [
+      { id: 'r1', at: '2026-10-24T16:10:00Z', actor: 'adrian@example.com', source: 'csv', fileName: 'ProductShipmentDatasheet_1024.csv', total: 14, shipped: 12, skipped: 2, emailsQueued: 12, notify: true },
+      { id: 'r2', at: '2026-10-23T15:42:00Z', actor: 'adrian@example.com', source: 'grid', fileName: null, total: 3, shipped: 3, skipped: 0, emailsQueued: 3, notify: true },
+    ] } };
+    if (path === '/import-tracking/preview' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body ?? '{}')) as { rows?: Array<{ code: string; tracking: string; carrier?: string | null }> };
+      if (body.rows?.length) return { data: { summary: { total: body.rows.length, importable: body.rows.length, byStatus: {} }, parse: null,
+        rows: body.rows.map((r, index) => ({ index, code: r.code, tracking: r.tracking, carrier: r.carrier ?? null, carrierSource: r.carrier ? 'given' : 'unknown', status: 'ready', message: 'ships the remaining items', items: [], customerEmail: 'x@example.com' })) } };
+      return { data: { rows: [], summary: { total: 0, importable: 0, byStatus: {} }, parse: {
+        titleSkipped: true, header: ['Owner', 'OrderId'], columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null },
+        skipped: { blank: 0, amazon: 1, duplicate: 0 },
+        skippedRows: [{ line: 3, code: '111-0237367-7778662', tracking: '9400150106151447202527', reason: 'amazon' }],
+      } } };
     }
     if (path === '/inventory') return { data: makeInventory() };
     if (path === '/products' && qs.get('q') === '__qa-empty__') return { data: makeProducts(0, 'empty') };

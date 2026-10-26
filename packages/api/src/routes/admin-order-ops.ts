@@ -324,7 +324,6 @@ const summarize = (rows: PlannedRow[]) => {
   for (const r of rows) by[r.status] = (by[r.status] ?? 0) + 1;
   return { total: rows.length, importable: rows.filter((r) => IMPORTABLE.has(r.status)).length, byStatus: by };
 };
-const rowsFromBody = (b: z.infer<typeof TrackingBody>): TrackingRowInput[] => parsedBody(b).rows;
 /** Rows of the request plus, for an uploaded/pasted file, how it was read (#376: shown in the preview). */
 function parsedBody(b: z.infer<typeof TrackingBody>): { rows: TrackingRowInput[]; info: TrackingParseInfo | null } {
   if (b.rows?.length) return { rows: b.rows.map((r) => ({ code: r.code ?? '', tracking: r.tracking ?? '', carrier: r.carrier })), info: null };
@@ -367,20 +366,20 @@ adminOrderOps.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/import-tracking', summary: 'Bulk import tracking numbers (creates Shipped fulfillments); only rows that validate are imported',
     request: { body: { content: J(TrackingBody.and(z.object({
-      notify: z.boolean().default(true),
       source: z.enum(['paste', 'csv', 'grid']).default('paste'),
       fileName: z.string().max(200).optional(),
     }))) } },
     responses: { 200: { description: 'OK', content: J(z.object({
       updated: z.number().int(), errors: z.array(z.object({ code: z.string(), error: z.string() })),
       emailsQueued: z.number().int(), skipped: z.number().int(), batchId: z.string(), rows: z.array(PlannedRowSchema.extend({ imported: z.boolean() })),
+      parse: ParseInfoSchema.nullable().optional(),
     })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const body = c.req.valid('json');
-    const rowsIn = rowsFromBody(body);
+    const { rows: rowsIn, info } = parsedBody(body);
     if (!rowsIn.length) throw new HttpError(400, 'no rows found');
     if (rowsIn.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
     const batchId = randomUUID();
@@ -401,7 +400,7 @@ adminOrderOps.openapi(
         let dedupe = `shipping_notification:${o.id}:Shipped`;
         const shipNow = (row._lines ?? []).map((l) => ({ l, ship: l.quantity - l.fulfilledQty - l.cancelledQty })).filter((x) => x.ship > 0);
         if (row.status === 'ready' && shipNow.length > 0) {
-          const [f] = await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier: row.carrier, notifyCustomer: body.notify }).returning({ id: s.fulfillment.id });
+          const [f] = await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier: row.carrier, notifyCustomer: true }).returning({ id: s.fulfillment.id });
           fulfillmentId = f!.id;
           dedupe = `shipping_notification:${fulfillmentId}:Shipped`;
           await tx.insert(s.fulfillmentLine).values(shipNow.map(({ l, ship }) => ({ storeId: st.storeId, fulfillmentId, orderLineId: l.id, quantity: ship })));
@@ -420,11 +419,12 @@ adminOrderOps.openapi(
           fulfillmentId = target.id;
           await tx.update(s.fulfillment).set({ state: 'Shipped', trackingCode: row.tracking, carrier: row.carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, target.id));
         }
-        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier: row.carrier, batchId, fulfillmentId, notify: body.notify } });
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier: row.carrier, batchId, fulfillmentId, notify: true } });
         // WP2: emit order.shipped (same txn => atomic with the Shipped transition).
         await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: row.tracking, carrier: row.carrier });
         // SR-05/SR-12: durable outbox send inside the same txn — never an inline post-commit send.
-        if (body.notify && row.customerEmail) {
+        // #380: every shipment emails the customer (guests by their checkout contact); the dedupe key keeps it to one.
+        if (row.customerEmail) {
           const queued = await enqueueShippingNotification(tx, st.storeId, storeCtx, row.customerEmail, { code: o.code, trackingCode: row.tracking, carrier: row.carrier, dedupeKey: dedupe });
           if (queued) emailsQueued++;
         }
@@ -433,11 +433,11 @@ adminOrderOps.openapi(
       }
       const skipped = planned.length - updated;
       const errors = planned.filter((r) => !imported.has(r.index)).map((r) => ({ code: r.code || '(blank)', error: r.message }));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tracking_import', entityId: batchId, action: 'batch', data: { source: body.source, fileName: body.fileName ?? null, total: planned.length, shipped: updated, skipped, emailsQueued, notify: body.notify, errors: errors.slice(0, 50) } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tracking_import', entityId: batchId, action: 'batch', data: { source: body.source, fileName: body.fileName ?? null, total: planned.length, shipped: updated, skipped, emailsQueued, notify: true, errors: errors.slice(0, 50) } });
       return { updated, errors, emailsQueued, skipped, rows: planned.map((r) => ({ ...publicRow(r), imported: imported.has(r.index) })) };
     });
     if (stockChanged) onStockChanged(st.slug);
-    return c.json({ ...result, batchId } as never, 200);
+    return c.json({ ...result, batchId, parse: info } as never, 200);
   }),
 );
 
@@ -477,13 +477,13 @@ adminOrderOps.openapi(
       const where = sql`"order"."deleted_at" is null and "order"."state" in ('Paid','PartiallyRefunded') and ${fulfillmentStatusSql()} in ('unfulfilled','partially_fulfilled')${q ? sql` and ${orderSearchSql(q, 'cust')}` : sql``}`;
       const r = await tx.execute(sql`
         select "order"."id" as id, "order"."code" as code, "order"."placed_at" as placed_at, "order"."created_at" as created_at, "order"."is_pre_order" as is_pre_order,
-          ${contact.email} as email, ${contact.name} as name,
+          ${contact.email} as email, ${contact.name} as name, "order"."state"::text as state,
           "order"."shipping_address"->>'country' as country, ${fulfillmentStatusSql()} as fulfillment_status
         from "order" left join customer cust on cust.id = "order"."customer_id"
         where ${where}
         order by coalesce("order"."placed_at", "order"."created_at") asc, "order"."code"
         limit ${limit}`);
-      const orders = (r as unknown as { rows: Array<{ id: string; code: string; placed_at: Date | null; created_at: Date; is_pre_order: boolean; email: string | null; name: string | null; country: string | null; fulfillment_status: string }> }).rows;
+      const orders = (r as unknown as { rows: Array<{ id: string; code: string; placed_at: Date | null; created_at: Date; is_pre_order: boolean; email: string | null; name: string | null; state: string; country: string | null; fulfillment_status: string }> }).rows;
       const [cnt] = (await tx.execute(sql`select count(*)::int as n from "order" left join customer cust on cust.id = "order"."customer_id" where ${where}`) as unknown as { rows: Array<{ n: number }> }).rows;
       const ids = orders.map((o) => o.id);
       const lines = ids.length ? await tx.select().from(s.orderLine).where(inArray(s.orderLine.orderId, ids)) : [];
@@ -491,7 +491,7 @@ adminOrderOps.openapi(
       return {
         total: cnt?.n ?? 0,
         items: orders.map((o) => ({
-          code: o.code, placedAt: new Date(o.placed_at ?? o.created_at).toISOString(), isPreOrder: o.is_pre_order, email: o.email, name: o.name, country: o.country, fulfillmentStatus: o.fulfillment_status,
+          code: o.code, placedAt: new Date(o.placed_at ?? o.created_at).toISOString(), isPreOrder: o.is_pre_order, email: o.email, name: o.name, state: o.state, country: o.country, fulfillmentStatus: o.fulfillment_status,
           items: remainingItems(lines.filter((l) => l.orderId === o.id).map((l) => ({ sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty }))),
           shippedTracking: ful.filter((f) => f.orderId === o.id && f.trackingCode).map((f) => f.trackingCode),
         })),

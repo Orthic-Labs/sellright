@@ -29,7 +29,7 @@ const GROUPS: NavGroup[] = [
   ]},
   // #376: Vendure had its own Fulfilment section (order-tools); same two tools here.
   { id: 'fulfilment', label: 'Fulfilment', defaultOpen: true, items: [
-    { to: '/fulfilment/upload', label: 'Upload', icon: FileUp },
+    { to: '/fulfilment/upload', label: 'CSV Upload', icon: FileUp },
     { to: '/fulfilment/manual', label: 'Manual', icon: ListChecks },
   ] },
   { id: 'catalog', label: 'Catalog', defaultOpen: true, items: [

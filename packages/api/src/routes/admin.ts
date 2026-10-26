@@ -648,7 +648,6 @@ admin.openapi(
           locationId: z.string().uuid().optional(),
           trackingCode: z.string().optional(),
           carrier: z.string().optional(),
-          notifyCustomer: z.boolean().default(true),
         })),
       },
     },
@@ -697,7 +696,8 @@ admin.openapi(
       const [f] = await tx.insert(s.fulfillment).values({
         storeId: st.storeId, orderId: o.id, state: 'Shipped',
         trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null,
-        locationId: body.locationId ?? null, notifyCustomer: body.notifyCustomer,
+        // #380: the customer is always emailed (Adrian: "emails go when order is fulfilled"); the column stays for history.
+        locationId: body.locationId ?? null, notifyCustomer: true,
       }).returning({ id: s.fulfillment.id });
       const fulfillmentId = f!.id;
       await tx.insert(s.fulfillmentLine).values(body.lines.map((l) => ({ storeId: st.storeId, fulfillmentId, orderLineId: l.orderLineId, quantity: l.quantity })));
@@ -720,13 +720,13 @@ admin.openapi(
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'fulfill', toState: 'Shipped', data: { partial: true, fulfillmentId, lines: body.lines.length, locationId: body.locationId ?? null } });
       // Webhook fires unconditionally (3rd-party subscribers care about every
-      // shipment); the CUSTOMER email is the thing notifyCustomer gates. Each
+      // shipment); the CUSTOMER email always goes too (#380: no opt-out). Each
       // fulfillment gets its own dedupeKey (keyed on fulfillmentId, not
       // orderId:Shipped like the whole-order route) — a second partial
       // shipment on the same order must send its own email, not be treated as
       // a duplicate of the first.
       await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, partial: true });
-      const recipient = body.notifyCustomer ? await resolveOrderRecipient(tx, o) : null;
+      const recipient = await resolveOrderRecipient(tx, o);
       if (recipient) {
         const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
         await enqueueShippingNotification(tx, st.storeId,

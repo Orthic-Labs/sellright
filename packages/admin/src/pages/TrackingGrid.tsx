@@ -1,151 +1,150 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { ArrowLeft, FileUp } from 'lucide-react';
+// #380: Manual Tracking Entry, a 1:1 port of the previous admin's order-tools ManualTrackingPage (same flow, controls,
+// order and copy; this admin's colours and fonts).
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { date } from '../lib/format';
-import { PageHeader, SearchInput, Spinner, InlineAlert, Badge, ErrorState } from '../components/ui';
-import { CARRIER_OPTIONS, inferCarrier } from '../lib/carrier';
-import { STATUS_LABEL, inputKey, isImportable, itemsSummary, type ImportResponse, type PreviewResponse, type PreviewRow } from '../lib/tracking';
+import { PageHeader } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
+import { ResultTable, StatusBadge } from '../components/FulfilmentResult';
+import { dryRunResult, importResult, inferProvider, openOrderStatus, type FulfilmentResult } from '../lib/fulfilment';
+import type { ImportResponse, PreviewResponse } from '../lib/tracking';
 
-interface OpenOrder {
-  code: string; placedAt: string; isPreOrder: boolean; email: string | null; name: string | null; country: string | null;
-  fulfillmentStatus: string; items: { sku: string; name: string; quantity: number }[]; shippedTracking: string[];
-}
-interface Entry { tracking: string; carrier: string }
+interface OpenOrderRow { code: string; placedAt: string; isPreOrder: boolean; email: string | null; name: string | null; state?: string; fulfillmentStatus: string }
+interface OpenOrder { orderCode: string; customerName: string; orderStatus: string; orderDate: string }
 
-/** Manual tracking (Vendure order-tools parity, #376): every paid order still to ship in one table, filter by order or
- *  name, a tracking number per row, one Submit for all filled rows (the server applies only rows that validate). */
 export default function TrackingGrid() {
   const { store } = useAuth();
   const qc = useQueryClient();
-  const [q, setQ] = useState('');
-  const [entries, setEntries] = useState<Record<string, Entry>>({});
-  const [notify, setNotify] = useState(true);
-  const [preview, setPreview] = useState<PreviewResponse | null>(null);
-  const [previewKey, setPreviewKey] = useState('');
-  const [result, setResult] = useState<ImportResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirmDialog();
+  const [orders, setOrders] = useState<OpenOrder[] | null>(null);
+  const [tracking, setTracking] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<FulfilmentResult | null>(null);
+  const [isDryRun, setIsDryRun] = useState(true);
+  const [filter, setFilter] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  const open = useQuery({
-    queryKey: ['open-orders', store?.slug, q],
-    queryFn: ({ signal }) => api.get<{ items: OpenOrder[]; total: number }>(`/fulfillment/open-orders?${new URLSearchParams({ q, limit: '2000' })}`, { signal }),
-    placeholderData: keepPreviousData,
-  });
-  const orders = open.data?.items ?? [];
-
-  const filled = useMemo(() => Object.entries(entries).filter(([, e]) => e.tracking.trim()).map(([code, e]) => ({ code, tracking: e.tracking, carrier: e.carrier || null })), [entries]);
-  const key = inputKey(filled, notify);
-  const stale = !!preview && key !== previewKey;
-  const verdicts = useMemo(() => new Map((preview?.rows ?? []).map((r) => [r.code, r])), [preview]);
-  const ready = (preview?.rows ?? []).filter((r) => isImportable(r.status));
-
-  const dryRun = useMutation({
-    mutationFn: () => api.post<PreviewResponse>('/import-tracking/preview', { rows: filled }),
-    onSuccess: (r) => { setPreview(r); setPreviewKey(key); setResult(null); setErr(null); },
-    onError: (e) => setErr((e as Error).message),
-  });
-  const confirm = useMutation({
-    mutationFn: () => api.post<ImportResponse>('/import-tracking', { rows: filled, notify, source: 'grid' }),
-    onSuccess: (r) => {
-      setResult(r); setPreview(null); setErr(null);
-      // Clear the rows that shipped; keep the rest so they can be fixed and retried.
-      const done = new Set(r.rows.filter((x) => x.imported).map((x) => x.code));
-      setEntries((cur) => Object.fromEntries(Object.entries(cur).filter(([code]) => !done.has(code.toUpperCase()))));
-      void qc.invalidateQueries({ queryKey: ['open-orders', store?.slug] });
-      void qc.invalidateQueries({ queryKey: ['orders', store?.slug] });
-      void qc.invalidateQueries({ queryKey: ['tracking-imports', store?.slug] });
-    },
-    onError: (e) => setErr((e as Error).message),
-  });
-
-  const setEntry = (code: string, patch: Partial<Entry>) => setEntries((cur) => ({ ...cur, [code]: { ...{ tracking: '', carrier: '' }, ...cur[code], ...patch } }));
-
-  // Pasting a column of numbers (e.g. from a spreadsheet) fills downward from this row.
-  function onPaste(i: number, e: React.ClipboardEvent<HTMLInputElement>) {
-    const lines = e.clipboardData.getData('text').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (lines.length < 2) return;
-    e.preventDefault();
-    setEntries((cur) => {
-      const next = { ...cur };
-      lines.forEach((tracking, k) => { const o = orders[i + k]; if (o) next[o.code] = { ...{ tracking: '', carrier: '' }, ...next[o.code], tracking: tracking.split(/[\t,]/)[0]!.trim() }; });
-      return next;
-    });
+  async function loadOrders() {
+    setLoading(true); setResult(null); setTracking({}); setError(null);
+    try {
+      const res = await api.get<{ items: OpenOrderRow[]; total: number }>('/fulfillment/open-orders?limit=2000');
+      setOrders(res.items.map((o) => ({ orderCode: o.code, customerName: o.name ?? o.email ?? '', orderStatus: openOrderStatus(o), orderDate: date(o.placedAt) })));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load open orders.');
+    } finally { setLoading(false); }
   }
 
+  const filledCount = Object.values(tracking).filter((v) => v.trim()).length;
+
+  const buildEntries = () =>
+    Object.entries(tracking)
+      .filter(([, v]) => v.trim())
+      .map(([code, t]) => ({ code, tracking: t.trim(), carrier: inferProvider(t.trim()) || null }));
+
+  async function run(dryRun: boolean) {
+    const rows = buildEntries();
+    if (!rows.length) return;
+    setSubmitting(true); setIsDryRun(dryRun); setError(null);
+    try {
+      if (dryRun) setResult(dryRunResult(await api.post<PreviewResponse>('/import-tracking/preview', { rows })));
+      else {
+        setResult(importResult(await api.post<ImportResponse>('/import-tracking', { rows, source: 'grid' })));
+        void qc.invalidateQueries({ queryKey: ['orders', store?.slug] });
+        void qc.invalidateQueries({ queryKey: ['tracking-imports', store?.slug] });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The tracking request failed.');
+    } finally { setSubmitting(false); }
+  }
+
+  async function submit() {
+    const ok = await confirm({
+      title: 'Confirm Tracking Update',
+      description: `This will ship ${filledCount} order${filledCount !== 1 ? 's' : ''} and send customer shipping notifications. Run Dry Run first to preview.`,
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Confirm Submit',
+    });
+    if (ok) await run(false);
+  }
+
+  const filtered = orders?.filter((o) =>
+    !filter || o.orderCode.toLowerCase().includes(filter.toLowerCase()) || o.customerName.toLowerCase().includes(filter.toLowerCase()),
+  ) ?? [];
+
   return (
-    <>
-      <Link to="/orders" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Orders</Link>
-      <PageHeader title="Manual tracking" subtitle="Paid orders waiting to ship, oldest first. Type or paste a tracking number on each order you shipped, then Submit." actions={
-        <Link to="/fulfilment/upload" className="btn-ghost whitespace-nowrap"><FileUp size={15} /> Upload a file instead</Link>
-      } />
-      {err && <div className="mb-3"><InlineAlert tone="critical">{err}</InlineAlert></div>}
-      {result && (
-        <div className="mb-3"><InlineAlert tone={result.skipped ? 'attention' : 'positive'} title={`${result.updated} order${result.updated === 1 ? '' : 's'} marked shipped, ${result.emailsQueued} email${result.emailsQueued === 1 ? '' : 's'} queued.`}>
-          {result.skipped > 0 && <ul className="text-xs mt-1">{result.errors.slice(0, 10).map((e, i) => <li key={i}><span className="font-mono">{e.code}</span> — {e.error}</li>)}</ul>}
-        </InlineAlert></div>
-      )}
+    <div className="max-w-[1040px]">
+      {dialog}
+      <PageHeader title="Manual Tracking Entry" subtitle="Load all open orders, fill in tracking numbers for any or all of them, then submit." />
 
-      <div className="flex flex-wrap items-center gap-3 mb-3">
-        <SearchInput value={q} onChange={setQ} placeholder="Filter by order number or name" />
-        <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> Email customers</label>
-        <span className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-gray-500" aria-live="polite">{open.data ? `${open.data.total} open order${open.data.total === 1 ? '' : 's'}, ` : ''}{filled.length} tracking number{filled.length === 1 ? '' : 's'} entered</span>
-          <button className="btn-ghost" disabled={filled.length === 0 || dryRun.isPending || confirm.isPending} onClick={() => dryRun.mutate()}>{dryRun.isPending ? <Spinner /> : 'Check first'}</button>
-          <button className="btn-primary" disabled={filled.length === 0 || confirm.isPending || (!!preview && !stale && ready.length === 0)} onClick={() => confirm.mutate()}>{confirm.isPending ? <Spinner className="text-white" /> : `Submit ${filled.length}`}</button>
-        </span>
-      </div>
-      {stale && <div className="mb-3"><InlineAlert tone="attention">You changed rows after checking them; the check column is cleared. Submit still validates every row.</InlineAlert></div>}
-
-      {open.error ? <div className="card"><ErrorState message={(open.error as Error).message} onRetry={() => open.refetch()} /></div> : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm" style={{ minWidth: '60rem' }}>
-            <thead>
-              <tr>
-                <th className="th text-left w-[14%]">Order</th>
-                <th className="th text-left w-[18%]">Customer</th>
-                <th className="th text-left w-[20%]">Still to ship</th>
-                <th className="th text-left w-[22%]">Tracking number</th>
-                <th className="th text-left w-[12%]">Carrier</th>
-                <th className="th text-left">Dry run</th>
-              </tr>
-            </thead>
-            <tbody className={open.isFetching ? 'opacity-60' : ''}>
-              {orders.map((o, i) => {
-                const e = entries[o.code]; const detected = e?.tracking ? inferCarrier(e.tracking) : null;
-                const v: PreviewRow | undefined = stale ? undefined : verdicts.get(o.code);
-                return (
-                  <tr key={o.code}>
-                    <td className="td"><span className="font-medium">{o.code}</span>
-                      <div className="text-xs text-gray-400">{date(o.placedAt)}{o.isPreOrder && <span className="ml-1 text-warning">pre-order</span>}</div></td>
-                    <td className="td min-w-0"><div className="truncate">{o.name ?? o.email ?? '—'}</div>{o.name && o.email && <div className="truncate text-xs text-gray-500">{o.email}</div>}{o.country && <div className="text-xs text-gray-400">{o.country}</div>}</td>
-                    <td className="td text-xs">
-                      {o.items.length ? o.items.map((it) => <div key={it.sku} title={it.name}>{it.quantity}× {it.sku}</div>) : <span className="text-gray-400">—</span>}
-                      {o.fulfillmentStatus === 'partially_fulfilled' && <div className="text-info mt-0.5">partly shipped{o.shippedTracking.length ? `: ${o.shippedTracking.join(', ')}` : ''}</div>}
-                    </td>
-                    <td className="td"><input className="input py-1.5! font-mono text-xs!" aria-label={`Tracking number for ${o.code}`} value={e?.tracking ?? ''} placeholder="Paste tracking" onChange={(ev) => setEntry(o.code, { tracking: ev.target.value })} onPaste={(ev) => onPaste(i, ev)} /></td>
-                    <td className="td">
-                      <select className="input py-1.5! text-xs!" aria-label={`Carrier for ${o.code}`} value={e?.carrier ?? ''} onChange={(ev) => setEntry(o.code, { carrier: ev.target.value })}>
-                        <option value="">{detected ? `Auto: ${detected}` : 'Auto'}</option>
-                        {CARRIER_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </td>
-                    <td className="td text-xs">
-                      {v ? <><Badge value={v.status} tone={STATUS_LABEL[v.status].tone} label={STATUS_LABEL[v.status].label} />
-                        <div className="text-gray-500 mt-0.5">{isImportable(v.status) && v.items.length ? `Ships ${itemsSummary(v.items)}` : v.message}{isImportable(v.status) && notify && v.customerEmail ? ' · emails customer' : ''}</div></>
-                        : <span className="text-gray-300">—</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-              {!open.isLoading && orders.length === 0 && <tr><td className="td text-gray-400 py-8 text-center" colSpan={6}>{q ? 'No open orders match your search.' : 'Nothing is waiting to ship.'}</td></tr>}
-              {open.isLoading && <tr><td className="td text-gray-400" colSpan={6}><Spinner /> Loading…</td></tr>}
-            </tbody>
-          </table>
+      {!orders && (
+        <div className="card p-6 mb-4">
+          <button className="btn-primary" disabled={loading} onClick={() => void loadOrders()}>{loading ? 'Loading orders...' : 'Load Open Orders'}</button>
         </div>
       )}
-      {open.data && open.data.total > orders.length && <p className="text-xs text-gray-400 mt-2">Showing the oldest {orders.length} of {open.data.total}. Ship these, or search for a specific order.</p>}
-    </>
+
+      {error && <p role="alert" className="text-sm text-danger font-medium mb-4">{error}</p>}
+
+      {orders && (
+        <div>
+          <div className="card p-6 mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3.5">
+              <span className="text-sm text-gray-500">{`${orders.length} open order${orders.length !== 1 ? 's' : ''} — ${filledCount} tracking number${filledCount !== 1 ? 's' : ''} entered`}</span>
+              <div className="flex items-center gap-2">
+                <input type="text" className="input py-1.5! text-sm w-[200px]" placeholder="Filter orders..." aria-label="Filter orders" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                <button className="btn-ghost" onClick={() => void loadOrders()}>Refresh</button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr>
+                    <th className="th text-left">Order</th>
+                    <th className="th text-left">Customer</th>
+                    <th className="th text-left">Status</th>
+                    <th className="th text-left">Date</th>
+                    <th className="th text-left">Tracking Number</th>
+                    <th className="th text-left w-[60px]">Carrier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((order) => {
+                    const value = tracking[order.orderCode] ?? '';
+                    return (
+                      <tr key={order.orderCode} className={value.trim() ? 'bg-success-soft' : ''}>
+                        <td className="td font-mono text-xs">{order.orderCode}</td>
+                        <td className="td">{order.customerName}</td>
+                        <td className="td"><StatusBadge state={order.orderStatus} /></td>
+                        <td className="td text-xs text-gray-400">{order.orderDate}</td>
+                        <td className="td">
+                          <input type="text" className="input py-1! text-xs! font-mono w-[200px]" placeholder="Paste tracking number" aria-label={`Tracking number for ${order.orderCode}`}
+                            value={value} onChange={(e) => setTracking((prev) => ({ ...prev, [order.orderCode]: e.target.value }))} />
+                        </td>
+                        <td className="td text-xs text-gray-400">{value.trim() ? inferProvider(value.trim()) || '—' : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {filledCount > 0 && (
+            <div className="card p-6 mb-4 bg-surface-2">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm text-gray-700">{`${filledCount} order${filledCount !== 1 ? 's' : ''} ready to update`}</span>
+                <button className="btn-ghost" disabled={submitting} onClick={() => void run(true)}>{submitting && isDryRun ? 'Running...' : 'Dry Run'}</button>
+                <button className="btn-primary" disabled={submitting} onClick={() => void submit()}>{submitting && !isDryRun ? 'Processing...' : 'Submit'}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {result && <ResultTable result={result} isDryRun={isDryRun} />}
+    </div>
   );
 }

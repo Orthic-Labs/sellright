@@ -15717,10 +15717,6 @@
                   },
                   "carrier": {
                     "type": "string"
-                  },
-                  "notifyCustomer": {
-                    "type": "boolean",
-                    "default": true
                   }
                 },
                 "required": [
@@ -22078,10 +22074,6 @@
                   {
                     "type": "object",
                     "properties": {
-                      "notify": {
-                        "type": "boolean",
-                        "default": true
-                      },
                       "source": {
                         "type": "string",
                         "enum": [
@@ -22217,6 +22209,99 @@
                           "imported"
                         ]
                       }
+                    },
+                    "parse": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "titleSkipped": {
+                          "type": "boolean"
+                        },
+                        "header": {
+                          "type": "array",
+                          "nullable": true,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "columns": {
+                          "type": "object",
+                          "properties": {
+                            "order": {
+                              "type": "string"
+                            },
+                            "tracking": {
+                              "type": "string"
+                            },
+                            "carrier": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "order",
+                            "tracking",
+                            "carrier"
+                          ]
+                        },
+                        "skipped": {
+                          "type": "object",
+                          "properties": {
+                            "blank": {
+                              "type": "integer"
+                            },
+                            "amazon": {
+                              "type": "integer"
+                            },
+                            "duplicate": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "blank",
+                            "amazon",
+                            "duplicate"
+                          ]
+                        },
+                        "skippedRows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "line": {
+                                "type": "integer"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "tracking": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "blank",
+                                  "amazon",
+                                  "duplicate"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "line",
+                              "code",
+                              "tracking",
+                              "reason"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "titleSkipped",
+                        "header",
+                        "columns",
+                        "skipped",
+                        "skippedRows"
+                      ]
                     }
                   },
                   "required": [

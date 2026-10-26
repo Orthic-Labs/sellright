@@ -112,12 +112,12 @@ describe('guest shipping notification recipient', () => {
     expect(await shippingRecipients()).toEqual([]);
   });
 
-  it('POST /fulfillments (partial) emails the guest contact, and notifyCustomer=false suppresses it', async () => {
+  it('POST /fulfillments (partial) emails the guest contact; notifyCustomer=false from an old client no longer suppresses it (#380)', async () => {
     const a = await seedOrder('GS-5', { contact: 'partial@example.com' });
     const b = await seedOrder('GS-6', { contact: 'quiet@example.com' });
     expect((await post('/v1/admin/orders/GS-5/fulfillments', { lines: [{ orderLineId: a.lineId, quantity: 1 }] })).status).toBe(200);
     expect((await post('/v1/admin/orders/GS-6/fulfillments', { lines: [{ orderLineId: b.lineId, quantity: 1 }], notifyCustomer: false })).status).toBe(200);
-    expect(await shippingRecipients()).toEqual(['partial@example.com']);
+    expect(await shippingRecipients()).toEqual(['partial@example.com', 'quiet@example.com']);
   });
 
   it('POST /bulk-fulfill emails guest contacts', async () => {

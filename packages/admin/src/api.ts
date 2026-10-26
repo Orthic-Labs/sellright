@@ -36,14 +36,17 @@ function apiError(status: number, json: Record<string, unknown> | null | undefin
   return err;
 }
 
+/** POSTs that only read (dry runs): QA mode may mock them like GETs. Every writing POST still passes through. */
+const READ_ONLY_POSTS = new Set(['/import-tracking/preview']);
+
 async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   // QA mock short-circuit — gated by VITE_QA_MOCK + ?qa=1 in qa-mocks.ts.
   // Mutations always pass through so we don't accidentally let QA mode write
   // to the real DB. The mock is at the network boundary, NOT inside pages.
-  if (method === 'GET') {
+  const pathOnly = path.split('?')[0]!;
+  if (method === 'GET' || (method === 'POST' && READ_ONLY_POSTS.has(pathOnly))) {
     const qs = new URLSearchParams(path.includes('?') ? path.split('?').pop() || '' : '');
-    const pathOnly = path.split('?')[0]!;
-    const mock = maybeMock(pathOnly, qs, { method });
+    const mock = maybeMock(pathOnly, qs, { method, body: body === undefined ? undefined : JSON.stringify(body) });
     if (mock) {
       if (mock.threw) throw new ApiError(500, mock.threw);
       return mock.data as T;

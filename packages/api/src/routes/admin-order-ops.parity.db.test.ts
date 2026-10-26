@@ -185,11 +185,11 @@ describe('tracking import: preview, commit, history', () => {
     expect(recent.items[0]).toMatchObject({ shipped: 1, skipped: 2, fileName: 'ship.csv', source: 'csv' });
   });
 
-  it('skips a row whose tracking number is already on the order and honours notify=false', async () => {
+  it('skips a row whose tracking number is already on the order; the customer is emailed even if an old client sends notify=false (#380)', async () => {
     await seedOrder({ code: 'IMP-3', lines: [A] });
     const first = await post('/v1/admin/import-tracking', { rows: [{ code: 'IMP-3', tracking: 'ABC-1', carrier: 'DHL' }], notify: false });
     const f = (await first.json()) as { updated: number; emailsQueued: number };
-    expect(f).toMatchObject({ updated: 1, emailsQueued: 0 });
+    expect(f).toMatchObject({ updated: 1, emailsQueued: 1 });
     const again = await post('/v1/admin/import-tracking/preview', { rows: [{ code: 'IMP-3', tracking: 'abc-1' }] });
     expect(((await again.json()) as { rows: Array<{ status: string }> }).rows[0]!.status).toBe('already_shipped');
   });

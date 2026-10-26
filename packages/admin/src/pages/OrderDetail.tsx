@@ -62,7 +62,6 @@ export default function OrderDetailPage() {
   const [fulfillLocation, setFulfillLocation] = useState('');
   const [tracking, setTracking] = useState('');
   const [carrier, setCarrier] = useState('');
-  const [notifyCustomer, setNotifyCustomer] = useState(true);
 
   const fulfill = useMutation({
     mutationFn: () => {
@@ -72,7 +71,7 @@ export default function OrderDetailPage() {
       if (!lines.length) throw new Error('Select at least one line to ship');
       return api.post(`/orders/${encodeURIComponent(code)}/fulfillments`, {
         lines, locationId: fulfillLocation || undefined,
-        trackingCode: tracking || undefined, carrier: carrier || undefined, notifyCustomer,
+        trackingCode: tracking || undefined, carrier: carrier || undefined,
       });
     },
     onSuccess: () => {
@@ -281,10 +280,6 @@ export default function OrderDetailPage() {
                     </select>
                   </Field>
                 )}
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" className="h-4 w-4 accent-brand" checked={notifyCustomer} onChange={(e) => setNotifyCustomer(e.target.checked)} />
-                  Notify customer by email
-                </label>
                 <button className="btn-primary" disabled={fulfill.isPending} onClick={() => fulfill.mutate()}>
                   {fulfill.isPending ? <Spinner className="text-white" /> : <><Truck size={16} /> Create fulfillment</>}
                 </button>
@@ -309,10 +304,12 @@ export default function OrderDetailPage() {
                     <div key={f.id} className="text-xs text-gray-500 flex items-center justify-between gap-2 flex-wrap">
                       <span>
                         <StatusBadge value={f.state} />{' '}
-                        {f.lines.length > 0 && `${f.lines.reduce((n, l) => n + l.quantity, 0)} item${f.lines.reduce((n, l) => n + l.quantity, 0) === 1 ? '' : 's'} · `}
-                        {f.trackingCode ? `${f.carrier ?? ''} ${f.trackingCode} · ` : ''}
-                        {loc ? `${loc.name} · ` : ''}
-                        {f.notifyCustomer ? 'customer notified' : 'no customer email'}
+                        {/* #380: the customer is always emailed on shipping, so no notified / not-notified label. */}
+                        {[
+                          f.lines.length > 0 ? `${f.lines.reduce((n, l) => n + l.quantity, 0)} item${f.lines.reduce((n, l) => n + l.quantity, 0) === 1 ? '' : 's'}` : '',
+                          f.trackingCode ? `${f.carrier ?? ''} ${f.trackingCode}`.trim() : '',
+                          loc ? loc.name : '',
+                        ].filter(Boolean).join(' · ')}
                       </span>
                       <span>{dateTime(f.createdAt)}</span>
                     </div>
