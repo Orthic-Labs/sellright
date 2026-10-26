@@ -31,9 +31,11 @@ export interface NmiCollectJs {
     invalidCss?: Record<string, string>;
     timeoutDuration?: number;
     validationCallback?: (field: string, valid: boolean, message: string) => void;
+    /** Inline variant: fires once the card number validates, with the card details Collect.js looked up for it. */
+    lookUpCallback?: (card: { type?: string } | null | undefined) => void;
     timeoutCallback?: () => void;
     fieldsAvailableCallback?: () => void;
-    callback?: (response: { token: string } | null) => void;
+    callback?: (response: { token: string; card?: { number?: string; type?: string } } | null) => void;
   }): void;
   startPaymentRequest(): void;
   completePaymentResponse?(resp: { token?: string }): void;
@@ -94,6 +96,57 @@ const invalidMessage = (field: string): string => `Check the ${FIELD_NAMES[field
 /** True for the card-field messages above: raised before any charge, so no order-state check is needed to show them. */
 export const isCardFieldMessage = (message: string): boolean => /^Check the .+ and try again\.$/.test(message);
 
+/** The hosted fields, by the names Collect.js reports them under. */
+export type CardField = 'ccnumber' | 'ccexp' | 'cvv';
+const CARD_FIELDS: readonly string[] = ['ccnumber', 'ccexp', 'cvv'];
+
+/** What the shopper sees under a hosted field. Collect.js reports "Field is empty" for a field left blank and its own
+ *  wording otherwise; the form speaks in one voice either way. */
+export function cardFieldHint(field: CardField, message: string): string {
+  const empty = /empty/i.test(message);
+  switch (field) {
+    case 'ccnumber': return empty ? 'Enter your card number.' : 'Check the card number.';
+    case 'ccexp': return empty ? 'Enter the expiry date.' : 'Check the expiry date (MM / YY).';
+    default: return empty ? 'Enter the security code.' : 'Check the security code.';
+  }
+}
+
+export type CardBrand = 'visa' | 'mastercard' | 'amex' | 'maestro' | 'diners' | 'jcb';
+
+/** Collect.js's card `type` (from the number lookup) as a brand the form has an icon for; anything else is no brand. */
+export function normalizeCardBrand(type: unknown): CardBrand | null {
+  if (typeof type !== 'string') return null;
+  const t = type.toLowerCase().replace(/[^a-z]/g, '');
+  if (t === 'visa') return 'visa';
+  if (t === 'mastercard' || t === 'mc') return 'mastercard';
+  if (t === 'amex' || t === 'americanexpress') return 'amex';
+  if (t === 'maestro') return 'maestro';
+  if (t === 'diners' || t === 'dinersclub' || t === 'dinersclubinternational') return 'diners';
+  if (t === 'jcb') return 'jcb';
+  return null;
+}
+
+/** Live feedback from the hosted fields. The card number itself never leaves the iframe: the brand comes from
+ *  Collect.js's own lookup, and arrives only after the number validates (never while typing). */
+export interface CardFieldListeners {
+  onFieldValidation?: (field: CardField, valid: boolean, message: string) => void;
+  onCardBrand?: (brand: CardBrand | null) => void;
+  /** #393: brand + last 4 of the tokenized card (for the receipt), reported just before the token resolves; null when unknown. */
+  onTokenCard?: (card: TokenCard | null) => void;
+}
+
+export interface TokenCard { brand: string; last4: string }
+const BRAND_NAME: Record<CardBrand, string> = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', maestro: 'Maestro', diners: 'Diners Club', jcb: 'JCB' };
+
+/** Brand + last 4 from Collect.js's callback card (number is masked, e.g. 411111******1111). Never more of the card. */
+export function tokenCardFacts(card: { number?: unknown; type?: unknown } | null | undefined): TokenCard | null {
+  const last4 = typeof card?.number === 'string' ? /(\d{4})$/.exec(card.number.trim())?.[1] : undefined;
+  const known = normalizeCardBrand(card?.type);
+  const raw = typeof card?.type === 'string' && /^[A-Za-z][A-Za-z ]{0,19}$/.test(card.type.trim()) ? card.type.trim() : null;
+  const brand = known ? BRAND_NAME[known] : raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : null;
+  return last4 && brand ? { brand, last4 } : null;
+}
+
 /** Collect.js internals (verified in the live secure.nmi.com/token/Collect.js, 2026-10-25): startPaymentRequest
  *  sets inSubmission and arms responseTimeout; only a token or that timer clears them, never an invalid field. */
 type CollectInternals = { inSubmission?: boolean; responseTimeout?: ReturnType<typeof setTimeout> };
@@ -109,7 +162,7 @@ const resetSubmission = (collect: NmiCollectJs): boolean => {
 export const FIELDS_INIT_TIMEOUT_MS = 30000;
 
 /** Configure before card entry; reconfiguring on Pay redraws the hosted fields. */
-export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void, onInitError?: (message: string) => void): () => Promise<string> {
+export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void, onInitError?: (message: string) => void, listeners?: CardFieldListeners): () => Promise<string> {
   let pending: { resolve: (token: string) => void; reject: (error: Error) => void } | null = null;
   // Collect.js never calls `callback` while a hosted field is invalid: it reports each field through
   // validationCallback instead. Without handling that, Pay on a bad expiry or card number did nothing at all.
@@ -137,7 +190,12 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
       invalidCss: { color: '#b3261e' },
       // A tokenization that never answers ends in timeoutCallback (a retryable error), not an endless "Processing".
       timeoutDuration: 20000,
+      // The lookup runs only when a listener wants the brand: it is an extra request to the gateway per validated number.
+      ...(listeners?.onCardBrand ? { lookUpCallback: (card: { type?: string } | null | undefined) => listeners.onCardBrand?.(normalizeCardBrand(card?.type)) } : {}),
       validationCallback: (field, valid, message) => {
+        if (CARD_FIELDS.includes(field)) listeners?.onFieldValidation?.(field as CardField, valid, message);
+        // An edited number is no longer the one that was looked up.
+        if (field === 'ccnumber' && !valid) listeners?.onCardBrand?.(null);
         if (valid) { invalid.delete(field); return; }
         invalid.set(field, message);
         // During a submission: fail now when Collect can be returned to idle (so the corrected retry starts a fresh
@@ -151,7 +209,10 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
         const first = invalid.keys().next();
         done(null, first.done ? 'Card validation timed out — try again.' : invalidMessage(first.value));
       },
-      callback: (response) => done(response?.token ?? null),
+      callback: (response) => {
+        if (response?.token) listeners?.onTokenCard?.(tokenCardFacts(response.card));
+        done(response?.token ?? null);
+      },
       fieldsAvailableCallback: () => { ready = true; clearTimeout(initTimer); onReady?.(); },
   });
   return () => new Promise<string>((resolve, reject) => {

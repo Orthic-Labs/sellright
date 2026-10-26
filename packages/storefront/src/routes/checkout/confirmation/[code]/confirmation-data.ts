@@ -65,6 +65,31 @@ export const isOrderSettled = (state?: string): boolean => state === 'Paid' || s
  *  dedicated message instead of polling further. */
 export const isOrderTerminalUnpaid = (state?: string): boolean => state === 'Cancelled' || state === 'Declined';
 
+/** Shown when verifying a gateway return threw, or the order is still unpaid after polling (the previous store's wording). */
+export const PAYMENT_UNVERIFIED_MESSAGE = 'Unable to verify payment status. Please contact support if payment was deducted.';
+export const PAYMENT_VERIFY_FAILED_MESSAGE = 'Payment verification failed';
+
+/** What reconciling the shopper's return from a hosted gateway (the `paymentAttempt` query param) came to. */
+export type GatewayVerifyOutcome =
+  | { kind: 'none' } // not a gateway return, so nothing was verified
+  | { kind: 'verified'; status: string; message?: string } // the API answered; `status` is the attempt's status
+  | { kind: 'threw' }; // the verify call itself failed
+
+/**
+ * The message for the "Payment verification error" screen, or null when the page may show the order as usual. Only a
+ * gateway return can fail verification, and only while the order is NOT settled: a settled order always wins (the
+ * webhook may have landed while verify failed), and a cancelled/declined one has its own screen. Otherwise a failed or
+ * unknown verification, a verify call that threw, or an order still PendingPayment once polling has ended, all mean the
+ * payment was not confirmed — the page must never say "Thank you … confirmed" for it.
+ */
+export function gatewayReturnVerificationError(returnedFromGateway: boolean, verify: GatewayVerifyOutcome, orderState?: string): string | null {
+  if (!returnedFromGateway) return null;
+  if (isOrderSettled(orderState) || isOrderTerminalUnpaid(orderState)) return null;
+  if (verify.kind === 'verified' && (verify.status === 'failed' || verify.status === 'unknown')) return verify.message || PAYMENT_VERIFY_FAILED_MESSAGE;
+  if (verify.kind === 'threw') return PAYMENT_UNVERIFIED_MESSAGE;
+  return orderState === 'PendingPayment' ? PAYMENT_UNVERIFIED_MESSAGE : null;
+}
+
 /** Builds an absolute-or-root asset URL from the API's stored path, mirroring
  *  the API's own static asset mount (`/assets/<path>`). Local to this route
  *  so confirmation has no dependency on the legacy `sr()` REST helper. */

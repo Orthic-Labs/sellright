@@ -3,6 +3,7 @@ import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
+import { PaymentMethodTab, methodTabClass } from '~/components/payment/PaymentMethodTab';
 import { INSTALLMENT_PROVIDER, PROVIDER_LABELS } from '~/platform/payments/labels';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
@@ -176,7 +177,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 											</div>
 										)}
 										{methods.length > 1 && (
-											<div role="radiogroup" aria-label="Payment method" class="flex gap-2" style="margin-bottom:14px;">
+											<div role="radiogroup" aria-label="Payment method" class="grid grid-flow-col auto-cols-fr gap-1 w-full rounded-md border border-black/10 bg-black/5 p-1 mb-5">
 												{methods.map((m) => (
 													<button
 														key={m}
@@ -190,14 +191,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
 															bumpView(props.paymentInit);
 														})}
-														class="payment-method-option"
-														style={{
-															flex: '1', padding: '10px 12px', fontSize: '13px', borderRadius: '4px', cursor: locked ? 'default' : 'pointer',
-															border: props.paymentMethod.value === m ? '1px solid var(--color-accent)' : '1px solid rgba(100,85,65,0.2)',
-															background: props.paymentMethod.value === m ? 'rgba(var(--color-accent-rgb),0.06)' : 'transparent',
-														}}
+														class={methodTabClass(props.paymentMethod.value === m)}
 													>
-														{METHOD_LABEL[m]}
+														<PaymentMethodTab method={m} label={METHOD_LABEL[m]} />
 													</button>
 												))}
 											</div>
@@ -278,7 +274,8 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												mountGen={props.paymentInit.gen}
 												code={props.srState.code}
 												receiptToken={props.srState.receiptToken || undefined}
-												label={payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER'}
+												totalCents={paying && props.srState.grandTotal > 0 ? props.srState.grandTotal : props.chargeTotalCents.value}
+												currency={props.currency}
 												disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
 												ensureOrder$={props.ensureOrder$}
 												onError$={props.onPaymentError$}

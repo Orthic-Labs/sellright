@@ -5,7 +5,7 @@
  * app (the gateway-payment route accepts the token alone).
  */
 import { describe, expect, it, vi } from 'vitest';
-import { collectJsSrc, loadCollectJs, prepareCardTokenization, FIELDS_INIT_TIMEOUT_MS, isCardFieldMessage, type NmiCollectJs } from './NmiCollect';
+import { collectJsSrc, loadCollectJs, prepareCardTokenization, FIELDS_INIT_TIMEOUT_MS, isCardFieldMessage, cardFieldHint, normalizeCardBrand, type NmiCollectJs } from './NmiCollect';
 
 describe('collectJsSrc', () => {
   it('uses the merchant host for existing-account test mode', () => {
@@ -284,5 +284,72 @@ describe('isCardFieldMessage', () => {
 		expect(isCardFieldMessage('Check the card number and try again.')).toBe(true);
 		expect(isCardFieldMessage('The card was declined. Please try a different card.')).toBe(false);
 		expect(isCardFieldMessage('Card validation timed out — try again.')).toBe(false);
+	});
+});
+
+describe('live field feedback', () => {
+	const capture = (listeners: Parameters<typeof prepareCardTokenization>[4]) => {
+		let options: any;
+		prepareCardTokenization({ configure: (opts) => { options = opts; }, startPaymentRequest: () => {} }, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, undefined, listeners);
+		return options;
+	};
+
+	it("reports each hosted field's validation as Collect.js raises it", () => {
+		const onFieldValidation = vi.fn();
+		const options = capture({ onFieldValidation });
+		options.validationCallback('ccexp', false, 'Field is empty');
+		options.validationCallback('cvv', true, 'Success');
+		options.validationCallback('something-else', false, 'ignored');
+		expect(onFieldValidation.mock.calls).toEqual([['ccexp', false, 'Field is empty'], ['cvv', true, 'Success']]);
+	});
+
+	it('asks Collect.js for the card lookup only when someone listens for the brand', () => {
+		expect(capture(undefined).lookUpCallback).toBeUndefined();
+		expect(capture({ onFieldValidation: vi.fn() }).lookUpCallback).toBeUndefined();
+		expect(capture({ onCardBrand: vi.fn() }).lookUpCallback).toBeTypeOf('function');
+	});
+
+	it('maps the looked-up card type to a brand and clears it when the number goes invalid', () => {
+		const onCardBrand = vi.fn();
+		const options = capture({ onCardBrand });
+		options.lookUpCallback({ type: 'visa' });
+		options.validationCallback('ccnumber', false, 'Card number is invalid');
+		options.lookUpCallback({ type: 'discover' });
+		options.lookUpCallback(undefined);
+		expect(onCardBrand.mock.calls).toEqual([['visa'], [null], [null], [null]]);
+	});
+
+	it('keeps the card-field rejection of a charge-time validation unchanged with listeners attached', async () => {
+		let options: any;
+		// Live Collect.js shape (see the model above): a submission sets inSubmission before reporting the invalid field.
+		const collect = { inSubmission: false, configure: (o: unknown) => { options = o; },
+			startPaymentRequest: () => { collect.inSubmission = true; options.validationCallback('ccexp', false, 'bad'); } };
+		const tokenize = prepareCardTokenization(collect as never, { ccnumber: '#a', ccexp: '#b', cvv: '#c' }, undefined, undefined, { onFieldValidation: vi.fn(), onCardBrand: vi.fn() });
+		await expect(tokenize()).rejects.toThrow(/expiry date/);
+	});
+});
+
+describe('cardFieldHint', () => {
+	it('names the field, and tells empty from invalid', () => {
+		expect(cardFieldHint('ccnumber', 'Field is empty')).toBe('Enter your card number.');
+		expect(cardFieldHint('ccnumber', 'Card number is invalid')).toBe('Check the card number.');
+		expect(cardFieldHint('ccexp', 'Field is empty')).toBe('Enter the expiry date.');
+		expect(cardFieldHint('ccexp', 'invalid')).toBe('Check the expiry date (MM / YY).');
+		expect(cardFieldHint('cvv', 'Field is empty')).toBe('Enter the security code.');
+		expect(cardFieldHint('cvv', 'invalid')).toBe('Check the security code.');
+	});
+	it('is never mistaken for the submit-time card-field message', () => {
+		expect(isCardFieldMessage(cardFieldHint('ccexp', 'invalid'))).toBe(false);
+	});
+});
+
+describe('normalizeCardBrand', () => {
+	it.each([['visa', 'visa'], ['Visa', 'visa'], ['mastercard', 'mastercard'], ['American Express', 'amex'], ['amex', 'amex'], ['Diners Club', 'diners'], ['maestro', 'maestro'], ['jcb', 'jcb']])('%s -> %s', (type, brand) => {
+		expect(normalizeCardBrand(type)).toBe(brand);
+	});
+	it('has no brand for an unknown or missing type', () => {
+		expect(normalizeCardBrand('discover')).toBeNull();
+		expect(normalizeCardBrand(undefined)).toBeNull();
+		expect(normalizeCardBrand(4)).toBeNull();
 	});
 });

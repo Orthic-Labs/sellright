@@ -1,5 +1,7 @@
 import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
-import { loadCollectJs, prepareCardTokenization } from '~/services/NmiCollect';
+import { loadCollectJs, prepareCardTokenization, cardFieldHint, type CardBrand, type CardField, type TokenCard } from '~/services/NmiCollect';
+import { ValidationIcon } from '~/components/checkout/ValidationIcon';
+import { CardBrandIcon } from './CardBrandIcons';
 import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { GatewayAttempt } from '~/sellright/types/checkout';
 import { SellRightError } from '~/sellright/client';
@@ -42,6 +44,12 @@ export interface NMIProps {
 	onReadyChange$?: QRL<(ready: boolean) => void>;
 }
 
+/** What the hosted fields have reported so far; a field with no entry has not been interacted with (nothing shown). */
+type FieldFeedback = Partial<Record<CardField, { valid: boolean; message: string }>>;
+
+const FIELD_BORDER = '1px solid rgba(100,85,65,0.2)';
+const FIELD_BORDER_INVALID = '1px solid #fca5a5';
+
 export const NMI = component$<NMIProps>((props) => {
 	const idPrefix = useSignal(`nmi-${Math.random().toString(36).slice(2)}`);
 	const ready = useSignal(false);
@@ -49,7 +57,12 @@ export const NMI = component$<NMIProps>((props) => {
 	const mountGen = useSignal(props.mountGen);
 	const collectRef = useSignal<unknown>(null);
 	const getTokenRef = useSignal<unknown>(null);
+	// #393: brand + last 4 of the card just tokenized (from Collect.js's callback), sent with the token for the receipt.
+	const tokenCard = useSignal<TokenCard | null>(null);
 	const submitting = useSignal(false);
+	// Per-field feedback from Collect.js's validationCallback, and the brand from its card lookup (shown once the number validates).
+	const feedback = useSignal<FieldFeedback>({});
+	const brand = useSignal<CardBrand | null>(null);
 	// Baseline = the parent's signal at mount: it survives payment-method switches, so a stale confirm must not replay.
 	const handledTrigger = useSignal(props.confirmTrigger.value);
 
@@ -83,6 +96,15 @@ export const NMI = component$<NMIProps>((props) => {
 					if (!disposed.value) void props.onReadyChange$?.(true);
 				},
 				(message) => { void reportInitError(message); },
+				{
+					onTokenCard: (card) => { tokenCard.value = card; },
+					onFieldValidation: (field, valid, message) => {
+						if (!disposed.value) feedback.value = { ...feedback.value, [field]: { valid, message } };
+					},
+					onCardBrand: (next) => {
+						if (!disposed.value) brand.value = next;
+					},
+				},
 			);
 			getTokenRef.value = getToken as unknown;
 		} catch (e) {
@@ -108,7 +130,9 @@ export const NMI = component$<NMIProps>((props) => {
 		let processing = false;
 		try {
 			// The card is tokenized (and validated) before any order exists; a bad card stops here with its own message.
+			tokenCard.value = null;
 			const token = await getToken();
+			const card = tokenCard.value;
 			if (disposed.value) return; // the component is gone: no charge on behalf of a removed view
 			let code = props.code;
 			let receiptToken = props.receiptToken;
@@ -122,6 +146,7 @@ export const NMI = component$<NMIProps>((props) => {
 			await props.onProcessingChange$?.(true, mountGen.value);
 			const result = await startGatewayPayment(code, 'nmi', {
 				token,
+				...(card ? { card } : {}),
 				idempotencyKey: crypto.randomUUID(), // a new card submit is a new attempt
 				receiptToken,
 			});
@@ -141,21 +166,53 @@ export const NMI = component$<NMIProps>((props) => {
 		}
 	});
 
+	// The bordered box is the wrapper: the hosted-field element inside it (which Collect.js fills with its iframe) keeps
+	// static props so re-rendering the feedback never touches it.
+	const box = (field: CardField, pr = 36) => {
+		const state = feedback.value[field];
+		return `position:relative;height:42px;border:${state && !state.valid ? FIELD_BORDER_INVALID : FIELD_BORDER};border-radius:4px;padding:0 ${pr}px 0 10px;background:#fff;transition:border-color 0.2s;`;
+	};
+	const icon = (field: CardField) => {
+		const state = feedback.value[field];
+		return <ValidationIcon touched={!!state} error={state && !state.valid ? cardFieldHint(field, state.message) : ''} valid={!!state?.valid} errorId={`${idPrefix.value}-${field}-error`} />;
+	};
+	const hostStyle = 'height:100%;display:flex;align-items:center;';
+
 	return (
 		<div class="nmi-card-form" style="display:flex;flex-direction:column;gap:12px;">
 			<div>
 				<span aria-hidden="true" class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Card number</span>
-				<div id={`${idPrefix.value}-number`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
+				<div style={box('ccnumber', brand.value ? 72 : 36)}>
+					<div id={`${idPrefix.value}-number`} class="nmi-field" style={hostStyle} />
+					{brand.value && (
+						<div data-testid="card-brand" style="position:absolute;right:34px;top:50%;transform:translateY(-50%);pointer-events:none;">
+							<CardBrandIcon brand={brand.value} />
+						</div>
+					)}
+					{icon('ccnumber')}
+				</div>
 			</div>
 			<div style="display:flex;gap:12px;">
 				<div style="flex:1;">
 					<span aria-hidden="true" class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Expiration</span>
-					<div id={`${idPrefix.value}-exp`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
+					<div style={box('ccexp')}>
+						<div id={`${idPrefix.value}-exp`} class="nmi-field" style={hostStyle} />
+						{icon('ccexp')}
+					</div>
 				</div>
 				<div style="flex:1;">
 					<span aria-hidden="true" class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Security code</span>
-					<div id={`${idPrefix.value}-cvv`} class="nmi-field" style="height:42px;border:1px solid rgba(100,85,65,0.2);border-radius:4px;padding:0 10px;display:flex;align-items:center;" />
+					<div style={box('cvv')}>
+						<div id={`${idPrefix.value}-cvv`} class="nmi-field" style={hostStyle} />
+						{icon('cvv')}
+					</div>
 				</div>
+			</div>
+			<div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+				<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:rgba(140,107,58,0.6);">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 11c1.1 0 2-.9 2-2V7a2 2 0 00-4 0v2c0 1.1.9 2 2 2zm6 0h-1V9a5 5 0 10-10 0v2H6a2 2 0 00-2 2v5a2 2 0 002 2h12a2 2 0 002-2v-5a2 2 0 00-2-2z" />
+				</svg>
+				<span style="font-size:11px;font-weight:500;color:rgba(100,85,65,0.55);">Secure Credit Card Processing</span>
 			</div>
 		</div>
 	);

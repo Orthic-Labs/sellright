@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, resolveConfirmationEmail, sleepAbortable } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, resolveConfirmationEmail, sleepAbortable, gatewayReturnVerificationError, PAYMENT_UNVERIFIED_MESSAGE, PAYMENT_VERIFY_FAILED_MESSAGE } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
@@ -140,5 +140,43 @@ describe('resolveConfirmationEmail', () => {
   it('is null when nothing names an address', () => {
     expect(resolveConfirmationEmail({ customerEmail: null }, '')).toBeNull();
     expect(resolveConfirmationEmail({}, undefined)).toBeNull();
+  });
+});
+
+describe('gatewayReturnVerificationError (hosted-gateway return must never read as confirmed)', () => {
+  const none = { kind: 'none' } as const;
+
+  it('leaves a normal (non-gateway) confirmation alone, even while PendingPayment', () => {
+    expect(gatewayReturnVerificationError(false, none, 'PendingPayment')).toBeNull();
+    expect(gatewayReturnVerificationError(false, { kind: 'threw' }, 'PendingPayment')).toBeNull();
+  });
+
+  it('shows the error when a gateway return is still PendingPayment after polling', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'pending' }, 'PendingPayment')).toBe(PAYMENT_UNVERIFIED_MESSAGE);
+  });
+
+  it('shows the API message for a failed or unknown verification, with a default when it has none', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'failed', message: 'Declined by the provider' }, 'PendingPayment')).toBe('Declined by the provider');
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'unknown' }, 'PendingPayment')).toBe(PAYMENT_VERIFY_FAILED_MESSAGE);
+  });
+
+  it('shows the unable-to-verify message when the verify call threw and the order is not settled', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'threw' }, 'PendingPayment')).toBe(PAYMENT_UNVERIFIED_MESSAGE);
+  });
+
+  it('a settled order wins, whatever verify said (the webhook may have landed first)', () => {
+    for (const state of ['Paid', 'Shipped', 'PartiallyShipped', 'Delivered']) {
+      expect(gatewayReturnVerificationError(true, { kind: 'threw' }, state)).toBeNull();
+      expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'failed' }, state)).toBeNull();
+    }
+  });
+
+  it('leaves Cancelled/Declined to their own screen', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'threw' }, 'Cancelled')).toBeNull();
+    expect(gatewayReturnVerificationError(true, none, 'Declined')).toBeNull();
+  });
+
+  it('a verified-settled gateway return shows the order as usual', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'settled' }, 'Paid')).toBeNull();
   });
 });

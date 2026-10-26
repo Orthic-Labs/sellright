@@ -84,3 +84,25 @@ describe('Sezzle reports with the mount id it was rendered with', () => {
 		expect(g.__sz.state.loading).toBe(false);
 	});
 });
+
+describe('Sezzle panel copy', () => {
+	const Priced = component$(() => (
+		<Sezzle code="ORD-1" totalCents={10001} onError$={$(() => {})} />
+	));
+
+	it('shows the four-payment schedule, the no-interest line, the redirect note and the continue button', async () => {
+		const { document } = await ssrRenderToDom(<Priced />, {});
+		const text = document.body.textContent ?? '';
+		expect(text).toContain('No interest. No fees if paid on time.');
+		expect(text).toContain("You'll be redirected to Sezzle to complete payment.");
+		const items = Array.from(document.querySelectorAll('[aria-label="Payment schedule"] li')).map((li) => li.textContent);
+		expect(items).toEqual(['$25.01Today', '$25Week 2', '$25Week 4', '$25Week 6']);
+		expect(document.querySelector('button')?.textContent).toBe('Continue with Sezzle');
+	});
+
+	it('omits the schedule (not the copy) when no total is known', async () => {
+		const { document } = await ssrRenderToDom(<Host />, {});
+		expect(document.querySelector('[aria-label="Payment schedule"]')).toBeFalsy();
+		expect(document.body.textContent).toContain('No interest. No fees if paid on time.');
+	});
+});
