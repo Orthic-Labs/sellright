@@ -176,14 +176,23 @@ describe('manifestProductMeta', () => {
     expect(manifestProductMeta({ productId: 'p-1', rating: { average: 4.5, count: 5 } })).toEqual({
       productId: 'p-1',
       rating: { average: 4.5, count: 5 },
+      catalogInStock: null,
     });
     expect(manifestProductMeta({ rating: { average: 4.5, count: 4 } }).rating).toBeNull();
   });
   it('never invents a rating: absent, zero-count and zero-average all read as null', () => {
-    expect(manifestProductMeta({})).toEqual({ productId: null, rating: null });
-    expect(manifestProductMeta({ rating: null })).toEqual({ productId: null, rating: null });
+    expect(manifestProductMeta({})).toEqual({ productId: null, rating: null, catalogInStock: null });
+    expect(manifestProductMeta({ rating: null })).toEqual({ productId: null, rating: null, catalogInStock: null });
     expect(manifestProductMeta({ rating: { average: 5, count: 0 } }).rating).toBeNull();
     expect(manifestProductMeta({ rating: { average: 0, count: 2 } }).rating).toBeNull();
+  });
+});
+
+describe('manifestProductMeta catalogInStock hint', () => {
+  it('carries the manifest product-level in-stock flag, and null when absent', () => {
+    expect(manifestProductMeta({ inStock: true }).catalogInStock).toBe(true);
+    expect(manifestProductMeta({ inStock: false }).catalogInStock).toBe(false);
+    expect(manifestProductMeta({}).catalogInStock).toBeNull();
   });
 });
 
@@ -192,6 +201,7 @@ describe('liveProductMeta (no catalog manifest)', () => {
     expect(liveProductMeta({ productId: 'p-1' }, { enabled: true, average: 4.5, count: 5 })).toEqual({
       productId: 'p-1',
       rating: { average: 4.5, count: 5 },
+      catalogInStock: null,
     });
   });
   it('has a null id against an older API that does not send one', () => {

@@ -151,6 +151,9 @@ export interface RawManifestProductDetail {
   productId?: string;
   /** Approved-review aggregate — present only when the product has reviews. */
   rating?: { average: number; count: number } | null;
+  /** Product-level in-stock hint the manifest publisher stamps (regenerated on stock movement). No quantities; only drives
+   *  the pre-hydration paint. Absent on older snapshots. */
+  inStock?: boolean;
   slug: string;
   name: string;
   description: string | null;
@@ -176,10 +179,14 @@ export interface RawManifestProductDetail {
  *  catalog-detail shape) has no field for: the product UUID (loyalty
  *  multipliers are keyed on it) and the approved-review aggregate (feeds the
  *  PDP rating link + schema.org AggregateRating). `rating` is null when the
- *  product is unreviewed — never an empty/zero rating. */
+ *  product is unreviewed — never an empty/zero rating. `catalogInStock` is the
+ *  manifest's product-level in-stock hint (null when unknown): a PAINT hint
+ *  only, so first paint does not label an in-stock product "Sold Out" before
+ *  the live read lands; the live `/stock` read stays authoritative. */
 export interface ManifestProductMeta {
   productId: string | null;
   rating: { average: number; count: number } | null;
+  catalogInStock: boolean | null;
 }
 
 /** Product-level meta for the live-API (no catalog manifest) PDP path: the
@@ -197,14 +204,16 @@ export function liveProductMeta(
   return {
     productId: product.productId || null,
     rating: reviews && usable ? { average: reviews.average, count: reviews.count } : null,
+    catalogInStock: null,
   };
 }
 
-export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'productId' | 'rating'>): ManifestProductMeta {
+export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'productId' | 'rating' | 'inStock'>): ManifestProductMeta {
   const r = raw.rating;
   return {
     productId: raw.productId ?? null,
     rating: r && reviewsMeetThreshold(r.count) && r.average > 0 ? { average: r.average, count: r.count } : null,
+    catalogInStock: typeof raw.inStock === 'boolean' ? raw.inStock : null,
   };
 }
 

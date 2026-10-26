@@ -2,14 +2,14 @@ import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useS
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
 import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
-import { useCart, addToCart } from '~/contexts/CartContext';
+import { useCart, addToCartWithOutcome } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
 import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
-import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
+import { findVariant, getOptionGroups, isPaintedSoldOut, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
 /** One gallery image — native shape (no legacy `Asset` object, no `id`;
@@ -39,6 +39,9 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const isEnhancing = useSignal(false);
   const liveStockReady = useSignal(false);
   const enhancementError = useSignal<string | null>(null);
+  // Manifest product-level in-stock hint (null when unknown). Only the pre-live paint trusts it; the live read is authoritative.
+  const catalogInStock = loaderResult.catalogInStock ?? null;
+  const liveStockLoaded = useSignal(false);
   const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
   const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
   const currentImageIndex = useSignal(0);
@@ -159,11 +162,12 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     try {
       const stock = await getProductStock(product.slug);
       if (gen !== stockReadGen.value) return;
-      if (!stock) return;
+      if (!stock) throw new Error('Stock response unusable');
       const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
       const merged = mergeProductStock(product, stock);
       product.variants = merged.variants;
       liveStockReady.value = waitlistStockReady;
+      liveStockLoaded.value = true;
       const isCompleteSelection =
         selectionSize.value > 0 &&
         selectedValues.value.length === selectionSize.value &&
@@ -271,12 +275,12 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     }
     return product.variants.some((v) => typeof v.salePrice === 'number' && v.salePrice > 0);
   });
-  const allVariantsSoldOut = useComputed$(() => areAllVariantsSoldOut(product.variants));
+  const allVariantsSoldOut = useComputed$(() => isPaintedSoldOut(product.variants, catalogInStock, liveStockLoaded.value));
   const allGroupsSelected = useComputed$(() =>
     selectedValues.value.length === selectionSize.value && selectedValues.value.every(v => v !== null)
   );
   const isOutOfStock = useComputed$(() => {
-    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value);
+    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value, isStockHintPending(catalogInStock, liveStockLoaded.value));
   });
   const showCtaTooltip = useSignal(false);
   const ctaTooltipFading = useSignal(false);
@@ -287,13 +291,21 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     if (!isOutOfStock.value) {
       try {
         isAddingToCart.value = true;
+        addItemToOrderErrorSignal.value = '';
+        // The paint may still be on the manifest hint: take the live read first, then judge (a failed read stays fail-closed).
+        if (isStockHintPending(catalogInStock, liveStockLoaded.value)) await refreshLiveStock();
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
         // Fail closed on the live read, independent of the pre-order flag.
         if (!isVariantPurchasable(selectedVar)) throw new Error('Variant is out of stock');
         const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
         const enrichment = toCartEnrichment(product, selectedVar, image);
-        await addToCart(cart, selectedVar.sku, 1, enrichment);
+        const outcome = await addToCartWithOutcome(cart, selectedVar.sku, 1, enrichment);
+        // A rejected or unapplied add is not "added": show the cart's own error, keep the drawer shut, announce nothing.
+        if (outcome.kind !== 'applied') {
+          addItemToOrderErrorSignal.value = (outcome.kind === 'error' && outcome.message) || cart.lastError || 'Failed to add item to cart';
+          return;
+        }
         appState.showCart = true;
         loadCountryOnDemand(appState);
         const announcement = document.createElement('div');
@@ -347,6 +359,10 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   return (
     <ProductPageView
       addItemToOrderErrorSignal={addItemToOrderErrorSignal}
+      catalogInStock={catalogInStock}
+      enhancementError={enhancementError}
+      isEnhancing={isEnhancing}
+      refreshLiveStock={refreshLiveStock}
       allVariantsSoldOut={allVariantsSoldOut}
       changeImage={changeImage}
       closeImageModal={closeImageModal}

@@ -12,7 +12,6 @@ import { ProductReviews } from '~/components/reviews/ProductReviews';
 import { reviewsMeetThreshold, starString } from '~/utils/rewards';
 import { productPageContent } from '~/platform/brand-data';
 import { useRelatedProducts } from '~/platform/product-related';
-import { PRODUCT_UUID } from '~/platform/controllers/restock-form';
 import { formatPrice } from '~/utils/price-format';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
@@ -22,7 +21,7 @@ const hasWaitlist = hasView('pdp.waitlist');
 const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { addItemToOrderErrorSignal, catalogInStock, enhancementError, isEnhancing, refreshLiveStock, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
   let widgetPriceCents = 0;
   if (hasPaymentWidget) {
@@ -34,7 +33,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
   // routes.json productPage: editorial content for this product and the related row (empty unless the brand turns it on).
   const content = productPageContent(String(product?.slug ?? ''));
   const related = useRelatedProducts();
-  const waitlistAvailable = hasWaitlist && liveStockReady.value && allVariantsSoldOut.value && typeof productId === 'string' && PRODUCT_UUID.test(productId) && product.variants.some((v: CatalogVariant) => v.enabled !== false);
+  // the previous platform showed the waitlist whenever every variant was sold out (O/components/products/WaitlistForm.tsx use). Here "sold out" must
+  // be real: a complete live read, or the manifest itself saying the product is out of stock (never an unchecked shell).
+  const waitlistAvailable = hasWaitlist && allVariantsSoldOut.value && (liveStockReady.value || catalogInStock === false) && product.variants.some((v: CatalogVariant) => v.enabled !== false);
   const namedVariantPricesVary = groups.value.length === 0 && new Set(product.variants.map((v: CatalogVariant) => effectiveVariantPrice(v))).size > 1;
   return (
     <div class="sr-pdp">
@@ -202,6 +203,13 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           />
           {hasPaymentWidget && <PaymentWidgetView priceCents={widgetPriceCents} />}
           <div class="sr-rule" />
+          {enhancementError.value && (
+            <div role="status" class="sr-stock-error" style="margin:0 0 12px">
+              <p>Unable to check availability.</p>
+              <button type="button" class="sr-stock-retry" style="text-decoration:underline;cursor:pointer;background:none;border:0;padding:0;font:inherit;color:inherit" disabled={isEnhancing.value}
+                onClick$={() => refreshLiveStock()}>Retry availability</button>
+            </div>
+          )}
           {groups.value.length === 0 && product.variants.length > 1 && (
             <div class="sr-sel-group">
               <div class="sr-sel-head">
@@ -406,7 +414,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           </div>
           {waitlistAvailable && (
             <div id="sr-pdp-waitlist">
-              <WaitlistView productId={productId} productName={product.name || ''} soldOut={true} />
+              <WaitlistView productId={productId ?? ''} productName={product.name || ''} soldOut={true} />
             </div>
           )}
           <ProductTrustBar />

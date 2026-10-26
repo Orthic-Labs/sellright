@@ -35,13 +35,28 @@ export function areAllVariantsSoldOut(variants: PurchasableVariant[]): boolean {
   return variants.every((v) => !isVariantPurchasable(v));
 }
 
+/** The manifest says the product is in stock and no live read has landed yet. Until then the variants carry the fail-closed
+ *  shell (`inStock: false`), so the paint trusts the hint instead of labelling an in-stock product "Sold Out" (the previous platform
+ *  parity: O/routes/products/[...slug]/index.tsx:64-71,670). The hint never makes anything purchasable: add-to-cart still
+ *  needs the live read. A failed read keeps the hint (the live flag is only set by a successful read). */
+export function isStockHintPending(catalogInStock: boolean | null | undefined, liveStockLoaded: boolean): boolean {
+  return catalogInStock === true && !liveStockLoaded;
+}
+
+/** `areAllVariantsSoldOut` as painted: the manifest hint holds the sold-out state off until the live read lands. */
+export function isPaintedSoldOut(variants: PurchasableVariant[], catalogInStock: boolean | null | undefined, liveStockLoaded: boolean): boolean {
+  return !isStockHintPending(catalogInStock, liveStockLoaded) && areAllVariantsSoldOut(variants);
+}
+
 /** Out of stock only for a complete selection that resolved to a variant whose
  *  live read is not in stock. An incomplete selection is never OOS (it is
  *  simply not yet purchasable) and is never wiped. */
 export function isSelectionOutOfStock(
   selectionComplete: boolean,
   selected: PurchasableVariant | null | undefined,
+  hintPending = false,
 ): boolean {
+  if (hintPending) return false;
   if (!selectionComplete) return false;
   if (!selected) return false;
   return !isVariantPurchasable(selected);

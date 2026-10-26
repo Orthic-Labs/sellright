@@ -5,8 +5,10 @@ import {
 	findVariant,
 	getOptionGroups,
 	isActivePreOrder,
+	isPaintedSoldOut,
 	isPreOrderPresented,
 	isSelectionOutOfStock,
+	isStockHintPending,
 	isVariantPurchasable,
 	liveUnitPrice,
 	priceDeltaLabel,
@@ -289,5 +291,26 @@ describe('liveUnitPrice', () => {
 		expect(liveUnitPrice({ salePrice: null, preOrderPrice: null }, false, 1000)).toBe(1000);
 		expect(liveUnitPrice({ salePrice: 0, preOrderPrice: 0 }, true, 1000)).toBe(1000);
 		expect(liveUnitPrice(undefined, false, 1000)).toBe(1000);
+	});
+});
+
+describe('manifest in-stock hint (first paint before the live read)', () => {
+	const unchecked = [variant({ sku: 'A', options: [], inStock: false, availableQuantity: 0 })];
+	it('does not paint an in-stock product sold out until a live read lands', () => {
+		expect(isPaintedSoldOut(unchecked, true, false)).toBe(false);
+		expect(isStockHintPending(true, false)).toBe(true);
+		expect(isSelectionOutOfStock(true, unchecked[0], isStockHintPending(true, false))).toBe(false);
+	});
+	it('keeps the live read authoritative once loaded', () => {
+		expect(isPaintedSoldOut(unchecked, true, true)).toBe(true);
+		expect(isSelectionOutOfStock(true, unchecked[0], isStockHintPending(true, true))).toBe(true);
+	});
+	it('an unknown or sold-out hint never suppresses sold out', () => {
+		expect(isPaintedSoldOut(unchecked, null, false)).toBe(true);
+		expect(isPaintedSoldOut(unchecked, false, false)).toBe(true);
+		expect(isStockHintPending(undefined, false)).toBe(false);
+	});
+	it('the hint never makes a variant purchasable', () => {
+		expect(isVariantPurchasable(unchecked[0])).toBe(false);
 	});
 });
