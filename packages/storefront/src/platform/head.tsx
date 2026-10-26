@@ -7,14 +7,14 @@ import { GTM_LOADER_SOURCE } from './head-analytics';
 export type { BrandHeadSpec, StaticSchema, ExtraLink, ResolvedHead, HeadSources } from './head-resolve';
 export type { AnalyticsCsp } from './head-analytics';
 export { canonicalHref, contentHead, DEFAULT_SOURCES, resolveHead, serialiseJsonLd, setMeta } from './head-resolve';
-export { analyticsCsp, GTM_LOADER_SOURCE } from './head-analytics';
+export { analyticsCsp, GTM_LOADER_SOURCE, ipCountry } from './head-analytics';
 
 /**
  * Everything brand-declared that the base head does not render: preloads, verification, static JSON-LD, the analytics loader.
  * A PLAIN FUNCTION returning elements, not a component: a component boundary would add Qwik's virtual-node markers to the head, and
  * the head must be byte-identical to today's when nothing is declared (an empty array renders nothing).
  */
-export function brandHeadTags(resolved: ResolvedHead, nonce?: string) {
+export function brandHeadTags(resolved: ResolvedHead, nonce?: string, country?: string) {
 	const spec = DEFAULT_SOURCES.spec;
 	const tags = [
 		...resolved.extraLinks.map((l) => (
@@ -25,7 +25,9 @@ export function brandHeadTags(resolved: ResolvedHead, nonce?: string) {
 		...resolved.extraJsonLd.map((json, i) => <script key={`brand-jsonld-${i}`} type="application/ld+json" dangerouslySetInnerHTML={json} />),
 		// consent 'implied' only: a 'required' declaration loads nothing until a consent source exists (none yet, plan §6.5)
 		...(spec.analytics?.provider === 'gtm' && spec.analytics.consent === 'implied'
-			? [<script key="gtm" {...(nonce ? { nonce } : {})} data-gtm-id={spec.analytics.containerId} dangerouslySetInnerHTML={GTM_LOADER_SOURCE} />]
+			? [<script key="gtm" {...(nonce ? { nonce } : {})} data-gtm-id={spec.analytics.containerId}
+				{...(spec.analytics.adPlatforms?.includes('openai') ? { 'data-ud': '1', ...(country ? { 'data-co': country } : {}) } : {})}
+				dangerouslySetInnerHTML={GTM_LOADER_SOURCE} />]
 			: []),
 	];
 	return tags;

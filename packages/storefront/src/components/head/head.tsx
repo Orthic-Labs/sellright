@@ -10,9 +10,10 @@ import { STALE_BUILD_RECOVERY_SOURCE } from '~/platform/stale-build-recovery';
 
 interface HeadProps {
 	nonce?: string;
+	country?: string;
 }
 
-export const Head = component$<HeadProps>(({ nonce }) => {
+export const Head = component$<HeadProps>(({ nonce, country }) => {
 	const documentHead = useDocumentHead();
 	const loc = useLocation();
 	// WS-C: runtime store identity/theme, resolved per-request by the root
@@ -219,7 +220,7 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 
 			{/* Reloads once if a deploy left this page with a missing chunk or an empty loader response (stale-build-recovery.ts). */}
 			<script key="stale-build-recovery" {...(nonce ? { nonce } : {})} dangerouslySetInnerHTML={STALE_BUILD_RECOVERY_SOURCE} />
-			{brandHeadTags(resolved, nonce)}
+			{brandHeadTags(resolved, nonce, country)}
 
 			{head.styles.map(({ key, style, ...props }) => (
 				<style key={key} {...props} dangerouslySetInnerHTML={sanitizeStyle(style ?? '')} />

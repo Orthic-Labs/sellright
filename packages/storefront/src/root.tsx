@@ -8,14 +8,16 @@ import globalStyles from './global.css?inline';
 
 interface RootProps {
 	nonce?: string;
+	/** #375: Cloudflare's visitor country for the GTM loader (head-analytics.ts). */
+	country?: string;
 }
 
-const CartRoot = component$<RootProps>(({ nonce }) => {
+const CartRoot = component$<RootProps>(({ nonce, country }) => {
 	useStyles$(globalStyles);
 
 	return (
 		<QwikRouterProvider>
-			<Head nonce={nonce} />
+			<Head nonce={nonce} country={country} />
 			<body lang="en">
 				<a
 					href="#main-content"

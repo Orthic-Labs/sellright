@@ -92,14 +92,76 @@ describe('user data (#375)', () => {
 		expect(ud.pixelOppref()).toBe('opp-9');
 	});
 
-	it('the GTM loader pushes the stored user data before gtm.js', async () => {
-		const { GTM_LOADER_SOURCE } = await import('~/platform/head-analytics');
-		localStorage.setItem('sr-user-data', JSON.stringify({ sha256_email_address: sha('a@b.co') }));
-		const w = { localStorage, dataLayer: [] as Record<string, unknown>[] } as unknown as Window & { dataLayer: Record<string, unknown>[] };
-		const script = { getAttribute: () => 'GTM-TEST', nonce: '' };
-		const d = { currentScript: script, getElementsByTagName: () => [{ parentNode: { insertBefore: () => undefined } }], createElement: () => ({ setAttribute: () => undefined }) };
-		new Function('window', 'document', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d);
-		expect(w.dataLayer[0]).toEqual({ user_data: { sha256_email_address: sha('a@b.co') } });
-		expect(w.dataLayer[1]).toMatchObject({ event: 'gtm.js' });
+	describe('GTM loader (#375)', () => {
+		type DL = Record<string, unknown>[];
+		const run = (attrs: Record<string, string>, opts: { cookie?: string; crypto?: unknown } = {}) => {
+			const { GTM_LOADER_SOURCE } = head_;
+			const jar = { value: opts.cookie ?? '' };
+			const d = {
+				currentScript: { getAttribute: (k: string) => attrs[k] ?? null, nonce: '' },
+				getElementsByTagName: () => [{ parentNode: { insertBefore: () => undefined } }],
+				createElement: () => ({ setAttribute: () => undefined }),
+				get cookie() { return jar.value; },
+				set cookie(v: string) { const [pair] = v.split(';'); jar.value = jar.value ? `${jar.value}; ${pair}` : pair!; },
+			};
+			const w = { localStorage, crypto: opts.crypto ?? globalThis.crypto, location: { protocol: 'https:' }, dataLayer: [] as DL };
+			new Function('window', 'document', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d);
+			return { w, jar };
+		};
+		let head_: typeof import('~/platform/head-analytics');
+		beforeEach(async () => { localStorage.clear(); head_ = await import('~/platform/head-analytics'); });
+		const settle = () => new Promise((r) => setTimeout(r, 20));
+
+		it('pushes the stored user data before gtm.js', async () => {
+			localStorage.setItem('sr-user-data', JSON.stringify({ sha256_email_address: sha('a@b.co') }));
+			const { w } = run({ 'data-gtm-id': 'GTM-TEST' });
+			expect(w.dataLayer[0]).toEqual({ user_data: { sha256_email_address: sha('a@b.co') } });
+			expect(w.dataLayer[1]).toMatchObject({ event: 'gtm.js' });
+		});
+
+		it('first visit (data-ud): creates sr_vid, hashes it and adds the request country before gtm.js', async () => {
+			const { w, jar } = run({ 'data-gtm-id': 'GTM-TEST', 'data-ud': '1', 'data-co': 'GB' });
+			expect(w.dataLayer).toEqual([]); // GTM waits for the hash
+			await settle();
+			const vid = /sr_vid=([A-Za-z0-9-]+)/.exec(jar.value)![1]!;
+			expect(w.dataLayer[0]).toEqual({ user_data: { country: 'GB', sha256_external_id: sha(vid) } });
+			expect(w.dataLayer[1]).toMatchObject({ event: 'gtm.js' });
+			expect(w.dataLayer).toHaveLength(2);
+			expect(JSON.parse(localStorage.getItem('sr-user-data')!)).toEqual({ country: 'GB', sha256_external_id: sha(vid) });
+		});
+
+		it('an existing sr_vid is reused; stored external id starts GTM at once and wins over the request country', async () => {
+			const first = run({ 'data-gtm-id': 'GTM-TEST', 'data-ud': '1' }, { cookie: 'sr_vid=vid-0001-abcd' });
+			await settle();
+			expect(first.w.dataLayer[0]).toEqual({ user_data: { sha256_external_id: sha('vid-0001-abcd') } });
+			localStorage.setItem('sr-user-data', JSON.stringify({ sha256_external_id: sha('cust-1'), country: 'US' }));
+			const second = run({ 'data-gtm-id': 'GTM-TEST', 'data-ud': '1', 'data-co': 'GB' }, { cookie: 'sr_vid=vid-0001-abcd' });
+			expect(second.w.dataLayer[0]).toEqual({ user_data: { sha256_external_id: sha('cust-1'), country: 'US' } });
+			expect(second.w.dataLayer[1]).toMatchObject({ event: 'gtm.js' });
+		});
+
+		it('never holds GTM longer than 200 ms', async () => {
+			vi.useFakeTimers();
+			try {
+				const { w } = run({ 'data-gtm-id': 'GTM-TEST', 'data-ud': '1', 'data-co': 'US' }, { crypto: { randomUUID: () => 'vid-hang-0001', subtle: { digest: () => new Promise(() => undefined) } } });
+				expect(w.dataLayer).toEqual([]);
+				vi.advanceTimersByTime(200);
+				expect(w.dataLayer).toEqual([{ user_data: { country: 'US' } }, expect.objectContaining({ event: 'gtm.js' })]);
+			} finally { vi.useRealTimers(); }
+		});
+
+		it('without data-ud (no OpenAI pixel) it sets no cookie and starts GTM at once', () => {
+			const { w, jar } = run({ 'data-gtm-id': 'GTM-TEST', 'data-co': 'US' });
+			expect(jar.value).toBe('');
+			expect(w.dataLayer).toEqual([expect.objectContaining({ event: 'gtm.js' })]);
+		});
+
+		it('reads the Cloudflare country safely', () => {
+			expect(head_.ipCountry('gb')).toBe('GB');
+			expect(head_.ipCountry('XX')).toBeUndefined();
+			expect(head_.ipCountry('T1')).toBeUndefined();
+			expect(head_.ipCountry('"><script>')).toBeUndefined();
+			expect(head_.ipCountry(undefined)).toBeUndefined();
+		});
 	});
 });

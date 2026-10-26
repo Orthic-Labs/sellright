@@ -15,6 +15,7 @@ import { manifest } from '@qwik-client-manifest';
 import Root from './root';
 import { extractBase } from './utils/i18n';
 import { identityFromStaticTheme } from './theme/theme.config';
+import { ipCountry } from './platform/head-analytics';
 
 // Extend RenderToStreamOptions to include the request headers this app's
 // render() actually receives.
@@ -37,8 +38,10 @@ interface ExtendedRenderOptions extends RenderToStreamOptions {
 
 export default function (opts: ExtendedRenderOptions) {
 	const nonce = opts.serverData?.requestHeaders?.['x-qwik-nonce'];
+	// #375: the visitor's country from Cloudflare, for the GTM loader's first-visit user data (HTML is never edge-cached).
+	const country = ipCountry(opts.serverData?.requestHeaders?.['cf-ipcountry']);
 
-	return renderToStream(<Root nonce={nonce} />, {
+	return renderToStream(<Root nonce={nonce} country={country} />, {
 		manifest,
 		...opts,
 		base: extractBase,

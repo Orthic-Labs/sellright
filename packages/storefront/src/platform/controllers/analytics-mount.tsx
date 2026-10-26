@@ -6,6 +6,7 @@ import { component$, useContext, useVisibleTask$ } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { captureAttribution } from '~/sellright/attribution';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { startConversion } from './conversion';
 import { publishUserData, userDataEnabled } from './user-data';
 
@@ -34,7 +35,9 @@ export const AnalyticsMount = component$(() => {
 					firstName: c.firstName,
 					lastName: c.lastName,
 					fullName: a.fullName,
-					country: a.countryCode,
+					// A real country only: one the shopper typed with an address, or chose; never the store default.
+					country: a.countryCode && (a.postalCode || a.city || a.streetLine1) ? a.countryCode
+						: CountryPreferenceService.getSource() === 'explicit' ? CountryPreferenceService.getCountry() : null,
 					city: a.city,
 					region: a.province,
 					postalCode: a.postalCode,

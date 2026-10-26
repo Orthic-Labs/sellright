@@ -26,7 +26,16 @@ export function analyticsCsp(analytics: BrandHeadSpec['analytics'] | undefined):
 /**
  * The GTM loader (Google's snippet, nonce'd): a STATIC script. It takes the container id from its own `data-gtm-id` attribute (validated
  * at build as `^GTM-[A-Z0-9]{4,12}$`, escaped by the JSX attribute), so no code is built from data. #375: before `gtm.js` it pushes the
- * hashed `user_data` a consented earlier page stored (platform/controllers/user-data.ts), so page-view tags already carry it.
+ * `user_data` stored by a consented earlier page (platform/controllers/user-data.ts), so page-view tags carry it. With `data-ud="1"` (a
+ * brand with the OpenAI pixel, implied consent) it also works on a FIRST visit: it creates the `sr_vid` visitor cookie, adds the
+ * request's country (`data-co`, Cloudflare CF-IPCountry) and hashes the visitor id (SubtleCrypto) before starting GTM, holding the
+ * loader at most 200 ms; a page whose stored data already has an external id starts GTM at once.
  */
 export const GTM_LOADER_SOURCE =
-	"(function(w,d,s,l){var c=d.currentScript,i=c&&c.getAttribute('data-gtm-id');if(!i)return;w[l]=w[l]||[];try{var u=JSON.parse(w.localStorage.getItem('sr-user-data')||'null');if(u&&typeof u==='object'&&!Array.isArray(u))w[l].push({user_data:u});}catch(e){}w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i);if(c.nonce){j.setAttribute('nonce',c.nonce);}f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer');";
+	"(function(w,d,s,l){var c=d.currentScript,i=c&&c.getAttribute('data-gtm-id');if(!i)return;w[l]=w[l]||[];var u=null;try{u=JSON.parse(w.localStorage.getItem('sr-user-data')||'null');}catch(e){}if(!u||typeof u!=='object'||Array.isArray(u))u={};var done=0,go=function(){if(done)return;done=1;for(var k in u){w[l].push({user_data:u});break;}w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i);if(c.nonce){j.setAttribute('nonce',c.nonce);}f.parentNode.insertBefore(j,f);};if(c.getAttribute('data-ud')!=='1'){go();return;}var co=c.getAttribute('data-co');if(!u.country&&co&&/^[A-Z]{2}$/.test(co))u.country=co;var m=d.cookie.match(/(?:^|; )sr_vid=([A-Za-z0-9-]{8,64})(?:;|$)/),v=m&&m[1];if(!v){try{v=w.crypto.randomUUID();}catch(e){v=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12);}d.cookie='sr_vid='+v+'; Path=/; Max-Age=31536000; SameSite=Lax'+(w.location.protocol==='https:'?'; Secure':'');}var save=function(){try{w.localStorage.setItem('sr-user-data',JSON.stringify(u));}catch(e){}};if(u.sha256_external_id){save();go();return;}setTimeout(go,200);try{w.crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)).then(function(b){var h='',a=new Uint8Array(b);for(var n=0;n<a.length;n++)h+=(a[n]<16?'0':'')+a[n].toString(16);u.sha256_external_id=h;save();go();},go);}catch(e){go();}})(window,document,'script','dataLayer');";
+
+/** Cloudflare's visitor country (CF-IPCountry) as the loader's data-co, or undefined (missing, XX unknown, T1 Tor). */
+export function ipCountry(header: string | string[] | undefined | null): string | undefined {
+	const v = (Array.isArray(header) ? header[0] : header)?.trim().toUpperCase();
+	return v && /^[A-Z]{2}$/.test(v) && v !== 'XX' && v !== 'T1' ? v : undefined;
+}
