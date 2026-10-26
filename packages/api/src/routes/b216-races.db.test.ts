@@ -83,10 +83,10 @@ describe.skipIf(!isTestDb)('B2.16 races', () => {
     expect(await outboxCount('magic_link')).toBe(0);
   });
 
-  it('2. concurrent contact submissions for one address send ONE confirmation', async () => {
+  it('2. concurrent contact submissions for one address each get their own confirmation (#391 dropped the cooldown)', async () => {
     const body = { name: 'V', email: 'victim@b216.test', subject: 'hi', message: 'hello there, a real message' };
     await Promise.all(Array.from({ length: 5 }, () => post('/v1/shop/contact', body)));
-    expect(await outboxCount('contact_confirm')).toBe(1);
+    expect(await outboxCount('contact_confirm')).toBe(5);
   });
 
   it('3. switching the newsletter topic does not bypass the per-address cooldown', async () => {

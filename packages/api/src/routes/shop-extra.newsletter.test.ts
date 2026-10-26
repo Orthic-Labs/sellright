@@ -64,7 +64,7 @@ describe('newsletter-signup rate limit bucket', () => {
     }
     const retry = await newsletterRetryAfter(ip);
     expect(retry).toBeGreaterThan(0);
-    expect(retry).toBeLessThanOrEqual(15 * 60);
+    expect(retry).toBeLessThanOrEqual(60 * 60);
   });
 
   it('tracks separate IPs independently', async () => {

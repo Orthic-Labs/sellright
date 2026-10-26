@@ -44,17 +44,12 @@ import { log } from '../lib/logger.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { legacyContactBinding, legacyContactMarkerId, verifyLegacyContact, type LegacyContactSubmission } from './contact-legacy.js';
 
+/** Confirmation links expire after 24 hours (kept when #391 removed the resend cooldown). */
+const LINK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export const contactRoutes = new OpenAPIHono();
 
 const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
-
-// 24h link lifetime — same as the legacy TOKEN_MAX_AGE_MS.
-const LINK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-// Per-address mailbomb guard: at most one confirmation email per address per
-// hour per store, checked inside the transaction — the same guard the
-// subscriber signup applies via last_sent_at (the per-IP throttle alone does
-// not stop a distributed attacker mailbombing a victim's inbox).
-const CONFIRM_COOLDOWN_MS = 60 * 60 * 1000;
 
 /**
  * Signing secret for the confirm link. Resolution order mirrors the legacy
@@ -233,16 +228,6 @@ contactRoutes.openapi(
     // subscriber pattern): a rolled-back insert leaves no dangling email,
     // and a missing email never leaves an undeliverable pending row.
     await withStore(st.id, async (tx) => {
-      // Serialize per (store, address): concurrent submissions for one address (e.g. from many IPs) used to all
-      // pass the SELECT below before any INSERT committed, and each sent a confirmation (B2.16 cooldown race).
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'contact-confirm:' + st.id + ':' + email}, 0))`);
-      const recent = await tx.execute(
-        sql`SELECT id FROM contact_submission
-            WHERE store_id = ${st.id} AND email = ${email} AND created_at > ${new Date(Date.now() - CONFIRM_COOLDOWN_MS)}
-            LIMIT 1`,
-      );
-      if (recent.rows.length) return; // cooldown — silently accepted, no second email
-
       const inserted = await tx.execute(
         sql`INSERT INTO contact_submission (store_id, name, email, subject, message, remote_ip)
             VALUES (${st.id}, ${name}, ${email}, ${subject}, ${message}, ${ip})

@@ -170,12 +170,24 @@ describe('contact form (PAR-01) — submit', () => {
     expect(res.status).toBe(429);
   });
 
-  it('suppresses a repeat submission for the same address inside the 1h cooldown (mailbomb guard)', async () => {
+  it('delivers every submission from the same address (no silent per-email drop — previous-platform parity)', async () => {
     await submit(VALID);
     const res = await submit(VALID); // same email, seconds later
     expect(res.status).toBe(200);
-    expect(await submissions('ada@example.com')).toHaveLength(1);
-    expect((await outbox('contact_confirm')).filter((m) => m.recipient === 'ada@example.com')).toHaveLength(1);
+    expect(await submissions('ada@example.com')).toHaveLength(2);
+    expect((await outbox('contact_confirm')).filter((m) => m.recipient === 'ada@example.com')).toHaveLength(2);
+  });
+
+  it('rate-limits on the forwarded visitor IP (x-real-ip from the storefront relay), not one shared relay address', async () => {
+    const post = (ip: string, email: string) => app.request('http://localhost/v1/shop/contact', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-store-slug': SLUG, 'x-real-ip': ip },
+      body: JSON.stringify({ ...VALID, email }),
+    });
+    for (let i = 0; i < 5; i++) expect((await post('203.0.113.10', `fw${i}@example.com`)).status).toBe(200);
+    expect((await post('203.0.113.10', 'fw-over@example.com')).status).toBe(429);
+    // A different visitor behind the same relay is unaffected.
+    expect((await post('203.0.113.11', 'fw-other@example.com')).status).toBe(200);
   });
 
   it('rejects the submission when Turnstile is configured and the token fails', async () => {

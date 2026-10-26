@@ -7,13 +7,13 @@
  * login throttle because that module's threshold (MAX_FAILURES = 8) is a
  * shared constant used by login/register/pay/check-email — changing it would
  * change behavior for those routes too. This is a small, dedicated
- * 5-attempts/15-min bucket keyed by IP, counting every attempt (not just
+ * 5-attempts/hour bucket keyed by IP, counting every attempt (not just
  * failures) since every unauthenticated POST here is an outbound-fetch
  * amplification opportunity, not just a "bad credential".
  */
 import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 
-const WINDOW_MS = 15 * 60 * 1000; // 15 min
+const WINDOW_MS = 60 * 60 * 1000; // 1 hour — newsletter parity: 5/hr/IP (listmonk.controller.ts:59)
 const MAX_ATTEMPTS = 5;
 const BUCKET = 'newsletter';
 

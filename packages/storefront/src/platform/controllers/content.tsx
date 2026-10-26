@@ -4,6 +4,7 @@ import { $, component$, useComputed$, useSignal, useStore, useVisibleTask$, type
 import { isServer } from '@qwik.dev/core/build';
 import { server$, useLocation } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { useFeaturedProducts } from '~/platform/home';
 import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/platform/blog';
@@ -81,7 +82,8 @@ const submitFormServer = server$(async function (formData: {
 	turnstileToken: string; honeypot: string;
 }) {
 	const { submitContactForm } = await import('~/providers/shop/contact/contact');
-	return submitContactForm(formData);
+	// Forward the real visitor IP so the API's contact limit (5/hr/IP) is per visitor, not per storefront server.
+	return withVisitorIp(this, () => submitContactForm(formData));
 });
 
 /** Moved from routes/contact/index.tsx: the contact form state, its Turnstile widget and its submit. */

@@ -30,6 +30,8 @@
 import { isServer } from '@qwik.dev/core/build';
 import { sellrightRequestCookie } from './sellright-request-context.server';
 import { sellrightRequestHost } from './sellright-request-host.server';
+import { sellrightVisitorIp } from './sellright-visitor-ip.server';
+import { VISITOR_IP_HEADER } from './visitor-ip-header';
 
 const BUILD_TIME_API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
 const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || '';
@@ -108,6 +110,10 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   // an anonymous server-to-server call. Browser calls already send cookies
   // natively via credentials:'include' below.
   const forwardedCookie = isServer ? sellrightRequestCookie.getStore() : undefined;
+  // SSR only, and only inside withVisitorIp (public form relays): the real visitor IP, so the API's per-IP limits
+  // apply per visitor instead of to this server's own address. The API trusts it from this server only (see
+  // utils/sellright-visitor-ip.server.ts).
+  const visitorIp = isServer ? sellrightVisitorIp.getStore() : undefined;
   const method = (init.method ?? 'GET').toUpperCase();
   const csrf = !isServer && MUTATING_METHODS.has(method) ? readCsrfCookie() : undefined;
   // Server-only, and only when the caller hasn't already supplied its own
@@ -130,6 +136,7 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
       'content-type': 'application/json',
       ...storeResolutionHeaders(),
       ...(forwardedCookie ? { cookie: forwardedCookie } : {}),
+      ...(visitorIp ? { [VISITOR_IP_HEADER]: visitorIp } : {}),
       ...(csrf ? { 'x-csrf-token': csrf } : {}),
       ...(init.headers as Record<string, string> | undefined),
     },
@@ -365,9 +372,6 @@ export const srAccountOrder = (code: string) =>
 export const srCurrencies = () =>
   sr<{ base: string; currencies: { currency: string; rate: number }[] }>('/v1/shop/currencies');
 
-export const srNewsletterSignup = (email: string, name?: string, turnstileToken?: string) =>
-  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify({ email, ...(name ? { name } : {}), ...(turnstileToken ? { turnstileToken } : {}) }) });
-
 export interface SrCreatedOrder {
   code: string; state: string; grandTotal: number; currency: string;
   // Checkout-migration: discountTotal / coupon / gift-card / receipt token. The
@@ -482,6 +486,9 @@ export interface SrBlogPost {
   featuredImage: { id: string; path: string } | null;
   tags: string[] | null;
   publishDate: string | null;
+  /** #387: ISO timestamps from the shop blog API (article dates, sitemaps). */
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface SrBlogDetail extends SrBlogPost {
@@ -772,6 +779,13 @@ export const srContact = (body: {
 }) =>
   sr<{ ok: boolean; message?: string }>('/v1/shop/contact', {
     method: 'POST', body: JSON.stringify(body),
+  });
+
+/** POST /v1/shop/newsletter-signup via sr() so the relay forwards the visitor IP (the generated client has no header
+ *  hook). Throws on non-2xx; the caller maps 429/403 (routes/newsletter-signup). */
+export const srNewsletterSignup = (body: { email: string; turnstileToken?: string }) =>
+  sr<unknown>('/v1/shop/newsletter-signup', {
+    method: 'POST', body: JSON.stringify({ email: body.email, source: 'storefront', turnstileToken: body.turnstileToken }),
   });
 
 /** Bootstrap transport stays scoped to the initial migration endpoint. */

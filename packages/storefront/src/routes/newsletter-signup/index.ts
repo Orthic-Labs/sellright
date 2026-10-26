@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@qwik.dev/router';
-import { newsletterSignup } from '~/sellright/content';
+import { srErrorStatus, srNewsletterSignup } from '~/utils/sellright';
+import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 
 /**
  * POST /newsletter-signup — the homepage's newsletter form posts here
@@ -10,7 +11,21 @@ import { newsletterSignup } from '~/sellright/content';
  * `/v1/shop/newsletter-signup`) so the storefront owns its own honeypot gate
  * and error-message shaping, matching the `/contact` route's pattern.
  */
-export const onPost: RequestHandler = async ({ request, json }) => {
+/** Honeypot fake-success plus 429/403 message shaping. The call goes through sr() so the visitor IP is forwarded and the API's 5/hr/IP limit is per visitor. */
+async function signup(email: string, honeypot?: string, turnstileToken?: string): Promise<{ ok: boolean; message?: string }> {
+	if (honeypot) return { ok: true };
+	try {
+		await srNewsletterSignup({ email, turnstileToken: turnstileToken || undefined });
+		return { ok: true };
+	} catch (err) {
+		if (srErrorStatus(err) === 429) return { ok: false, message: 'Too many signups from this IP. Try again in an hour.' };
+		if (srErrorStatus(err) === 403) return { ok: false, message: 'Security check failed. Please try again.' };
+		return { ok: false, message: 'Subscription failed. Please try again.' };
+	}
+}
+
+export const onPost: RequestHandler = async (event) => {
+	const { request, json } = event;
 	let body: { email?: unknown; honeypot?: unknown; turnstileToken?: unknown };
 	try {
 		body = await request.json();
@@ -28,6 +43,6 @@ export const onPost: RequestHandler = async ({ request, json }) => {
 	}
 
 	const turnstileToken = typeof body.turnstileToken === 'string' ? body.turnstileToken : undefined;
-	const result = await newsletterSignup(email, honeypot, turnstileToken);
+	const result = await withVisitorIp(event, () => signup(email, honeypot, turnstileToken));
 	json(result.ok ? 200 : result.message?.includes('Too many') ? 429 : result.message?.includes('Security check') ? 403 : 400, result);
 };
