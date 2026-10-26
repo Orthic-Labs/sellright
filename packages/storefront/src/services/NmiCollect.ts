@@ -45,8 +45,12 @@ export const collectJsSrc = (mode: 'test' | 'live', environment?: 'sandbox' | 'p
 
 let inflight: { key: string; promise: Promise<NmiCollectJs> } | null = null;
 
+/** A script request that hangs fires neither onload nor onerror: past this it counts as failed (#372, Ads live pass
+ *  2026-10-26: a fresh desktop load had no Collect.js and no error, so PLACE ORDER did nothing). */
+export const COLLECT_LOAD_TIMEOUT_MS = 15000;
+
 /** Load the Collect.js script once per tokenization key. */
-export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', doc?: Document, environment?: 'sandbox' | 'production'): Promise<NmiCollectJs> {
+export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', doc?: Document, environment?: 'sandbox' | 'production', timeoutMs = COLLECT_LOAD_TIMEOUT_MS): Promise<NmiCollectJs> {
   if (typeof window === 'undefined') return Promise.reject(new Error('Collect.js is browser-only'));
   const src = collectJsSrc(mode, environment);
   const key = `${src}:${tokenizationKey}`;
@@ -59,14 +63,24 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
     script.async = true;
     // A failed load must not stay cached: the next call (the retry) has to request the script again, and the dead
     // script element must not linger in the head.
+    let settled = false;
     const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (inflight?.promise === promise) inflight = null;
       script.remove();
       reject(new Error(message));
     };
+    // A hung request clears `inflight` like any failure, so the retry requests the script afresh.
+    const timer = setTimeout(() => fail('Collect.js timed out loading'), timeoutMs);
     script.onload = () => {
-      if (window.CollectJS) resolve(window.CollectJS);
-      else fail('Collect.js failed to initialise');
+      if (settled) return;
+      if (window.CollectJS) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(window.CollectJS);
+      } else fail('Collect.js failed to initialise');
     };
     script.onerror = () => fail('Collect.js failed to load');
     documentRef.head.appendChild(script);

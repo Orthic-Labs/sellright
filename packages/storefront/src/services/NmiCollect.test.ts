@@ -87,6 +87,35 @@ describe('loadCollectJs failure and retry', () => {
 	});
 });
 
+describe('loadCollectJs hung request (#372)', () => {
+	it('a request that never fires onload or onerror fails after the timeout, and the retry requests the script again', async () => {
+		vi.useFakeTimers();
+		const scripts: any[] = [];
+		const removed: any[] = [];
+		const doc = {
+			createElement: () => { const el: any = { setAttribute() {}, remove() { removed.push(this); } }; scripts.push(el); return el; },
+			head: { appendChild: vi.fn() },
+		} as unknown as Document;
+		vi.stubGlobal('window', {});
+		const first = loadCollectJs('hung_key', 'live', doc, undefined, 15000);
+		const outcome = first.catch((e: Error) => e.message);
+		await vi.advanceTimersByTimeAsync(14999);
+		expect(removed).toHaveLength(0); // still waiting
+		await vi.advanceTimersByTimeAsync(1);
+		expect(await outcome).toBe('Collect.js timed out loading');
+		expect(removed).toContain(scripts[0]);
+		// A late onload of the abandoned element changes nothing; the retry is a fresh request that can succeed.
+		vi.stubGlobal('window', { CollectJS: { configure: () => {}, startPaymentRequest: () => {} } });
+		scripts[0].onload();
+		const second = loadCollectJs('hung_key', 'live', doc, undefined, 15000);
+		expect(scripts).toHaveLength(2);
+		scripts[1].onload();
+		await expect(second).resolves.toBeDefined();
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+});
+
 describe('prepareCardTokenization hosted-field initialisation', () => {
 	it('fields that never report ready within the init timeout are an initialisation failure', () => {
 		vi.useFakeTimers();

@@ -38,6 +38,8 @@ export interface NMIProps {
 	onSuccess$: QRL<(result: GatewayAttempt) => void>;
 	/** #372: the order to charge, created on the first PAY; null = stop without charging. */
 	ensureOrder$?: QRL<() => Promise<PayableOrder | null>>;
+	/** The hosted fields are usable (true) or gone (false, on unmount): the page keeps PLACE ORDER disabled until true. */
+	onReadyChange$?: QRL<(ready: boolean) => void>;
 }
 
 export const NMI = component$<NMIProps>((props) => {
@@ -57,7 +59,10 @@ export const NMI = component$<NMIProps>((props) => {
 	const disposed = useSignal(false);
 
 	useVisibleTask$(async ({ cleanup }) => {
-		cleanup(() => { disposed.value = true; });
+		cleanup(() => {
+			disposed.value = true;
+			void props.onReadyChange$?.(false);
+		});
 		const reportInitError = async (message: string) => {
 			if (disposed.value) return;
 			await (props.onInitError$ ?? props.onError$)(message, mountGen.value);
@@ -73,7 +78,10 @@ export const NMI = component$<NMIProps>((props) => {
 					ccexp: `#${idPrefix.value}-exp`,
 					cvv: `#${idPrefix.value}-cvv`,
 				},
-				() => { if (!disposed.value) ready.value = true; },
+				() => {
+					if (!disposed.value) ready.value = true;
+					if (!disposed.value) void props.onReadyChange$?.(true);
+				},
 				(message) => { void reportInitError(message); },
 			);
 			getTokenRef.value = getToken as unknown;

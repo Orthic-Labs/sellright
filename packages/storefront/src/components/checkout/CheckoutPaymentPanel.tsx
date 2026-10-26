@@ -1,4 +1,4 @@
-import { $, component$, Slot, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -57,6 +57,8 @@ export const METHOD_LABEL: Readonly<Record<keyof typeof PROVIDER_LABELS, string>
 
 export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
 	const methods = availableMethods(props.shopConfig.value);
+	// NMI hosted fields: PLACE ORDER stays disabled until Collect.js reports them usable (a press before that did nothing).
+	const cardFieldsReady = useSignal(false);
 	const locked = props.srState.phase === 'paying' || props.srState.phase === 'placing';
 	// Once the order exists the amount charged is ITS server-priced grandTotal — never the estimate the shopper
 	// saw while filling the form. When the two differ, charging waits for the shopper's explicit confirmation.
@@ -251,6 +253,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													onProcessingChange$={props.onPaymentProcessingChange$}
 													onSuccess$={props.onGatewaySuccess$}
 													ensureOrder$={props.ensureOrder$}
+													onReadyChange$={$((ready: boolean) => { cardFieldsReady.value = ready; })}
 												/>
 												<button
 													type="button"
@@ -259,13 +262,15 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 													})}
-													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
+													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent || !cardFieldsReady.value}
 													class="checkout-cta"
 													style="margin-top:14px;"
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER')}
+														: !cardFieldsReady.value
+															? 'Loading card fields…'
+															: (payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER')}
 												</button>
 											</>
 										) : controls && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
