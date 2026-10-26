@@ -21,3 +21,14 @@ describe('shipping copy rendering', () => {
     expect(getLatestPreOrderShipDate(order)?.toISOString()).toBe('2027-01-01T00:00:00.000Z');
   });
 });
+
+describe('order summary', () => {
+  it('shows discount and tax so the rows add up to the total (#393)', async () => {
+    const { document } = await ssrRenderToDom(<OrderDetails order={{ ...order, subtotal: 21940, discountTotal: 2194, shippingTotal: 0, taxTotal: 1810, grandTotal: 21556 }} />, {});
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Discount');
+    expect(text).toContain('-$21.94');
+    expect(text).toContain('Tax');
+    expect(text).toContain('$18.10');
+  });
+});

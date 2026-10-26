@@ -198,10 +198,22 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
               <span class="text-[#645541]">Subtotal</span>
               <span class="font-medium">{formatPrice(order.subtotal, order.currency)}</span>
             </div>
+            {order.discountTotal > 0 && (
+              <div class="flex justify-between text-sm">
+                <span class="text-[#645541]">Discount</span>
+                <span class="font-medium">-{formatPrice(order.discountTotal, order.currency)}</span>
+              </div>
+            )}
             {order.shippingTotal > 0 && (
               <div class="flex justify-between text-sm">
                 <span class="text-[#645541]">Shipping</span>
                 <span class="font-medium">{formatPrice(order.shippingTotal, order.currency)}</span>
+              </div>
+            )}
+            {order.taxTotal > 0 && (
+              <div class="flex justify-between text-sm">
+                <span class="text-[#645541]">Tax</span>
+                <span class="font-medium">{formatPrice(order.taxTotal, order.currency)}</span>
               </div>
             )}
             <div class="border-t border-[#E5E0D8] pt-2">
