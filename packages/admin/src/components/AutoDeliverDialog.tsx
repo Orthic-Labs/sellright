@@ -6,9 +6,10 @@ import { useToast } from './Toast';
 import { Modal, InlineAlert, Spinner, Field } from './ui';
 import { date } from '../lib/format';
 
-interface Result { dryRun: boolean; days: number; cutoff: string; count: number; sample: { code: string; trackingCode: string | null; carrier: string | null; shippedAt: string }[] }
+interface Result { dryRun: boolean; days: number; maxOrders?: number; cutoff: string; count: number; sample: { code: string; trackingCode: string | null; carrier: string | null; shippedAt: string }[] }
 
-/** Orders > Actions > "Mark old shipments delivered": always previews first, then asks for confirmation. */
+/** Orders > Actions > "Mark old shipments delivered": always previews first, then asks for confirmation.
+ *  Counts are ORDERS: an order qualifies when every shipment is Shipped with tracking (Vendure's rule); maxOrders caps one run (default 100, as Vendure's). */
 export default function AutoDeliverDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { store } = useAuth();
   const toast = useToast();
@@ -17,12 +18,15 @@ export default function AutoDeliverDialog({ open, onClose }: { open: boolean; on
   const [preview, setPreview] = useState<Result | null>(null);
   const n = Number(days);
   const validDays = Number.isInteger(n) && n >= 1 && n <= 365;
+  const [max, setMax] = useState('100');
+  const m = Number(max);
+  const validMax = Number.isInteger(m) && m >= 1 && m <= 1000;
 
   const run = useMutation({
-    mutationFn: (dryRun: boolean) => api.post<Result>('/jobs/auto-deliver', { dryRun, days: n }),
+    mutationFn: (dryRun: boolean) => api.post<Result>('/jobs/auto-deliver', { dryRun, days: n, maxOrders: m }),
     onSuccess: (r) => {
       if (r.dryRun) { setPreview(r); return; }
-      toast.success(`${r.count} shipment${r.count === 1 ? '' : 's'} marked delivered`);
+      toast.success(`${r.count} order${r.count === 1 ? '' : 's'} marked delivered`);
       void qc.invalidateQueries({ queryKey: ['orders', store?.slug] });
       onClose();
     },
@@ -32,19 +36,20 @@ export default function AutoDeliverDialog({ open, onClose }: { open: boolean; on
   // Fresh preview each time the dialog opens.
   useEffect(() => { if (open) { setPreview(null); run.mutate(true); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
 
-  const stale = !!preview && preview.days !== n;
+  const stale = !!preview && (preview.days !== n || (preview.maxOrders ?? m) !== m);
   return (
     <Modal open={open} onClose={onClose} title="Mark old shipments delivered" width="max-w-xl">
       <div className="stack-y-4">
-        <p className="text-sm text-gray-600">Shipments still marked <b>Shipped</b> for longer than the number of days below are marked <b>Delivered</b>. Nothing changes until you confirm.</p>
+        <p className="text-sm text-gray-600">Orders whose shipments are all marked <b>Shipped</b> with a tracking number, for longer than the number of days below, are marked <b>Delivered</b>. Nothing changes until you confirm.</p>
         <div className="flex items-end gap-2">
           <Field label="Shipped more than (days) ago" htmlFor="ad-days"><input id="ad-days" className="input w-24 tnum" inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} /></Field>
-          <button className="btn-ghost" disabled={!validDays || run.isPending} onClick={() => run.mutate(true)}>Preview</button>
+          <Field label="Max orders per run" htmlFor="ad-max"><input id="ad-max" className="input w-24 tnum" inputMode="numeric" value={max} onChange={(e) => setMax(e.target.value)} /></Field>
+          <button className="btn-ghost" disabled={!validDays || !validMax || run.isPending} onClick={() => run.mutate(true)}>Preview</button>
         </div>
         {run.isPending && !preview && <div className="text-sm text-gray-400 flex items-center gap-2"><Spinner /> Checking…</div>}
         {preview && (
           <div className="stack-y-2" aria-live="polite">
-            <InlineAlert tone={preview.count ? 'attention' : 'neutral'} title={preview.count ? `${preview.count} shipment${preview.count === 1 ? '' : 's'} would be marked delivered` : 'Nothing to mark delivered'}>
+            <InlineAlert tone={preview.count ? 'attention' : 'neutral'} title={preview.count ? `${preview.count} order${preview.count === 1 ? '' : 's'} would be marked delivered` : 'Nothing to mark delivered'}>
               Shipped before {date(preview.cutoff)} ({preview.days} days ago or more).
             </InlineAlert>
             {preview.sample.length > 0 && (
@@ -60,7 +65,7 @@ export default function AutoDeliverDialog({ open, onClose }: { open: boolean; on
         )}
         <div className="flex justify-end gap-2 pt-1">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={!preview || stale || preview.count === 0 || run.isPending} onClick={() => run.mutate(false)}>
+          <button className="btn-primary" disabled={!preview || stale || !validMax || preview.count === 0 || run.isPending} onClick={() => run.mutate(false)}>
             {run.isPending && preview ? <Spinner className="text-white" /> : stale ? 'Preview again first' : `Mark ${preview?.count ?? 0} delivered`}
           </button>
         </div>

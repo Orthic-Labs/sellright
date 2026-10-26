@@ -4,7 +4,7 @@
  *
  *   JOBS_ENABLED=1                  master switch (default off → no-op)
  *   JOBS_PUSH_ENABLED=1             deliver queued APNs pushes (default off)
- *   JOBS_AUTO_DELIVER_APPLY=1       actually transition (default: dry-run log)
+ *   JOBS_AUTO_DELIVER_APPLY=0       dry-run log only (default ON since #396, as the previous platform)
  *   JOBS_AUTO_DELIVER_DAYS=10       Shipped→Delivered age threshold
  *   JOBS_RELEASE_STALE_APPLY=1      actually cancel + release (default: dry-run)
  *   JOBS_RELEASE_STALE_TTL_MIN=60   unpaid-order age threshold (minutes)
@@ -182,7 +182,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     return DISABLED;
   }
   const state: SchedulerState = { stopped: false, timers: new Set(), inflight: new Set(), names: [] };
-  const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY === '1';
+  // #396: Shipped -> Delivered after JOBS_AUTO_DELIVER_DAYS applies by default (the previous platform did); =0 opts out.
+  const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY !== '0';
   const autoDeliverDays = env.JOBS_AUTO_DELIVER_DAYS ?? 10;
   const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
   const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;

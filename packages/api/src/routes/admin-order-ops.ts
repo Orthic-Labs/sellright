@@ -505,22 +505,23 @@ adminOrderOps.openapi(
 adminOrderOps.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/jobs/auto-deliver', summary: 'Mark old Shipped fulfillments as Delivered (dry-run by default)',
-    request: { body: { content: J(z.object({ dryRun: z.boolean().default(true), days: z.number().int().min(1).max(365).optional() })) } },
+    // #396: maxOrders caps one run (the previous admin's default was 100 orders).
+    request: { body: { content: J(z.object({ dryRun: z.boolean().default(true), days: z.number().int().min(1).max(365).optional(), maxOrders: z.number().int().min(1).max(1000).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({
-      dryRun: z.boolean(), days: z.number().int(), cutoff: z.string(), count: z.number().int(),
+      dryRun: z.boolean(), days: z.number().int(), maxOrders: z.number().int().optional(), cutoff: z.string(), count: z.number().int(),
       sample: z.array(z.object({ code: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), shippedAt: z.string() })),
     })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
-    const { dryRun, days: reqDays } = c.req.valid('json');
+    const { dryRun, days: reqDays, maxOrders } = c.req.valid('json');
     const days = reqDays ?? env.JOBS_AUTO_DELIVER_DAYS ?? 10;
-    const r = await autoDeliverStore(st.storeId, { apply: !dryRun, days, exact: dryRun, maxBatches: dryRun ? 1 : 25 });
+    const r = await autoDeliverStore(st.storeId, { apply: !dryRun, days, exact: dryRun, maxBatches: dryRun ? 1 : 25, ...(maxOrders ? { maxOrders } : {}) });
     if (!dryRun) {
-      await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'store', entityId: st.storeId, action: 'auto_deliver_run', data: { days, delivered: r.count } }));
+      await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'store', entityId: st.storeId, action: 'auto_deliver_run', data: { days, maxOrders: maxOrders ?? null, delivered: r.count } }));
     }
-    return c.json({ dryRun, days, cutoff: r.cutoff, count: r.count, sample: r.sample }, 200);
+    return c.json({ dryRun, days, ...(maxOrders ? { maxOrders } : {}), cutoff: r.cutoff, count: r.count, sample: r.sample }, 200);
   }),
 );
 

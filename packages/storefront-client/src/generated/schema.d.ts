@@ -401,6 +401,660 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/account-credit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List/search account credits (by email or coupon code) */
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Account credit detail with ledger */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            account: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            };
+                            ledger: {
+                                actor: string | null;
+                                amount: number;
+                                balanceAfter: number | null;
+                                createdAt: string;
+                                delta: number;
+                                id: string;
+                                kind: string;
+                                orderCode: string | null;
+                                reason: string | null;
+                                status: string;
+                            }[];
+                            redeemedOrders: {
+                                lines: {
+                                    id: string;
+                                    name: string;
+                                    quantity: number;
+                                    unitCreditCents: number[];
+                                }[];
+                                orderCode: string | null;
+                                orderId: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/{id}/adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adjust an account credit balance (signed cents) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        deltaCents: number;
+                        operationKey: string;
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            account: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manually restore credit for returned units of an order that redeemed this credit */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        expectedCents: number;
+                        operationKey: string;
+                        orderCode: string;
+                        orderLineId: string;
+                        quantity: number;
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            account: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            };
+                            restoredCents: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable or re-enable an account credit */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        disabled: boolean;
+                        operationKey: string;
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            account: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/issue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue account credit to an email address */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        amountCents: number;
+                        code?: string;
+                        email: string;
+                        issuanceKey: string;
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            account: {
+                                available: number;
+                                balance: number;
+                                code: string | null;
+                                createdAt: string;
+                                currency: string;
+                                disabled: boolean;
+                                email: string;
+                                held: number;
+                                id: string;
+                                initialAmount: number;
+                            };
+                            created: boolean;
+                        };
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/account-credit/issue-batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bulk-issue account credit (apply=false previews and returns the digest; apply=true requires it) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @default false */
+                        apply?: boolean;
+                        batch: string;
+                        digest?: string;
+                        reason: string;
+                        rows: {
+                            amountCents: number;
+                            email: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            applied: boolean;
+                            count: number;
+                            digest: string;
+                            errors: string[];
+                            issued: {
+                                accountId: string;
+                                amountCents: number;
+                                code: string;
+                                created: boolean;
+                                email: string;
+                                row: number;
+                            }[];
+                            totalCents: number;
+                        };
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/activity": {
         parameters: {
             query?: never;
@@ -1566,7 +2220,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Conflicting create request */
+                /** @description Conflicting create request or slug already in use */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -1730,7 +2384,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Revision conflict */
+                /** @description Revision conflict or slug already in use */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -4575,6 +5229,7 @@ export interface paths {
                         days?: number;
                         /** @default true */
                         dryRun?: boolean;
+                        maxOrders?: number;
                     };
                 };
             };
@@ -4590,6 +5245,7 @@ export interface paths {
                             cutoff: string;
                             days: number;
                             dryRun: boolean;
+                            maxOrders?: number;
                             sample: {
                                 carrier: string | null;
                                 code: string;
@@ -11052,11 +11708,31 @@ export interface paths {
                             indexNowConfigured: boolean;
                             indexNowKey: string | null;
                             organization: {
+                                address: {
+                                    addressCountry?: string;
+                                    addressLocality?: string;
+                                    addressRegion?: string;
+                                    postalCode?: string;
+                                    streetAddress?: string;
+                                } | null;
+                                description: string | null;
+                                founder: {
+                                    id: string | null;
+                                    name: string;
+                                } | null;
+                                image: string | null;
                                 logo: string | null;
                                 name: string;
                                 sameAs: string[];
+                                telephone: string | null;
                             };
                             productUrlPattern: string;
+                            returns: {
+                                country: string;
+                                days: number;
+                                /** @enum {string} */
+                                fees: "customer" | "free";
+                            } | null;
                             robots: {
                                 directives?: string[];
                                 extra?: string | null;
@@ -11065,6 +11741,19 @@ export interface paths {
                                 sitemaps?: string[];
                             };
                             robotsDisallow: string[];
+                            searchPath: string | null;
+                            shipping: {
+                                country: string;
+                                handling: {
+                                    max: number;
+                                    min: number;
+                                } | null;
+                                rate: string;
+                                transit: {
+                                    max: number;
+                                    min: number;
+                                } | null;
+                            } | null;
                             siteUrl: string | null;
                             staticPaths: string[];
                         };
@@ -11101,18 +11790,47 @@ export interface paths {
                         contactEmail?: string | null;
                         indexNowKey?: string | null;
                         organization?: {
+                            address?: {
+                                addressCountry?: string;
+                                addressLocality?: string;
+                                addressRegion?: string;
+                                postalCode?: string;
+                                streetAddress?: string;
+                            } | null;
+                            description?: string | null;
+                            founder?: {
+                                /** Format: uri */
+                                id?: string;
+                                name: string;
+                            } | null;
+                            /** Format: uri */
+                            image?: string | null;
                             /** Format: uri */
                             logo?: string | null;
                             name?: string;
                             sameAs?: string[];
+                            telephone?: string | null;
                         };
                         productUrlPattern?: string | null;
+                        returns?: {
+                            country: string;
+                            days: number;
+                            /** @enum {string} */
+                            fees: "customer" | "free";
+                        } | null;
                         robotsDirectives?: string[];
                         robotsDisallow?: string[];
                         robotsExtra?: string | null;
                         robotsFooter?: string | null;
                         robotsHeader?: string[];
                         robotsSitemaps?: string[];
+                        searchPath?: string | null;
+                        shipping?: {
+                            country: string;
+                            handlingDays?: number[];
+                            rate: string;
+                            transitDays?: number[];
+                        } | null;
                         /** Format: uri */
                         siteUrl?: string | null;
                         staticPaths?: string[];
@@ -11131,11 +11849,31 @@ export interface paths {
                             indexNowConfigured: boolean;
                             indexNowKey: string | null;
                             organization: {
+                                address: {
+                                    addressCountry?: string;
+                                    addressLocality?: string;
+                                    addressRegion?: string;
+                                    postalCode?: string;
+                                    streetAddress?: string;
+                                } | null;
+                                description: string | null;
+                                founder: {
+                                    id: string | null;
+                                    name: string;
+                                } | null;
+                                image: string | null;
                                 logo: string | null;
                                 name: string;
                                 sameAs: string[];
+                                telephone: string | null;
                             };
                             productUrlPattern: string;
+                            returns: {
+                                country: string;
+                                days: number;
+                                /** @enum {string} */
+                                fees: "customer" | "free";
+                            } | null;
                             robots: {
                                 directives?: string[];
                                 extra?: string | null;
@@ -11144,6 +11882,19 @@ export interface paths {
                                 sitemaps?: string[];
                             };
                             robotsDisallow: string[];
+                            searchPath: string | null;
+                            shipping: {
+                                country: string;
+                                handling: {
+                                    max: number;
+                                    min: number;
+                                } | null;
+                                rate: string;
+                                transit: {
+                                    max: number;
+                                    min: number;
+                                } | null;
+                            } | null;
                             siteUrl: string | null;
                             staticPaths: string[];
                         };
@@ -13406,6 +14157,67 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/stock/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Products with their variants and stock (Bulk Stock page) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                enabled: boolean;
+                                id: string;
+                                name: string;
+                                variants: {
+                                    allocated: number;
+                                    enabled: boolean;
+                                    id: string;
+                                    name: string;
+                                    onHand: number;
+                                    sku: string;
+                                }[];
+                            }[];
+                            total: number;
+                            truncated: boolean;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -16642,6 +17454,7 @@ export interface paths {
                         firstName?: string | null;
                         lastName?: string | null;
                         phone?: string | null;
+                        title?: string | null;
                     };
                 };
             };
@@ -16658,6 +17471,7 @@ export interface paths {
                             id: string;
                             lastName: string | null;
                             phone: string | null;
+                            title: string | null;
                         };
                     };
                 };
@@ -16702,18 +17516,40 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: {
+                                carrier: string | null;
                                 code: string;
                                 currency: string;
+                                discountTotal: number;
                                 /** @enum {string} */
                                 fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                                 grandTotal: number;
+                                isPreOrder: boolean;
+                                items: {
+                                    image: string | null;
+                                    isPreOrder: boolean;
+                                    lineTotal: number;
+                                    name: string;
+                                    productName: string | null;
+                                    quantity: number;
+                                    shipDate: string | null;
+                                    shipDateLabel: string | null;
+                                    sku: string;
+                                    unitPrice: number;
+                                }[];
                                 lines: number;
                                 /** @enum {string} */
                                 paymentStatus: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed" | "balance_due";
                                 placedAt: string | null;
+                                shipDate: string | null;
+                                shipDateLabel: string | null;
+                                shippingMethodName: string | null;
+                                shippingTotal: number;
                                 state: string;
                                 /** @enum {string} */
                                 status: "open" | "completed" | "cancelled" | "archived";
+                                subtotal: number;
+                                taxTotal: number;
+                                trackingCode: string | null;
                             }[];
                             limit: number;
                             offset: number;
@@ -16796,6 +17632,8 @@ export interface paths {
                             }[];
                             payments: {
                                 amount: number;
+                                cardBrand: string | null;
+                                cardLast4: string | null;
                                 createdAt: string;
                                 errorMessage: string | null;
                                 method: string;
@@ -17219,6 +18057,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Rate limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         put?: never;
@@ -17269,6 +18116,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -17355,15 +18203,6 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Too many attempts */
-                429: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ApiError"];
-                    };
-                };
             };
         };
         put?: never;
@@ -17415,6 +18254,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -17550,6 +18390,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -17648,6 +18489,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -17778,6 +18620,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -17904,6 +18747,7 @@ export interface paths {
                             isMigrated: boolean;
                             lastName: string | null;
                             phone: string | null;
+                            title: string | null;
                         };
                     };
                 };
@@ -18750,6 +19594,7 @@ export interface paths {
                                 isMigrated: boolean;
                                 lastName: string | null;
                                 phone: string | null;
+                                title: string | null;
                             };
                             token: string;
                         };
@@ -21930,6 +22775,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/newsletter/legacy/{action}/{uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm or unsubscribe via a legacy Listmonk email link */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    action: "confirm" | "unsubscribe";
+                    uuid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Applied (idempotent) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            email: string;
+                            /** @enum {string} */
+                            result: "confirmed" | "already_confirmed" | "unsubscribed" | "already_unsubscribed";
+                        };
+                    };
+                };
+                /** @description Listmonk not configured for this store, or no such subscriber */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Listmonk unreachable */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/orders/{code}": {
         parameters: {
             query?: never;
@@ -21964,6 +22870,7 @@ export interface paths {
                                 editedAt: string | null;
                                 previousGrandTotal: number | null;
                             } | null;
+                            billingAddress?: unknown;
                             code: string;
                             contactEmail: string | null;
                             couponCodes: string[];
@@ -21998,6 +22905,8 @@ export interface paths {
                             } | null;
                             payments: {
                                 amount: number;
+                                cardBrand: string | null;
+                                cardLast4: string | null;
                                 createdAt: string;
                                 errorMessage: string | null;
                                 method: string;
@@ -22064,6 +22973,10 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        card?: {
+                            brand: string;
+                            last4: string;
+                        };
                         /** @enum {string} */
                         method: "nmi" | "sezzle";
                         token?: string;

@@ -287,6 +287,67 @@ adminProducts.openapi(
   }),
 );
 
+// ── Bulk Stock page read model (the previous platform order-tools BulkStockPage parity) ─────
+// Every non-deleted product with its non-deleted variants and live stock, in one
+// round trip, so the page can render the product -> variant tree and save every
+// changed variant through PATCH /variants/stock/bulk above (one transaction).
+// `enabled` is the previous platform's product/variant enabled flag (product.status = active).
+// Capped like the previous platform's `take: 300`-style single fetch, but with headroom.
+const STOCK_TREE_MAX_PRODUCTS = 2000;
+adminProducts.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/stock/tree', summary: 'Products with their variants and stock (Bulk Stock page)',
+    responses: {
+      200: { description: 'OK', content: J(z.object({
+        items: z.array(z.object({
+          id: z.string(), name: z.string(), enabled: z.boolean(),
+          variants: z.array(z.object({ id: z.string(), name: z.string(), sku: z.string(), enabled: z.boolean(), onHand: z.number().int(), allocated: z.number().int() })),
+        })),
+        total: z.number().int(), truncated: z.boolean(),
+      })) },
+      401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const out = await withStore(st.storeId, async (tx) => {
+      const products = await tx
+        .select({ id: s.product.id, name: s.product.name, status: s.product.status })
+        .from(s.product)
+        .where(sql`${s.product.deletedAt} is null`)
+        .orderBy(s.product.name)
+        .limit(STOCK_TREE_MAX_PRODUCTS + 1);
+      const truncated = products.length > STOCK_TREE_MAX_PRODUCTS;
+      const page = truncated ? products.slice(0, STOCK_TREE_MAX_PRODUCTS) : products;
+      const variants = page.length
+        ? await tx
+          .select({
+            id: s.productVariant.id, productId: s.productVariant.productId, name: s.productVariant.name, sku: s.productVariant.sku,
+            enabled: s.productVariant.enabled, onHand: s.stock.onHand, allocated: s.stock.allocated,
+          })
+          .from(s.productVariant)
+          .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
+          .where(and(inArray(s.productVariant.productId, page.map((p) => p.id)), sql`${s.productVariant.deletedAt} is null`))
+          .orderBy(s.productVariant.name, s.productVariant.sku)
+        : [];
+      const byProduct = new Map<string, typeof variants>();
+      for (const v of variants) {
+        const list = byProduct.get(v.productId);
+        if (list) list.push(v); else byProduct.set(v.productId, [v]);
+      }
+      const items = page
+        .map((p) => ({
+          id: p.id, name: p.name, enabled: p.status === 'active',
+          variants: (byProduct.get(p.id) ?? []).map((v) => ({ id: v.id, name: v.name, sku: v.sku, enabled: v.enabled, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0 })),
+        }))
+        .filter((p) => p.variants.length > 0);
+      return { items, total: items.length, truncated };
+    });
+    return c.json(out, 200);
+  }),
+);
+
 // ── stock adjustments: +/- delta with a mandatory reason (admin-essentials) ──
 // Distinct from PATCH /variants/{id}/stock above (which SETS an absolute
 // on-hand value for the inline editor/CSV-style bulk-set UI and stays as-is

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Check, Boxes, History } from 'lucide-react';
 import { api, type Page, type InventoryRow, type StockMovementRow, type StockLocationRow } from '../api';
@@ -90,7 +91,7 @@ export default function Inventory() {
 
   return (
     <>
-      <PageHeader title="Inventory" subtitle={data ? `${data.total} variants` : undefined} />
+      <PageHeader title="Inventory" subtitle={data ? `${data.total} variants` : undefined} actions={<Link to="/bulk-stock" className="btn-ghost">Bulk stock update</Link>} />
       {adjustFor && (
         <StockAdjustModal
           row={adjustFor}

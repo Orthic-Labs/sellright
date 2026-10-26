@@ -6155,6 +6155,24 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 4096
+                  },
+                  "card": {
+                    "type": "object",
+                    "properties": {
+                      "brand": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z ]{0,19}$"
+                      },
+                      "last4": {
+                        "type": "string",
+                        "pattern": "^\\d{4}$"
+                      }
+                    },
+                    "required": [
+                      "brand",
+                      "last4"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -6710,6 +6728,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -6732,6 +6754,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -6833,6 +6856,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -6855,6 +6882,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -7027,6 +7055,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -7049,6 +7081,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -7170,6 +7203,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -7192,6 +7229,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -7272,6 +7310,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -7294,6 +7336,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -7485,6 +7528,10 @@
                         "email": {
                           "type": "string"
                         },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "firstName": {
                           "type": "string",
                           "nullable": true
@@ -7507,6 +7554,7 @@
                       "required": [
                         "id",
                         "email",
+                        "title",
                         "firstName",
                         "lastName",
                         "phone",
@@ -7553,6 +7601,10 @@
                     "email": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "firstName": {
                       "type": "string",
                       "nullable": true
@@ -7575,6 +7627,7 @@
                   "required": [
                     "id",
                     "email",
+                    "title",
                     "firstName",
                     "lastName",
                     "phone",
@@ -7648,16 +7701,6 @@
                   "required": [
                     "exists"
                   ]
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many attempts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -10013,6 +10056,95 @@
                           },
                           "lines": {
                             "type": "integer"
+                          },
+                          "subtotal": {
+                            "type": "integer"
+                          },
+                          "shippingTotal": {
+                            "type": "integer"
+                          },
+                          "taxTotal": {
+                            "type": "integer"
+                          },
+                          "discountTotal": {
+                            "type": "integer"
+                          },
+                          "shippingMethodName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "trackingCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "carrier": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "productName": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "quantity": {
+                                  "type": "integer"
+                                },
+                                "unitPrice": {
+                                  "type": "integer"
+                                },
+                                "lineTotal": {
+                                  "type": "integer"
+                                },
+                                "image": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "isPreOrder": {
+                                  "type": "boolean"
+                                },
+                                "shipDate": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "shipDateLabel": {
+                                  "type": "string",
+                                  "nullable": true
+                                }
+                              },
+                              "required": [
+                                "sku",
+                                "name",
+                                "productName",
+                                "quantity",
+                                "unitPrice",
+                                "lineTotal",
+                                "image",
+                                "isPreOrder",
+                                "shipDate",
+                                "shipDateLabel"
+                              ]
+                            }
                           }
                         },
                         "required": [
@@ -10024,7 +10156,18 @@
                           "currency",
                           "grandTotal",
                           "placedAt",
-                          "lines"
+                          "lines",
+                          "subtotal",
+                          "shippingTotal",
+                          "taxTotal",
+                          "discountTotal",
+                          "shippingMethodName",
+                          "trackingCode",
+                          "carrier",
+                          "isPreOrder",
+                          "shipDate",
+                          "shipDateLabel",
+                          "items"
                         ]
                       }
                     },
@@ -10268,6 +10411,14 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "cardBrand": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "cardLast4": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -10276,7 +10427,9 @@
                           "amount",
                           "providerRef",
                           "errorMessage",
-                          "createdAt"
+                          "createdAt",
+                          "cardBrand",
+                          "cardLast4"
                         ]
                       }
                     },
@@ -10603,6 +10756,11 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "title": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 40
+                  },
                   "firstName": {
                     "type": "string",
                     "nullable": true,
@@ -10637,6 +10795,10 @@
                     "email": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "firstName": {
                       "type": "string",
                       "nullable": true
@@ -10653,6 +10815,7 @@
                   "required": [
                     "id",
                     "email",
+                    "title",
                     "firstName",
                     "lastName",
                     "phone"
@@ -12188,6 +12351,9 @@
                     "shippingAddress": {
                       "nullable": true
                     },
+                    "billingAddress": {
+                      "nullable": true
+                    },
                     "customerEmail": {
                       "type": "string",
                       "nullable": true
@@ -12230,6 +12396,14 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "cardBrand": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "cardLast4": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -12238,7 +12412,9 @@
                           "amount",
                           "providerRef",
                           "errorMessage",
-                          "createdAt"
+                          "createdAt",
+                          "cardBrand",
+                          "cardLast4"
                         ]
                       }
                     },
@@ -17813,6 +17989,103 @@
         }
       }
     },
+    "/v1/admin/stock/tree": {
+      "get": {
+        "summary": "Products with their variants and stock (Bulk Stock page)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "variants": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "sku": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "onHand": {
+                                  "type": "integer"
+                                },
+                                "allocated": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name",
+                                "sku",
+                                "enabled",
+                                "onHand",
+                                "allocated"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "enabled",
+                          "variants"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total",
+                    "truncated"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/variants/{id}/stock/adjust": {
       "post": {
         "summary": "Adjust variant on-hand stock by a +/- delta, with a reason",
@@ -22447,6 +22720,11 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 365
+                  },
+                  "maxOrders": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
                   }
                 }
               }
@@ -22465,6 +22743,9 @@
                       "type": "boolean"
                     },
                     "days": {
+                      "type": "integer"
+                    },
+                    "maxOrders": {
                       "type": "integer"
                     },
                     "cutoff": {
@@ -23017,6 +23298,1134 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit": {
+      "get": {
+        "summary": "List/search account credits (by email or coupon code)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "email": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "initialAmount": {
+                            "type": "integer"
+                          },
+                          "balance": {
+                            "type": "integer"
+                          },
+                          "held": {
+                            "type": "integer"
+                          },
+                          "available": {
+                            "type": "integer"
+                          },
+                          "disabled": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "code",
+                          "email",
+                          "currency",
+                          "initialAmount",
+                          "balance",
+                          "held",
+                          "available",
+                          "disabled",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/{id}": {
+      "get": {
+        "summary": "Account credit detail with ledger",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "initialAmount": {
+                          "type": "integer"
+                        },
+                        "balance": {
+                          "type": "integer"
+                        },
+                        "held": {
+                          "type": "integer"
+                        },
+                        "available": {
+                          "type": "integer"
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "email",
+                        "currency",
+                        "initialAmount",
+                        "balance",
+                        "held",
+                        "available",
+                        "disabled",
+                        "createdAt"
+                      ]
+                    },
+                    "ledger": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "amount": {
+                            "type": "integer"
+                          },
+                          "delta": {
+                            "type": "integer"
+                          },
+                          "balanceAfter": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "reason": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "actor": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "orderCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "status",
+                          "amount",
+                          "delta",
+                          "balanceAfter",
+                          "reason",
+                          "actor",
+                          "orderCode",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "redeemedOrders": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "orderId": {
+                            "type": "string"
+                          },
+                          "orderCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "integer"
+                                },
+                                "unitCreditCents": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name",
+                                "quantity",
+                                "unitCreditCents"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "orderId",
+                          "orderCode",
+                          "lines"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "ledger",
+                    "redeemedOrders"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/issue": {
+      "post": {
+        "summary": "Issue account credit to an email address",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 320
+                  },
+                  "amountCents": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "issuanceKey": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 120
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 200
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "email",
+                  "amountCents",
+                  "issuanceKey",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "initialAmount": {
+                          "type": "integer"
+                        },
+                        "balance": {
+                          "type": "integer"
+                        },
+                        "held": {
+                          "type": "integer"
+                        },
+                        "available": {
+                          "type": "integer"
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "email",
+                        "currency",
+                        "initialAmount",
+                        "balance",
+                        "held",
+                        "available",
+                        "disabled",
+                        "createdAt"
+                      ]
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "created"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/issue-batch": {
+      "post": {
+        "summary": "Bulk-issue account credit (apply=false previews and returns the digest; apply=true requires it)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "batch": {
+                    "type": "string",
+                    "pattern": "^[\\w-]{1,60}$"
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "email": {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 320
+                        },
+                        "amountCents": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2147483647
+                        }
+                      },
+                      "required": [
+                        "email",
+                        "amountCents"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 500
+                  },
+                  "apply": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "digest": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "batch",
+                  "rows",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "applied": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "totalCents": {
+                      "type": "integer"
+                    },
+                    "digest": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "issued": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "row": {
+                            "type": "integer"
+                          },
+                          "email": {
+                            "type": "string"
+                          },
+                          "amountCents": {
+                            "type": "integer"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "created": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "row",
+                          "email",
+                          "amountCents",
+                          "accountId",
+                          "code",
+                          "created"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "applied",
+                    "count",
+                    "totalCents",
+                    "digest",
+                    "errors",
+                    "issued"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/{id}/adjust": {
+      "post": {
+        "summary": "Adjust an account credit balance (signed cents)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "deltaCents": {
+                    "type": "integer",
+                    "minimum": -2147483647,
+                    "maximum": 2147483647
+                  },
+                  "operationKey": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 120
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "deltaCents",
+                  "operationKey",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "initialAmount": {
+                          "type": "integer"
+                        },
+                        "balance": {
+                          "type": "integer"
+                        },
+                        "held": {
+                          "type": "integer"
+                        },
+                        "available": {
+                          "type": "integer"
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "email",
+                        "currency",
+                        "initialAmount",
+                        "balance",
+                        "held",
+                        "available",
+                        "disabled",
+                        "createdAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "account"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/{id}/status": {
+      "post": {
+        "summary": "Disable or re-enable an account credit",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "disabled": {
+                    "type": "boolean"
+                  },
+                  "operationKey": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 120
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "disabled",
+                  "operationKey",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "initialAmount": {
+                          "type": "integer"
+                        },
+                        "balance": {
+                          "type": "integer"
+                        },
+                        "held": {
+                          "type": "integer"
+                        },
+                        "available": {
+                          "type": "integer"
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "email",
+                        "currency",
+                        "initialAmount",
+                        "balance",
+                        "held",
+                        "available",
+                        "disabled",
+                        "createdAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "account"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/account-credit/{id}/restore": {
+      "post": {
+        "summary": "Manually restore credit for returned units of an order that redeemed this credit",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "orderCode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "orderLineId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000
+                  },
+                  "expectedCents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "operationKey": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 120
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "orderCode",
+                  "orderLineId",
+                  "quantity",
+                  "expectedCents",
+                  "operationKey",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "initialAmount": {
+                          "type": "integer"
+                        },
+                        "balance": {
+                          "type": "integer"
+                        },
+                        "held": {
+                          "type": "integer"
+                        },
+                        "available": {
+                          "type": "integer"
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "code",
+                        "email",
+                        "currency",
+                        "initialAmount",
+                        "balance",
+                        "held",
+                        "available",
+                        "disabled",
+                        "createdAt"
+                      ]
+                    },
+                    "restoredCents": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "restoredCents"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -32071,8 +33480,7 @@
         "parameters": [
           {
             "schema": {
-              "type": "string",
-              "minLength": 10
+              "type": "string"
             },
             "required": true,
             "name": "t",
@@ -32092,6 +33500,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -32239,7 +33657,7 @@
             }
           },
           "409": {
-            "description": "Conflicting create request",
+            "description": "Conflicting create request or slug already in use",
             "content": {
               "application/json": {
                 "schema": {
@@ -32479,7 +33897,7 @@
             }
           },
           "409": {
-            "description": "Revision conflict",
+            "description": "Revision conflict or slug already in use",
             "content": {
               "application/json": {
                 "schema": {
@@ -34473,6 +35891,84 @@
         }
       }
     },
+    "/v1/shop/newsletter/legacy/{action}/{uuid}": {
+      "post": {
+        "summary": "Confirm or unsubscribe via a legacy Listmonk email link",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "confirm",
+                "unsubscribe"
+              ]
+            },
+            "required": true,
+            "name": "action",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "uuid",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Applied (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "confirmed",
+                        "already_confirmed",
+                        "unsubscribed",
+                        "already_unsubscribed"
+                      ]
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result",
+                    "email"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Listmonk not configured for this store, or no such subscriber",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Listmonk unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/seo/config": {
       "get": {
         "summary": "Effective SEO config for the current store",
@@ -34507,12 +36003,150 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "image": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "description": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "telephone": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "founder": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "id"
+                          ]
+                        },
+                        "address": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "streetAddress": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressLocality": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressRegion": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "postalCode": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressCountry": {
+                              "type": "string",
+                              "maxLength": 200
+                            }
+                          }
                         }
                       },
                       "required": [
                         "name",
                         "logo",
-                        "sameAs"
+                        "sameAs",
+                        "image",
+                        "description",
+                        "telephone",
+                        "founder",
+                        "address"
+                      ]
+                    },
+                    "searchPath": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "shipping": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rate": {
+                          "type": "string"
+                        },
+                        "country": {
+                          "type": "string"
+                        },
+                        "handling": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "min": {
+                              "type": "integer"
+                            },
+                            "max": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "min",
+                            "max"
+                          ]
+                        },
+                        "transit": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "min": {
+                              "type": "integer"
+                            },
+                            "max": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "min",
+                            "max"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "rate",
+                        "country",
+                        "handling",
+                        "transit"
+                      ]
+                    },
+                    "returns": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "country": {
+                          "type": "string"
+                        },
+                        "fees": {
+                          "type": "string",
+                          "enum": [
+                            "customer",
+                            "free"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "days",
+                        "country",
+                        "fees"
                       ]
                     },
                     "robotsDisallow": {
@@ -34573,6 +36207,9 @@
                     "siteUrl",
                     "contactEmail",
                     "organization",
+                    "searchPath",
+                    "shipping",
+                    "returns",
                     "robotsDisallow",
                     "staticPaths",
                     "productUrlPattern",
@@ -34631,8 +36268,137 @@
                           "type": "string",
                           "format": "uri"
                         }
+                      },
+                      "image": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uri"
+                      },
+                      "description": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 1000
+                      },
+                      "telephone": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 40
+                      },
+                      "founder": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "id": {
+                            "type": "string",
+                            "format": "uri"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      "address": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "streetAddress": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "addressLocality": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "addressRegion": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "postalCode": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "addressCountry": {
+                            "type": "string",
+                            "maxLength": 200
+                          }
+                        }
                       }
                     }
+                  },
+                  "searchPath": {
+                    "type": "string",
+                    "nullable": true,
+                    "pattern": "^\\/[^\\s?#{}]*$"
+                  },
+                  "shipping": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "rate": {
+                        "type": "string",
+                        "pattern": "^\\d{1,6}(\\.\\d{1,2})?$"
+                      },
+                      "country": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z]{2}$"
+                      },
+                      "handlingDays": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 365
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "transitDays": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 365
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      }
+                    },
+                    "required": [
+                      "rate",
+                      "country"
+                    ]
+                  },
+                  "returns": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "days": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 365
+                      },
+                      "country": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z]{2}$"
+                      },
+                      "fees": {
+                        "type": "string",
+                        "enum": [
+                          "customer",
+                          "free"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "days",
+                      "country",
+                      "fees"
+                    ]
                   },
                   "robotsDisallow": {
                     "type": "array",
@@ -34722,12 +36488,150 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "image": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "description": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "telephone": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "founder": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "id"
+                          ]
+                        },
+                        "address": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "streetAddress": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressLocality": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressRegion": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "postalCode": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "addressCountry": {
+                              "type": "string",
+                              "maxLength": 200
+                            }
+                          }
                         }
                       },
                       "required": [
                         "name",
                         "logo",
-                        "sameAs"
+                        "sameAs",
+                        "image",
+                        "description",
+                        "telephone",
+                        "founder",
+                        "address"
+                      ]
+                    },
+                    "searchPath": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "shipping": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rate": {
+                          "type": "string"
+                        },
+                        "country": {
+                          "type": "string"
+                        },
+                        "handling": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "min": {
+                              "type": "integer"
+                            },
+                            "max": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "min",
+                            "max"
+                          ]
+                        },
+                        "transit": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "min": {
+                              "type": "integer"
+                            },
+                            "max": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "min",
+                            "max"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "rate",
+                        "country",
+                        "handling",
+                        "transit"
+                      ]
+                    },
+                    "returns": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "country": {
+                          "type": "string"
+                        },
+                        "fees": {
+                          "type": "string",
+                          "enum": [
+                            "customer",
+                            "free"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "days",
+                        "country",
+                        "fees"
                       ]
                     },
                     "robotsDisallow": {
@@ -34788,6 +36692,9 @@
                     "siteUrl",
                     "contactEmail",
                     "organization",
+                    "searchPath",
+                    "shipping",
+                    "returns",
                     "robotsDisallow",
                     "staticPaths",
                     "productUrlPattern",

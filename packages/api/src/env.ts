@@ -310,7 +310,7 @@ const EnvSchema = z.object({
   // Test harnesses only: every job whose interval is one minute runs on this interval instead (the e2e suites use
   // 1000, so a spec sees an outbox drain in seconds). Unset in every real deployment.
   JOBS_FAST_INTERVAL_MS: z.coerce.number().int().positive().optional(),
-  // auto-deliver job: actually transition Shipped→Delivered (default: dry-run log only).
+  // auto-deliver job: Shipped→Delivered applies by default (#396); '0' = dry-run log only.
   JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
   // auto-deliver job: age threshold in days before Shipped becomes Delivered.
   JOBS_AUTO_DELIVER_DAYS: z.coerce.number().int().positive().optional(),

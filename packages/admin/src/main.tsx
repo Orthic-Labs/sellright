@@ -45,6 +45,9 @@ const DraftOrder = lazy(() => import('./pages/DraftOrder'));
 const ImportTracking = lazy(() => import('./pages/ImportTracking'));
 const TrackingGrid = lazy(() => import('./pages/TrackingGrid'));
 const OrderExport = lazy(() => import('./pages/OrderExport'));
+const SheerIdSettings = lazy(() => import('./pages/SheerIdSettings'));
+const BulkStock = lazy(() => import('./pages/BulkStock'));
+const AccountCredit = lazy(() => import('./pages/AccountCredit'));
 const AbandonedCarts = lazy(() => import('./pages/AbandonedCarts'));
 const Affiliates = lazy(() => import('./pages/Affiliates'));
 const AffiliateDetail = lazy(() => import('./pages/AffiliateDetail'));
@@ -151,6 +154,7 @@ function App() {
         <Route path="/collections" element={<Collections />} />
         <Route path="/collections/:id" element={<CollectionDetail />} />
         <Route path="/inventory" element={<Inventory />} />
+        <Route path="/bulk-stock" element={<BulkStock />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/customers/:id" element={<CustomerDetail />} />
         <Route path="/discounts" element={<Discounts />} />
@@ -161,6 +165,7 @@ function App() {
         <Route path="/activity" element={<Activity />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/gift-cards" element={<GiftCards />} />
+        <Route path="/account-credit" element={<AccountCredit />} />
         <Route path="/loyalty" element={<Loyalty />} />
         <Route path="/reviews" element={<Reviews />} />
         <Route path="/locations" element={<Locations />} />
@@ -171,6 +176,7 @@ function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/payments" element={<PaymentsSettings />} />
         <Route path="/settings/email" element={<EmailSettings />} />
+        <Route path="/settings/sheerid" element={<SheerIdSettings />} />
         <Route path="/settings/seo" element={<Seo />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -16,7 +16,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
-import { autoDeliver } from './auto-deliver.js';
+import { autoDeliver, autoDeliverStore } from './auto-deliver.js';
 import { withLeaderLock } from './leader-lock.js';
 
 // Safety: refuse to run against anything but a *_test database.
@@ -72,12 +72,14 @@ async function auditLogCount(): Promise<number> {
   });
 }
 
+// Shared teardown for every describe below: wipe, then close the pool once the file is done.
+afterAll(async () => {
+  await wipe();
+  await pool.end();
+});
+
 describe('autoDeliver concurrency (PERF-12)', () => {
   beforeEach(wipe);
-  afterAll(async () => {
-    await wipe();
-    await pool.end();
-  });
 
   it('two concurrent passes transition each Shipped fulfillment exactly once (no double-transition)', async () => {
     await seedStore();
@@ -138,8 +140,9 @@ describe('autoDeliver concurrency (PERF-12)', () => {
     try {
       await locker.query('BEGIN');
       await locker.query("SELECT set_config('app.current_store', $1, true)", [STORE]);
+      // #396: a pass claims ORDER rows (the lock every ship/fulfil route takes first), so a concurrent fulfil holds this one.
       const lockResult = await locker.query(
-        "SELECT id FROM fulfillment WHERE store_id = $1 AND order_id = (SELECT id FROM \"order\" WHERE store_id = $1 AND code = $2) FOR UPDATE",
+        "SELECT id FROM \"order\" WHERE store_id = $1 AND code = $2 FOR UPDATE",
         [STORE, 'AD-LOCKED'],
       );
       expect(lockResult.rows.length).toBe(1);
@@ -240,5 +243,74 @@ describe('autoDeliver concurrency (PERF-12)', () => {
 
     // No audit row from the dry-run.
     expect(await auditLogCount()).toBe(0);
+  });
+});
+
+describe('auto-deliver candidate rule (the previous platform delivered-order-check parity, #396)', () => {
+  beforeEach(wipe);
+
+  /** Seed an order with one line (`qty` ordered, `fulfilled` shipped) and any number of fulfillments. */
+  async function seed(code: string, opts: { state?: string; qty?: number; fulfilled?: number; fulfillments: Array<{ state: string; tracking: string | null; daysAgo: number }> }): Promise<string> {
+    return withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`
+        INSERT INTO "order" (id, store_id, code, state, currency, grand_total)
+        VALUES (gen_random_uuid(), ${STORE}, ${code}, ${opts.state ?? 'Paid'}::order_state, 'USD', 1000)
+        RETURNING id`);
+      const orderId = (r.rows[0] as { id: string }).id;
+      const qty = opts.qty ?? 1;
+      await tx.execute(sql`
+        INSERT INTO order_line (id, store_id, order_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total, fulfilled_qty)
+        VALUES (gen_random_uuid(), ${STORE}, ${orderId}, 'SKU', 'Item', ${qty}, 1000, ${qty * 1000}, ${qty * 1000}, ${opts.fulfilled ?? qty})`);
+      for (const f of opts.fulfillments) {
+        const t = new Date(Date.now() - f.daysAgo * 86_400_000);
+        await tx.execute(sql`
+          INSERT INTO fulfillment (id, store_id, order_id, state, tracking_code, created_at, updated_at)
+          VALUES (gen_random_uuid(), ${STORE}, ${orderId}, ${f.state}::fulfillment_state, ${f.tracking}, ${t}, ${t})`);
+      }
+      return orderId;
+    });
+  }
+
+  const dueCodes = async (days = 10) => {
+    const r = await autoDeliverStore(STORE, { apply: false, days, exact: true });
+    return r.sample.map((x) => x.code).sort();
+  };
+
+  it('delivers only orders whose fulfillments are ALL Shipped with tracking, and marks every one Delivered', async () => {
+    await seedStore();
+    await seed('R-OK', { fulfillments: [{ state: 'Shipped', tracking: 'T1', daysAgo: 30 }, { state: 'Shipped', tracking: 'T2', daysAgo: 20 }], qty: 2 });
+    await seed('R-NOTRACK', { fulfillments: [{ state: 'Shipped', tracking: null, daysAgo: 30 }] });
+    await seed('R-BLANK', { fulfillments: [{ state: 'Shipped', tracking: '  ', daysAgo: 30 }] });
+    await seed('R-ONEBLANK', { qty: 2, fulfillments: [{ state: 'Shipped', tracking: 'T3', daysAgo: 30 }, { state: 'Shipped', tracking: '', daysAgo: 30 }] });
+    await seed('R-PENDING', { qty: 2, fulfillments: [{ state: 'Shipped', tracking: 'T4', daysAgo: 30 }, { state: 'Pending', tracking: null, daysAgo: 30 }] });
+    await seed('R-PARTIAL', { qty: 2, fulfilled: 1, fulfillments: [{ state: 'Shipped', tracking: 'T5', daysAgo: 30 }] });
+    await seed('R-RECENT', { fulfillments: [{ state: 'Shipped', tracking: 'T6', daysAgo: 20 }, { state: 'Shipped', tracking: 'T7', daysAgo: 2 }], qty: 1 });
+    await seed('R-REFUNDED', { state: 'Refunded', fulfillments: [{ state: 'Shipped', tracking: 'T8', daysAgo: 30 }] });
+
+    expect(await dueCodes()).toEqual(['R-OK']);
+    expect(await autoDeliver({ apply: true, days: 10 })).toBe(1);
+
+    const rows = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT o.code AS code, f.state AS state FROM fulfillment f JOIN "order" o ON o.id = f.order_id WHERE f.store_id = ${STORE} ORDER BY o.code`);
+      return r.rows as Array<{ code: string; state: string }>;
+    });
+    expect(rows.filter((x) => x.code === 'R-OK').map((x) => x.state)).toEqual(['Delivered', 'Delivered']);
+    expect(rows.filter((x) => x.code !== 'R-OK').every((x) => x.state !== 'Delivered')).toBe(true);
+    expect(await auditLogCount()).toBe(1);
+  });
+
+  it('maxOrders caps the run, oldest shipment first, and reports order counts', async () => {
+    await seedStore();
+    await seed('M-OLDEST', { fulfillments: [{ state: 'Shipped', tracking: 'A', daysAgo: 40 }] });
+    await seed('M-MID', { fulfillments: [{ state: 'Shipped', tracking: 'B', daysAgo: 30 }] });
+    await seed('M-NEWER', { fulfillments: [{ state: 'Shipped', tracking: 'C', daysAgo: 20 }] });
+
+    const dry = await autoDeliverStore(STORE, { apply: false, days: 10, exact: true, maxOrders: 2 });
+    expect(dry.count).toBe(2);
+    expect(dry.sample.map((x) => x.code)).toEqual(['M-OLDEST', 'M-MID']);
+
+    const real = await autoDeliverStore(STORE, { apply: true, days: 10, maxBatches: 25, maxOrders: 2 });
+    expect(real.count).toBe(2);
+    expect(await dueCodes()).toEqual(['M-NEWER']);
   });
 });

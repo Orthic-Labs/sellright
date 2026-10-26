@@ -227,7 +227,7 @@ describe('open orders feed (manual tracking grid)', () => {
 
 describe('auto-deliver run now', () => {
   async function shipped(code: string, daysAgo: number) {
-    const id = await seedOrder({ code, lines: [A] });
+    const id = await seedOrder({ code, lines: [{ ...A, fulfilled: A.qty }] }); // #396: only fully fulfilled orders auto-deliver
     await withStore(STORE, async (tx) => {
       const t = new Date(Date.now() - daysAgo * 86_400_000);
       await tx.execute(sql`INSERT INTO fulfillment (id, store_id, order_id, state, tracking_code, created_at, updated_at) VALUES (gen_random_uuid(), ${STORE}, ${id}, 'Shipped', ${`T-${code}`}, ${t}, ${t})`);

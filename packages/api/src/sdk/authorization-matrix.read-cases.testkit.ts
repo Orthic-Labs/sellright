@@ -129,6 +129,7 @@ export function createReadCases(fixture: MatrixReadFixture): MatrixCase[] {
     } },
     { path: '/v1/admin/affiliates', verify: list({ id: 'string', email: 'string', promotionId: 'string', code: 'string', onboardedAt: 'string' }, { commissionPct: 'number' }) },
     { path: '/v1/admin/gift-cards', verify: list({ id: 'string', code: 'string', enabled: 'boolean' }) },
+    { path: '/v1/admin/stock/tree', verify: list({ id: 'string', name: 'string', enabled: 'boolean', variants: 'array' }, { total: 'number', truncated: 'boolean' }) },
     { path: '/v1/admin/subscribers/stats', verify(body: Json, proof: MatrixProof) { rows(body, proof, { kind: 'string', topic: 'string', status: 'string', n: 'number' }, 'counts'); } },
     { path: '/v1/admin/marketing/config', verify(body: Json, proof: MatrixProof) {
       fields(body, { configured: 'boolean', url: 'nullable-string' }, proof);
