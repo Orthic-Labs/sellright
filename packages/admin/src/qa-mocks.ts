@@ -249,6 +249,110 @@ export function maybeMock(path: string, qs: URLSearchParams, init?: RequestInit)
       { code: 'DD30366', placedAt: '2026-10-25T18:20:00Z', isPreOrder: true, email: 'alex@example.com', name: 'Alex Chen', state: 'Paid', country: 'CA', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
       { code: 'DD30367', placedAt: '2026-10-26T11:05:00Z', isPreOrder: false, email: 'casey@example.com', name: null, state: 'Paid', country: 'US', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
     ] } };
+    // #382-#396 audit screens (synthetic data, shapes per the API routes).
+    if (path === '/account-credit') return { data: { items: [
+      { id: 'ac-1', code: 'ACC-7QK2M', email: 'jordan@example.com', currency: 'USD', initialAmount: 5000, balance: 3899, held: 0, available: 3899, disabled: false, createdAt: '2026-09-14T10:02:00Z' },
+      { id: 'ac-2', code: 'ACC-R4T8W', email: 'sam.rivera@example.com', currency: 'USD', initialAmount: 2500, balance: 2500, held: 1200, available: 1300, disabled: false, createdAt: '2026-10-02T16:40:00Z' },
+      { id: 'ac-3', code: 'ACC-9HZ3P', email: 'alex.chen@example.com', currency: 'USD', initialAmount: 10000, balance: 0, held: 0, available: 0, disabled: true, createdAt: '2026-08-21T08:15:00Z' },
+    ] } };
+    if (path.startsWith('/account-credit/')) return { data: {
+      account: { id: 'ac-1', code: 'ACC-7QK2M', email: 'jordan@example.com', currency: 'USD', initialAmount: 5000, balance: 3899, held: 0, available: 3899, disabled: false, createdAt: '2026-09-14T10:02:00Z' },
+      ledger: [
+        { id: 'l3', kind: 'ADJUST', status: 'POSTED', amount: 500, delta: 500, balanceAfter: 3899, reason: 'Goodwill for late shipment', actor: 'owner@demo.test', orderCode: null, createdAt: '2026-10-20T12:00:00Z' },
+        { id: 'l2', kind: 'REDEEM', status: 'POSTED', amount: 1601, delta: -1601, balanceAfter: 3399, reason: null, actor: null, orderCode: 'DD30331', createdAt: '2026-10-05T09:30:00Z' },
+        { id: 'l1', kind: 'ISSUE', status: 'POSTED', amount: 5000, delta: 5000, balanceAfter: 5000, reason: 'Warranty replacement credit', actor: 'owner@demo.test', orderCode: null, createdAt: '2026-09-14T10:02:00Z' },
+      ],
+      redeemedOrders: [{ orderId: 'o-1', orderCode: 'DD30331', lines: [
+        { id: 'ol-1', name: 'Pioneer Field Knife — Black', quantity: 1, unitCreditCents: [1201] },
+        { id: 'ol-2', name: 'Leather Sheath', quantity: 2, unitCreditCents: [200, 200] },
+      ] }],
+    } };
+    if (path === '/stock/tree') return { data: { total: 3, truncated: false, items: [
+      { id: 'p1', name: 'Pioneer Field Knife', enabled: true, variants: [
+        { id: 'v1', name: 'Black / M390', sku: 'PION-FK-BLK', enabled: true, onHand: 14, allocated: 2 },
+        { id: 'v2', name: 'Stonewash / M390', sku: 'PION-FK-SW', enabled: true, onHand: 0, allocated: 0 },
+        { id: 'v3', name: 'Damascus', sku: 'PION-FK-DAM', enabled: false, onHand: 3, allocated: 1 },
+      ] },
+      { id: 'p2', name: 'Falcon Multi-Tool', enabled: true, variants: [{ id: 'v4', name: 'Default', sku: 'FALC-MT-1', enabled: true, onHand: 42, allocated: 5 }] },
+      { id: 'p3', name: 'Sierra Wool Beanie', enabled: true, variants: [
+        { id: 'v5', name: 'Charcoal', sku: 'SIE-BN-CH', enabled: true, onHand: 8, allocated: 0 },
+        { id: 'v6', name: 'Oat', sku: 'SIE-BN-OT', enabled: true, onHand: 1, allocated: 1 },
+      ] },
+    ] } };
+    if (path === '/sheerid/config') return { data: { storeId: '048dc9af-0000-4000-8000-000000000000', configured: true, programId: '64f0c1e2a5b7d90012ab34cd', theme: null, hasWebhookSecret: true, hasClientCredentials: true, verificationTtlDays: 365 } };
+    if (path === '/affiliates') return { data: { commissionPct: 10, items: [
+      { id: 'af-1', email: 'creator.one@example.com', code: 'BLADEWORKS', status: 'Active', earned: 48250, settled: 30000, unsettled: 18250, orders: 37, lastSettledAt: '2026-09-30T00:00:00Z' },
+      { id: 'af-2', email: 'edc.reviews@example.com', code: 'EDCREV10', status: 'Active', earned: 12900, settled: 0, unsettled: 12900, orders: 11, lastSettledAt: null },
+      { id: 'af-3', email: 'old.partner@example.com', code: 'SUMMER24', status: 'Disabled', earned: 5400, settled: 5400, unsettled: 0, orders: 6, lastSettledAt: '2026-06-30T00:00:00Z' },
+    ] } };
+    if (/^\/affiliates\/[^/]+\/stats$/.test(path)) return { data: { range: { from: null, to: null }, commissionPct: 10,
+      totals: { orders: 30, units: 34, revenue: 499860, commission: 49986 },
+      bySku: [
+        { sku: 'PION-FK-BLK', name: 'Pioneer Field Knife — Black', units: 21, orders: 19, revenue: 418950, commission: 41895 },
+        { sku: 'FALC-MT-1', name: 'Falcon Multi-Tool', units: 9, orders: 8, revenue: 80910, commission: 8091 },
+      ] } };
+    if (/^\/affiliates\/[^/]+$/.test(path)) return { data: {
+      id: 'af-1', email: 'creator.one@example.com', code: 'BLADEWORKS', status: 'Active', accessToken: 'tok_demo_0000', commissionPct: 10,
+      earned: 48250, settled: 30000, unsettled: 18250,
+      topSellers: [
+        { name: 'Pioneer Field Knife', sku: 'PION-FK-BLK', qtySold: 21, revenue: 418950 },
+        { name: 'Falcon Multi-Tool', sku: 'FALC-MT-1', qtySold: 9, revenue: 80910 },
+      ],
+      orders: [
+        { code: 'DD30340', state: 'Paid', subtotal: 19950, discountTotal: 1995, basis: 17955, commission: 1796, placedAt: '2026-10-22T14:10:00Z', createdAt: '2026-10-22T14:08:00Z' },
+        { code: 'DD30318', state: 'Paid', subtotal: 8990, discountTotal: 899, basis: 8091, commission: 809, placedAt: '2026-10-12T09:44:00Z', createdAt: '2026-10-12T09:40:00Z' },
+      ],
+      settlements: [{ amountCents: 30000, periodStartAt: '2026-09-01T00:00:00Z', periodEndAt: '2026-09-30T23:59:59Z', settledAt: '2026-10-01T10:00:00Z', txRef: 'PAYPAL-8XK21', notes: 'September payout' }],
+    } };
+    if (path === '/blog') return { data: { items: [
+      { id: 'b1', title: 'Choosing a steel: M390 vs S35VN', slug: 'm390-vs-s35vn', isPublished: true, publishDate: '2026-10-18T09:00:00Z', authorName: 'Damned Designs', readingTime: 6, tags: ['steel', 'guides'], createdAt: '2026-10-17T15:00:00Z' },
+      { id: 'b2', title: 'Sharpening at home', slug: 'sharpening-at-home', isPublished: false, publishDate: null, authorName: 'Workshop Team', readingTime: 4, tags: ['care'], createdAt: '2026-10-24T11:00:00Z' },
+    ] } };
+    if (path.startsWith('/blog/')) return { data: {
+      id: 'b1', title: 'Choosing a steel: M390 vs S35VN', slug: 'm390-vs-s35vn', excerpt: 'Edge retention, toughness and corrosion resistance, side by side.',
+      body: null,
+      bodyHtml: '<h2>Why steel matters</h2><p>Two of our most asked-about steels are <strong>M390</strong> and <em>S35VN</em>. Here is how they compare.</p>'
+        + '<ul><li><strong>Edge retention:</strong> M390 holds longer.</li><li><strong>Toughness:</strong> S35VN chips less.</li><li><strong>Sharpening:</strong> S35VN is easier.</li></ul>'
+        + '<blockquote><p>Pick the steel for the work, not the spec sheet.</p></blockquote>'
+        + '<h3>Care tips</h3><ol><li>Wipe dry after use.</li><li>Strop often.</li></ol>'
+        + '<p>Read our <a href="https://example.com/care">care guide</a> or run <code>hone --angle 20</code> on a guided sharpener.</p>'
+        + '<p><img src="https://placehold.co/640x320/png" alt="Blade close-up"></p>',
+      authorName: 'Damned Designs', tags: ['steel', 'guides'], isPublished: true, publishDate: '2026-10-18T09:00:00Z',
+      seoTitle: 'M390 vs S35VN — which knife steel?', seoDescription: 'Edge retention, toughness and care for two premium knife steels.',
+      featuredAssetId: null, featuredAssetPath: null, seoRevision: 'rev-1',
+    } };
+    if (path === '/discounts') return { data: { items: [
+      { id: 'd1', code: 'HEROES15', type: 'percentage', value: 15, enabled: true, usedCount: 128, usageLimit: null, perCustomerUsageLimit: 1, startsAt: null, endsAt: null, freeShipping: false },
+      { id: 'd2', code: 'BLADEWORKS', type: 'percentage', value: 10, enabled: true, usedCount: 37, usageLimit: null, perCustomerUsageLimit: null, startsAt: null, endsAt: null, freeShipping: false },
+      { id: 'd3', code: 'FALL25', type: 'fixed', value: 2500, enabled: false, usedCount: 4, usageLimit: 100, perCustomerUsageLimit: 1, startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-11-30T23:59:59Z', freeShipping: true },
+    ] } };
+    if (path.startsWith('/discounts/')) {
+      const id = path.split('/').pop();
+      const base = id === 'd2'
+        ? { id: 'd2', code: 'BLADEWORKS', type: 'percentage', value: 10, enabled: true, usedCount: 37, usageLimit: null, perCustomerUsageLimit: null, conditions: [], priority: 0, exclusionGroup: null, affiliateEmail: 'creator.one@example.com' }
+        : { id: 'd1', code: 'HEROES15', type: 'percentage', value: 15, enabled: true, usedCount: 128, usageLimit: null, perCustomerUsageLimit: 1,
+            conditions: [{ code: 'verified_customer', args: [{ name: 'categories', value: '["military","first_responder","teacher"]' }] }, { code: 'minimum_order_amount', args: [{ name: 'amount', value: '5000' }] }],
+            priority: 20, exclusionGroup: 'verified', affiliateEmail: null };
+      return { data: { ...base, startsAt: null, endsAt: null, freeShipping: false, usage: [
+        { orderCode: 'DD30341', email: 'jordan@example.com', at: '2026-10-23T10:00:00Z' },
+        { orderCode: 'DD30329', email: 'sam.rivera@example.com', at: '2026-10-15T18:22:00Z' },
+      ] } };
+    }
+    if (path === '/collections') return { data: { items: [{ id: 'c1', name: 'Fixed blades' }, { id: 'c2', name: 'Folders' }] } };
+    if (path === '/seo/config') return { data: {
+      siteUrl: 'https://www.damneddesigns.com', indexNowKey: 'demo-indexnow-key', indexNowConfigured: true,
+      organization: { name: 'Damned Designs', logo: 'https://www.damneddesigns.com/logo.png', sameAs: ['https://www.instagram.com/example'],
+        image: 'https://www.damneddesigns.com/og.jpg', description: 'Knives and blade tools in M390, S35VN and 14C28N.', telephone: '+1-555-0100',
+        founder: { name: 'Founder Name', id: null }, address: { streetAddress: '100 Example St', addressLocality: 'Austin', addressRegion: 'TX', postalCode: '78701', addressCountry: 'US' } },
+      searchPath: '/search?q={search_term_string}',
+      shipping: { rate: '0', country: 'US', handling: { min: 0, max: 1 }, transit: { min: 2, max: 5 } },
+      returns: { days: 30, country: 'US', fees: 'customer' },
+    } };
+    if (path === '/seo/sitemaps') return { data: { configured: true, siteUrl: 'https://www.damneddesigns.com', indexUrl: 'https://www.damneddesigns.com/sitemap.xml', totalUrls: 214,
+      indexNowConfigured: true, cloudflareConfigured: true, files: [
+        { name: 'sitemap-products.xml', url: 'https://www.damneddesigns.com/sitemap-products.xml', kind: 'products', count: 180, urls: [], truncated: false },
+        { name: 'sitemap-blog.xml', url: 'https://www.damneddesigns.com/sitemap-blog.xml', kind: 'blog', count: 22, urls: [], truncated: false },
+      ] } };
     // #381 Order Export page: the count, this admin's saved settings and presets, and the download result.
     if (path === '/order-export/count') return { data: { totalOrders: qs.get('statuses') ? Math.min(qs.get('statuses')!.split(',').length, 5) + 3 : 0 } };
     if (path === '/preferences/order-export.last') return { data: { key: 'order-export.last', value: null } };
