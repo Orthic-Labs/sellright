@@ -9,7 +9,6 @@ import { sellright } from './client';
 import { srErrorStatus } from '~/utils/sellright';
 import type {
 	AffiliateStatsResult,
-	NewsletterSignupResult,
 	SubscriberActionResult,
 	TrackedAddress,
 	TrackedFulfillment,
@@ -91,6 +90,7 @@ function normalizeTrackedOrder(raw: Record<string, unknown>): TrackedOrder {
 				isPreOrder: Boolean(line.isPreOrder),
 				shipDate: (line.shipDate as string | null) ?? null,
 				shipDateLabel: typeof line.shipDateLabel === 'string' ? line.shipDateLabel : null,
+				image: typeof line.image === 'string' && line.image ? line.image : null,
 			};
 		}) as TrackedOrderLine[],
 	};
@@ -113,30 +113,6 @@ export async function trackOrder(code: string, email: string, turnstileToken?: s
 		}
 		console.error('Order tracking error:', err);
 		return { success: false, error: 'Unable to track order at this time. Please try again later.' };
-	}
-}
-
-// ── Newsletter signup ─────────────────────────────────────────────────────────
-
-/** POST /v1/shop/newsletter-signup. `honeypot` is a client-side-only bot trap
- *  (the field storefront forms already render hidden) — the API has no such
- *  field, so a filled honeypot short-circuits here and never calls out. */
-export async function newsletterSignup(email: string, honeypot?: string, turnstileToken?: string): Promise<NewsletterSignupResult> {
-	if (honeypot) return { ok: true };
-	try {
-		const { error } = await sellright().POST('/v1/shop/newsletter-signup', {
-			body: { email, source: 'storefront', turnstileToken: turnstileToken || undefined },
-		});
-		if (error) return { ok: false, message: 'Subscription failed. Please try again.' };
-		return { ok: true };
-	} catch (err) {
-		if (srErrorStatus(err) === 429) {
-			return { ok: false, message: 'Too many signups from this IP. Try again in an hour.' };
-		}
-		if (srErrorStatus(err) === 403) {
-			return { ok: false, message: 'Security check failed. Please try again.' };
-		}
-		return { ok: false, message: 'Subscription failed. Please try again.' };
 	}
 }
 
@@ -208,6 +184,8 @@ export async function fetchAffiliateStats(token: string): Promise<AffiliateStats
 		return { ...(data as Omit<AffiliateStatsResult, 'success'>), success: true };
 	} catch (err) {
 		if (srErrorStatus(err) === 404) return { success: false, error: 'Invalid affiliate link.' };
+		// #390: the dashboard's per-visitor limit (forwarded IP, sellright-visitor-ip.server.ts) — say so, don't call it an outage.
+		if (srErrorStatus(err) === 429) return { success: false, error: 'Too many requests. Please wait a minute and refresh.' };
 		console.error('Affiliate stats fetch failed:', err);
 		return { success: false, error: 'Could not reach the dashboard service.' };
 	}

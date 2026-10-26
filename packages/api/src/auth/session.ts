@@ -83,6 +83,7 @@ export async function createSession(tx: Tx, storeId: string, customerId: string,
 export interface SessionCustomer {
   id: string;
   email: string;
+  title: string | null;
   firstName: string | null;
   lastName: string | null;
   phone: string | null;
@@ -118,6 +119,7 @@ export async function resolveCustomer(
     .select({
       id: s.customer.id,
       email: s.customer.email,
+      title: s.customer.title,
       firstName: s.customer.firstName,
       lastName: s.customer.lastName,
       phone: s.customer.phone,

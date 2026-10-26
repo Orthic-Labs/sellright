@@ -21,6 +21,8 @@ gatewayPayments.use('/v1/webhooks/sezzle/*', bodyLimit({ maxSize: 262144 }));
 const requestSchema = z.object({
   method: z.enum(['nmi', 'sezzle']),
   token: z.string().min(1).max(4096).optional(),
+  // #393: brand + last four digits from the Collect.js tokenization callback, for the receipt. Never more of the card.
+  card: z.object({ brand: z.string().regex(/^[A-Za-z][A-Za-z ]{0,19}$/), last4: z.string().regex(/^\d{4}$/) }).strict().optional(),
 }).strict();
 
 // Shared response shape for both routes below — mirrors `view()` in

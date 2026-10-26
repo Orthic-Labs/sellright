@@ -51,6 +51,22 @@ export function resolveOrderDisplayState(
 	return orderState;
 }
 
+/** The pre-order facts an order (list row or detail) carries: any line pre-ordered, the latest ship date, and the
+ *  merchant's own ship-date wording (shipDateLabel wins over the date, as in `shippingDateText`). */
+export type PreOrderFacts = { isPreOrder: boolean; shipDate?: string | null; shipDateLabel?: string | null };
+
+/** previous-platform parity (account history `getStatusDisplay`): "Expected to ship around <date>" for a pre-order, or
+ *  "Expected ship date to be announced" when no date is known. */
+export function preOrderShipText(pre: PreOrderFacts): string {
+	const label = pre.shipDateLabel?.trim();
+	if (label) return `Expected to ship around ${label}`;
+	const date = pre.shipDate ? new Date(pre.shipDate) : null;
+	if (date && !Number.isNaN(date.getTime())) {
+		return `Expected to ship around ${date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`;
+	}
+	return 'Expected ship date to be announced';
+}
+
 /**
  * Status label/color. See `resolveOrderDisplayState` for the precedence between
  * the native payment state (`Paid`/`PendingPayment`/`Refunded`/…), the order's
@@ -61,6 +77,7 @@ export function getStatusDisplay(
 	orderState: string,
 	fulfillments: AccountOrderDetail['fulfillments'] | undefined,
 	fulfillmentStatus?: string | null,
+	preOrder?: PreOrderFacts,
 ): { label: string; color: string; description?: string } {
 	switch (resolveOrderDisplayState(orderState, fulfillments, fulfillmentStatus)) {
 		case 'Delivered':
@@ -73,14 +90,17 @@ export function getStatusDisplay(
 
 	switch (orderState) {
 		case 'Paid':
+			// Paid, nothing shipped yet, and a pre-order line: "Pre-ordered" with its ship date (the previous platform's PaymentSettled + isPreOrder).
+			if (preOrder?.isPreOrder) return { label: 'Pre-ordered', color: NEUTRAL, description: preOrderShipText(preOrder) };
 			return { label: 'Processing', color: NEUTRAL };
 		case 'PendingPayment':
 			return { label: 'Payment Pending', color: 'bg-[#fef3c7] text-[#92400e] border-[#fde68a]' };
 		case 'Cancelled':
 			return { label: 'Cancelled', color: NEUTRAL };
 		case 'Refunded':
-		case 'PartiallyRefunded':
 			return { label: 'Refunded', color: 'bg-[#fee2e2] text-[#991b1b] border-[#fca5a5]' };
+		case 'PartiallyRefunded':
+			return { label: 'Partially Refunded', color: 'bg-[#fee2e2] text-[#991b1b] border-[#fca5a5]' };
 		default:
 			return { label: orderState, color: NEUTRAL };
 	}

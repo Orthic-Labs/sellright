@@ -97,7 +97,7 @@ function federatedSource(fixture: Fixture, adapter: FederatedTransport) {
   async function session(response: Response, proof: MatrixProof, s: Customer, existing: string[] = []) {
     const result = await response.json() as Claims;
     proof.equal(Object.keys(result).sort(), ['customer', 'token'], 'exact federated sign-in response fields');
-    proof.equal(result.customer, { id: s.id, email: s.email, firstName: 'Synthetic', lastName: 'Customer', phone: null, emailVerified: true, isMigrated: true },
+    proof.equal(result.customer, { id: s.id, email: s.email, title: null, firstName: 'Synthetic', lastName: 'Customer', phone: null, emailVerified: true, isMigrated: true },
       'verified body identity links existing intended customer independently of supplied admin headers');
     proof.ok(typeof result.token === 'string' && result.token.length === 64, 'new opaque customer session');
     const hash = digest(result.token);

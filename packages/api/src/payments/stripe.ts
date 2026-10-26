@@ -170,6 +170,16 @@ export interface IntentLike {
  * onto payment.gateway_mode, so a later refund never has to guess which Stripe
  * account/mode the money actually moved through.
  */
+const STRIPE_BRAND: Record<string, string> = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', diners: 'Diners Club', jcb: 'JCB', unionpay: 'UnionPay', cartes_bancaires: 'Cartes Bancaires', eftpos_au: 'eftpos', interac: 'Interac' };
+
+/** #393: brand + last 4 of the card that paid (expanded latest_charge.payment_method_details.card), or null. */
+export function stripeCardFacts(latestCharge: unknown): { brand: string; last4: string } | null {
+  const card = (latestCharge as { payment_method_details?: { card?: { brand?: unknown; last4?: unknown } } } | null | undefined)?.payment_method_details?.card;
+  const last4 = typeof card?.last4 === 'string' && /^\d{4}$/.test(card.last4) ? card.last4 : null;
+  const brand = typeof card?.brand === 'string' ? STRIPE_BRAND[card.brand] ?? null : null;
+  return last4 && brand ? { brand, last4 } : null;
+}
+
 export function verifyIntent(pi: IntentLike, input: CreatePaymentInput): PaymentResult {
   const gateway = input.stripeMode ? { gateway: { mode: input.stripeMode } } : undefined;
   if (pi.amount !== input.amount || pi.currency.toUpperCase() !== input.currency.toUpperCase()) {
@@ -178,7 +188,14 @@ export function verifyIntent(pi: IntentLike, input: CreatePaymentInput): Payment
   if (pi.metadata?.orderCode !== input.orderCode) {
     return { state: 'Failed', providerRef: pi.id, errorMessage: 'order mismatch', metadata: gateway };
   }
-  if (pi.status === 'succeeded') return { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: pi.latest_charge ?? null, ...gateway } };
+  if (pi.status === 'succeeded') {
+    // latest_charge is retrieved expanded (#393) only to read the card's brand + last 4: the payment row keeps the
+    // charge id as before, never the charge object (it carries billing details).
+    const lc = pi.latest_charge;
+    const chargeId = typeof lc === 'string' ? lc : lc && typeof lc === 'object' && typeof (lc as { id?: unknown }).id === 'string' ? (lc as { id: string }).id : null;
+    const card = stripeCardFacts(lc);
+    return { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: chargeId, ...(card ? { card } : {}), ...gateway } };
+  }
   if (pi.status === 'requires_capture') return { state: 'Authorized', providerRef: pi.id, metadata: gateway };
   // D12: async payment methods (automatic_payment_methods is enabled) sit in
   // 'processing' while money may still settle — that is Pending, never
@@ -209,7 +226,7 @@ export const stripeProvider: PaymentProvider = {
     let pi: Stripe.PaymentIntent;
     try {
       const client = await resolveStripeClient(input.storeId, input.stripeMode);
-      pi = await client.paymentIntents.retrieve(intentId);
+      pi = await client.paymentIntents.retrieve(intentId, { expand: ['latest_charge'] });
     } catch (e) {
       return { state: 'Failed', providerRef: intentId, errorMessage: e instanceof Error ? e.message : 'retrieve failed' };
     }
@@ -258,7 +275,7 @@ export function stripeRefundState(status: string): 'Settled' | 'Pending' | 'Fail
 /** Read-only provider truth for one PaymentIntent (settlement fallback, D1). */
 export async function retrieveStripeIntent(storeId: string, mode: StripeMode, intentId: string): Promise<IntentLike & { last_payment_error?: { message?: string | null } | null }> {
   const client = await resolveStripeClient(storeId, mode);
-  return (await client.paymentIntents.retrieve(intentId)) as unknown as IntentLike & { last_payment_error?: { message?: string | null } | null };
+  return (await client.paymentIntents.retrieve(intentId, { expand: ['latest_charge'] })) as unknown as IntentLike & { last_payment_error?: { message?: string | null } | null };
 }
 
 /** Discovery for PaymentIntents we never tracked (minted before intent
@@ -292,7 +309,7 @@ export async function cancelStripeIntent(storeId: string, mode: StripeMode, inte
   try {
     return (await client.paymentIntents.cancel(intentId, {}, { idempotencyKey: `pi-cancel:${intentId}` })) as unknown as IntentLike;
   } catch {
-    return (await client.paymentIntents.retrieve(intentId)) as unknown as IntentLike;
+    return (await client.paymentIntents.retrieve(intentId, { expand: ['latest_charge'] })) as unknown as IntentLike;
   }
 }
 

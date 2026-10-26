@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { displayOrderState, getStatusDisplay, resolveOrderDisplayState } from './order-display';
+import { displayOrderState, getStatusDisplay, preOrderShipText, resolveOrderDisplayState } from './order-display';
 
 const read = (rel: string) => readFileSync(join(process.cwd(), rel), 'utf8');
 
@@ -48,8 +48,8 @@ describe('getStatusDisplay — the order list (no fulfillments array)', () => {
 	});
 
 	it('the order list and the detail page pass fulfillmentStatus through', () => {
-		expect(read('src/routes/account/orders/index.tsx')).toContain('getStatusDisplay(order.state, undefined, order.fulfillmentStatus)');
-		expect(read('src/routes/account/orders/[code]/index.tsx')).toContain('getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus)');
+		expect(read('src/routes/account/orders/index.tsx')).toContain('getStatusDisplay(order.state, undefined, order.fulfillmentStatus, preOrder)');
+		expect(read('src/routes/account/orders/[code]/index.tsx')).toContain('getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus, preOrderFactsOfLines(o.lines))');
 	});
 });
 
@@ -85,5 +85,28 @@ describe('status precedence — terminal payment state, then aggregate fulfilmen
 		const src = read('src/routes/account/orders/order-display.tsx');
 		expect(src).toContain('resolveOrderDisplayState(orderState, fulfillments, fulfillmentStatus)');
 		expect(src).not.toContain('fulfillments?.[0]');
+	});
+});
+
+describe('getStatusDisplay — refunds and pre-orders (#393)', () => {
+	it('a partially refunded order reads "Partially Refunded", a refunded one "Refunded"', () => {
+		expect(getStatusDisplay('PartiallyRefunded', undefined, null).label).toBe('Partially Refunded');
+		expect(getStatusDisplay('Refunded', undefined, null).label).toBe('Refunded');
+	});
+
+	it('a paid, unshipped pre-order reads "Pre-ordered" with its ship date', () => {
+		const out = getStatusDisplay('Paid', undefined, 'unfulfilled', { isPreOrder: true, shipDate: '2027-03-15T00:00:00.000Z' });
+		expect(out.label).toBe('Pre-ordered');
+		expect(out.description).toMatch(/^Expected to ship around March 1[45], 2027$/);
+	});
+
+	it('the merchant ship-date wording wins; no date at all says it is to be announced', () => {
+		expect(preOrderShipText({ isPreOrder: true, shipDate: '2027-03-15T00:00:00.000Z', shipDateLabel: 'Spring 2027' })).toBe('Expected to ship around Spring 2027');
+		expect(preOrderShipText({ isPreOrder: true })).toBe('Expected ship date to be announced');
+	});
+
+	it('a shipped pre-order shows its shipping status, and a plain paid order stays Processing', () => {
+		expect(getStatusDisplay('Paid', undefined, 'fulfilled', { isPreOrder: true }).label).toBe('Shipped');
+		expect(getStatusDisplay('Paid', undefined, 'unfulfilled', { isPreOrder: false }).label).toBe('Processing');
 	});
 });

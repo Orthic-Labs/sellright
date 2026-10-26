@@ -89,6 +89,7 @@ const HAND_WRITTEN = [
   '0112_scheduler_lease.sql',
   '0113_admin_handoff_code.sql',
   '0114_admin_preference.sql',
+  '0115_customer_title.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

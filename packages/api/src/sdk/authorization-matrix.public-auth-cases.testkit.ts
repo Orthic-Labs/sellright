@@ -75,7 +75,7 @@ function publicSource(fixture: Fixture) {
   async function sessionResponse(response: Response, proof: MatrixProof, s: Pick<Seed, 'id' | 'email'>, verified: boolean, existing: string[], migrated = false) {
     const body = await response.json() as Json;
     proof.equal(Object.keys(body).sort(), ['customer', 'token'], 'only customer session response fields');
-    proof.equal(body.customer, { id: s.id, email: s.email, firstName: 'Matrix', lastName: 'Public', phone: null, emailVerified: verified, isMigrated: migrated },
+    proof.equal(body.customer, { id: s.id, email: s.email, title: null, firstName: 'Matrix', lastName: 'Public', phone: null, emailVerified: verified, isMigrated: migrated },
       'body credentials/capability select fresh real customer, never supplied admin principal');
     proof.ok(typeof body.token === 'string' && body.token.length > 20, 'fresh opaque customer session');
     const hash = digest(body.token);

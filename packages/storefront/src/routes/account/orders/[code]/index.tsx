@@ -9,7 +9,7 @@ import { formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { productPath } from '~/platform/product-path';
 import { reviewEntryPath } from '~/utils/rewards';
-import { canReviewLine, formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder } from '../order-display';
+import { canReviewLine, formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder, preOrderFactsOfLines } from '../order-display';
 import { orderLineLabel } from '~/utils/line-label';
 
 export default component$(() => {
@@ -43,7 +43,7 @@ export default component$(() => {
 
 	const o = order.value;
 	const tracking = getTrackingInfo(o?.fulfillments);
-	const status = o ? getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus) : undefined;
+	const status = o ? getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus, preOrderFactsOfLines(o.lines)) : undefined;
 
 	return (
 		<div class="max-w-6xl m-auto rounded-lg p-4 space-y-6 text-gray-900">
@@ -79,7 +79,10 @@ export default component$(() => {
 				)}
 				{tracking.hasTracking && (
 					<p class="text-sm text-[#645541] font-mono mb-4">
-						Tracking: {tracking.trackingCode}{tracking.carrier ? ` (${tracking.carrier})` : ''}
+						Tracking:{' '}
+						<a href={tracking.url} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-[#141210]">{tracking.trackingCode}</a>
+						{tracking.carrier ? ` (${tracking.carrier})` : ''}
+						<a href={tracking.url} target="_blank" rel="noopener noreferrer" class="ml-3 px-2 py-1 bg-[#141210] text-[#FDFAF6] text-xs rounded-[3px] hover:opacity-90 transition-opacity no-underline font-sans">Track Package</a>
 					</p>
 				)}
 				<ul class="divide-y divide-gray-200">
@@ -172,11 +175,20 @@ export default component$(() => {
 			{o?.payments && o.payments.length > 0 && (
 				<div class="bg-gray-100 p-6">
 					<p class="mb-2 text-gray-600 text-sm">Payment</p>
-					{o.payments.map((p, i) => (
-						<p key={i} class="text-sm font-medium">
-							{p.method.replace(/([A-Z])/g, ' $1').trim()} — {p.state} — {formatPrice(p.amount, o.currency)}
-						</p>
-					))}
+					{o.payments.map((p, i) => {
+						// Brand + last four only (the API never sends more); "Visa ending in 1234", as the previous platform's order page showed.
+						const card = p as typeof p & { cardBrand?: string | null; cardLast4?: string | null };
+						return (
+							<div key={i}>
+								<p class="text-sm font-medium">
+									{p.method.replace(/([A-Z])/g, ' $1').trim()} — {p.state} — {formatPrice(p.amount, o.currency)}
+								</p>
+								{card.cardBrand && card.cardLast4 && (
+									<p class="text-xs text-gray-600 mt-0.5">{card.cardBrand} ending in {card.cardLast4}</p>
+								)}
+							</div>
+						);
+					})}
 				</div>
 			)}
 			{o && <OrderReturnsPanel code={o.code} />}

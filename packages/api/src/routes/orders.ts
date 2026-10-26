@@ -57,6 +57,7 @@ orders.openapi(
               discountTotal: z.number().int(), grandTotal: z.number().int(),
               placedAt: z.string().nullable(),
               shippingAddress: z.any(),
+              billingAddress: z.any(),
               customerEmail: z.string().nullable(),
               /** Where order mail goes: the checkout contact email (guests), else the account email. Same receipt/owner scope as the rest of this read. */
               contactEmail: z.string().nullable(),
@@ -67,6 +68,8 @@ orders.openapi(
               payments: z.array(z.object({
                 method: z.string(), state: z.string(), amount: z.number().int(),
                 providerRef: z.string().nullable(), errorMessage: z.string().nullable(), createdAt: z.string(),
+                // #393: brand + last 4 only (order-facts.ts cardFactsFromMetadata), for the receipt's payment line.
+                cardBrand: z.string().nullable(), cardLast4: z.string().nullable(),
               })),
               fulfillments: z.array(z.object({
                 state: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), updatedAt: z.string().nullable(),
@@ -167,7 +170,7 @@ orders.openapi(
         code: o.code, state: o.state, status, paymentStatus, fulfillmentStatus, currency: o.currency,
         shippingMethodName: o.shippingMethodName, subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, customerEmail, contactEmail, promotionCode, couponCodes,
+        shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null, customerEmail, contactEmail, promotionCode, couponCodes,
         payments, fulfillments, lines, amountDue: due, balanceChange, testMode,
         loyalty: (() => { const l = orderLoyaltySnapshot(o.metadata); return l ? { earnPoints: l.earnPoints, redeemPoints: l.redeemPoints, pointsDiscount: l.pointsDiscount } : null; })(),
       };

@@ -449,6 +449,8 @@ export const customer = pgTable(
     id: uuid().primaryKey().defaultRandom(),
     storeId: uuid().notNull().references(() => store.id),
     email: text().notNull(),
+    // #393 (0115): title (Mr, Ms, Dr, ...), edited on the storefront account profile.
+    title: text(),
     firstName: text(),
     lastName: text(),
     phone: text(),

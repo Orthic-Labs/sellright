@@ -44,11 +44,14 @@ export default component$(() => {
 	}));
 
 	const updateCustomer = $(async (): Promise<void> => {
+		// `title` is sent with the rest of the profile (PATCH /v1/shop/account/me accepts it); `UpdateProfileInput`
+		// (providers/shop/account/account.ts) does not declare it yet, hence the assertion.
 		await updateProfile({
+			title: appState.customer.title,
 			firstName: appState.customer.firstName,
 			lastName: appState.customer.lastName,
 			phone: appState.customer.phoneNumber,
-		});
+		} as Parameters<typeof updateProfile>[0]);
 
 		appState.customer.emailAddress !== newEmail.value
 			? (showModal.value = true)

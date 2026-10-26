@@ -9,7 +9,7 @@ import { importedFinancialReconciliationRequired } from '../orders/imported-fina
  * and line images. Centralized here so the four call sites can't drift.
  */
 import { shippingLabelSql } from '../lib/shipping-label.js';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { usableTenderRawSql } from '../payments/tender.js';
@@ -25,6 +25,24 @@ export interface OrderPaymentFact {
   providerRef: string | null;
   errorMessage: string | null;
   createdAt: string;
+  /** Card brand as the gateway reported it ("Visa"), or null (non-card tender / not recorded). Brand + last4 are the ONLY card facts ever exposed. */
+  cardBrand: string | null;
+  /** Last four digits of the card, or null. Validated to exactly four digits; never a longer fragment of the number. */
+  cardLast4: string | null;
+}
+
+/** The customer-safe card facts out of a payment's metadata. Writers (the NMI/Stripe settle paths) record
+ *  `metadata.card = { brand, last4 }`; the previous platform kept the same pair as `metadata.public.{cardType,last4}`, which an
+ *  imported/legacy payment may still carry. Anything else in the metadata (AVS/CVV, auth codes, gateway ids) stays
+ *  server-side. Strict shape checks: a malformed value yields null rather than leaking a longer card fragment. */
+export function cardFactsFromMetadata(metadata: unknown): { cardBrand: string | null; cardLast4: string | null } {
+  const m = (metadata && typeof metadata === 'object' ? metadata : {}) as { card?: { brand?: unknown; last4?: unknown }; public?: { cardType?: unknown; last4?: unknown } };
+  const brandRaw = m.card?.brand ?? m.public?.cardType;
+  const last4Raw = m.card?.last4 ?? m.public?.last4;
+  const last4 = typeof last4Raw === 'string' && /^\d{4}$/.test(last4Raw) ? last4Raw : null;
+  const brand = typeof brandRaw === 'string' && /^[A-Za-z][A-Za-z0-9 .&_-]{0,23}$/.test(brandRaw.trim()) ? brandRaw.trim() : null;
+  // A brand with no digits (or digits with no brand) is not a displayable "Visa ending in 1234".
+  return last4 && brand ? { cardBrand: brand, cardLast4: last4 } : { cardBrand: null, cardLast4: null };
 }
 
 /** Real payment records for an order — the API's own ground truth for
@@ -35,12 +53,12 @@ export async function loadOrderPayments(tx: Tx, orderId: string): Promise<OrderP
   const rows = await tx
     .select({
       method: s.payment.method, state: s.payment.state, amount: s.payment.amount,
-      providerRef: s.payment.providerRef, errorMessage: s.payment.errorMessage, createdAt: s.payment.createdAt,
+      providerRef: s.payment.providerRef, errorMessage: s.payment.errorMessage, createdAt: s.payment.createdAt, metadata: s.payment.metadata,
     })
     .from(s.payment)
     .where(eq(s.payment.orderId, orderId))
     .orderBy(desc(s.payment.createdAt));
-  return rows.map((r) => ({ ...r, state: wirePaymentState(r.state), createdAt: r.createdAt.toISOString() }));
+  return rows.map(({ metadata, ...r }) => ({ ...r, state: wirePaymentState(r.state), createdAt: r.createdAt.toISOString(), ...cardFactsFromMetadata(metadata) }));
 }
 
 export interface OrderFulfillmentFact {
@@ -53,6 +71,19 @@ export interface OrderFulfillmentFact {
 export async function loadOrderFulfillments(tx: Tx, orderId: string): Promise<OrderFulfillmentFact[]> {
   const rows = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, orderId)).orderBy(desc(s.fulfillment.createdAt));
   return rows.map((f) => ({ state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, updatedAt: f.updatedAt?.toISOString() ?? null }));
+}
+
+/** Batched counterpart of `loadOrderFulfillments` for list endpoints: one query for every order id, newest first per order. */
+export async function loadOrderFulfillmentsBatch(tx: Tx, orderIds: string[]): Promise<Map<string, OrderFulfillmentFact[]>> {
+  const out = new Map<string, OrderFulfillmentFact[]>();
+  if (!orderIds.length) return out;
+  const rows = await tx.select().from(s.fulfillment).where(inArray(s.fulfillment.orderId, orderIds)).orderBy(desc(s.fulfillment.createdAt));
+  for (const f of rows) {
+    const fact = { state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, updatedAt: f.updatedAt?.toISOString() ?? null };
+    const list = out.get(f.orderId);
+    if (list) list.push(fact); else out.set(f.orderId, [fact]);
+  }
+  return out;
 }
 
 /** Cents still owed per order (grand total - settled payments + edit-handed-back
@@ -170,8 +201,25 @@ export interface OrderLineFact {
  *  see the deploy notes for why adding order-time snapshot columns is a
  *  separate, larger schema change deferred out of this fix. */
 export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLineFact[]> {
+  return (await selectOrderLines(tx, eq(s.orderLine.orderId, orderId))).map(({ orderId: _orderId, ...l }) => l);
+}
+
+/** Batched counterpart of `loadOrderLines` for list endpoints (account order history): the same snapshot + live
+ *  image/preorder/ship-date facts for every order id in one query, grouped by order. */
+export async function loadOrderLinesBatch(tx: Tx, orderIds: string[]): Promise<Map<string, OrderLineFact[]>> {
+  const out = new Map<string, OrderLineFact[]>();
+  if (!orderIds.length) return out;
+  for (const { orderId, ...l } of await selectOrderLines(tx, inArray(s.orderLine.orderId, orderIds))) {
+    const list = out.get(orderId);
+    if (list) list.push(l); else out.set(orderId, [l]);
+  }
+  return out;
+}
+
+async function selectOrderLines(tx: Tx, where: SQL): Promise<Array<OrderLineFact & { orderId: string }>> {
   const rows = await tx
     .select({
+      orderId: s.orderLine.orderId,
       sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
@@ -185,8 +233,27 @@ export async function loadOrderLines(tx: Tx, orderId: string): Promise<OrderLine
     .from(s.orderLine)
     .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
     .leftJoin(s.product, eq(s.productVariant.productId, s.product.id))
-    .where(eq(s.orderLine.orderId, orderId));
+    .where(where);
   return rows.map((l) => ({ ...l, isPreOrder: l.isPreOrder ?? false, shipDate: l.shipDate?.toISOString() ?? null }));
+}
+
+/** What an order LIST row needs beyond the status triple (the previous platform's account history showed all of it): the tracking
+ *  number + carrier of the newest tracked fulfilment, whether any line is a pre-order, and the pre-order ship date
+ *  (the LATEST line date, as the previous platform's `getLatestPreOrderShipDate`) plus the merchant's own ship-date wording. */
+export function summarizeOrderForList(lines: OrderLineFact[], fulfillments: OrderFulfillmentFact[]): {
+  trackingCode: string | null; carrier: string | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null;
+} {
+  const tracked = fulfillments.find((f) => f.trackingCode);
+  const pre = lines.filter((l) => l.isPreOrder);
+  const times = pre.flatMap((l) => (l.shipDate ? [new Date(l.shipDate).getTime()] : [])).filter((n) => !Number.isNaN(n));
+  const labels = [...new Set(pre.flatMap((l) => (l.shipDateLabel ? [l.shipDateLabel] : [])))];
+  return {
+    trackingCode: tracked?.trackingCode ?? null,
+    carrier: tracked?.carrier ?? null,
+    isPreOrder: pre.length > 0,
+    shipDate: times.length ? new Date(Math.max(...times)).toISOString() : null,
+    shipDateLabel: labels.length ? labels.join('; ') : null,
+  };
 }
 
 /** The coupon code behind order.promotionId, if any (null for an automatic

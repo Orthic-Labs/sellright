@@ -224,14 +224,14 @@ export const createPaymentIntent = async (code: string, receiptToken?: string, e
 export const startGatewayPayment = async (
 	code: string,
 	method: 'nmi' | 'sezzle',
-	opts: { token?: string; idempotencyKey: string; receiptToken?: string },
+	opts: { token?: string; card?: { brand: string; last4: string }; idempotencyKey: string; receiptToken?: string },
 ): Promise<GatewayAttempt> => {
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment', {
 		params: {
 			path: { code },
 			header: { ...idempotency(opts.idempotencyKey), ...(opts.receiptToken ? { 'x-receipt-token': opts.receiptToken } : {}) },
 		},
-		body: { method, ...(opts.token ? { token: opts.token } : {}) },
+		body: { method, ...(opts.token ? { token: opts.token } : {}), ...(opts.card ? { card: opts.card } : {}) },
 	});
 	return nonEmpty(data, 'gateway-payment') as GatewayAttempt;
 };

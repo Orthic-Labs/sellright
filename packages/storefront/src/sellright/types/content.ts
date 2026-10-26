@@ -65,6 +65,8 @@ export interface TrackedOrderLine {
 	lineTotal: number;
 	isPreOrder: boolean;
 	shipDate: string | null; shipDateLabel?: string | null;
+	/** #393: the product image (asset path or URL) the tracking page shows beside the line, or null. */
+	image?: string | null;
 }
 
 /** packages/api `src/routes/order-facts.ts` `OrderPaymentFact` — the guest
@@ -101,11 +103,6 @@ export type TrackOrderResult =
 	| { success: false; error: string };
 
 // ── Newsletter + subscriber lifecycle ────────────────────────────────────────
-
-export interface NewsletterSignupResult {
-	ok: boolean;
-	message?: string;
-}
 
 export interface SubscriberActionResult {
 	ok: boolean;

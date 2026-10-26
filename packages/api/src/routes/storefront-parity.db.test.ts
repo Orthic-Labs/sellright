@@ -6,14 +6,13 @@ import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { createAdminSession } from '../auth/admin-session.js';
-import { clearLoginAttempts } from '../auth/rate-limit.js';
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { shopExtra } from './shop-extra.js';
 import { adminContent } from './admin-content.js';
 import { adminProducts } from './admin-products.js';
 import { adminCatalog } from './admin-catalog.js';
 import { auth } from './auth.js';
-import { clearTrackingAttempts } from './shop-extra.tracking-limit.js';
 import { emitProductChanged } from '../webhooks/catalog.js';
 
 vi.mock('../security/turnstile.js', () => ({ verifyTurnstileToken: vi.fn(async ({ token }) => token === 'valid-token') }));
@@ -53,11 +52,10 @@ beforeEach(async () => {
   await pool.query('INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, $3)', [ADMIN, STORE, 'owner']);
   token = await createAdminSession(ADMIN);
   invalidateStoreCache();
-  clearLoginAttempts('unknown', 'checkemail:unknown');
-  clearTrackingAttempts(JSON.stringify([STORE, 'unknown', EMAIL]));
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend()); // fresh tracking + check-email budgets per test
   vi.mocked(verifyTurnstileToken).mockClear();
 });
-afterAll(() => pool.end());
+afterAll(async () => { _setRateLimitBackendForTest(undefined); await pool.end(); });
 
 function admin(method: string, path: string, body: unknown) {
   return app.request(path, { method, headers: { ...headers, authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
@@ -184,13 +182,15 @@ describe('guest tracking', () => {
   it('returns the same error for an unknown code and a mismatched email', async () => {
     expect(await (await track('unknown')).json()).toEqual(await (await track('IMPORTED-123', 'wrong@parity.test')).json());
   });
-  it('counts attempts before lookup, resets on success, and blocks after ten failures', async () => {
-    for (let i = 0; i < 9; i++) expect((await track('unknown')).status).toBe(404);
+  it('counts attempts per order code before lookup, resets on success, and blocks after ten failures', async () => {
+    for (let i = 0; i < 9; i++) expect((await track('IMPORTED-123', `guess${i}@parity.test`)).status).toBe(404);
     expect((await track('IMPORTED-123', EMAIL.toUpperCase())).status).toBe(200);
-    for (let i = 0; i < 10; i++) expect((await track('unknown')).status).toBe(404);
+    // rotating the email (or the code's spelling) never mints a fresh budget for one order
+    for (let i = 0; i < 10; i++) expect((await track(i % 2 ? '#imported-123' : 'IMPORTED-123', `guess${i}@parity.test`)).status).toBe(404);
     const limited = await track('IMPORTED-123');
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect((await track('unknown')).status).toBe(404); // another code keeps its own budget
   });
 });
 

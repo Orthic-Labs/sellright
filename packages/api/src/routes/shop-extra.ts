@@ -1,4 +1,3 @@
-import { shippingLabelSql } from '../lib/shipping-label.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
@@ -17,8 +16,8 @@ import { contactRoutes, turnstileSecret } from './contact.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
-import { loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
+import { clearTrackingAttempts, trackingKey, trackingRetryAfter } from './shop-extra.tracking-limit.js';
+import { loadOrderLines, loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
 import { orderCodeCandidates } from '../orders/order-number.js';
 
 export const shopExtra = new OpenAPIHono();
@@ -40,7 +39,8 @@ shopExtra.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { code, email, turnstileToken } = c.req.valid('query');
-    const key = JSON.stringify([st.id, clientIp(c), email.toLowerCase()]);
+    // previous-platform parity (order-tracking.service.ts getClientKey): the throttle key is IP + order code, never the email.
+    const key = trackingKey(st.id, clientIp(c), code);
     const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
@@ -52,7 +52,8 @@ shopExtra.openapi(
     const out = await withStore(st.id, async (tx) => {
       // #309: accept '#1001' for '1001' and the reverse, and lower-case input; exact match wins.
       const candidates = orderCodeCandidates(code);
-      const found = await tx.select().from(s.order).where(inArray(s.order.code, candidates));
+      // A soft-deleted (trashed) order is hidden from every order read — it must not be trackable by code + email.
+      const found = await tx.select().from(s.order).where(and(inArray(s.order.code, candidates), isNull(s.order.deletedAt)));
       const o = candidates.map((k) => found.find((r) => r.code === k)).find(Boolean);
       if (!o) return null;
       // email must match the order's customer or the checkout contact snapshot.
@@ -60,16 +61,8 @@ shopExtra.openapi(
       if (!ok && o.customerId) { const [cu] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1); ok = cu?.email?.toLowerCase() === email.toLowerCase(); }
       if (!ok) return null;
       const fuls = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
-      const lines = await tx
-        .select({
-          sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
-          unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
-          isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
-          shipDateLabel: shippingLabelSql(s.productVariant.metafields),
-        })
-        .from(s.orderLine)
-        .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
-        .where(eq(s.orderLine.orderId, o.id));
+      // Same line facts as the receipt/account detail (order-facts.ts), including the product image — the previous platform's tracking page showed line images.
+      const lines = await loadOrderLines(tx, o.id);
       // R18: real payment facts alongside order.state, same as the public
       // receipt (orders.ts) and account order detail (account.ts).
       const payments = await loadOrderPayments(tx, o.id);
@@ -85,10 +78,7 @@ shopExtra.openapi(
           state: f.state, trackingCode: f.trackingCode, carrier: f.carrier,
           updatedAt: f.updatedAt?.toISOString() ?? null,
         })),
-        lines: lines.map(l => ({
-          ...l, isPreOrder: l.isPreOrder ?? false,
-          shipDate: l.shipDate?.toISOString() ?? null,
-        })),
+        lines: lines.map(({ productSlug: _productSlug, ...l }) => l),
       };
     });
     if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found for that code + email');
@@ -109,13 +99,13 @@ shopExtra.openapi(
     const { take, skip } = c.req.valid('query');
     const visible = and(eq(s.blogPost.isPublished, true), or(isNull(s.blogPost.publishDate), lte(s.blogPost.publishDate, new Date())));
     const result = await withStore(st.id, async (tx) => {
-      const items = await tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags, featuredImage: { id: s.asset.id, path: s.asset.path } })
+      const items = await tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, createdAt: s.blogPost.createdAt, updatedAt: s.blogPost.updatedAt, tags: s.blogPost.tags, featuredImage: { id: s.asset.id, path: s.asset.path } })
         .from(s.blogPost).leftJoin(s.asset, eq(s.asset.id, s.blogPost.featuredAssetId)).where(visible)
         .orderBy(sql`${s.blogPost.publishDate} DESC NULLS LAST`, desc(s.blogPost.id)).limit(take).offset(skip);
       const [count] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.blogPost).where(visible);
       return { items, totalItems: count!.total };
     });
-    return c.json({ ...result, items: result.items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null })) }, 200);
+    return c.json({ ...result, items: result.items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null, createdAt: p.createdAt.toISOString(), updatedAt: p.updatedAt.toISOString() })) }, 200);
   },
 );
 
@@ -135,7 +125,7 @@ shopExtra.openapi(
       return { ...post, featuredImage: featuredImage ?? null };
     });
     if (!out) return errJson(c, 404, 'POST_NOT_FOUND', 'post not found');
-    return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredImage: out.featuredImage }, 200);
+    return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, createdAt: out.createdAt.toISOString(), updatedAt: out.updatedAt.toISOString(), seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredImage: out.featuredImage }, 200);
   },
 );
 

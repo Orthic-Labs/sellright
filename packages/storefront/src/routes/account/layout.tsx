@@ -35,7 +35,8 @@ export default component$(() => {
 		const activeCustomer = await getMe();
 		if (activeCustomer) {
 			appState.customer = {
-				title: '',
+				// The saved Title (Mr/Ms/Dr…) from GET /v1/shop/auth/me; the generated `getMe` type does not declare it yet.
+				title: (activeCustomer as { title?: string | null }).title ?? '',
 				firstName: activeCustomer.firstName ?? '',
 				id: activeCustomer.id,
 				lastName: activeCustomer.lastName ?? '',

@@ -6,12 +6,21 @@ import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/check
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { trackPurchaseOnce } from '~/platform/controllers/conversion';
-import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
+import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail, gatewayReturnVerificationError, type GatewayVerifyOutcome } from './confirmation-data';
+import { PaymentVerificationError } from '~/components/checkout/PaymentVerificationError';
 import { APP_STATE } from '~/constants';
 import { displayOrderCode } from '~/utils/order-code';
 import { orderLineLabel } from '~/utils/line-label';
 
 export { confirmationHead as head } from '~/platform/checkout';
+
+/** The receipt as the page reads it: `OrderSummary` plus the facts #393 adds to GET /v1/shop/orders/{code} (the billing
+ *  address, and per payment the card brand + last four — nothing more of the card). Optional so the page also renders
+ *  against a client generated before them. */
+type ConfirmationOrder = Omit<OrderSummary, 'payments'> & {
+	billingAddress?: OrderAddressSnapshot | null;
+	payments: Array<OrderSummary['payments'][number] & { cardBrand?: string | null; cardLast4?: string | null }>;
+};
 
 const ConfirmationPage = component$(() => {
 	const loc = useLocation();
@@ -19,9 +28,11 @@ const ConfirmationPage = component$(() => {
 	const localCart = useContext(CartContextId);
 	const appState = useContext(APP_STATE);
 	const store = useStore<{
-		order?: OrderSummary;
+		order?: ConfirmationOrder;
 		loading: boolean;
 		error?: string;
+		/** Set when a hosted-gateway return (Sezzle) could not be verified — shows the "Payment verification error" screen instead of a confirmation. */
+		verificationError?: string;
 	}>({
 		loading: true,
 	});
@@ -45,11 +56,14 @@ const ConfirmationPage = component$(() => {
 			// fatal — the polling loop below still catches a webhook that lands
 			// a moment later.
 			const paymentAttempt = loc.url.searchParams.get('paymentAttempt') || undefined;
+			let verify: GatewayVerifyOutcome = { kind: 'none' };
 			if (paymentAttempt) {
 				try {
-					await verifyGatewayPayment(code, paymentAttempt, rt, ac.signal);
+					const result = await verifyGatewayPayment(code, paymentAttempt, rt, ac.signal);
+					verify = { kind: 'verified', status: result.status, message: result.message };
 				} catch (error) {
 					if (ac.signal.aborted) return;
+					verify = { kind: 'threw' };
 					console.warn('[Confirmation] gateway verify failed (will still poll the order):', error);
 				}
 			}
@@ -59,7 +73,15 @@ const ConfirmationPage = component$(() => {
 			// moment later. Poll a few times while still PendingPayment.
 			const order = await readOrderUntilSettled((signal) => getOrder(code, rt, signal), ac.signal);
 			if (!order) return; // aborted — the page is gone, touch nothing
-			store.order = order;
+			store.order = order as ConfirmationOrder;
+
+			// A gateway return that could not be verified (and an order that is not settled) is never shown as a confirmation.
+			const verificationError = gatewayReturnVerificationError(!!paymentAttempt, verify, order.state);
+			if (verificationError) {
+				store.verificationError = verificationError;
+				store.loading = false;
+				return;
+			}
 
 			if (isOrderSettled(order.state)) {
 				// Plan v3.1 §3.5: purchase, once per order code (every settled checkout path lands here). The sessionStorage key holds
@@ -108,8 +130,13 @@ const ConfirmationPage = component$(() => {
 				</div>
 			)}
 
+			{/* ── Payment verification error (hosted-gateway return that could not be verified) ── */}
+			{store.order && !store.error && store.verificationError && (
+				<PaymentVerificationError code={code} message={store.verificationError} />
+			)}
+
 			{/* ── Cancelled / declined ── */}
-			{store.order && !store.error && isOrderTerminalUnpaid(store.order.state) && (
+			{store.order && !store.error && !store.verificationError && isOrderTerminalUnpaid(store.order.state) && (
 				<div class="max-w-2xl mx-auto pt-20 pb-24 px-6 text-center">
 					<svg class="w-10 h-10 mx-auto text-[var(--color-accent)] mb-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z" />
@@ -137,10 +164,13 @@ const ConfirmationPage = component$(() => {
 			)}
 
 			{/* ── Confirmation ── */}
-			{store.order && !store.error && !isOrderTerminalUnpaid(store.order.state) && (() => {
+			{store.order && !store.error && !store.verificationError && !isOrderTerminalUnpaid(store.order.state) && (() => {
 				const order = store.order!;
 				const activeStep = activeStepFromState(order.state);
 				const addr = order.shippingAddress as OrderAddressSnapshot | null | undefined;
+				// previous-platform parity: the billing block shows only when it differs from the shipping address.
+				const billAddr = order.billingAddress;
+				const hasBilling = !!(billAddr?.line1 && (billAddr.line1 !== addr?.line1 || billAddr.postalCode !== addr?.postalCode));
 				const fullName = addr?.fullName || '';
 				const contactEmail = resolveConfirmationEmail(order, appState.customer?.emailAddress);
 
@@ -280,12 +310,36 @@ const ConfirmationPage = component$(() => {
 							</div>
 						)}
 
+						{hasBilling && billAddr && (
+							<div>
+								<h3 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-2">Billing to</h3>
+								<address class="not-italic text-xs text-[#5b5a56] leading-relaxed">
+									{billAddr.fullName && <div class="text-sm text-[var(--color-ink)]">{billAddr.fullName}</div>}
+									<div>{billAddr.line1}</div>
+									{billAddr.line2 && <div>{billAddr.line2}</div>}
+									<div>{billAddr.city}{billAddr.province ? `, ${billAddr.province}` : ''} {billAddr.postalCode}</div>
+									<div>{billAddr.country}</div>
+								</address>
+							</div>
+						)}
+
+						{order.shippingMethodName && (
+							<div>
+								<h3 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-2">Shipping method</h3>
+								<p class="text-sm text-[var(--color-ink)]">{order.shippingMethodName}</p>
+							</div>
+						)}
+
 						{order.payments?.length ? (
 							<div>
 								<h3 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-2">Payment</h3>
 								{order.payments.map((payment, idx) => (
 									<div key={idx}>
 										<p class="text-sm text-[var(--color-ink)] capitalize">{payment.method}</p>
+										{/* Brand + last four only, as the API sends them ("Visa ending in 1234"). */}
+										{payment.cardBrand && payment.cardLast4 && (
+											<p class="text-xs text-[#5b5a56] mt-0.5">{payment.cardBrand} ending in {payment.cardLast4}</p>
+										)}
 										<p class="text-xs text-[#5b5a56] mt-0.5 capitalize">{payment.state}</p>
 									</div>
 								))}

@@ -4,7 +4,7 @@
  * a mocked global `fetch`: no network, no credentials, no store row.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchAffiliateStats, newsletterSignup, trackOrder, unsubscribeSubscriber } from './content';
+import { fetchAffiliateStats, trackOrder, unsubscribeSubscriber } from './content';
 
 type FetchCall = { url: string; init: RequestInit };
 const calls: FetchCall[] = [];
@@ -100,29 +100,6 @@ describe('trackOrder', () => {
 		enqueue(jsonResponse(404, { error: { code: 'ORDER_NOT_FOUND', message: 'order not found for that code + email' } }));
 		const result = await trackOrder('MISSING', 'x@y.z');
 		expect(result).toEqual({ success: false, error: 'Order not found for that code + email.' });
-	});
-});
-
-describe('newsletterSignup', () => {
-	it('posts the email to the API', async () => {
-		enqueue(jsonResponse(200, { ok: true }));
-		const result = await newsletterSignup('subscriber@example.com');
-		expect(result).toEqual({ ok: true });
-		expect(String(lastCall().url)).toContain('/v1/shop/newsletter-signup');
-		expect(JSON.parse(String(lastCall().init.body))).toEqual({ email: 'subscriber@example.com', source: 'storefront' });
-	});
-
-	it('never calls the API when the honeypot is filled', async () => {
-		const result = await newsletterSignup('bot@example.com', 'i-am-a-bot');
-		expect(result).toEqual({ ok: true });
-		expect(calls).toHaveLength(0);
-	});
-
-	it('surfaces the rate-limit message on 429', async () => {
-		enqueue(jsonResponse(429, { error: { code: 'RATE_LIMITED', message: 'too many attempts' } }));
-		const result = await newsletterSignup('subscriber@example.com');
-		expect(result.ok).toBe(false);
-		expect(result.message).toContain('Too many signups');
 	});
 });
 

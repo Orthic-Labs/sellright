@@ -10,8 +10,10 @@ import {
   getTrackingInfo,
   getTrackingUrl,
   hasPreOrderItems,
+  lineImageSrc,
 } from './order-details-utils';
 import { displayOrderCode } from '~/utils/order-code';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 
 interface OrderDetailsProps {
   order: TrackedOrder;
@@ -103,7 +105,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             <div>
               <p class="text-sm font-medium text-[#141210]">Tracking Number</p>
               <a
-                href={getTrackingUrl(trackingInfo.trackingCode)}
+                href={getTrackingUrl(trackingInfo.trackingCode, trackingInfo.carrier)}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-[#645541] font-mono text-lg hover:text-[#141210] underline underline-offset-2"
@@ -117,7 +119,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             </div>
           </div>
           <a
-            href={getTrackingUrl(trackingInfo.trackingCode)}
+            href={getTrackingUrl(trackingInfo.trackingCode, trackingInfo.carrier)}
             target="_blank"
             rel="noopener noreferrer"
             class="mt-4 inline-flex bg-transparent border border-[#141210] text-[#141210] px-6 py-2 rounded-[3px] hover:bg-[#F5F0E8] transition-colors duration-200 font-medium items-center gap-2"
@@ -138,7 +140,18 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
         <div class="divide-y divide-[#E5E0D8]">
           {order.lines.map((line, index) => (
             <div key={`${line.sku}-${index}`} class="p-6 flex gap-4">
-              {/* Product details — guest tracking doesn't return line images */}
+              {/* Line image — /v1/shop/track returns the current variant (or product) image path, as the previous platform's tracking page showed. */}
+              {(() => {
+                const src = lineImageSrc(line);
+                return src ? (
+                  <div class="flex-shrink-0 w-20 border border-[#E5E0D8] rounded-[3px] overflow-hidden">
+                    <div class="relative aspect-[4/5]">
+                      <OptimizedImage src={src} alt={line.name} class="w-full h-full object-cover object-center" width={80} height={100} loading="lazy" />
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              {/* Product details */}
               <div class="flex-1 flex flex-col justify-between">
                 <div>
                   <h4 class="font-semibold text-[#141210]">{line.name}</h4>

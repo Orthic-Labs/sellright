@@ -10,7 +10,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, loadOrderLinesBatch, summarizeOrderForList, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
 import { normalizeEmail } from '../auth/email.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -137,6 +137,15 @@ account.openapi(
           paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
           fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
           currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int(),
+          // Order history parity with the previous platform's account page: totals breakdown, tracking, line thumbnails and pre-order facts.
+          subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(), discountTotal: z.number().int(),
+          shippingMethodName: z.string().nullable(),
+          trackingCode: z.string().nullable(), carrier: z.string().nullable(),
+          isPreOrder: z.boolean(), shipDate: z.string().nullable(), shipDateLabel: z.string().nullable(),
+          items: z.array(z.object({
+            sku: z.string(), name: z.string(), productName: z.string().nullable(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
+            image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(), shipDateLabel: z.string().nullable(),
+          })),
         })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
       }) } } },
@@ -161,6 +170,8 @@ account.openapi(
       const items = await tx
         .select({
           id: s.order.id, code: s.order.code, state: s.order.state, status: s.order.status, currency: s.order.currency, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
+          subtotal: s.order.subtotal, shippingTotal: s.order.shippingTotal, taxTotal: s.order.taxTotal, discountTotal: s.order.discountTotal,
+          shippingMethodName: s.order.shippingMethodName,
           lines: sql<number>`count(${s.orderLine.id})::int`,
         })
         .from(s.order)
@@ -171,11 +182,22 @@ account.openapi(
         .limit(limit)
         .offset(offset);
       const statusFacts = await loadOrderStatusFactsBatch(tx, items);
+      // Three batched reads for the whole page (lines, fulfilments, status), never one per order.
+      const ids = items.map((o) => o.id);
+      const linesByOrder = await loadOrderLinesBatch(tx, ids);
+      const fulfillmentsByOrder = await loadOrderFulfillmentsBatch(tx, ids);
       return {
         total,
         items: items.map((o) => {
           const facts = statusFacts.get(o.id)!;
-          return { code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null };
+          const lines = linesByOrder.get(o.id) ?? [];
+          const list = summarizeOrderForList(lines, fulfillmentsByOrder.get(o.id) ?? []);
+          return {
+            code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null,
+            subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, shippingMethodName: o.shippingMethodName,
+            ...list,
+            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel })),
+          };
         }),
       };
     });
@@ -266,6 +288,7 @@ account.openapi(
         payments: z.array(z.object({
           method: z.string(), state: z.string(), amount: z.number().int(),
           providerRef: z.string().nullable(), errorMessage: z.string().nullable(), createdAt: z.string(),
+          cardBrand: z.string().nullable(), cardLast4: z.string().nullable(),
         })),
         fulfillments: z.array(z.object({
           state: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), updatedAt: z.string().nullable(),
@@ -347,13 +370,13 @@ account.openapi(
   },
 );
 
-// PATCH /v1/shop/account/me — edit profile (firstName/lastName/phone). WP4a.
+// PATCH /v1/shop/account/me — edit profile (title/firstName/lastName/phone). WP4a.
 account.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/account/me', summary: 'Update profile',
-    request: { body: { content: { 'application/json': { schema: z.object({ firstName: z.string().max(120).nullable().optional(), lastName: z.string().max(120).nullable().optional(), phone: z.string().max(40).nullable().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ title: z.string().max(40).nullable().optional(), firstName: z.string().max(120).nullable().optional(), lastName: z.string().max(120).nullable().optional(), phone: z.string().max(40).nullable().optional() }) } } } },
     responses: {
-      200: { description: 'Updated', content: { 'application/json': { schema: z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable() }) } } },
+      200: { description: 'Updated', content: { 'application/json': { schema: z.object({ id: z.string(), email: z.string(), title: z.string().nullable(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable() }) } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
     },
   }),
@@ -364,11 +387,13 @@ account.openapi(
       const cust = await me(tx, customerToken(c));
       if (!cust) return null;
       const patch: Record<string, unknown> = { updatedAt: new Date() };
+      // the previous platform's profile form had a Title (Mr/Ms/Dr…); '' clears it. Stored trimmed.
+      if (body.title !== undefined) patch.title = body.title?.trim() || null;
       if (body.firstName !== undefined) patch.firstName = body.firstName;
       if (body.lastName !== undefined) patch.lastName = body.lastName;
       if (body.phone !== undefined) patch.phone = body.phone;
       const [row] = await tx.update(s.customer).set(patch).where(eq(s.customer.id, cust.id))
-        .returning({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone });
+        .returning({ id: s.customer.id, email: s.customer.email, title: s.customer.title, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone });
       return row ?? null;
     });
     if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');

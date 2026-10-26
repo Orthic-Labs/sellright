@@ -27,3 +27,18 @@ describe('tracking throttle', () => {
   // hard per-bucket cap) — and doesn't apply at all to the default Postgres
   // backend (an indexed table, not an unbounded process-memory Map).
 });
+
+describe('tracking key (previous-platform parity: IP + order code, never the email)', () => {
+  it('is independent of the email and of how the order code is spelled', async () => {
+    const { trackingKey } = await import('./shop-extra.tracking-limit.js');
+    expect(trackingKey('s1', '1.2.3.4', '#1001')).toBe(trackingKey('s1', '1.2.3.4', ' 1001 '));
+    expect(trackingKey('s1', '1.2.3.4', 'ab-1')).toBe(trackingKey('s1', '1.2.3.4', 'AB-1'));
+  });
+  it('separates stores, clients and orders', async () => {
+    const { trackingKey } = await import('./shop-extra.tracking-limit.js');
+    const base = trackingKey('s1', '1.2.3.4', '1001');
+    expect(trackingKey('s2', '1.2.3.4', '1001')).not.toBe(base);
+    expect(trackingKey('s1', '5.6.7.8', '1001')).not.toBe(base);
+    expect(trackingKey('s1', '1.2.3.4', '1002')).not.toBe(base);
+  });
+});

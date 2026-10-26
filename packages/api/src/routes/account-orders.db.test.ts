@@ -111,3 +111,53 @@ describe('GET /v1/shop/account/orders/{code} — full contract (R20)', () => {
     expect(body.payments).toMatchObject([{ method: 'nmi', state: 'captured' }]);
   });
 });
+
+describe('GET /v1/shop/account/orders — history facts (#393)', () => {
+  const ORDER = '11111111-1111-1111-1111-111111111101';
+  type Row = {
+    code: string; subtotal: number; shippingTotal: number; discountTotal: number; trackingCode: string | null; carrier: string | null;
+    isPreOrder: boolean; shipDate: string | null; items: Array<{ sku: string; quantity: number; lineTotal: number; image: string | null; isPreOrder: boolean }>;
+  };
+  const row = async (code: string) => {
+    const res = await app.request('/v1/shop/account/orders', { headers: hdr() });
+    return ((await res.json()) as { items: Row[] }).items.find((o) => o.code === code)!;
+  };
+
+  it('carries the totals breakdown and line data, with empty tracking/pre-order state for a plain order', async () => {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total)
+        VALUES (${STORE}, ${ORDER}, 'SKU-A', 'Thing A', 2, 2500, 5000, 5000)`);
+    });
+    expect(await row('ORD-PAGE-1')).toMatchObject({
+      subtotal: 5000, shippingTotal: 500, discountTotal: 500, trackingCode: null, carrier: null, isPreOrder: false, shipDate: null,
+      items: [{ sku: 'SKU-A', quantity: 2, lineTotal: 5000, image: null, isPreOrder: false }],
+    });
+  });
+
+  it('reports the newest tracked fulfilment and the latest pre-order ship date', async () => {
+    await withStore(STORE, async (tx) => {
+      const product = (await tx.execute(sql`INSERT INTO product (store_id, slug, name) VALUES (${STORE}, 'hist-pre', 'Hist pre') RETURNING id`)).rows as Array<{ id: string }>;
+      const variant = (await tx.execute(sql`INSERT INTO product_variant (store_id, product_id, sku, name, price, is_pre_order, ship_date)
+        VALUES (${STORE}, ${product[0]!.id}, 'PRE-1', 'Pre one', 1000, true, '2027-03-01T00:00:00Z') RETURNING id`)).rows as Array<{ id: string }>;
+      await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total)
+        VALUES (${STORE}, ${ORDER}, ${variant[0]!.id}, 'PRE-1', 'Pre one', 1, 1000, 1000, 1000)`);
+      await tx.execute(sql`INSERT INTO fulfillment (store_id, order_id, state, tracking_code, carrier) VALUES (${STORE}, ${ORDER}, 'Shipped', '1Z999AA10123456784', 'UPS')`);
+    });
+    expect(await row('ORD-PAGE-1')).toMatchObject({ trackingCode: '1Z999AA10123456784', carrier: 'UPS', isPreOrder: true, shipDate: '2027-03-01T00:00:00.000Z' });
+  });
+});
+
+describe('order detail payments — card facts only (#393)', () => {
+  it('exposes brand + last4 from payment metadata and nothing else from it', async () => {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO payment (store_id, order_id, amount, method, state, metadata)
+        VALUES (${STORE}, '11111111-1111-1111-1111-111111111101', 5400, 'nmi', 'Settled',
+          ${JSON.stringify({ card: { brand: 'Visa', last4: '4242' }, avs: 'Y', cvv: 'M', authCode: 'SECRET1' })}::jsonb)`);
+    });
+    const res = await app.request('/v1/shop/account/orders/ORD-PAGE-1', { headers: hdr() });
+    const text = await res.text();
+    expect(JSON.parse(text).payments).toMatchObject([{ method: 'nmi', cardBrand: 'Visa', cardLast4: '4242' }]);
+    expect(text).not.toContain('SECRET1');
+    expect(text).not.toContain('"avs"');
+  });
+});
