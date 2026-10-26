@@ -22,6 +22,8 @@ interface CheckoutPaymentPanelProps {
 	onGatewaySuccess$: QRL<() => void>;
 	onPaymentInitError$: QRL<(message: string, mountGen?: number) => void>;
 	onPaymentError$: QRL<(message: string, mountGen?: number) => void>;
+	/** A payment form's own validation message (before any order): shown as is. */
+	onPaymentFieldError$: QRL<(message: string, mountGen?: number) => void>;
 	onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
 	onPlaceOrder$: QRL<() => void>;
 	pageLoading: Signal<boolean>;
@@ -211,6 +213,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													amount={props.chargeTotalCents.value}
 													currency={props.currency}
 													ensureOrder$={props.ensureOrder$}
+													onValidationError$={props.onPaymentFieldError$}
 													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${encodeURIComponent(props.srState.code)}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
 													confirmTrigger={props.stripeConfirmTrigger}
 													onError$={props.onPaymentError$}
@@ -229,7 +232,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (payLabel ? `PAY — ${payLabel}` : 'PAY')}
+														: (payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER')}
 												</button>
 											</>
 										) : controls && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
@@ -262,7 +265,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (payLabel ? `PAY — ${payLabel}` : 'PAY')}
+														: (payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER')}
 												</button>
 											</>
 										) : controls && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
@@ -270,7 +273,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												mountGen={props.paymentInit.gen}
 												code={props.srState.code}
 												receiptToken={props.srState.receiptToken || undefined}
-												label={payLabel ? `Continue — ${payLabel}` : 'Continue'}
+												label={payLabel ? `PLACE ORDER — ${payLabel}` : 'PLACE ORDER'}
 												disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
 												ensureOrder$={props.ensureOrder$}
 												onError$={props.onPaymentError$}

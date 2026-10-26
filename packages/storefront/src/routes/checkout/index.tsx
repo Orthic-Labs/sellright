@@ -781,6 +781,15 @@ const CheckoutContent = component$(() => {
     });
   });
 
+  // A payment form's own validation (Stripe elements.submit: incomplete card, invalid ZIP) before any order exists: show
+  // Stripe's message as is; nothing was created or charged, so there is no order state to recover.
+  const onPaymentFieldError$ = $(async (message: string, mountGen?: number) => {
+    if (!acceptsMount(paymentInit, mountGen)) return;
+    showProcessingModal.value = false;
+    isOrderProcessing.value = false;
+    state.error = message;
+  });
+
   // The payment component failed to LOAD (not a decline): no order-state read, nothing to classify — show the retry that
   // remounts it. The order, its client secret and the selected method stay as they are.
   const onPaymentInitError$ = $(async (errorMessage: string, mountGen?: number) => {
@@ -839,6 +848,7 @@ const CheckoutContent = component$(() => {
       totalConfirmed={totalConfirmed}
       onGatewaySuccess$={onGatewaySuccess$}
       onPaymentError$={onPaymentError$}
+      onPaymentFieldError$={onPaymentFieldError$}
       onPaymentInitError$={onPaymentInitError$}
       onPaymentProcessingChange$={onPaymentProcessingChange$}
       onPlaceOrder$={placeOrder}

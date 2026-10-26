@@ -29,6 +29,8 @@ export interface StripePaymentElementProps {
 	currency?: string;
 	/** Deferred mode: the order to confirm, created on the first PAY; null = stop without charging. */
 	ensureOrder$?: QRL<() => Promise<PayableOrder | null>>;
+	/** Deferred mode: Stripe's own validation message (incomplete card, invalid ZIP): shown as is, before any order exists. */
+	onValidationError$?: QRL<(message: string, mountGen?: number) => void>;
 	/** Flip (increment) to trigger confirmPayment. */
 	confirmTrigger: Signal<number>;
 	/** The route's view generation when this component was rendered; every callback carries it so a stale mount is rejected. */
@@ -119,7 +121,8 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 			const submitted = await elements.submit();
 			if (disposed.value) return;
 			if (submitted.error) {
-				await props.onError$(submitted.error.message || 'Check your payment details.', mountGen.value);
+				const message = submitted.error.message || 'Check your payment details.';
+				await (props.onValidationError$ ?? props.onError$)(message, mountGen.value);
 				return;
 			}
 			const order = props.ensureOrder$ ? await props.ensureOrder$() : null;

@@ -102,7 +102,7 @@ describe('buildCsp — Google Identity sources join only when supplied, alongsid
 		expect(directive(csp, 'connect-src')).toContain(IP_LOOKUP_ORIGIN);
 		expect(directive(csp, 'frame-src')).toContain('https://g.test/gsi/');
 		expect(directive(csp, 'frame-src')).toContain(TURNSTILE_ORIGIN);
-		expect(directive(csp, 'style-src')).toBe("style-src 'self' 'unsafe-inline' https://g.test/gsi/style");
+		expect(directive(csp, 'style-src')).toBe("style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com https://g.test/gsi/style");
 	});
 
 	it('puts each real Google Identity source in its own directives and in no other', () => {
@@ -122,7 +122,7 @@ describe('buildCsp — Google Identity sources join only when supplied, alongsid
 	it('adds nothing without google or with empty lists', () => {
 		const empty = { script: [], connect: [], frame: [], style: [] };
 		expect(buildCsp({ nonce: 'n', google: empty })).toBe(buildCsp({ nonce: 'n' }));
-		expect(directive(buildCsp({ nonce: 'n' }), 'style-src')).toBe("style-src 'self' 'unsafe-inline'");
+		expect(directive(buildCsp({ nonce: 'n' }), 'style-src')).toBe("style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com");
 	});
 });
 

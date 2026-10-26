@@ -38,6 +38,7 @@ interface CheckoutPageViewProps {
   localCart: any;
   onGatewaySuccess$: QRL<() => void>;
   onPaymentError$: QRL<(message: string, mountGen?: number) => void>;
+  onPaymentFieldError$: QRL<(message: string, mountGen?: number) => void>;
   onPaymentInitError$: QRL<(message: string, mountGen?: number) => void>;
   onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
   onPlaceOrder$: QRL<() => void>;

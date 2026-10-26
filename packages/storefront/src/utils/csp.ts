@@ -63,8 +63,10 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 	const api = apiOrigin ? ` ${apiOrigin}` : '';
 	return [
 		`default-src 'self'`,
-		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
-		withSources(`style-src 'self' 'unsafe-inline'`, google?.style),
+		// Collect.js (NMI) injects its own stylesheet from its host and, for Apple Pay, applepay.cdn-apple.com/jsapi
+		// (both verified in the live secure.nmi.com/token/Collect.js, 2026-10-26).
+		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
+		withSources(`style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com`, google?.style),
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
 		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(apple?.connect ?? []), ...(analytics?.connect ?? [])]),
