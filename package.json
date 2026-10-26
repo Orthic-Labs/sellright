@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@rightkit/release": "0.6.4",
-    "@typescript-eslint/parser": "8.71.2",
+    "@typescript-eslint/parser": "8.72.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "10.13.0",
     "jscpd": "^5.4.2",
