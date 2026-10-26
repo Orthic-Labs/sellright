@@ -103,4 +103,16 @@ describe('readCatalogGeneration (brand views PR2 §7)', () => {
     await expect(readCatalogGeneration(['products/../x.json'], config)).rejects.toThrow('Invalid catalog file');
     await expect(readCatalogSnapshot('products/absent.json', config)).rejects.toThrow();
   });
+  it('#382: reads products-v2 detail files of the same generation; traversal there is still refused', async () => {
+    const config = await fixture();
+    const { files: before } = await readCatalogGeneration(['products-v2/native.json'], config);
+    expect(before['products-v2/native.json']).toBeNull();
+    const generation = (await readlink(join(config.directory, 'current'))).split('/').pop()!;
+    await mkdir(join(config.directory, 'generations', generation, 'products-v2'));
+    await writeFile(join(config.directory, 'generations', generation, 'products-v2/native.json'), JSON.stringify({ inStock: true }));
+    const { files } = await readCatalogGeneration(['products/native.json', 'products-v2/native.json'], config);
+    expect(files['products-v2/native.json']).toEqual({ inStock: true });
+    await expect(readCatalogGeneration(['products-v2/../x.json'], config)).rejects.toThrow('Invalid catalog file');
+    await expect(readCatalogGeneration(['products-v3/native.json'], config)).rejects.toThrow('Invalid catalog file');
+  });
 });

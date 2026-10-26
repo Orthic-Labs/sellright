@@ -223,7 +223,9 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       lastUpdated: now, id: p.slug, productId: p.id, name: p.name, slug: p.slug, description: p.description,
       featuredImage: featured ? { url: featured } : null,
       assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max,
+      // #382: the same product-level availability fact as the list entry, so the PDP's first paint never says Sold Out for an
+      // in-stock product (the storefront's live read stays authoritative). Availability only, never a quantity.
+      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max, inStock,
       hasVariantAssets: vs.some((v) => (assetsByVariant.get(v.id)?.length ?? 0) > 0),
       ...ratingField,
       variants: vs.map((v) => ({

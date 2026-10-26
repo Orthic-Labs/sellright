@@ -14,7 +14,8 @@ import { jsonLdProduct } from '~/services/sellright-seo';
 import { productPageContent } from '~/platform/brand-data';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { theme, siteUrl } from '~/theme/theme.config';
-import { readCatalogSnapshot } from '~/services/catalog-snapshot';
+import { readCatalogGeneration } from '~/services/catalog-snapshot';
+import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
 import { withAbsoluteImages } from '~/platform/product-jsonld';
 import { productMetaDescription } from '~/platform/product-meta';
@@ -47,6 +48,21 @@ export interface ProductLoaderResult {
 // block a routeLoader$ on a stock query, never default missing stock to
 // in-stock) — the client hydrates real availability on qidle.
 // ─────────────────────────────────────────────────────────────────
+/** The PDP from the current catalog generation (metadata + the #382 in-stock hint), or null when the generation is unusable or
+ *  does not have the product (the loader then falls back to the live API). Exported for the loader test. */
+export async function productFromManifest(slug: string, read = readCatalogGeneration) {
+  try {
+    const gen = await read<RawManifestProductDetail>([v1DetailFile(slug), v2DetailFile(slug)]);
+    const raw = gen.files[v1DetailFile(slug)];
+    if (!raw) return null;
+    const catalogInStock = catalogInStockOf(raw, gen.files[v2DetailFile(slug)]);
+    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null, ...manifestProductMeta(raw), catalogInStock };
+  } catch {
+    // Invalid generation or a file that fails to parse: the live API serves the PDP.
+    return null;
+  }
+}
+
 export const useProductLoader = routeLoader$(async ({ params, fail, status, url }) => {
   // Brand views PR2: a branded product page has its own loader (useBrandProductDetail), and a route that is not the configured
   // product path (routes.json productPath) serves no product. Neither case does any I/O here.
@@ -68,13 +84,8 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url 
   // in the SSR payload). Live stock is populated by the client-side
   // refreshLiveStock hook on qidle — fast SSR shell, progressive stock enable
   // once the client checks in.
-  try {
-    const raw = await readCatalogSnapshot<RawManifestProductDetail>(`products/${slug}.json`);
-    const catalogInStock = typeof (raw as { inStock?: unknown }).inStock === 'boolean' ? (raw as { inStock: boolean }).inStock : null;
-    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null, ...manifestProductMeta(raw), catalogInStock };
-  } catch {
-    // File doesn't exist or failed to parse — fall back to the live API.
-  }
+  const fromManifest = await productFromManifest(slug);
+  if (fromManifest) return fromManifest;
 
   // No manifest: take the product id from the detail response and the rating from the reviews endpoint (null on any
   // failure — reviews must never block or fail the PDP shell). Both reads start together, not one after the other (#362).

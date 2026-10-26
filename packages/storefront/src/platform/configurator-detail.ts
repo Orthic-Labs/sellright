@@ -10,6 +10,7 @@ import type { ModelProduct } from '~/platform/controllers/product-model';
 import { buildModelProduct } from '~/platform/controllers/product-model';
 import { liveBrowseCatalog, normalizeBrowseCatalog, type BrowseCatalog } from '~/services/browse-catalog';
 import { readCatalogGeneration } from '~/services/catalog-snapshot';
+import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { manifestProductMeta, normalizeManifestProductDetail, type CatalogListItem, type RawManifestProductDetail } from '~/sellright/types/catalog';
 import { modelsFromLive } from '~/platform/product-detail';
 import { DEFAULT_CURRENCY } from '~/constants';
@@ -37,10 +38,11 @@ const statusOf = (resolved: number, wanted: number): ConfiguratorDetail['detailS
 
 /** Listing + detail from one generation, or null when the generation is invalid or any file of the set is missing. */
 export async function fromManifest(read = readCatalogGeneration): Promise<Omit<ConfiguratorDetail, 'source'> | null> {
-	const detailFiles = DETAIL_PRODUCTS.map((p) => `products/${p.slug}.json`);
+	const detailFiles = DETAIL_PRODUCTS.map((p) => v1DetailFile(p.slug));
+	const hints = DETAIL_PRODUCTS.map((p) => v2DetailFile(p.slug)); // #382 in-stock hint for older generations; optional
 	let gen: Awaited<ReturnType<typeof readCatalogGeneration<unknown>>>;
 	try {
-		gen = await read<unknown>(['shop-catalog.json', ...detailFiles]);
+		gen = await read<unknown>(['shop-catalog.json', ...detailFiles, ...hints]);
 	} catch {
 		return null;
 	}
@@ -49,7 +51,7 @@ export async function fromManifest(read = readCatalogGeneration): Promise<Omit<C
 		const listing = normalizeBrowseCatalog(gen.files['shop-catalog.json']);
 		const detail = DETAIL_PRODUCTS.map((p, i) => {
 			const raw = gen.files[detailFiles[i]] as RawManifestProductDetail;
-			return buildModelProduct(normalizeManifestProductDetail(raw), { key: p.key, href: productPath(p.slug), ...manifestProductMeta(raw) });
+			return buildModelProduct(normalizeManifestProductDetail(raw), { key: p.key, href: productPath(p.slug), ...manifestProductMeta(raw), catalogInStock: catalogInStockOf(raw, gen.files[hints[i]]) });
 		}).filter((m) => m.variants.length > 0);
 		return { listing: listing.products.map(listingItem), detail, detailStatus: statusOf(detail.length, DETAIL_PRODUCTS.length) };
 	} catch {

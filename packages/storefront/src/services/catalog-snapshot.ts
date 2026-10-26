@@ -8,7 +8,7 @@ function defaultConfig(): CatalogSnapshotConfig {
 }
 
 function isCatalogFile(file: string): boolean {
-  return file === 'shop-catalog.json' || /^products\/[a-z0-9][a-z0-9_-]*\.json$/.test(file);
+  return file === 'shop-catalog.json' || /^products(-v2)?\/[a-z0-9][a-z0-9_-]*\.json$/.test(file);
 }
 
 /**

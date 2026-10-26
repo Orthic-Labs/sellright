@@ -11,6 +11,7 @@ export { detailSet, productSlugOf, withCanonicalUrls };
 import { productPath, productUrl } from '~/platform/product-path';
 import { buildModelProduct, type ModelProduct } from '~/platform/controllers/product-model';
 import { readCatalogGeneration } from '~/services/catalog-snapshot';
+import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { getProductReviews } from '~/providers/shop/rewards/rewards';
 import { liveProductMeta, manifestProductMeta, normalizeManifestProductDetail, type RawManifestProductDetail } from '~/sellright/types/catalog';
@@ -34,10 +35,11 @@ const MISSING: BrandProductDetail = { state: 'missing' };
 
 /** Every product of `set` from one generation, or null when the generation is invalid or any file is missing. */
 export async function modelsFromManifest(set: readonly { key: string; slug: string }[], read = readCatalogGeneration): Promise<ModelProduct[] | null> {
-	const files = set.map((p) => `products/${p.slug}.json`);
+	const files = set.map((p) => v1DetailFile(p.slug));
+	const hints = set.map((p) => v2DetailFile(p.slug)); // #382 in-stock hint for older generations; optional
 	let gen: Awaited<ReturnType<typeof readCatalogGeneration<RawManifestProductDetail>>>;
 	try {
-		gen = await read<RawManifestProductDetail>(files);
+		gen = await read<RawManifestProductDetail>([...files, ...hints]);
 	} catch {
 		return null;
 	}
@@ -45,7 +47,7 @@ export async function modelsFromManifest(set: readonly { key: string; slug: stri
 	try {
 		return set.map((p, i) => {
 			const raw = gen.files[files[i]] as RawManifestProductDetail;
-			return buildModelProduct(normalizeManifestProductDetail(raw), { key: p.key, href: productPath(p.slug), ...manifestProductMeta(raw) });
+			return buildModelProduct(normalizeManifestProductDetail(raw), { key: p.key, href: productPath(p.slug), ...manifestProductMeta(raw), catalogInStock: catalogInStockOf(raw, gen.files[hints[i]]) });
 		});
 	} catch {
 		return null;

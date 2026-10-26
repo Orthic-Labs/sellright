@@ -133,6 +133,9 @@ export interface ModelProduct {
   currencyCode: string;
   rating: { average: number; count: number } | null;
   productId: string | null;
+  /** #382: the catalog's product-level in-stock hint (null on the live path or when unknown). A first-paint hint for brand views
+   *  only; purchase state still waits for the live read. */
+  catalogInStock: boolean | null;
 }
 
 export interface SkuStock { inStock: boolean; availableQuantity: number | null }
@@ -154,7 +157,7 @@ function uniqueCodes(names: string[]): string[] {
 }
 
 /** The model of one catalog product (manifest-normalised or live detail; its stock fields are ignored). */
-export function buildModelProduct(product: CatalogProduct, meta: { key: string; href: string; rating: { average: number; count: number } | null; productId: string | null }): ModelProduct {
+export function buildModelProduct(product: CatalogProduct, meta: { key: string; href: string; rating: { average: number; count: number } | null; productId: string | null; catalogInStock?: boolean | null }): ModelProduct {
   const raw = getOptionGroups(product.variants);
   const groupCodes = uniqueCodes(raw.map((g) => g.groupName));
   const groups: ModelGroup[] = raw.map((g, i) => {
@@ -198,6 +201,7 @@ export function buildModelProduct(product: CatalogProduct, meta: { key: string; 
     currencyCode: String(product.currency || 'USD'),
     rating: meta.rating ? { average: meta.rating.average, count: meta.rating.count } : null,
     productId: meta.productId,
+    catalogInStock: meta.catalogInStock ?? null,
   };
 }
 

@@ -36,6 +36,7 @@ describe('native catalog generation', () => {
       const listing = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8')).products[0];
       expect(listing.displayPriceRange).toEqual(detail.displayPriceRange);
       expect(listing.inStock).toBe(false);
+      expect(JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8')).inStock).toBe(false); // #382 v1 detail
       // An admin enabling a choice moves it out of display-only metadata on regeneration.
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product_variant SET enabled = true WHERE id = ${disabled}`); });
       await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [disabled] });
@@ -125,6 +126,7 @@ describe('native catalog generation', () => {
       expect(manifest.products[0]).toMatchObject({ priceRange: { min: 3000, max: 3000 }, inStock: true, featuredImage: { url: '/assets/fixture/product.webp' }, tags: ['edc'] });
       const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
       expect(detail.tags).toEqual(['edc']);
+      expect(detail.inStock).toBe(true); // #382: the v1 PDP file carries the same availability fact as the list entry
       expect(detail.variants[0]).toMatchObject({ shipDate: null, shipDateLabel: label });
       const labelNative = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
       expect(labelNative.variants[0]).toMatchObject({ shipDate: null, shipDateLabel: label });
