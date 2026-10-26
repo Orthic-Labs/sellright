@@ -224,7 +224,8 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 			expect(code, rel).toMatch(/await (loadStripe|loadCollectJs)\([^\n]*\n\s*if \(disposed\.value\) return;/);
 		}
 		const nmi = read('components/payment/NMI.tsx');
-		expect(nmi).toMatch(/if \(!disposed\.value\) await props\.onProcessingChange\$\?\.\(false, mountGen\.value\)/);
+		// #372: processing is only raised once the order exists, so only a raised flag is lowered.
+		expect(nmi).toMatch(/if \(processing && !disposed\.value\) await props\.onProcessingChange\$\?\.\(false, mountGen\.value\)/);
 		expect(nmi).toMatch(/if \(!disposed\.value\) ready\.value = true/);
 	});
 

@@ -1,4 +1,4 @@
-import { $, component$, Slot, type QRL, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -10,6 +10,7 @@ import { totalChange, formatCents, needsTotalConsent } from '~/hooks/checkout-to
 import { CheckoutDesktopCta } from './CheckoutCta';
 import { PaymentInitRetry, type PaymentInitState } from './PaymentInitRetry';
 import { bumpView } from './view-generation';
+import { paymentControlsMounted, stripeElementMountable, type PayableOrder } from './payable-order';
 
 interface CheckoutPaymentPanelProps {
 	checkoutState: any;
@@ -31,6 +32,11 @@ interface CheckoutPaymentPanelProps {
 	state: { loading: boolean; error: string | null };
 	stripeConfirmTrigger: Signal<number>;
 	stripePublishableKey: Signal<string>;
+	/** #372: the order PAY charges — created on the first PAY, before that the controls are mounted with no order. */
+	ensureOrder$: QRL<() => Promise<PayableOrder | null>>;
+	/** The total shown to the shopper (cents): the Stripe element's amount before the order exists. */
+	chargeTotalCents: ReadonlySignal<number>;
+	currency: string;
 }
 
 /** The available-method list, derived from what `GET /v1/shop/config`
@@ -56,6 +62,14 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 	const change = totalChange(props.srState.shownTotal, props.srState.grandTotal);
 	const chargeLabel = paying && props.srState.grandTotal > 0 ? formatCents(props.srState.grandTotal) : null;
 	const needsConsent = paying && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value);
+	// #372: the payment controls are mounted as soon as the details are valid, before the order exists (PAY creates it),
+	// and stay the SAME mounted component through order creation ('placing') into 'paying', so a charge in flight is never
+	// dropped by a remount. 'paid' leaves for confirmation; an order that failed after creation is recovered by the page.
+	// Nothing to pay (a gift card, credit or discount covers it): no payment controls; PLACE ORDER completes the order.
+	const mountInput = { phase: props.srState.phase, code: props.srState.code, clientSecret: props.srState.clientSecret, chargeTotalCents: props.chargeTotalCents.value };
+	const controls = paymentControlsMounted(mountInput);
+	const payLabel = chargeLabel ?? props.formattedTotal.value;
+	const detailsValid = props.checkoutValidation.isCustomerValid && props.checkoutValidation.isShippingAddressValid;
 	return (
 	<div class="checkout-right order-1 lg:order-2 mb-8 lg:mb-0 lg:basis-[58%]">
 		<div class="checkout-right-inner" style="padding:8px 20px 32px;">
@@ -184,9 +198,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												))}
 											</div>
 										)}
-										{props.srState.phase === 'paying' && props.paymentInit.failed ? (
+										{controls && props.paymentInit.failed ? (
 											<PaymentInitRetry init={props.paymentInit} />
-										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && props.srState.clientSecret ? (
+										) : controls && props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && stripeElementMountable(mountInput) ? (
 											<>
 												<StripePaymentElement
 													key={props.paymentInit.key}
@@ -194,6 +208,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													onInitError$={props.onPaymentInitError$}
 													publishableKey={props.stripePublishableKey.value}
 													clientSecret={props.srState.clientSecret}
+													amount={props.chargeTotalCents.value}
+													currency={props.currency}
+													ensureOrder$={props.ensureOrder$}
 													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${encodeURIComponent(props.srState.code)}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
 													confirmTrigger={props.stripeConfirmTrigger}
 													onError$={props.onPaymentError$}
@@ -206,16 +223,16 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
 													})}
-													disabled={props.state.loading || needsConsent}
+													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
 													class="checkout-cta"
 													style="margin-top:14px;"
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (chargeLabel ? `PAY — ${chargeLabel}` : 'PAY')}
+														: (payLabel ? `PAY — ${payLabel}` : 'PAY')}
 												</button>
 											</>
-										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
+										) : controls && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
 											<>
 												<NMI
 													key={props.paymentInit.key}
@@ -230,6 +247,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													onError$={props.onPaymentError$}
 													onProcessingChange$={props.onPaymentProcessingChange$}
 													onSuccess$={props.onGatewaySuccess$}
+													ensureOrder$={props.ensureOrder$}
 												/>
 												<button
 													type="button"
@@ -238,36 +256,35 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 													})}
-													disabled={props.state.loading || needsConsent}
+													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
 													class="checkout-cta"
 													style="margin-top:14px;"
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (chargeLabel ? `PAY — ${chargeLabel}` : 'PAY')}
+														: (payLabel ? `PAY — ${payLabel}` : 'PAY')}
 												</button>
 											</>
-										) : props.srState.phase === 'paying' && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
+										) : controls && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
 											<Sezzle
 												mountGen={props.paymentInit.gen}
 												code={props.srState.code}
 												receiptToken={props.srState.receiptToken || undefined}
-												label={chargeLabel ? `Continue — ${chargeLabel}` : 'Continue'}
-												disabled={props.state.loading || needsConsent}
+												label={payLabel ? `Continue — ${payLabel}` : 'Continue'}
+												disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
+												ensureOrder$={props.ensureOrder$}
 												onError$={props.onPaymentError$}
 												onProcessingChange$={props.onPaymentProcessingChange$}
 											/>
-										) : props.srState.phase === 'paying' ? (
+										) : controls && props.shopConfig.value && methods.length === 0 ? (
 											<div class="payment-placeholder text-red-600" style="padding:14px 0;" role="alert">
 												No payment method is configured for this store — please contact support.
 											</div>
-										) : (
+										) : controls || props.srState.phase === 'placing' ? (
 											<div class="payment-placeholder" style="padding:14px 0;">
-												{props.srState.phase === 'placing'
-													? 'Preparing secure payment...'
-													: 'Your secure payment options appear after you continue.'}
+												Preparing secure payment...
 											</div>
-										)}
+										) : null}
 									</>
 						</div>
 					</div>
@@ -293,7 +310,8 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 					<span>{props.state.error}</span>
 				</div>
 			)}
-			{!paying && <CheckoutDesktopCta {...props} />}
+			{/* The panel's own PAY replaces the CTA once the payment controls are showing. */}
+			{!(paying || (detailsValid && controls)) && <CheckoutDesktopCta {...props} />}
 		</div>
 	</div>
 	);

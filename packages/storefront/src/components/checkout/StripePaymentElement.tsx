@@ -1,6 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
 import { paymentElementOptions } from './payment-element-options';
 import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement as StripePaymentElementHandle } from '@stripe/stripe-js';
+import type { PayableOrder } from './payable-order';
 
 /**
  * Stripe Payment Element — the only card tender this storefront wires up.
@@ -12,11 +13,22 @@ import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement
  *
  * Stripe.js is imperative + browser-only, so all of this runs in a
  * useVisibleTask$ (never SSR). The element is fully client-rendered.
+ *
+ * #372 deferred mode: with no `clientSecret` the element mounts before the order exists (`mode: 'payment'` with the
+ * shown amount + currency, kept in sync). PAY then runs elements.submit() (validation, wallet sheets), asks the page for
+ * the order (`ensureOrder$`: created on the first PAY, with its PaymentIntent) and confirms against its client secret.
  */
 export interface StripePaymentElementProps {
 	publishableKey: string;
+	/** The order's PaymentIntent secret; '' mounts in deferred mode (needs `amount`, `currency`, `ensureOrder$`). */
 	clientSecret: string;
 	returnUrl: string;
+	/** Deferred mode: the amount shown to the shopper, in minor units. */
+	amount?: number;
+	/** Deferred mode: ISO currency of `amount`. */
+	currency?: string;
+	/** Deferred mode: the order to confirm, created on the first PAY; null = stop without charging. */
+	ensureOrder$?: QRL<() => Promise<PayableOrder | null>>;
 	/** Flip (increment) to trigger confirmPayment. */
 	confirmTrigger: Signal<number>;
 	/** The route's view generation when this component was rendered; every callback carries it so a stale mount is rejected. */
@@ -61,7 +73,9 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 				await reportInitError('Stripe failed to load.');
 				return;
 			}
-			const elements: StripeElements = stripe.elements({ clientSecret: props.clientSecret });
+			const elements: StripeElements = props.clientSecret
+				? stripe.elements({ clientSecret: props.clientSecret })
+				: stripe.elements({ mode: 'payment', amount: Math.max(1, Math.round(props.amount ?? 0)), currency: (props.currency || 'usd').toLowerCase() });
 			const element = elements.create('payment', paymentElementOptions());
 			paymentElement = element;
 			// Loading failures after mount arrive asynchronously as `loaderror`; readiness is Stripe's `ready`, not the mount call.
@@ -80,6 +94,14 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 		}
 	});
 
+	// Deferred mode: the element's amount follows the total shown (shipping, coupons, the order's own total once it exists).
+	useVisibleTask$(({ track }) => {
+		const amount = track(() => props.amount);
+		const elements = track(() => elementsRef.value) as StripeElements | null;
+		if (props.clientSecret || !elements || disposed.value || !amount) return;
+		elements.update({ amount: Math.max(1, Math.round(amount)) });
+	});
+
 	// Confirm: when confirmTrigger flips, run confirmPayment.
 	useVisibleTask$(async ({ track }) => {
 		const t = track(() => props.confirmTrigger.value);
@@ -90,11 +112,26 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 			await props.onError$('Payment is not ready yet.', mountGen.value);
 			return;
 		}
+		let deferredSecret = '';
+		let returnUrl = props.returnUrl;
+		if (!props.clientSecret) {
+			// Deferred: validate the details first (nothing is created for an incomplete form), then the order.
+			const submitted = await elements.submit();
+			if (disposed.value) return;
+			if (submitted.error) {
+				await props.onError$(submitted.error.message || 'Check your payment details.', mountGen.value);
+				return;
+			}
+			const order = props.ensureOrder$ ? await props.ensureOrder$() : null;
+			if (!order || !order.clientSecret || disposed.value) return;
+			deferredSecret = order.clientSecret;
+			returnUrl = order.returnUrl;
+		}
 		await props.onProcessingChange$?.(true, mountGen.value);
-		const { error } = await stripe.confirmPayment({
-			elements,
-			confirmParams: { return_url: props.returnUrl },
-		});
+		// An element created from the intent's secret confirms with the elements alone; a deferred one names the intent.
+		const { error } = deferredSecret
+			? await stripe.confirmPayment({ elements, clientSecret: deferredSecret, confirmParams: { return_url: returnUrl } })
+			: await stripe.confirmPayment({ elements, confirmParams: { return_url: returnUrl } });
 		// A removed component's result is not the current view's: the order status is re-read by whoever owns the page.
 		if (disposed.value) return;
 		// confirmPayment only RETURNS on error (success redirects to return_url).

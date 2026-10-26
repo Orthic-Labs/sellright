@@ -13,7 +13,8 @@ import { CartService } from '~/services/CartService';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
-import { formatCents } from '~/hooks/checkout-total';
+import { formatCents, needsTotalConsent } from '~/hooks/checkout-total';
+import { confirmationUrl, type PayableOrder } from '~/components/checkout/payable-order';
 import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
 import { expressCheckoutOptions, type ExpressOrderForm, type ExpressOrderResult } from '~/components/checkout/express-checkout';
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
@@ -637,6 +638,24 @@ const CheckoutContent = component$(() => {
     }
   });
 
+  // #372: PAY on the payment controls, which are mounted before any order exists. The first PAY creates the order
+  // through PLACE ORDER's own path (validation, live stock read, POST /checkout, payment-intent for Stripe); a later PAY
+  // (after a decline, or once a changed total is confirmed) returns the order the page already has. Null stops the charge:
+  // the order could not be created (state.error says why) or its total changed and awaits the shopper's confirmation.
+  const ensureOrder$ = $(async (): Promise<PayableOrder | null> => {
+    if (srState.phase !== 'paying') await placeOrder();
+    const phase: string = srState.phase;
+    if (phase !== 'paying' || !srState.code) return null;
+    if (needsTotalConsent(srState.shownTotal, srState.grandTotal, totalConfirmed.value)) return null;
+    if (paymentMethod.value === 'stripe' && !srState.clientSecret) return null;
+    return {
+      code: srState.code,
+      receiptToken: srState.receiptToken,
+      clientSecret: srState.clientSecret,
+      returnUrl: confirmationUrl(location.origin, srState.code, srState.receiptToken),
+    };
+  });
+
   // Express checkout confirm: the wallet's authorized details go through PLACE ORDER's own path (submitOrderFlow: shop
   // config, live stock read under the cart lock, POST /checkout with the wallet quote's hash as consent, converted-cart and
   // existing-order recovery), with the payment intent minted only for the wallet's exact total. Ok only when the order is
@@ -839,6 +858,9 @@ const CheckoutContent = component$(() => {
       state={state}
       stripeConfirmTrigger={stripeConfirmTrigger}
       stripePublishableKey={stripePublishableKey}
+      ensureOrder$={ensureOrder$}
+      chargeTotalCents={chargeTotalCents}
+      currency={cartCurrency.value}
     />
     </>
 
