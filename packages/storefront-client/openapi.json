@@ -5103,6 +5103,22 @@
                     },
                     "additionalProperties": false,
                     "description": "Landing-URL attribution (UTM parameters and oppref) to store on the order. Allowlisted keys only; each value at most 256 printable characters."
+                  },
+                  "tracking": {
+                    "type": "object",
+                    "properties": {
+                      "obref": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                      },
+                      "visitorId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9-]{8,64}$"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Ad match keys: the OpenAI pixel's __obref cookie value and the storefront's first-party visitor id."
                   }
                 },
                 "required": [

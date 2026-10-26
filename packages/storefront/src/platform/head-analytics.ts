@@ -25,7 +25,8 @@ export function analyticsCsp(analytics: BrandHeadSpec['analytics'] | undefined):
 
 /**
  * The GTM loader (Google's snippet, nonce'd): a STATIC script. It takes the container id from its own `data-gtm-id` attribute (validated
- * at build as `^GTM-[A-Z0-9]{4,12}$`, escaped by the JSX attribute), so no code is built from data.
+ * at build as `^GTM-[A-Z0-9]{4,12}$`, escaped by the JSX attribute), so no code is built from data. #375: before `gtm.js` it pushes the
+ * hashed `user_data` a consented earlier page stored (platform/controllers/user-data.ts), so page-view tags already carry it.
  */
 export const GTM_LOADER_SOURCE =
-	"(function(w,d,s,l){var c=d.currentScript,i=c&&c.getAttribute('data-gtm-id');if(!i)return;w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i);if(c.nonce){j.setAttribute('nonce',c.nonce);}f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer');";
+	"(function(w,d,s,l){var c=d.currentScript,i=c&&c.getAttribute('data-gtm-id');if(!i)return;w[l]=w[l]||[];try{var u=JSON.parse(w.localStorage.getItem('sr-user-data')||'null');if(u&&typeof u==='object'&&!Array.isArray(u))w[l].push({user_data:u});}catch(e){}w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i);if(c.nonce){j.setAttribute('nonce',c.nonce);}f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer');";

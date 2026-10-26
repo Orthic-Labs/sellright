@@ -11,6 +11,7 @@ import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
 import { minorUnitDigits } from '~/utils/currency';
 import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent, type AnalyticsLine } from '~/sellright/analytics';
 import { purchaseUserData } from './purchase-identity';
+import { publishUserData, userDataEnabled } from './user-data';
 
 export const SINK_PATH = BRAND_ROUTES?.operational?.analyticsPath ?? '/api/analytics/events/';
 
@@ -125,6 +126,12 @@ export async function trackPurchaseOnce(order: PurchaseOrder): Promise<void> {
 		// storage blocked: the event_id (purchase_<code>) and GA4's transaction_id still dedupe downstream
 	}
 	const address = (order.shippingAddress && typeof order.shippingAddress === 'object' ? order.shippingAddress : {}) as { phone?: unknown; country?: unknown };
+	// #375: the order's own contact/address joins the stored user data (pushed as `user_data` before the purchase event).
+	if (userDataEnabled()) {
+		const s = (k: string) => { const v = (address as Record<string, unknown>)[k]; return typeof v === 'string' ? v : null; };
+		await publishUserData({ email: order.contactEmail || order.customerEmail, phone: s('phone'), fullName: s('fullName'), country: s('country'),
+			city: s('city'), region: s('province'), postalCode: s('postalCode') });
+	}
 	const userData = await purchaseUserData({
 		email: order.contactEmail || order.customerEmail,
 		phone: typeof address.phone === 'string' ? address.phone : null,

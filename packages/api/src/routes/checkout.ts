@@ -31,6 +31,7 @@ import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptanc
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { normalizeAttribution, OrderAttributionIn } from '../orders/attribution.js';
+import { adMatchFor, OrderTrackingIn } from '../orders/ad-match.js';
 import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodes, type PricedCart } from './cart.js';
 import { CartTooLargeError, boundedCartItems, cartTooLargeFields } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -294,6 +295,9 @@ checkout.openapi(
               // Landing attribution (UTM + oppref) captured by the storefront; stored as metadata.attribution and never part
               // of the idempotency fingerprint. See orders/attribution.ts.
               attribution: OrderAttributionIn.optional(),
+              // #375: ad match keys (pixel __obref, first-party visitor id), stored as metadata.adMatch with the client IP
+              // address and user agent; never part of the idempotency fingerprint. See orders/ad-match.ts.
+              tracking: OrderTrackingIn.optional(),
             }),
           },
         },
@@ -657,6 +661,7 @@ checkout.openapi(
       // bare-code (P1): the order code is ~enumerable.
       const receiptToken = randomBytes(32).toString('base64url');
       const attribution = normalizeAttribution(body.attribution);
+      const adMatch = adMatchFor(body.tracking, ip, c.req.header('user-agent'));
       const orderMetadata = { ...(linkedVia ? { linked_via: linkedVia } : {}),
         contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
         taxInclusive: st.taxInclusive,
@@ -667,7 +672,8 @@ checkout.openapi(
         // verified above) for manifest-configured licensed products.
         ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
         ...(loyaltySnap ? { loyalty: loyaltySnap } : {}),
-        ...(attribution ? { attribution } : {}) };
+        ...(attribution ? { attribution } : {}),
+        ...(adMatch ? { adMatch } : {}) };
       // #309: the store's next sequential code, taken in this transaction (orders/order-number.ts).
       const { code } = await withOrderNumber(tx, st.id, (code) => tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,

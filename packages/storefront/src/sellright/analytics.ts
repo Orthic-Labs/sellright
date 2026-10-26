@@ -77,6 +77,14 @@ let consentGranted = false;
  *  `track()` calls. */
 export function setAnalyticsConsent(granted: boolean): void {
 	consentGranted = granted;
+	// #375: revoking consent forgets the stored hashed user data (platform/controllers/user-data.ts USER_DATA_STORAGE_KEY).
+	if (!granted && typeof window !== 'undefined') {
+		try {
+			window.localStorage.removeItem('sr-user-data');
+		} catch {
+			// storage blocked: nothing was stored
+		}
+	}
 }
 
 export function hasAnalyticsConsent(): boolean {

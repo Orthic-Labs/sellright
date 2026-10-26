@@ -20934,6 +20934,11 @@ export interface paths {
                             [key: string]: unknown;
                         };
                         shippingMethodCode?: string;
+                        /** @description Ad match keys: the OpenAI pixel's __obref cookie value and the storefront's first-party visitor id. */
+                        tracking?: {
+                            obref?: string;
+                            visitorId?: string;
+                        };
                     };
                 };
             };

@@ -10,6 +10,7 @@
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
 import { storedAttribution } from '~/sellright/attribution';
+import { orderTracking, pixelOppref, userDataEnabled } from '~/platform/controllers/user-data';
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
 import type { CheckoutSnapshot } from '~/hooks/pre-submit-stock';
 import type { ServerCart } from '~/sellright/types/cart';
@@ -124,7 +125,12 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 	}
 
 	// Landing UTM + oppref (consent-gated, last touch this session); stored on the order, never part of its idempotency fingerprint.
-	const attribution = storedAttribution();
+	const landing = storedAttribution();
+	// #375: the OpenAI pixel's own 30-day __oppref cookie fills in when this tab's landing carried none.
+	const oppref = userDataEnabled() && !landing?.oppref ? pixelOppref() : null;
+	const attribution = landing || oppref ? { ...landing, ...(oppref ? { oppref: oppref.slice(0, 256) } : {}) } : null;
+	// #375: ad match keys for the server-side conversion (pixel __obref, first-party visitor id).
+	const tracking = userDataEnabled() ? orderTracking() : null;
 	const body: CheckoutRequest = {
 		items: form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }],
 		email: form.email,
@@ -139,6 +145,7 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		cartToken: snapshot.token,
 		expectedRevision: snapshot.revision,
 		...(attribution ? { attribution } : {}),
+		...(tracking ? { tracking } : {}),
 	};
 
 	try {

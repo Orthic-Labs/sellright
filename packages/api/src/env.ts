@@ -319,6 +319,12 @@ const EnvSchema = z.object({
   JOBS_RELEASE_STALE_APPLY: z.enum(['0', '1']).optional(),
   // release-stale-allocations job: unpaid-order age threshold in minutes.
   JOBS_RELEASE_STALE_TTL_MIN: z.coerce.number().int().positive().optional(),
+  // OpenAI Ads Conversions API (#375): the pixel id and the CAPI key from Ads Manager (Conversions tab). Both set = the
+  // openai-capi job runs; either missing = off. The key is a secret: env only, never logged.
+  OPENAI_CAPI_PIXEL_ID: optionalEnvString,
+  OPENAI_CAPI_KEY: optionalEnvString,
+  // '0' sends live events; anything else (default) sends validate_only (OpenAI validates without saving).
+  OPENAI_CAPI_VALIDATE_ONLY: z.enum(['0', '1']).optional(),
   // purge-cancelled-orders job (#374): actually delete Cancelled, money-free orders (default: dry-run log only).
   JOBS_PURGE_CANCELLED_APPLY: z.enum(['0', '1']).optional(),
   // purge-cancelled-orders job: hours an order stays Cancelled before it is deleted. Default 24.

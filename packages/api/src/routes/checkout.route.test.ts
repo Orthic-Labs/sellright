@@ -461,3 +461,38 @@ describe('MONEY-5: cart estimate tax matches checkout tax for the same destinati
     expect(body.taxTotal).toBe(0);
   });
 });
+
+describe('POST /v1/shop/checkout — ad match keys (#375)', () => {
+  const post = (extra: Record<string, unknown>, headers: Record<string, string> = {}) => app.request('/v1/shop/checkout', {
+    method: 'POST', headers: hdr({ 'user-agent': 'Mozilla/5.0 Test', ...headers }), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], ...extra }),
+  });
+
+  it('stores obref + visitor id with the user agent on order.metadata.adMatch', async () => {
+    const res = await post({ tracking: { obref: 'ob.abc', visitorId: 'vid-0001-abcd' } });
+    expect(res.status).toBe(200);
+    const { code } = await res.json() as { code: string };
+    const adMatch = ((await orderByCode(code))?.metadata as { adMatch?: Record<string, string> }).adMatch;
+    expect(adMatch).toMatchObject({ obref: 'ob.abc', visitorId: 'vid-0001-abcd', userAgent: 'Mozilla/5.0 Test' });
+  });
+
+  it('an order without tracking stores no adMatch (not even the IP address / user agent)', async () => {
+    const { code } = await (await post({})).json() as { code: string };
+    expect((await orderByCode(code))?.metadata).not.toHaveProperty('adMatch');
+  });
+
+  it.each([
+    ['an unknown key', { obref: 'x', fbp: 'y' }],
+    ['a malformed visitor id', { visitorId: 'has space' }],
+    ['a control character', { obref: 'a\nb' }],
+  ])('refuses %s with 400', async (_label, tracking) => {
+    expect((await post({ tracking })).status).toBe(400);
+  });
+
+  it('is not part of the idempotency fingerprint', async () => {
+    const key = 'idem-key-tracking-1';
+    const a = await (await post({ tracking: { visitorId: 'vid-0001-aaaa' } }, { 'idempotency-key': key })).json() as { code: string };
+    const second = await post({ tracking: { visitorId: 'vid-0002-bbbb' } }, { 'idempotency-key': key });
+    expect(second.status).toBe(200);
+    expect((await second.json() as { code: string }).code).toBe(a.code);
+  });
+});

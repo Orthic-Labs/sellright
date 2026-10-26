@@ -25,6 +25,7 @@ import { isMaintenanceOn } from '../maintenance.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { purgeCancelledOrders } from './purge-cancelled-orders.js';
+import { capiConfig, openaiCapiPass } from '../ads/openai-capi.js';
 import { reservationReleaseSweep } from './reservation-release-sweep.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
 import { recoverGatewayAttempts } from './gateway-recovery.js';
@@ -187,6 +188,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;
   const purgeCancelledApply = env.JOBS_PURGE_CANCELLED_APPLY === '1';
   const purgeCancelledHours = env.JOBS_PURGE_CANCELLED_HOURS ?? 24;
+  const capi = capiConfig();
 
   log.info('scheduler on', {
     autoDeliverApply,
@@ -195,6 +197,7 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     releaseTtlMin,
     purgeCancelledApply,
     purgeCancelledHours,
+    openaiCapi: capi ? (capi.validateOnly ? 'validate_only' : 'live') : 'off',
     cartAbandonHours: env.CART_ABANDON_HOURS,
     cartTtlDays: env.CART_TTL_DAYS,
     cartRetentionDays: env.CART_RETENTION_DAYS,
@@ -257,6 +260,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   every(state, 15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
   // #374: a Cancelled, money-free order is deleted `purgeCancelledHours` after cancellation.
   every(state, 15 * 60_000, 'purge-cancelled', 'purge-cancelled', () => purgeCancelledOrders({ apply: purgeCancelledApply, hours: purgeCancelledHours, log: jobLog }));
+  // #375: server-side OpenAI order_created for live-paid orders; registered only when the pixel id and key are configured.
+  if (capi) every(state, 5 * 60_000, 'openai-capi', 'openai-capi', () => openaiCapiPass({ log: jobLog }));
   // PAYMENT-TIMING §5.2: safety net for release requests and R5 projections deferred by a failing policy hook.
   every(state, 15 * 60_000, 'reservation-release-sweep', 'reservation-release-sweep', () => reservationReleaseSweep({ log: jobLog }));
   // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned

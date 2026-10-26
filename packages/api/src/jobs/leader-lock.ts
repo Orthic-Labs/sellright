@@ -82,6 +82,8 @@ const JOB_KEYS = {
   'passkey-prune': NAMESPACE | 42n,
   // #374: deletes Cancelled, money-free orders after the retention window (jobs/purge-cancelled-orders.ts).
   'purge-cancelled': NAMESPACE | 43n,
+  // #375: OpenAI Ads Conversions API sends (ads/openai-capi.ts).
+  'openai-capi': NAMESPACE | 44n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;
