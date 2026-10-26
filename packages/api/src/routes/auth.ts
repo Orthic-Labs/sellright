@@ -12,7 +12,7 @@ import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity }
 import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
 import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, legacyCustomerToken, clearReadableLegacyToken, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
-import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { checkEmailRetryAfter, clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -51,15 +51,14 @@ function turnstileSecret(config: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
+/** No secret → verifyTurnstileToken's policy: production fails closed unless
+ *  TURNSTILE_DISABLED=true; dev/test pass (security/turnstile.ts). Any failure with
+ *  a secret configured also fails closed, matching V/turnstile-guard/turnstile-verify.ts. */
 async function turnstileOk(config: unknown, token: string | undefined, remoteIp: string): Promise<boolean> {
-  const secret = turnstileSecret(config);
-  if (!secret) return true;
-  return verifyTurnstileToken({ secret, token: token ?? null, remoteIp }); // fail closed on failure
+  return verifyTurnstileToken({ secret: turnstileSecret(config), token: token ?? null, remoteIp });
 }
 
-/** Strict variant: no secret → verifyTurnstileToken's policy (production fails
- *  closed unless TURNSTILE_DISABLED=true). Used by resend-verification; the
- *  shared turnstileOk above is left untouched for register/sign-in/magic-link. */
+/** Alias kept for resend-verification. */
 async function turnstileGate(config: unknown, token: string | undefined, remoteIp: string): Promise<boolean> {
   return verifyTurnstileToken({ secret: turnstileSecret(config), token: token ?? null, remoteIp });
 }
@@ -77,7 +76,7 @@ async function googleClientId(storeId: string): Promise<string | null> {
 // isMigrated is true for a credential-less account imported from another
 // system. The storefront reads it to render the "set your password" banner.
 // The shape is intentionally identical across register / login / google / me.
-const CustomerOut = z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
+const CustomerOut = z.object({ id: z.string(), email: z.string(), title: z.string().nullable(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
 
 export const auth = new OpenAPIHono();
 
@@ -130,7 +129,7 @@ auth.openapi(
     if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return errJson(c, 409, 'EMAIL_TAKEN', 'email already registered'); }
     await clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
-    return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
+    return c.json({ token: out.token, customer: { id: out.id, email, title: null, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
   },
 );
 
@@ -164,7 +163,7 @@ auth.openapi(
       // reset & email change, which lock this customer first.
       // A change that wins the lock is rechecked by this email-scoped read;
       // a login that wins commits its session before reset can revoke it.
-      const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
+      const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, title: s.customer.title, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
 
       // Keep the native password format on the current Argon2id work factor.
@@ -185,7 +184,7 @@ auth.openapi(
 
       const policy = loginSessionPolicy(st, rememberMe);
       const token = await createSession(tx, st.id, cust.id, policy);
-      return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
+      return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
     if (out.ok === false) { await recordLoginFailure(ip, email); return errJson(c, 401, 'INVALID_CREDENTIALS', 'invalid email or password'); }
     if (out.ok === 'not_verified') {
@@ -302,7 +301,7 @@ async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[
   }
   await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
   const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
 }
 
 function signInOutcomeResponse(c: Parameters<typeof errJson>[0], st: StoreCtx, out: SignInOutcome) {
@@ -435,7 +434,7 @@ auth.openapi(
 // be linked by email. apple_user_id is read/written via raw SQL (see the route comment below).
 async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
   const { sub, email: appleEmail, emailVerified } = apple;
-  type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
+  type CustomerRow = { id: string; email: string; title: string | null; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
   let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
   if (!cust && appleEmail) {
     // SEC: an identity naming an address without mailbox proof was matched by subject a moment ago and has since been
@@ -488,7 +487,7 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     cust = created;
   }
   const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
+  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
 }
 
 // POST /v1/shop/auth/apple — Sign in with Apple (ported upstream from
@@ -651,7 +650,7 @@ auth.openapi(
       if (!cust.emailVerified) await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
       await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
       const sessionToken = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+      return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
     if (!out.ok) return errJson(c, 409, 'MAGIC_LINK_INVALID', 'token is invalid, expired, or already used');
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
@@ -682,13 +681,13 @@ auth.openapi(
     }
     const cust = adopted?.customer ?? (token ? await withStore(st.id, tx => resolveCustomer(tx, token, true)) : null);
     if (!cust) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
-    return c.json({ id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
+    return c.json({ id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
   },
 );
 
 // GET /v1/shop/auth/check-email?email= — pre-submit UX ("email already in use").
 // WP4a. This is a deliberate account-existence oracle, so it's rate-limited per
-// IP (8/15min, same bucket family as login) to blunt enumeration/scraping.
+// IP (10/min, as the previous platform's checkCustomerEmail) to blunt enumeration/scraping.
 auth.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/auth/check-email',
@@ -700,19 +699,17 @@ auth.openapi(
       // (the reset-password email) instead of a password prompt that can never
       // succeed. Only ever true alongside exists: true.
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean(), needsPasswordSetup: z.boolean().optional() }) } } },
-      429: { description: 'Too many attempts', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const ip = clientIp(c);
-    const retry = await loginRetryAfter(ip, `checkemail:${ip}`);
-    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-    await recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
     const query = c.req.valid('query');
-    if (query.honeypot || !(await turnstileOk(st.config, query.turnstileToken, ip))) {
-      return c.json({ exists: false }, 200);
-    }
+    // Honeypot, then the limiter, then Turnstile (V/auth-flow/auth-flow.resolver.ts:35-62).
+    // Every refusal is a silent exists:false so rate limiting is never revealed.
+    if (query.honeypot) return c.json({ exists: false }, 200);
+    if ((await checkEmailRetryAfter(ip)) > 0) return c.json({ exists: false }, 200);
+    if (!(await turnstileOk(st.config, query.turnstileToken, ip))) return c.json({ exists: false }, 200);
     const email = normalizeEmail(query.email);
     const row = await withStore(st.id, async (tx) => {
       const [found] = await tx.select({ passwordHash: s.customer.passwordHash, googleSub: s.customer.googleSub, appleUserId: s.customer.appleUserId })

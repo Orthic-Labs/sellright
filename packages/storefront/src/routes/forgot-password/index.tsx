@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { XCircleIcon } from '~/platform/gateway';
-import { requestPasswordReset } from '~/providers/shop/account/account';
+import { passwordResetFailureMessage, requestPasswordReset } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';
 import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
@@ -17,6 +17,11 @@ export default component$(() => {
 	});
 
 	const reset = $(async () => {
+		success.value = false;
+		if (!email.value.trim()) {
+			error.value = 'Please enter your email address.';
+			return;
+		}
 		if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
 			error.value = 'Please complete the security check.';
 			return;
@@ -25,9 +30,12 @@ export default component$(() => {
 		const token = turnstileToken.value;
 		turnstileToken.value = '';
 		if (TURNSTILE_SITE_KEY) resetTurnstile();
-		// Enumeration-safe on the API side — always resolves ok.
-		await requestPasswordReset(email.value, token || undefined);
-		success.value = true;
+		error.value = '';
+		// The API answers 200 whether or not an account exists, so only a 200 is "sent"; a 403/429/transport
+		// failure is shown as such (previous-platform parity, #389).
+		const result = await requestPasswordReset(email.value, token || undefined);
+		if (result.ok) success.value = true;
+		else error.value = passwordResetFailureMessage(result);
 	});
 	return (
 		<div class="flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-white">

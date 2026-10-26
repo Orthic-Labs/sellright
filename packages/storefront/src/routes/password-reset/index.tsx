@@ -1,6 +1,7 @@
 import { $, component$, useSignal } from '@qwik.dev/core';
 import { XCircleIcon } from '~/platform/gateway';
 import { resetPassword } from '~/providers/shop/account/account';
+import { MIN_PASSWORD_LENGTH } from '~/components/auth/signup-flow';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';
 
@@ -19,8 +20,12 @@ export default component$(() => {
 	const loadingMessage = useSignal('Resetting...');
 
 	const reset = $(async () => {
-		isLoading.value = true;
 		error.value = '';
+		if (password.value.length < MIN_PASSWORD_LENGTH) {
+			error.value = `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+			return;
+		}
+		isLoading.value = true;
 
 		try {
 			const token = new URLSearchParams(window.location.search).get('token');
@@ -38,8 +43,10 @@ export default component$(() => {
 				error.value = result.message || 'Password reset failed. The link may have expired.';
 				isLoading.value = false;
 			} else {
+				// the previous platform signed the shopper in here (O/routes/password-reset/index.tsx:35-45). This API revokes every
+				// session on reset and returns no session, so show success and send them to sign in with the new password.
 				loadingMessage.value = 'Success! Redirecting...';
-				window.location.href = '/sign-in';
+				window.location.href = '/sign-in?reset=success';
 			}
 		} catch {
 			error.value = 'An error occurred while resetting your password. Please try again.';

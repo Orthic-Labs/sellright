@@ -178,13 +178,14 @@ describe('Turnstile enforcement (PAR-06 wiring)', () => {
     expect(verifyTurnstileToken).toHaveBeenCalledWith(expect.objectContaining({ secret: 'cf-secret-1', token: 'cf-token' }));
   });
 
-  it('stores WITHOUT a secret never call the verifier (feature off)', async () => {
+  it('stores WITHOUT a secret defer to the verifier\'s no-secret policy (#389: production fails closed, dev/test pass)', async () => {
     vi.mocked(verifyTurnstileToken).mockClear();
+    vi.mocked(verifyTurnstileToken).mockResolvedValue(true);
     const res = await app.request('/v1/shop/auth/register', {
       method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ email: 'plain@b.test', password: 'plainpassword1' }),
     });
     expect(res.status).toBe(200);
-    expect(verifyTurnstileToken).not.toHaveBeenCalled();
+    expect(verifyTurnstileToken).toHaveBeenCalledWith(expect.objectContaining({ secret: null, token: null }));
   });
 });
 

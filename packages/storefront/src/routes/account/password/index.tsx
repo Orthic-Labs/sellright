@@ -29,8 +29,8 @@ export default component$(() => {
 			return;
 		}
 
-		if (newPassword.value.length < 6) {
-			errorMessage.value = 'New password must be at least 6 characters long!';
+		if (newPassword.value.length < 8) {
+			errorMessage.value = 'New password must be at least 8 characters long!';
 			return;
 		}
 

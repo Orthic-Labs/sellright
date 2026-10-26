@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useStyles$, QRL, useContext, useOnWindow, useVisibleTask$ } from '@qwik.dev/core';
-import { login, requestPasswordReset } from '~/providers/shop/account/account';
-import { checkCustomerEmail } from '~/providers/shop/account/check-email';
+import { login, passwordResetFailureMessage, requestPasswordReset } from '~/providers/shop/account/account';
+import { checkEmailStatus } from '~/providers/shop/account/check-email';
 import { getMe } from '~/services/customer';
 import { APP_STATE } from '~/constants';
 import { ActiveCustomer } from '~/types';
@@ -17,7 +17,7 @@ export interface LoginModalProps {
   onLoginSuccess$?: QRL<() => void>;
 }
 
-type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent';
+type Step = 'email' | 'signin' | 'signup' | 'setup' | 'success' | 'reset-sent';
 
 export default component$<LoginModalProps>(({
   isOpen,
@@ -97,10 +97,11 @@ export default component$<LoginModalProps>(({
     if (!emailRegex.test(trimmed)) { error.value = 'Please enter a valid email address.'; return; }
     if (TURNSTILE_SITE_KEY && !turnstileToken.value) { error.value = 'Please complete the security check.'; return; }
     loading.value = true;
-    const exists = await checkCustomerEmail(trimmed, turnstileToken.value, honeypot.value);
+    const status = await checkEmailStatus(trimmed, turnstileToken.value, honeypot.value);
     await resetChallenge();
     loading.value = false;
-    step.value = exists ? 'signin' : 'signup';
+    // An imported account without a password gets the set-password path: a password prompt could never succeed.
+    step.value = status.exists ? (status.needsPasswordSetup ? 'setup' : 'signin') : 'signup';
   });
 
   const handleSignIn = $(async () => {
@@ -209,10 +210,15 @@ export default component$<LoginModalProps>(({
 
   const handleForgotPassword = $(async () => {
     error.value = '';
+    if (!email.value.trim()) { error.value = 'Please enter your email address.'; return; }
+    if (TURNSTILE_SITE_KEY && !turnstileToken.value) { error.value = 'Please complete the security check.'; return; }
     loading.value = true;
-    // Enumeration-safe on the API side — always resolves ok.
-    await requestPasswordReset(email.value.trim());
-    step.value = 'reset-sent';
+    // Same as the previous platform (O/components/auth/LoginModal.tsx:207-225): send the Turnstile token, and show the real
+    // outcome. The API answers 200 whether or not an account exists, so only a 200 is shown as sent.
+    const result = await requestPasswordReset(email.value.trim(), turnstileToken.value || undefined);
+    await resetChallenge();
+    if (result.ok) step.value = 'reset-sent';
+    else error.value = passwordResetFailureMessage(result);
     loading.value = false;
   });
 
@@ -241,7 +247,7 @@ export default component$<LoginModalProps>(({
         <div class="bg-[#FDFAF6] rounded-[3px] border border-[#D8D1C7] shadow-none overflow-hidden">
           <div class="px-6 py-6">
 
-            <div id="modal-turnstile" class={['email', 'signin', 'signup'].includes(step.value) ? 'min-h-[65px] flex justify-center mb-4' : 'hidden'}></div>
+            <div id="modal-turnstile" class={['email', 'signin', 'signup', 'setup'].includes(step.value) ? 'min-h-[65px] flex justify-center mb-4' : 'hidden'}></div>
             {step.value === 'email' && (
               <div class="space-y-4 font-body">
                 <div class="text-center mb-2">
@@ -314,6 +320,32 @@ export default component$<LoginModalProps>(({
                 <button key={`signin-submit-${loading.value}`} onClick$={handleSignIn} disabled={loading.value}
                   class="w-full flex justify-center py-3 px-4 border border-transparent rounded-[3px] text-sm font-medium text-[#FDFAF6] bg-[#141210] hover:opacity-90 transition-colors cursor-pointer disabled:opacity-50">
                   {loading.value ? 'Signing in...' : 'Sign In'}
+                </button>
+                <div class="text-center">
+                  <button type="button" onClick$={$(async () => { resetAndClose(); await onClose$(); })}
+                    class="text-sm text-gray-500 hover:text-gray-700 cursor-pointer">Close</button>
+                </div>
+              </div>
+            )}
+
+            {step.value === 'setup' && (
+              <div class="space-y-4 font-body">
+                <div class="text-center mb-2">
+                  <h2 class="text-xl font-bold text-gray-900">Set your password</h2>
+                  <p class="mt-1 text-sm text-gray-600">{email.value}</p>
+                  <button onClick$={handleBack} class="text-xs text-gray-500 hover:text-gray-700 underline mt-1 cursor-pointer">
+                    Use a different email
+                  </button>
+                </div>
+                <p class="text-sm text-gray-600 text-center">
+                  Your account doesn't have a password yet. We'll email you a link to set one.
+                </p>
+                {error.value && (
+                  <AuthError message={error.value} />
+                )}
+                <button key={`setup-submit-${loading.value}`} onClick$={handleForgotPassword} disabled={loading.value}
+                  class="w-full flex justify-center py-3 px-4 border border-transparent rounded-[3px] text-sm font-medium text-[#FDFAF6] bg-[#141210] hover:opacity-90 transition-colors cursor-pointer disabled:opacity-50">
+                  {loading.value ? 'Sending...' : 'Email me a link'}
                 </button>
                 <div class="text-center">
                   <button type="button" onClick$={$(async () => { resetAndClose(); await onClose$(); })}

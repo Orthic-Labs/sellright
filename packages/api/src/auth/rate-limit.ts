@@ -64,6 +64,18 @@ export async function clearLoginAttempts(ip: string, identifier: string): Promis
   await rateLimitBackend().clear(BUCKET, keyFor(ip, identifier));
 }
 
+// check-email (issue #389): attempt-counted, 10 per minute per IP, matching the
+// the previous platform checkCustomerEmail limit (V/auth-flow/auth-flow.resolver.ts:43-51).
+// Over the limit the route answers a silent exists:false, never a 429.
+const CHECK_EMAIL_BUCKET = 'check-email';
+const CHECK_EMAIL_WINDOW_MS = 60 * 1000;
+const CHECK_EMAIL_MAX_ATTEMPTS = 10;
+
+/** Consume one check-email probe for this IP. Returns retry-after seconds (>0) when over the limit, else 0. */
+export async function checkEmailRetryAfter(ip: string): Promise<number> {
+  return rateLimitBackend().consume(CHECK_EMAIL_BUCKET, ip, CHECK_EMAIL_WINDOW_MS, CHECK_EMAIL_MAX_ATTEMPTS);
+}
+
 // ── admin credential checks (P1a, security audit 2026-10-15) ─────────────────
 // Every admin credential check — /v1/admin/login, /step-up, /2fa/enable,
 // /2fa/disable, invite accept with a current password, password change — goes

@@ -25,7 +25,7 @@
  *   6. logout requires a valid CSRF token; succeeds with one
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -346,16 +346,46 @@ describe('GET /v1/shop/auth/me — native session renewal', () => {
 });
 
 describe('GET /v1/shop/auth/check-email — rate limiting', () => {
-  it('rate-limits after repeated probes from the same IP', async () => {
-    // check-email counts EVERY probe (success or not) toward the throttle
-    // bucket `checkemail:${ip}` — 8 failures/15min trips it. Fire 9 probes
-    // with distinct emails so we're testing the IP bucket, not email reuse.
-    let lastStatus = 200;
-    for (let i = 0; i < 9; i++) {
-      const res = await app.request(`/v1/shop/auth/check-email?email=probe${i}@auth.test`, { headers: hdr() });
-      lastStatus = res.status;
+  it('answers a silent exists:false (never a 429) once an IP is over 10 probes a minute, as the previous platform did', async () => {
+    // the previous platform checkCustomerEmail: 10/min/IP, over the limit → { exists: false } without revealing the limit.
+    // Probe an account that exists so a limited answer is distinguishable from "no such account".
+    await withStore(STORE, async (tx) => {
+      await tx.insert(s.customer).values({ storeId: STORE, email: 'limited@auth.test', passwordHash: null, emailVerified: true });
+    });
+    const answers: Array<{ status: number; body: { exists: boolean } }> = [];
+    for (let i = 0; i < 14; i++) {
+      const res = await app.request('/v1/shop/auth/check-email?email=limited@auth.test', { headers: hdr() });
+      answers.push({ status: res.status, body: await res.json() as { exists: boolean } });
     }
-    expect(lastStatus).toBe(429);
+    expect(answers.every((a) => a.status === 200)).toBe(true);
+    expect(answers.filter((a) => a.body.exists).length).toBeLessThanOrEqual(10);
+    expect(answers[answers.length - 1]!.body).toEqual({ exists: false });
+  });
+});
+
+describe('Turnstile gate on register — no secret configured', () => {
+  const saved = { nodeEnv: process.env.NODE_ENV, parsedNodeEnv: env.NODE_ENV, disabled: process.env.TURNSTILE_DISABLED, parsedDisabled: env.TURNSTILE_DISABLED, secret: process.env.TURNSTILE_SECRET_KEY, parsedSecret: env.TURNSTILE_SECRET_KEY };
+  afterEach(() => {
+    const restore = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+    restore('NODE_ENV', saved.nodeEnv); restore('TURNSTILE_DISABLED', saved.disabled); restore('TURNSTILE_SECRET_KEY', saved.secret);
+    env.NODE_ENV = saved.parsedNodeEnv; env.TURNSTILE_DISABLED = saved.parsedDisabled; env.TURNSTILE_SECRET_KEY = saved.parsedSecret;
+  });
+  const register = (email: string) => app.request('/v1/shop/auth/register', { method: 'POST', headers: hdr(), body: JSON.stringify({ email, password: 'turnstilepass1' }) });
+  const production = (disabled?: string) => {
+    process.env.NODE_ENV = 'production'; env.NODE_ENV = 'production';
+    delete process.env.TURNSTILE_SECRET_KEY; env.TURNSTILE_SECRET_KEY = undefined;
+    if (disabled === undefined) { delete process.env.TURNSTILE_DISABLED; env.TURNSTILE_DISABLED = undefined; }
+    else { process.env.TURNSTILE_DISABLED = disabled; env.TURNSTILE_DISABLED = disabled as typeof env.TURNSTILE_DISABLED; }
+  };
+
+  it('fails closed in production (matches security/turnstile.ts and the previous platform guard)', async () => {
+    production();
+    expect((await register('prod-closed@auth.test')).status).toBe(403);
+  });
+
+  it('passes in production only with the explicit TURNSTILE_DISABLED=true opt-out', async () => {
+    production('true');
+    expect((await register('prod-optout@auth.test')).status).toBe(200);
   });
 });
 

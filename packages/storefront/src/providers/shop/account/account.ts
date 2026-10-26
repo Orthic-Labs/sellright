@@ -148,13 +148,21 @@ export async function resetPassword(token: string, password: string): Promise<Si
 	}
 }
 
-/** The API is enumeration-safe (always 200) — mirror that unconditionally, do
- *  not leak account existence on a transient failure either. */
-export async function requestPasswordReset(email: string, turnstileToken?: string): Promise<{ ok: true }> {
+/** The API answers 200 whether or not the address has an account (enumeration-safe), so a 200 is the only "sent".
+ *  A bot-check 403, a 429, or a transport failure is a real failure the shopper must see — never reported as sent
+ *  (the previous platform showed the same, O/components/auth/LoginModal.tsx:207-225). */
+export async function requestPasswordReset(email: string, turnstileToken?: string): Promise<SimpleResult> {
 	try {
-		await sellright().POST('/v1/shop/auth/forgot-password', { body: { email, turnstileToken } });
-	} catch {
-		// enumeration-safe: no-op
+		await sellright().POST('/v1/shop/auth/forgot-password', { body: turnstileToken ? { email, turnstileToken } : { email } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 403: 'bot_check_failed' }) };
 	}
-	return { ok: true };
+}
+
+/** Shopper-facing copy for a failed requestPasswordReset (wording as the previous platform). */
+export function passwordResetFailureMessage(result: { code: string }): string {
+	if (result.code === 'bot_check_failed') return 'Verification expired. Complete the check again and resend.';
+	if (result.code === 'rate_limited') return 'Too many attempts — please wait a few minutes and try again.';
+	return "We couldn't send the reset email. Please try again.";
 }

@@ -135,11 +135,30 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		await expect(resendVerification('a@b.com')).resolves.toEqual({ ok: true });
 	});
 
-	it('requestPasswordReset is enumeration-safe: resolves ok:true even on failure', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: { code: 'UNKNOWN_ERROR', message: 'boom' } })));
+	it('requestPasswordReset reports sent only on a 200 (the API is enumeration-safe on its side)', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { ok: true })));
 
 		const { requestPasswordReset } = await import('./account');
-		await expect(requestPasswordReset('a@b.com')).resolves.toEqual({ ok: true });
+		await expect(requestPasswordReset('a@b.com', 'tok')).resolves.toEqual({ ok: true });
+	});
+
+	it('requestPasswordReset surfaces a 403 bot-check failure, a 429 and a transport failure as failures, never as sent', async () => {
+		const { requestPasswordReset, passwordResetFailureMessage } = await import('./account');
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: { code: 'BOT_CHECK_FAILED', message: 'verification failed' } })));
+		const bot = await requestPasswordReset('a@b.com');
+		expect(bot).toMatchObject({ ok: false, code: 'bot_check_failed' });
+		expect(passwordResetFailureMessage(bot as { code: string })).toMatch(/Verification expired/);
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, { error: { code: 'RATE_LIMITED', message: 'slow down' } })));
+		const limited = await requestPasswordReset('a@b.com', 'tok');
+		expect(limited).toMatchObject({ ok: false, code: 'rate_limited' });
+		expect(passwordResetFailureMessage(limited as { code: string })).toMatch(/Too many attempts/);
+
+		vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+		const down = await requestPasswordReset('a@b.com', 'tok');
+		expect(down.ok).toBe(false);
+		expect(passwordResetFailureMessage(down as { code: string })).toMatch(/couldn't send the reset email/);
 	});
 
 	it('resetPassword maps a 409 to invalid_token', async () => {

@@ -52,6 +52,18 @@ describe('checkCustomerEmail turnstile/honeypot passthrough', () => {
 		await expect(checkCustomerEmail('x@example.com')).resolves.toBe(false);
 	});
 
+	it('checkEmailStatus carries needsPasswordSetup only alongside exists', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ exists: true, needsPasswordSetup: true }), { status: 200 })));
+		const { checkEmailStatus } = await import('./check-email');
+		await expect(checkEmailStatus('imported@example.com')).resolves.toEqual({ exists: true, needsPasswordSetup: true });
+
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ exists: false, needsPasswordSetup: true }), { status: 200 })));
+		await expect(checkEmailStatus('nobody@example.com')).resolves.toEqual({ exists: false, needsPasswordSetup: false });
+
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ exists: true }), { status: 200 })));
+		await expect(checkEmailStatus('native@example.com')).resolves.toEqual({ exists: true, needsPasswordSetup: false });
+	});
+
 	it('resolves false on a 429 (rate limited) rather than throwing', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'rate limited' }), { status: 429 })));
 

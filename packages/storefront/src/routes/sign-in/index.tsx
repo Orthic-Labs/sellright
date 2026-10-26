@@ -2,7 +2,7 @@ import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
-import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
+import { login, passwordResetFailureMessage, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
 import { loginWithApple, preloadAppleSdk, signInWithApple } from '~/providers/shop/account/apple-auth';
 import { loginWithPasskey } from '~/providers/shop/account/passkeys';
@@ -67,6 +67,11 @@ export default component$(() => {
 	const turnstileToken = useSignal('');
 	const widgetError = useSignal(false);
 	const widgetId = useSignal<string>();
+	/** Set when the shopper lands here from a completed password reset (/password-reset redirects with ?reset=success). */
+	const passwordResetDone = useSignal(false);
+	useVisibleTask$(() => {
+		passwordResetDone.value = new URLSearchParams(globalThis.location?.search ?? '').get('reset') === 'success';
+	});
 	const resendLoading = useSignal(false);
 	const resendSent = useSignal(false);
 	/** Whether this store has passwordless sign-in links switched on (GET /v1/shop/config) — offered only when it has. */
@@ -255,13 +260,19 @@ export default component$(() => {
 	});
 
 	const handleForgotPassword = $(async () => {
-		if (!(EMAIL_RE.test(email.value.trim()) && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || loading.value) return;
+		if (loading.value) return;
 		error.value = '';
+		// An empty or malformed email prompts for it instead of doing nothing (the button is only visually greyed).
+		if (!email.value.trim()) { error.value = 'Enter your email address above, then choose Reset it.'; return; }
+		if (!EMAIL_RE.test(email.value.trim())) { error.value = 'Please enter a valid email address.'; return; }
+		if (TURNSTILE_SITE_KEY && !turnstileToken.value) { error.value = TOKEN_MISSING_HINT; return; }
 		loading.value = true;
-		// Enumeration-safe on the API side — always resolves ok, so this always shows the same "check your email" state.
-		await requestPasswordReset(email.value.trim(), turnstileToken.value);
+		// The API answers 200 whether or not an account exists, so only a 200 is shown as "check your email";
+		// a 403/429/transport failure is shown as the failure it is (previous-platform parity, #389).
+		const result = await requestPasswordReset(email.value.trim(), turnstileToken.value);
 		await resetChallenge();
-		view.value = 'reset-sent';
+		if (result.ok) view.value = 'reset-sent';
+		else error.value = passwordResetFailureMessage(result);
 		loading.value = false;
 	});
 
@@ -314,6 +325,11 @@ export default component$(() => {
 								<h1 class="text-2xl font-bold text-gray-900">Sign in</h1>
 								<p class="mt-2 text-sm text-gray-600">Welcome back</p>
 							</div>
+							{passwordResetDone.value && (
+								<p class="mb-5 rounded-md bg-green-50 p-3 text-sm text-green-800" role="status" data-testid="password-reset-success">
+									Your password has been updated. Sign in with your new password.
+								</p>
+							)}
 							<div class="space-y-5">
 								<div>
 									<label class="block text-sm font-medium text-gray-700">Email address</label>
