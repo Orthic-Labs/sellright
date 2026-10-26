@@ -125,6 +125,8 @@ describe('imported financial quarantine', () => {
   it('keeps an existing payment attempt readable after quarantine', async () => {
     const id = await makeOrder({ code: 'ATTEMPT-READ', state: 'Paid', paid: 1500 });
     const started = await start('ATTEMPT-READ', 'nmi', 'existing-attempt');
+    // #395: the NMI orderid (order code + attempt suffix) is stored for the recovery/verify query.
+    expect((await attempts(id))[0]!.context).toMatchObject({ orderReference: `ATTEMPT-READ-${started.attemptId.replace(/-/g, '').slice(0, 8)}` });
     await withStore(STORE, tx => tx.update(s.order).set({ metadata: financialReconciliationMetadata(null) }).where(eq(s.order.id, id)));
     const before = await attempts(id);
     expect(await readGatewayAttempt({ storeId: STORE, code: 'ATTEMPT-READ', id: started.attemptId, receiptToken: RT })).toMatchObject({ status: 'settled', method: 'nmi' });

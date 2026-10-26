@@ -49,6 +49,8 @@ import { createAdminAgentGuard } from './routes/admin-agent-guard.js';
 import { buildAgentRouteContext, type AgentRouteContext } from './auth/agent-policy.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
+import { listmonkLegacyLinkRoutes } from './marketing/listmonk-legacy-links.js';
+import { adminAccountCredit } from './routes/admin-account-credit.js';
 import { feeds } from './routes/feeds.js';
 import { sheeridRoutes } from './routes/sheerid.js';
 import { disputeRoutes } from './routes/disputes.js';
@@ -568,6 +570,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminOrderExport); // #381 Order Export page: count + download
   app.route('/', adminPreferences); // #381 per-admin UI preferences (export settings + presets)
+  app.route('/', adminAccountCredit); // #395 account credit admin (issue, adjust, disable, restore)
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminSecurity); // P1b: 2FA enrolment + recovery codes, password change, per-store 2FA requirement
@@ -586,6 +589,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminAgents); // agent seats: API-token identities with ordinary roles (deny set in auth/agent-policy.ts)
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
   app.route('/', subscriberRoutes); // subscriber confirm + unsubscribe (SUBSCRIBER-1)
+  app.route('/', listmonkLegacyLinkRoutes); // #386 legacy Listmonk confirm/unsubscribe links (emails sent before SellRight)
   app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit
   app.route('/', adminWaitlist); // G10: waitlist demand report + CSV
 

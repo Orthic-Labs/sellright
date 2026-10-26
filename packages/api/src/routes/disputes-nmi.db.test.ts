@@ -91,7 +91,8 @@ const assertNoMoneyEffects = async (paymentCount = 1) => withStore(STORE, async 
     (SELECT count(*) FROM payment WHERE store_id = ${STORE})::int AS payments,
     (SELECT count(*) FROM refund WHERE store_id = ${STORE})::int AS refunds,
     (SELECT count(*) FROM payment_attempt WHERE store_id = ${STORE})::int AS attempts,
-    (SELECT bool_and(state = 'Paid') FROM "order" WHERE store_id = ${STORE}) AS orders_paid,
+    -- #395 (previous-platform parity): an unfulfilled order with a chargeback is cancelled (no refund); every other order is untouched.
+    (SELECT bool_and((state = 'Cancelled') = EXISTS (SELECT 1 FROM dispute d WHERE d.order_id = "order".id)) FROM "order" WHERE store_id = ${STORE}) AS orders_paid,
     (SELECT bool_and(state = 'Settled') FROM payment WHERE store_id = ${STORE}) AS payments_settled`);
   expect(r.rows[0]).toMatchObject({ payments: paymentCount, refunds: 0, attempts: 0, orders_paid: true, payments_settled: true });
 });
@@ -99,6 +100,35 @@ const assertNoMoneyEffects = async (paymentCount = 1) => withStore(STORE, async 
 describe('POST /v1/webhooks/nmi/:store/:account', () => {
   beforeEach(wipe);
   afterAll(wipe);
+
+  const orderState = (id: string) => withStore(STORE, async (tx) =>
+    ((await tx.execute(sql`SELECT state FROM "order" WHERE id = ${id}`)).rows[0] as { state: string }).state);
+  const orderNotes = () => withStore(STORE, async (tx) =>
+    (await tx.execute(sql`SELECT action, data->>'note' AS note FROM audit_log WHERE action IN ('nmi_chargeback_note','cancel') ORDER BY at`)).rows);
+
+  it('#395: cancels an unfulfilled order without a refund, notes it, and queues the entitlement reversal once', async () => {
+    const ids = await seed();
+    const body = JSON.stringify(EVENT);
+    expect((await app.request(signedRequest(body))).status).toBe(200);
+    expect((await app.request(signedRequest(JSON.stringify({ ...EVENT, event_id: 'redelivery' })))).status).toBe(200);
+    expect(await orderState(ids.orderId)).toBe('Cancelled');
+    expect(await orderNotes()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'cancel' }),
+      expect.objectContaining({ action: 'nmi_chargeback_note', note: expect.stringContaining('no NMI refund was issued') }),
+    ]));
+    const ops = await withStore(STORE, async (tx) =>
+      (await tx.execute(sql`SELECT count(*)::int AS n FROM settlement_operation WHERE operation_kind = 'dispute_opened'`)).rows[0] as { n: number });
+    expect(ops.n).toBe(1);
+    await assertNoMoneyEffects();
+  });
+
+  it('#395: leaves a fulfilled order alone and records a review note', async () => {
+    const ids = await seed();
+    await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO fulfillment (store_id, order_id, state) VALUES (${STORE}, ${ids.orderId}, 'Shipped')`));
+    expect((await app.request(signedRequest(JSON.stringify(EVENT)))).status).toBe(200);
+    expect(await orderState(ids.orderId)).toBe('Paid');
+    expect(await orderNotes()).toEqual([expect.objectContaining({ action: 'nmi_chargeback_note', note: expect.stringContaining('review immediately') })]);
+  });
 
   it('a signed chargeback.batch.complete records the dispute, links the order, and enqueues ONE operator alert', async () => {
     await seed();

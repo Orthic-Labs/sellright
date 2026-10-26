@@ -23,6 +23,7 @@ describe('agent deny set', () => {
     expect(agentDenied('PATCH', '/v1/admin/settings/payments/stripe-mode')).toBe('credentials');
     expect(agentDenied('POST', '/v1/admin/customers/:id/loyalty/adjust')).toBe('credit');
     expect(agentDenied('POST', '/v1/admin/loyalty/ledger/:id/reverse')).toBe('credit');
+    expect(agentDenied('POST', '/v1/admin/account-credit/:id/adjust')).toBe('credit'); // #395
     expect(agentDenied('POST', '/v1/admin/licenses')).toBe('entitlement');
     expect(agentDenied('POST', '/v1/admin/payment-reconciliation/effects/:id/approve-issuance')).toBe('entitlement');
     expect(agentDenied('POST', '/v1/admin/apps/releases')).toBe('release');
@@ -37,7 +38,7 @@ describe('agent deny set', () => {
     for (const k of AGENT_DENIED.keys()) expect(k).toMatch(/^(POST|PUT|PATCH|DELETE) \/v1\/admin\/[^ ]+$/);
   });
   it('the invariant regex catches bulk and hyphenated irreversible paths (so the CI gate would notice their removal)', () => {
-    for (const p of ['/v1/admin/orders/bulk-cancel', '/v1/admin/orders/bulk-purge', '/v1/admin/orders/:code/cancel', '/v1/admin/settings/payments/stripe-mode', '/v1/admin/settings/preview-token', '/v1/admin/returns/:id/approve', '/v1/admin/payment-reconciliation/effects/:id/retry', '/v1/admin/customers/:id/loyalty/adjust', '/v1/admin/loyalty/ledger/:id/reverse']) expect([p, IRREVERSIBLE_PATH.test(p)]).toEqual([p, true]);
+    for (const p of ['/v1/admin/orders/bulk-cancel', '/v1/admin/orders/bulk-purge', '/v1/admin/orders/:code/cancel', '/v1/admin/settings/payments/stripe-mode', '/v1/admin/settings/preview-token', '/v1/admin/returns/:id/approve', '/v1/admin/payment-reconciliation/effects/:id/retry', '/v1/admin/customers/:id/loyalty/adjust', '/v1/admin/loyalty/ledger/:id/reverse', '/v1/admin/account-credit/issue', '/v1/admin/account-credit/:id/restore']) expect([p, IRREVERSIBLE_PATH.test(p)]).toEqual([p, true]);
     for (const p of ['/v1/admin/products', '/v1/admin/orders/bulk-soft-delete', '/v1/admin/orders/bulk-restore', '/v1/admin/draft-orders', '/v1/admin/settings/store', '/v1/admin/gift-cards']) expect([p, IRREVERSIBLE_PATH.test(p)]).toEqual([p, false]);
   });
 });

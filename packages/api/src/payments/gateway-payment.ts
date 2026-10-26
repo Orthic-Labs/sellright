@@ -10,6 +10,7 @@ import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundRes
 import { resolveConfiguredGatewayAccount, resolveGatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
+import { nmiOrderReference } from './nmi.js';
 import { queryNmiPayment, queryNmiPaymentObserved } from './nmi-query.js';
 import { recordProviderObservationDetached } from './provider-observation.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
@@ -82,6 +83,8 @@ function view(attempt: typeof s.paymentAttempt.$inferSelect) {
 export async function startGatewayPayment(input: {
   storeId: string; code: string; method: GatewayMethod; config: unknown;
   idempotencyKey: string; receiptToken?: string; customerSession?: string | null; token?: string;
+  /** #393: card brand + last 4 the storefront read from the tokenization callback (validated by the route). */
+  card?: { brand: string; last4: string };
 }) {
   const operation = input.method === 'sezzle' ? 'session' : 'charge';
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
@@ -170,7 +173,10 @@ export async function startGatewayPayment(input: {
       const [attempt] = await tx.insert(s.paymentAttempt).values({
         id: attemptId, storeId: input.storeId, orderId: order.id, operation, method: input.method,
         accountId: account.accountId, mode: account.mode, amount, currency: order.currency,
-        idempotencyKey: attemptKey, fingerprint, context,
+        idempotencyKey: attemptKey, fingerprint,
+        // NMI: the `orderid` sent on the sale (order code + attempt suffix) — the
+        // recovery/verify query keys on it. Attempts without it used the attempt id.
+        context: input.method === 'nmi' ? { ...context, orderReference: nmiOrderReference(order.code, attemptId) } : context,
       }).returning();
       if (editTender) await bindPreparedEditTender(tx, { storeId: input.storeId, orderId: order.id, editId: editTender.editId, paymentAttemptId: attempt!.id });
       return { attempt: attempt!, order, session, account };
@@ -197,7 +203,9 @@ export async function startGatewayPayment(input: {
     const result = await getProvider('nmi')!.createPayment({
       ...common, token: input.token, billingAddress: (order.billingAddress ?? order.shippingAddress ?? {}) as Record<string, unknown>,
     });
-    return finishAttempt(input.storeId, attempt.id, result);
+    // #393: the receipt's card line (order-facts.ts cardFactsFromMetadata) — brand + last 4 only, on a settled charge.
+    const card = input.card && result.state === 'Settled' ? { brand: input.card.brand, last4: input.card.last4 } : undefined;
+    return finishAttempt(input.storeId, attempt.id, card ? { ...result, metadata: { ...(result.metadata ?? {}), card } } : result);
   });
 }
 

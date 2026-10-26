@@ -16,6 +16,13 @@ const DUPLICATE = /duplicate/i;
 export const NMI_DECLINE_MESSAGE = 'Payment declined. Please try a different card or payment method.';
 export const NMI_DUPLICATE_MESSAGE = 'Payment declined: it matches a payment just made with the same card and amount. Check your email for an order confirmation before trying again.';
 export const NMI_VERIFICATION_MESSAGE = 'Payment rejected: the card address or security code did not match. Please check your details or use a different card.';
+/** NMI `orderid` for a sale: the order code (staff search NMI by it; the previous
+ *  the previous platform store sent `${order.code}-${Date.now()}`) plus a short attempt suffix so
+ *  each attempt stays unique for duplicate checks and the recovery query. The same
+ *  value is stored in payment_attempt.context.orderReference at insert. */
+export function nmiOrderReference(orderCode: string, attemptId: string): string {
+  return `${orderCode}-${attemptId.replace(/-/g, '').slice(0, 8)}`.slice(0, 64);
+}
 function configFault(text: string | null, where: string) {
   if (text && CONFIG_FAULT.test(text)) logErr.error('NMI CONFIG FAULT', undefined, { where, responseText: text.slice(0, 200) });
 }
@@ -82,7 +89,9 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
       const billing: Record<string, unknown> = { ...source, streetLine1: source.streetLine1 ?? source.line1,
         streetLine2: source.streetLine2 ?? source.line2, countryCode: source.countryCode ?? source.country };
       const fields: Record<string, string> = {
-        type: 'sale', payment_token: input.token, orderid: input.attemptId,
+        type: 'sale', payment_token: input.token,
+        orderid: nmiOrderReference(input.orderCode, input.attemptId),
+        orderdescription: `Order ${input.orderCode}`.slice(0, 255),
         amount: (input.amount / 100).toFixed(2), currency: input.currency,
       };
       for (const [target, source] of [
@@ -96,9 +105,11 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
       catch { return unknownPayment(null, 'sale_outcome_unknown'); }
       const ref = result.get('transactionid');
       const responseText = result.get('responsetext');
+      // AVS/CVV response codes are recorded on every sale outcome (codes only, no card data).
+      const avs = result.get('avsresponse'), cvv = result.get('cvvresponse');
       if (result.get('response') === '2') {
         return { state: 'Declined', providerRef: ref, errorMessage: NMI_DECLINE_MESSAGE,
-          metadata: { responseText, responseCode: result.get('response_code') } };
+          metadata: { responseText, responseCode: result.get('response_code'), avs, cvv } };
       }
       if (result.get('response') === '3') {
         configFault(responseText, 'sale');
@@ -110,17 +121,17 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
         // transaction was processed either.
         if (DUPLICATE.test(responseText ?? '')) {
           return { state: 'Declined', providerRef: ref, errorMessage: NMI_DUPLICATE_MESSAGE,
-            metadata: { reason: 'duplicate_transaction', responseText, responseCode: result.get('response_code') } };
+            metadata: { reason: 'duplicate_transaction', responseText, responseCode: result.get('response_code'), avs, cvv } };
         }
         if (!ref) {
           return { state: 'Failed', providerRef: null, errorMessage: NMI_DECLINE_MESSAGE,
-            metadata: { responseText, responseCode: result.get('response_code') } };
+            metadata: { responseText, responseCode: result.get('response_code'), avs, cvv } };
         }
       }
       if (result.get('response') !== '1' || !ref) {
-        return unknownPayment(ref, 'sale_response_requires_reconciliation');
+        const unresolved = unknownPayment(ref, 'sale_response_requires_reconciliation');
+        return { ...unresolved, metadata: { ...(unresolved.metadata as Record<string, unknown> | undefined ?? {}), avs, cvv } };
       }
-      const avs = result.get('avsresponse'), cvv = result.get('cvvresponse');
       const rejected = account.mode === 'live' && (AVS_REJECT.has(avs ?? '') || CVV_REJECT.has(cvv ?? ''));
       if (rejected) {
         // Never retry a monetary request or follow an ambiguous void with a
@@ -151,7 +162,7 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
           metadata: { needsReconciliation: true, reason: 'verification_reversal_unconfirmed', manualReview: true, avs, cvv } };
       }
       return { state: 'Settled', providerRef: ref,
-        metadata: { gateway: gatewayIdentity(account), avs: result.get('avsresponse'), cvv: result.get('cvvresponse') } };
+        metadata: { gateway: gatewayIdentity(account), avs, cvv } };
     },
     refundPayment: refund,
   };

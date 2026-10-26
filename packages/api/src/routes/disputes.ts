@@ -11,9 +11,10 @@
  * Mounted outside the shop/admin CSRF guards (same as /v1/webhooks/stripe and
  * /v1/webhooks/sezzle): the provider signature is the authentication.
  *
- * Deliberate non-parity with DD: the DD handler auto-cancelled unfulfilled
- * orders on chargeback. SellRight's stance (webhook-reconcile.ts) is that
- * disputes need human handling — we record + alert, never auto-cancel.
+ * DD parity (#395): like the DD handler, an NMI chargeback auto-cancels an
+ * UNFULFILLED order without a refund and notes the order; a fulfilled order is
+ * left alone and noted for review (disputes/nmi-chargeback.ts). Stripe disputes
+ * stay record + alert + entitlement reversal (webhook-reconcile.ts).
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
@@ -24,6 +25,8 @@ import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
 import { resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
 import { recordDispute } from '../disputes/disputes.js';
+import { applyNmiChargebackToOrder } from '../disputes/nmi-chargeback.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 import { J, errBody, guard, requireAdmin, requireStore } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 
@@ -97,6 +100,7 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
     }
     let recorded = 0;
     let skipped = 0;
+    let stockChanged = false;
     for (const cb of chargebacks) {
       const transactionId = String(cb.id ?? '').trim();
       if (!transactionId) { skipped++; continue; }
@@ -133,16 +137,30 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
         details: { eventId: body.data.event_id ?? null },
         actor: 'nmi:webhook',
       });
-      if (res.created) recorded++;
-      else skipped++;
+      if (res.created) {
+        recorded++;
+        // DD parity: cancel an unfulfilled order (no refund), note a fulfilled one, reverse entitlements.
+        if (res.orderId && res.disputeId) {
+          const applied = await applyNmiChargebackToOrder(tx, storeId, {
+            orderId: res.orderId, disputeRecordId: res.disputeId, transactionId, reason: cb.reason ?? null });
+          if (applied.stockChanged) stockChanged = true;
+          if (applied.outcome === 'not_cancelled_fulfilled') {
+            logErr.error('nmi chargeback on a fulfilled order — review immediately', undefined, { storeId, transactionId, orderCode });
+          }
+        }
+      } else skipped++;
       if (!pay) {
         logErr.error('nmi chargeback for unknown transaction', undefined, { storeId, transactionId, gatewayAccount: account.accountId, gatewayMode: account.mode });
       }
     }
-    return { recorded, skipped };
+    return { recorded, skipped, stockChanged };
   });
   if ('duplicates' in result) return c.json({ received: true }, 200);
-  return c.json({ received: true, ...result }, 200);
+  if (result.stockChanged) {
+    const [store] = await withStore(storeId, (tx) => tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1));
+    if (store) onStockChanged(store.slug);
+  }
+  return c.json({ received: true, recorded: result.recorded, skipped: result.skipped }, 200);
 });
 
 // ── admin: dispute list (operator visibility for BOTH providers) ─────────────

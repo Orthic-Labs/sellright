@@ -28,7 +28,10 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
   ...D('settlement', 'POST /v1/admin/payment-reconciliation/:id/verify', 'POST /v1/admin/payment-reconciliation/effects/:id/retry',
     'POST /v1/admin/payment-reconciliation/events/:id/retry', 'POST /v1/admin/payment-reconciliation/orders/:code/stripe-reconcile'),
   // credit out of thin air (D12): loyalty points are redeemable at checkout; gift cards are handled as a mixed route (created disabled)
-  ...D('credit', 'POST /v1/admin/customers/:id/loyalty/adjust', 'POST /v1/admin/loyalty/ledger/:id/reverse'),
+  ...D('credit', 'POST /v1/admin/customers/:id/loyalty/adjust', 'POST /v1/admin/loyalty/ledger/:id/reverse',
+    // #395 account credit: issuing, adjusting, re-enabling or restoring spendable store credit
+    'POST /v1/admin/account-credit/issue', 'POST /v1/admin/account-credit/issue-batch', 'POST /v1/admin/account-credit/:id/adjust',
+    'POST /v1/admin/account-credit/:id/status', 'POST /v1/admin/account-credit/:id/restore'),
   // entitlements: issue/revoke licences, release held reservations, revoke/clear verifications
   ...D('entitlement', 'POST /v1/admin/licenses', 'POST /v1/admin/payment-reconciliation/reservations/:id/override-release',
     'POST /v1/admin/payment-reconciliation/effects/:id/approve-issuance', // a human approves an issuance an agent edit (or an unresolved actor) was held from
@@ -74,7 +77,7 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.
  *  Delimiter is `/` OR `-` so `bulk-cancel`, `bulk-purge`, `stripe-mode`, `preview-token` are caught. Used by scripts/assert-agent-boundary.mjs. */
-export const IRREVERSIBLE_PATH = /[/-](passkeys|cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|apple|adjust|reverse|password|handoff)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
+export const IRREVERSIBLE_PATH = /[/-](passkeys|cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|apple|adjust|reverse|password|handoff)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear|\/account-credit\//;
 
 /**
  * Agent policy for routes the ENGINE does not own (P1c, security audit 2026-10-15). SDK `EnginePlugin`s and

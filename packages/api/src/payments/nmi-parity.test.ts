@@ -11,6 +11,14 @@ describe('NMI parity (legacy-store spec A)', () => {
     const r = await createNmiProvider(t).createPayment(input);
     expect(r).toMatchObject({ state: 'Declined', errorMessage: NMI_DECLINE_MESSAGE, metadata: { responseText: 'DECLINE R05' } });
   });
+  it('records AVS/CVV response codes on declines and approvals (#395); never card data', async () => {
+    const declined = vi.fn().mockResolvedValue(reply('response=2&responsetext=DECLINE&transactionid=9&avsresponse=N&cvvresponse=N'));
+    expect((await createNmiProvider(declined).createPayment(input)).metadata).toMatchObject({ avs: 'N', cvv: 'N' });
+    const settled = vi.fn().mockResolvedValue(reply('response=1&transactionid=7&avsresponse=Y&cvvresponse=M'));
+    const ok = await createNmiProvider(settled).createPayment({ ...input, gateway: { ...gateway, mode: 'test' as const } });
+    expect(ok).toMatchObject({ state: 'Settled', metadata: { avs: 'Y', cvv: 'M' } });
+    expect(JSON.stringify(ok.metadata)).not.toMatch(/ccnumber|payment_token/);
+  });
   it('declines a duplicate (response=3) with the duplicate message; nothing is held for reconciliation (#374)', async () => {
     const t = vi.fn().mockResolvedValue(reply('response=3&responsetext=Duplicate+transaction+REFID:1'));
     const r = await createNmiProvider(t).createPayment(input);

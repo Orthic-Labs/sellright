@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createNmiProvider } from './nmi.js';
+import { createNmiProvider, nmiOrderReference } from './nmi.js';
 
 const gateway = {
   accountId: 'dd-nmi-test', storeId: 'store-dd', method: 'nmi' as const,
@@ -41,7 +41,10 @@ describe('NMI port', () => {
     const params = new URLSearchParams(request.body);
     expect(params.get('payment_token')).toBe('single-use-token');
     expect(params.get('amount')).toBe('12.34');
-    expect(params.get('orderid')).toBe('attempt-1');
+    // #395: staff search NMI by order number — orderid leads with the order code, suffixed per attempt.
+    expect(params.get('orderid')).toBe('DD-1-attempt1');
+    expect(params.get('orderid')).toBe(nmiOrderReference('DD-1', 'attempt-1'));
+    expect(params.get('orderdescription')).toBe('Order DD-1');
     expect(params.has('ccnumber')).toBe(false);
     expect(params.has('cvv')).toBe(false);
   });
@@ -97,5 +100,14 @@ describe('NMI port', () => {
     });
     expect(result.state).toBe('Pending');
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('nmiOrderReference (#395)', () => {
+  it('starts with the order code, is deterministic and differs per attempt', () => {
+    const a = nmiOrderReference('DD-1001', '11111111-2222-3333-4444-555555555555');
+    expect(a).toBe('DD-1001-11111111');
+    expect(nmiOrderReference('DD-1001', '11111111-2222-3333-4444-555555555555')).toBe(a);
+    expect(nmiOrderReference('DD-1001', '99999999-2222-3333-4444-555555555555')).not.toBe(a);
   });
 });
