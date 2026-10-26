@@ -168,6 +168,23 @@ function source(fixture: Fixture) {
         proof.equal(await fixture.snapshot(), before, 'recovery creates no order or other state', 'state');
       } };
     } },
+    { key: 'POST /v1/shop/cart/{token}/reopen', contract: 'capability', async prepare(s) {
+      const orderId = randomUUID(), code = 'CART-REOPEN-' + randomUUID(), receiptToken = randomBytes(32).toString('base64url');
+      await rows('INSERT INTO "order"(id,store_id,code,state,currency,subtotal,grand_total,receipt_token) VALUES($1,$2,$3,$4,$5,2500,2500,$6)',
+        [orderId, fixture.storeId, code, 'PendingPayment', 'USD', receiptToken]);
+      await rows('UPDATE cart SET status=$2,converted_order_id=$3,revision=1 WHERE id=$1', [s.cartId, 'converted', orderId]);
+      return { url: '/v1/shop/cart/' + s.token + '/reopen', async verify(response: Response, proof: MatrixProof) {
+        const body = await json(response);
+        proof.equal({ token: body.token, status: body.status, revision: body.revision }, { token: s.token, status: 'active', revision: 2 },
+          'correct opaque cart capability reopens its own converted cart (#370)');
+        proof.equal(response.headers.get('cache-control'), 'private, no-store', 'reopened cart never publicly cached');
+        proof.equal(await rows('SELECT state FROM "order" WHERE id=$1', [orderId]), [{ state: 'Cancelled' }], 'the unpaid order behind it is cancelled', 'state');
+        proof.equal(await rows('SELECT status,converted_order_id,revision FROM cart WHERE id=$1', [s.cartId]),
+          [{ status: 'active', converted_order_id: null, revision: 2 }], 'the same cart is active again', 'state');
+        proof.equal(await rows('SELECT actor,action FROM audit_log WHERE entity_id=$1', [orderId]),
+          [{ actor: 'shopper:cart-reopen', action: 'cancel' }], 'the cancel is audited to the shopper, not the admin principal', 'state');
+      } };
+    } },
     { key: 'POST /v1/shop/checkout', contract: 'public', async prepare(s) {
       // Digital goods avoid a shipping-provider dependency while exercising real cart-to-order conversion.
       await rows('UPDATE product_variant SET fulfillment_type=$2 WHERE id=$1', [s.variantId, 'digital_download']);

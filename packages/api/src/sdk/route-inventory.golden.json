@@ -1,5 +1,5 @@
 {
-  "count": 379,
+  "count": 380,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -345,6 +345,7 @@
     "POST /v1/shop/cart",
     "POST /v1/shop/cart/{token}/express-quote",
     "POST /v1/shop/cart/{token}/merge",
+    "POST /v1/shop/cart/{token}/reopen",
     "POST /v1/shop/cart/estimate",
     "POST /v1/shop/cart/legacy-migration",
     "POST /v1/shop/catalog/products/{slug}/reviews",
