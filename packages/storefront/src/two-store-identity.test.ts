@@ -1,18 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { SrStoreIdentity } from '~/utils/sellright';
 import { footerViewModel } from '~/components/footer/footer-view-model';
-import {
-  generateOrganizationSchema,
-  generateWebsiteSchema,
-  generateProductSchema,
-} from '~/services/seo-schemas';
 
 /**
  * WS-C follow-up: proves that the runtime store identity actually drives
- * user-visible output — the footer and JSON-LD schemas — rather than being
+ * user-visible output — the footer — rather than being
  * threaded through and silently ignored. Two distinct identities (as two
  * different stores' /v1/shop/identity responses would resolve to) must
- * produce two distinct results everywhere identity-derived copy appears.
+ * produce two distinct results everywhere identity-derived copy appears. (JSON-LD is built by the API from each store's own SEO
+ * config: see api/src/seo/jsonld.test.ts.)
  */
 function makeIdentity(overrides: Partial<SrStoreIdentity>): SrStoreIdentity {
   return {
@@ -91,59 +87,5 @@ describe('two stores with different identities render different output', () => {
     expect(a.social.twitter).toBeNull();
     expect(b.social.instagram).toBeNull();
     expect(b.social.twitter).toEqual({ href: 'https://twitter.com/bloomandco', ariaLabel: 'Bloom & Co on Twitter' });
-  });
-
-  it('JSON-LD Organization schema differs per store', () => {
-    const a = generateOrganizationSchema(storeA);
-    const b = generateOrganizationSchema(storeB);
-
-    expect(a.name).toBe('Acme Knives');
-    expect(b.name).toBe('Bloom & Co');
-    expect(a.name).not.toBe(b.name);
-
-    expect(a.url).toBe('https://acmeknives.test');
-    expect(b.url).toBe('https://bloomandco.test');
-
-    expect(a.description).toBe('Sharp things, honestly made.');
-    expect(b.description).toBe('Flowers for every season.');
-
-    expect((a.contactPoint as any).email).toBe('help@acmeknives.test');
-    expect((b.contactPoint as any).email).toBe('hello@bloomandco.test');
-
-    expect((a as any).sameAs).toEqual(['https://instagram.com/acmeknives', 'https://facebook.com/acmeknives']);
-    expect((b as any).sameAs).toEqual(['https://twitter.com/bloomandco']);
-
-    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
-  });
-
-  it('JSON-LD WebSite schema differs per store', () => {
-    const a = generateWebsiteSchema(storeA);
-    const b = generateWebsiteSchema(storeB);
-
-    expect(a.name).toBe('Acme Knives');
-    expect(b.name).toBe('Bloom & Co');
-    expect((a.potentialAction as any).target).toBe('https://acmeknives.test/shop?q={search_term_string}');
-    expect((b.potentialAction as any).target).toBe('https://bloomandco.test/shop?q={search_term_string}');
-  });
-
-  it('JSON-LD Product schema (seller/brand/currency) differs per store', () => {
-    const product = {
-      name: 'Field Knife',
-      slug: 'field-knife',
-      id: 'prod_1',
-      description: 'A sturdy field knife.',
-      variants: [{ sku: 'FK-1', priceWithTax: 4999, currencyCode: null, stockLevel: 'IN_STOCK' }],
-      featuredAsset: null,
-      assets: [],
-    };
-    const a = generateProductSchema(product, storeA)!;
-    const b = generateProductSchema(product, storeB)!;
-
-    expect(a.brand).toEqual({ '@type': 'Brand', name: 'Acme Knives' });
-    expect(b.brand).toEqual({ '@type': 'Brand', name: 'Bloom & Co' });
-    expect((a.offers as any).seller).toEqual({ '@type': 'Organization', name: 'Acme Knives' });
-    expect((b.offers as any).seller).toEqual({ '@type': 'Organization', name: 'Bloom & Co' });
-    expect(a.url).toBe('https://acmeknives.test/products/field-knife/');
-    expect(b.url).toBe('https://bloomandco.test/products/field-knife/');
   });
 });

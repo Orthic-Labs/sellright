@@ -30,17 +30,17 @@ describe('signed catalog IndexNow consumer', () => {
     await onPost({ request: request(), send } as unknown as Parameters<typeof onPost>[0]);
     const response = send.mock.calls[0]![0] as Response;
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true, submitted: 1, status: 202 });
+    expect(await response.json()).toEqual({ success: true, submitted: 2, status: 202 });
     send.mockClear();
     await onPost({ request: request(undefined, { 'x-sr-signature': 'bad' }), send } as unknown as Parameters<typeof onPost>[0]);
     expect((send.mock.calls[0]![0] as Response).status).toBe(403);
   });
-  it.each([200, 202])('accepts provider %i and constructs only the configured host URL', async status => {
+  it.each([200, 202])('accepts provider %i and constructs only the configured host URLs: the product and the shop listing', async status => {
     const submit = vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status }));
     expect((await handleIndexNowWebhook(request(), config, submit)).status).toBe(200);
     expect(submit).toHaveBeenCalledOnce();
     expect(JSON.parse(submit.mock.calls[0]![1]!.body as string)).toEqual({ host: config.host, key: config.key,
-      keyLocation: 'https://fixture.example/fixture-key-123.txt', urlList: ['https://fixture.example/products/a%20%26%20b/'] });
+      keyLocation: 'https://fixture.example/fixture-key-123.txt', urlList: ['https://fixture.example/products/a%20%26%20b/', 'https://fixture.example/shop/'] });
   });
   it('rejects missing configuration, forged signatures, foreign stores and topics without submitting', async () => {
     const submit = vi.fn<typeof fetch>();

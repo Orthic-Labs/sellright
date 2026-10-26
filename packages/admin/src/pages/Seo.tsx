@@ -7,6 +7,7 @@ import { useToast } from '../components/Toast';
 import { dateTime } from '../lib/format';
 import { describeRefresh, maskKey, seoSettingsPatch, validateIndexNowKey, validateSiteUrl, type RefreshResult } from '../lib/seo';
 import { EmptyState, ErrorState, Field, FormSection, InlineAlert, KpiCard, Loading, PageHeader, Spinner } from '../components/ui';
+import { seoDetailsForm, seoDetailsPatch, type SeoDetailsConfig, type SeoDetailsForm } from '../lib/seo-details';
 
 interface SitemapFile { name: string; url: string; kind: string; count: number; urls: { loc: string; lastmod: string | null }[]; truncated: boolean }
 interface Sitemaps { configured: boolean; siteUrl: string | null; indexUrl: string | null; totalUrls: number; files: SitemapFile[]; indexNowConfigured: boolean; cloudflareConfigured: boolean }
@@ -68,6 +69,74 @@ function SeoSettingsCard({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+/** #388: the business facts behind search-result data (Organization, site search, shipping + returns on products). */
+function SeoDetailsCard() {
+  const { store } = useAuth();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const cfgKey = ['seo-config', store?.slug];
+  const { data, isLoading, error } = useQuery({ queryKey: cfgKey, queryFn: () => api.get<SeoDetailsConfig & SeoConfig>('/seo/config') });
+  const [f, setF] = useState<SeoDetailsForm | null>(null);
+  useEffect(() => { if (data) setF(seoDetailsForm(data)); }, [data]);
+  const save = useMutation({
+    mutationFn: () => api.patch<SeoDetailsConfig & SeoConfig>('/seo/config', seoDetailsPatch(f!)),
+    onSuccess: (r) => { qc.setQueryData(cfgKey, r); toast.success('Business details saved'); },
+    onError: (e) => toast.error('Could not save business details', (e as Error).message),
+  });
+  const set = (k: keyof SeoDetailsForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setF((p) => (p ? { ...p, [k]: e.target.value } : p));
+  const input = (k: keyof SeoDetailsForm, label: string, hint?: string, placeholder?: string) => (
+    <Field label={label} htmlFor={`seo-${k}`} hint={hint}>
+      <input id={`seo-${k}`} className="input" value={f ? String(f[k]) : ''} onChange={set(k)} disabled={!f} placeholder={placeholder} />
+    </Field>
+  );
+  return (
+    <FormSection title="Business details for search results" description="What search engines show about your store: who you are, how to reach you, and the shipping and return policy on product results."
+      actions={<button className="btn-primary" form="seo-details" disabled={!f || save.isPending || isLoading}>{save.isPending ? <Spinner className="text-white" /> : null} Save details</button>}>
+      {error ? <InlineAlert tone="critical" title="Could not load SEO settings">{(error as Error).message}</InlineAlert> : (
+        <form id="seo-details" className="stack-y-4" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {input('name', 'Business name')}
+            {input('telephone', 'Phone', undefined, '+1 555 0100')}
+            {input('logo', 'Logo URL', 'An absolute https:// address.')}
+            {input('image', 'Brand image URL', 'Shown when your site is shared; an absolute https:// address.')}
+          </div>
+          <Field label="Description" htmlFor="seo-description"><textarea id="seo-description" className="input min-h-[72px]" value={f?.description ?? ''} onChange={set('description')} disabled={!f} /></Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {input('founderName', 'Founder name')}
+            {input('founderUrl', 'Founder page URL', 'Optional, e.g. your about page.')}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {input('street', 'Street address')}
+            {input('city', 'City')}
+            {input('region', 'State / region')}
+            {input('postalCode', 'Postal code')}
+            {input('country', 'Country', 'Two letters, e.g. US.')}
+          </div>
+          <Field label="Social profiles" htmlFor="seo-sameAs" hint="One https:// link per line (Instagram, Facebook, YouTube...).">
+            <textarea id="seo-sameAs" className="input min-h-[72px] font-mono text-xs" value={f?.sameAs ?? ''} onChange={set('sameAs')} disabled={!f} />
+          </Field>
+          {input('searchPath', 'Search page path', 'The storefront page that searches products with ?q=, e.g. /shop. Leave blank if there is none.', '/shop')}
+          <div className="grid gap-4 sm:grid-cols-3">
+            {input('shipRate', 'Shipping price', 'e.g. 8.00 (0.00 = free). Leave blank to leave shipping out.', '8.00')}
+            {input('shipCountry', 'Ships to (country)', 'Two letters, e.g. US.', 'US')}
+            <div className="grid grid-cols-2 gap-2">{input('handlingMin', 'Handling min days')}{input('handlingMax', 'max')}</div>
+            <div className="grid grid-cols-2 gap-2 sm:col-start-3">{input('transitMin', 'Transit min days')}{input('transitMax', 'max')}</div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {input('returnDays', 'Return window (days)', 'Leave blank to leave the return policy out.', '30')}
+            {input('returnCountry', 'Returns from (country)', 'Two letters, e.g. US.', 'US')}
+            <Field label="Return shipping paid by" htmlFor="seo-returnFees">
+              <select id="seo-returnFees" className="input" value={f?.returnFees ?? 'customer'} onChange={set('returnFees')} disabled={!f}>
+                <option value="customer">Customer</option><option value="free">Store (free returns)</option>
+              </select>
+            </Field>
+          </div>
+        </form>
+      )}
+    </FormSection>
+  );
+}
+
 /** SEO: preview the generated sitemaps, then refresh the CDN copies / ping IndexNow (G11). */
 export default function SeoPage() {
   const { store } = useAuth();
@@ -101,6 +170,7 @@ export default function SeoPage() {
       {isLoading ? <Loading /> : error ? <div className="card overflow-hidden"><ErrorState message={(error as Error).message} onRetry={() => refetch()} /></div> : data && (
         <div className="stack-y-5">
           <SeoSettingsCard onSaved={() => qc.invalidateQueries({ queryKey: key })} />
+          <SeoDetailsCard />
           {!data.configured && <InlineAlert tone="attention" title="Site URL not set">Sitemaps need the store's public address. Enter it under Site settings below and this page will list every sitemap.</InlineAlert>}
           {result && <InlineAlert tone={result.indexNow.attempted && !result.indexNow.ok ? 'attention' : 'positive'} title="Refresh finished">{describeRefresh(result).map((l) => <div key={l}>{l}</div>)}</InlineAlert>}
 

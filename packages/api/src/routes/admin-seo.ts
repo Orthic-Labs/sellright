@@ -45,10 +45,25 @@ async function mutateSeoConfig(storeId: string, actor: string, mutate: (seo: Rec
   return nextSeo;
 }
 
+const SeoAddressSchema = z.object({
+  streetAddress: z.string().max(200).optional(), addressLocality: z.string().max(200).optional(), addressRegion: z.string().max(200).optional(),
+  postalCode: z.string().max(200).optional(), addressCountry: z.string().max(200).optional(),
+});
+const DayRangeOut = z.object({ min: z.number().int(), max: z.number().int() });
+const DayRangeIn = z.tuple([z.number().int().min(0).max(365), z.number().int().min(0).max(365)]).refine(([a, b]) => a <= b, 'min must not exceed max');
+
 const seoConfigOut = z.object({
   siteUrl: z.string().nullable(),
   contactEmail: z.string().nullable(),
-  organization: z.object({ name: z.string(), logo: z.string().nullable(), sameAs: z.array(z.string()) }),
+  organization: z.object({
+    name: z.string(), logo: z.string().nullable(), sameAs: z.array(z.string()),
+    // #388: the previous storefront's Organization facts, now set here (not in code).
+    image: z.string().nullable(), description: z.string().nullable(), telephone: z.string().nullable(),
+    founder: z.object({ name: z.string(), id: z.string().nullable() }).nullable(), address: SeoAddressSchema.nullable(),
+  }),
+  searchPath: z.string().nullable(),
+  shipping: z.object({ rate: z.string(), country: z.string(), handling: DayRangeOut.nullable(), transit: DayRangeOut.nullable() }).nullable(),
+  returns: z.object({ days: z.number().int(), country: z.string(), fees: z.enum(['customer', 'free']) }).nullable(),
   robotsDisallow: z.array(z.string()),
   staticPaths: z.array(z.string()),
   productUrlPattern: z.string(),
@@ -76,7 +91,20 @@ adminSeo.openapi(
 const patchBody = z.object({
   siteUrl: z.string().url().nullable().optional(),
   contactEmail: z.string().email().nullable().optional(),
-  organization: z.object({ name: z.string().optional(), logo: z.string().url().nullable().optional(), sameAs: z.array(z.string().url()).optional() }).optional(),
+  organization: z.object({
+    name: z.string().optional(), logo: z.string().url().nullable().optional(), sameAs: z.array(z.string().url()).optional(),
+    image: z.string().url().nullable().optional(), description: z.string().max(1000).nullable().optional(),
+    telephone: z.string().max(40).nullable().optional(),
+    founder: z.object({ name: z.string().min(1).max(200), id: z.string().url().optional() }).nullable().optional(),
+    address: SeoAddressSchema.nullable().optional(),
+  }).optional(),
+  // #388: storefront search page (WebSite SearchAction), Product offer shipping + return policy.
+  searchPath: z.string().regex(/^\/[^\s?#{}]*$/, 'an absolute path such as /shop').refine((p) => !p.startsWith('//'), 'an absolute path such as /shop').nullable().optional(),
+  shipping: z.object({
+    rate: z.string().regex(/^\d{1,6}(\.\d{1,2})?$/, 'a price such as 8.00'), country: z.string().regex(/^[A-Za-z]{2}$/),
+    handlingDays: DayRangeIn.optional(), transitDays: DayRangeIn.optional(),
+  }).nullable().optional(),
+  returns: z.object({ days: z.number().int().min(1).max(365), country: z.string().regex(/^[A-Za-z]{2}$/), fees: z.enum(['customer', 'free']) }).nullable().optional(),
   robotsDisallow: z.array(z.string()).optional(),
   staticPaths: z.array(z.string()).optional(),
   productUrlPattern: z.string().refine(isProductUrlPattern, 'must be an absolute path containing {slug}, e.g. /shop/{slug}/').nullable().optional(),
@@ -104,6 +132,10 @@ adminSeo.openapi(
       if (patch.siteUrl !== undefined) next.siteUrl = patch.siteUrl;
       if (patch.contactEmail !== undefined) next.contactEmail = patch.contactEmail;
       if (patch.organization !== undefined) next.organization = { ...(seo.organization as object | undefined), ...patch.organization };
+      // #388: whole-object replace (null clears); config.ts parses them back.
+      for (const k of ['searchPath', 'shipping', 'returns'] as const) {
+        if (patch[k] !== undefined) next[k] = patch[k] ?? undefined;
+      }
       if (patch.robotsDisallow !== undefined) next.robotsDisallow = patch.robotsDisallow.length ? patch.robotsDisallow : [...DEFAULT_ROBOTS_DISALLOW];
       if (patch.staticPaths !== undefined) next.staticPaths = patch.staticPaths.length ? patch.staticPaths : [...DEFAULT_STATIC_PATHS];
       if (patch.productUrlPattern !== undefined) next.productUrlPattern = patch.productUrlPattern ?? undefined;

@@ -3,6 +3,8 @@ import { productPath } from '~/platform/product-path';
 
 type Config = { host?: string; key?: string; keyLocation?: string; secret?: string; storeId?: string };
 const MAX_BODY = 16 * 1024;
+/** The shop listing changes whenever a product does, so it is resubmitted with the product (as the previous the previous platform store did). */
+const SHOP_PATH = '/shop/';
 
 export async function handleIndexNowWebhook(request: Request, config: Config, submit: typeof fetch = fetch): Promise<Response> {
   const reply = (status: number, error: string) => Response.json({ success: false, error }, { status });
@@ -46,10 +48,10 @@ export async function handleIndexNowWebhook(request: Request, config: Config, su
   try {
     const result = await submit('https://api.indexnow.org/indexnow', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, key, keyLocation, urlList: [`https://${host}${productPath(slug)}`] }),
+      body: JSON.stringify({ host, key, keyLocation, urlList: [`https://${host}${productPath(slug)}`, `https://${host}${SHOP_PATH}`] }),
       signal: AbortSignal.timeout(8000),
     });
     if (result.status !== 200 && result.status !== 202) return reply(502, 'IndexNow did not accept the submission');
-    return Response.json({ success: true, submitted: 1, status: result.status });
+    return Response.json({ success: true, submitted: 2, status: result.status });
   } catch { return reply(502, 'IndexNow submission failed'); }
 }

@@ -7,6 +7,7 @@ import { BRAND_ROUTES } from '~/platform/brand-data';
 import { fixBodyHtml, rankRelatedPosts, RELATED_POOL } from '~/platform/blog-content';
 import { hasView } from '~/platform/gateway';
 import { blogPageSize } from '~/platform/controllers/blog-view';
+import { renamedBlogPath } from '~/platform/blog-redirects';
 
 /** The blog list page size: routes.json `blog.pageSize` (1-100; the API caps `take` at 100), else today's 20. */
 export const BLOG_PAGE_SIZE: number = blogPageSize(BRAND_ROUTES);
@@ -18,6 +19,9 @@ export const useBlogPosts = routeLoader$(async () => {
 // Moved verbatim from routes/blog/[slug]/index.tsx (the route re-exports them, the A13 pattern).
 export const useBlogPost = routeLoader$(async (requestEvent) => {
     const slug = requestEvent.params.slug;
+    // Retired slugs 301 to their live successor (platform/blog-redirects.ts), before any API read.
+    const renamed = renamedBlogPath(slug);
+    if (renamed) throw requestEvent.redirect(301, renamed);
     const post = await getBlogPostBySlug(slug);
     if (!post) { requestEvent.status(404); return null; }
     if (post.bodyHtml) post.bodyHtml = fixBodyHtml(post.bodyHtml);

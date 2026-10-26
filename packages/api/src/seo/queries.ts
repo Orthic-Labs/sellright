@@ -27,14 +27,24 @@ export interface SitemapEntry {
 
 const toIso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
-/** Active, non-deleted products — mirrors catalog.ts's product-list WHERE. */
+/** Name/slug fragments of test and placeholder catalog rows, kept out of the product sitemap (the previous the previous platform store's
+ *  seo.service.ts `shouldExcludeProduct`). A plain substring test on the lowercased name and slug, as there. */
+const JUNK_PRODUCT_PATTERNS = ['history', 'test', 'sample', 'demo', 'sdfsdf'] as const;
+
+export function isJunkProduct(p: { name: string | null; slug: string | null }): boolean {
+  const name = (p.name ?? '').toLowerCase();
+  const slug = (p.slug ?? '').toLowerCase();
+  return JUNK_PRODUCT_PATTERNS.some((pattern) => name.includes(pattern) || slug.includes(pattern));
+}
+
+/** Active, non-deleted products — mirrors catalog.ts's product-list WHERE — minus test/sample/demo rows (isJunkProduct). */
 export async function listProductSitemapEntries(tx: Tx, storeId: string): Promise<SitemapEntry[]> {
   const rows = await tx
-    .select({ slug: s.product.slug, updatedAt: s.product.updatedAt })
+    .select({ slug: s.product.slug, name: s.product.name, updatedAt: s.product.updatedAt })
     .from(s.product)
     .where(and(eq(s.product.storeId, storeId), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
     .orderBy(asc(s.product.slug));
-  return rows.map((r) => ({ slug: r.slug, lastmod: toIso(r.updatedAt) }));
+  return rows.filter((r) => !isJunkProduct(r)).map((r) => ({ slug: r.slug, lastmod: toIso(r.updatedAt) }));
 }
 
 /** Published collections only — never advertise an unpublished collection URL. */
@@ -111,6 +121,8 @@ export interface ProductAvailability {
   price: number | null;
   sku: string | null;
   inStock: boolean;
+  /** Any enabled variant is a pre-order (with `inStock`, the offer is PreOrder rather than InStock). */
+  preOrder: boolean;
   updatedAt: string | null;
 }
 
@@ -179,6 +191,7 @@ export async function productAvailability(
     price: cheapest ? cheapestPrice : null,
     sku: cheapest?.sku ?? null,
     inStock,
+    preOrder: variants.some((v) => v.isPreOrder),
     updatedAt: toIso(p.updatedAt),
   };
 }

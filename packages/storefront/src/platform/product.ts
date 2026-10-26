@@ -14,10 +14,10 @@ import { jsonLdProduct } from '~/services/sellright-seo';
 import { productPageContent } from '~/platform/brand-data';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { theme, siteUrl } from '~/theme/theme.config';
-import { stripHtml } from '~/utils/sanitize';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
 import { withAbsoluteImages } from '~/platform/product-jsonld';
+import { productMetaDescription } from '~/platform/product-meta';
 import { hasView } from '~/platform/gateway';
 
 /** The page reads these loaders in the browser too (render and head refresh). With the router's default ('never') each
@@ -36,6 +36,9 @@ export interface ProductLoaderResult {
    *  null when the product is unreviewed or reviews are off/unreadable. On the
    *  live-API path it comes from the reviews endpoint summary. */
   rating: { average: number; count: number } | null;
+  /** #382: the manifest detail's product-level inStock (computed from stock levels at publish), so first paint does
+   *  not show a whole product sold out before live stock answers; null on the live-API path and older manifests. */
+  catalogInStock?: boolean | null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -67,7 +70,8 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url 
   // once the client checks in.
   try {
     const raw = await readCatalogSnapshot<RawManifestProductDetail>(`products/${slug}.json`);
-    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null, ...manifestProductMeta(raw) };
+    const catalogInStock = typeof (raw as { inStock?: unknown }).inStock === 'boolean' ? (raw as { inStock: boolean }).inStock : null;
+    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null, ...manifestProductMeta(raw), catalogInStock };
   } catch {
     // File doesn't exist or failed to parse — fall back to the live API.
   }
@@ -112,19 +116,8 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   const product = loaderResult?.product || loaderResult;
   const productJsonLd = resolveValue(useProductJsonLd) as JsonLdSchema | null;
 
-  const cleanDescription = product?.description
-    ? (() => {
-      // stripHtml (DOMPurify, real HTML parser) instead of a hand-rolled
-      // tag-strip regex — a single-pass `/<[^>]*>/g` replace can leave a
-      // reconstructed `<script` behind for crafted input like
-      // `<scr<script>ipt>` (CodeQL js/incomplete-multi-character-sanitization).
-      const raw = stripHtml(product.description).replace(/[""]/g, '"').replace(/['']/g, "'").trim();
-      if (raw.length <= 160) return raw;
-      const truncated = raw.substring(0, 160);
-      const lastSpace = truncated.lastIndexOf(' ');
-      return (lastSpace > 80 ? truncated.substring(0, lastSpace) : truncated).replace(/[.,;:!?\s]+$/, '') + '…';
-    })()
-    : `${product?.name || 'Product'} - High quality product available at ${theme.storeName}`;
+  // the previous platform's meta logic (platform/product-meta.ts): plain text, never the raw SPECS dump.
+  const cleanDescription = productMetaDescription(product, theme.storeName);
 
   let imagePreloadLinks: any[] = [];
   if (product?.images?.[0]) {
@@ -160,7 +153,7 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   const canonicalUrl = productUrl(product?.slug || '');
   return createSEOHead({
     title: product?.name || 'Product',
-    description: cleanDescription || `${product?.name || 'Product'} - Premium quality product from ${theme.storeName}`,
+    description: cleanDescription,
     image: product?.images?.[0],
     canonical: canonicalUrl,
     ogUrl: canonicalUrl,

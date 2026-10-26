@@ -68,7 +68,7 @@ describe('seoConfigFromStore', () => {
 
   it('organization.name falls back to the store name; other org fields default empty', () => {
     const config = seoConfigFromStore({ name: 'Acme', config: { seo: { organization: { logo: 'https://example.com/logo.png' } } } });
-    expect(config.organization).toEqual({ name: 'Acme', logo: 'https://example.com/logo.png', sameAs: [] });
+    expect(config.organization).toEqual({ name: 'Acme', logo: 'https://example.com/logo.png', sameAs: [], image: null, description: null, telephone: null, founder: null, address: null });
   });
 
   it('accepts a custom robotsDisallow list, ignoring empty/non-string entries', () => {
@@ -90,5 +90,44 @@ describe('seoConfigFromStore', () => {
 
     const notHex = seoConfigFromStore({ name: 'Acme', config: { seo: { indexNow: { key: 'not-hex-at-all!!' } } } });
     expect(notHex.indexNowKey).toBeNull();
+  });
+});
+
+describe('seoConfigFromStore: structured-data policy fields', () => {
+  it('defaults every optional field to unset (nothing is invented for an unconfigured store)', () => {
+    const config = seoConfigFromStore({ name: 'Acme', config: { seo: { siteUrl: 'https://example.com' } } });
+    expect(config.searchPath).toBeNull();
+    expect(config.shipping).toBeNull();
+    expect(config.returns).toBeNull();
+    expect(config.organization).toMatchObject({ image: null, description: null, telephone: null, founder: null, address: null });
+  });
+
+  it('reads shipping and returns, normalizing the rate and country', () => {
+    const config = seoConfigFromStore({ name: 'Acme', config: { seo: {
+      shipping: { rate: 8, country: 'us', handlingDays: [1, 3], transitDays: [3, 7] },
+      returns: { days: 30, country: 'US', fees: 'free' },
+    } } });
+    expect(config.shipping).toEqual({ rate: '8.00', country: 'US', handling: { min: 1, max: 3 }, transit: { min: 3, max: 7 } });
+    expect(config.returns).toEqual({ days: 30, country: 'US', fees: 'free' });
+  });
+
+  it('drops malformed shipping/returns and keeps the delivery ranges optional', () => {
+    const bad = seoConfigFromStore({ name: 'Acme', config: { seo: { shipping: { rate: '-1', country: 'US' }, returns: { days: 7 } } } });
+    expect(bad.shipping).toBeNull();
+    expect(bad.returns).toBeNull();
+    const free = seoConfigFromStore({ name: 'Acme', config: { seo: { shipping: { rate: '0', country: 'US', handlingDays: [3, 1] } } } });
+    expect(free.shipping).toEqual({ rate: '0.00', country: 'US', handling: null, transit: null });
+  });
+
+  it('accepts a site-rooted searchPath only', () => {
+    for (const bad of ['shop', '//evil.example/shop', '/shop?x=1', '/sh op', 7]) {
+      expect(seoConfigFromStore({ name: 'Acme', config: { seo: { searchPath: bad } } }).searchPath, String(bad)).toBeNull();
+    }
+    expect(seoConfigFromStore({ name: 'Acme', config: { seo: { searchPath: '/shop' } } }).searchPath).toBe('/shop');
+  });
+
+  it('reads the organization address and drops blank address fields', () => {
+    const config = seoConfigFromStore({ name: 'Acme', config: { seo: { organization: { address: { streetAddress: '1 Main St', postalCode: ' ', addressCountry: 'US' } } } } });
+    expect(config.organization.address).toEqual({ streetAddress: '1 Main St', addressCountry: 'US' });
   });
 });
