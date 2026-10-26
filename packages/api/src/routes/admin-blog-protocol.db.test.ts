@@ -73,8 +73,8 @@ describe('blog conditional update and durable create contract', () => {
     expect(results.map(r => r.status)).toEqual([200, 200]);
     const receipts = await Promise.all(results.map(r => r.json()));
     expect(receipts[0]).toEqual(receipts[1]);
-    const { rows } = await pool.query('SELECT count(*)::int AS count FROM blog_post');
-    expect(rows[0].count).toBe(1);
+    const { rows } = await withStore(STORE, tx => tx.execute(sql`SELECT count(*)::int AS count FROM blog_post`));
+    expect((rows[0] as { count: number }).count).toBe(1);
   });
   it('does not reinterpret a reused key as a new payload', async () => {
     expect((await create()).status).toBe(200);
@@ -130,5 +130,67 @@ describe('blog conditional update and durable create contract', () => {
     expect((await create('not a valid key')).status).toBe(400);
     const { id } = await (await create()).json() as { id: string };
     expect((await patchPost(id, { title: 'X', expectedRevision: 'not-a-revision' })).status).toBe(400);
+  });
+  it('rejects a duplicate slug with a clear 409 instead of silently suffixing it, with or without an idempotency key', async () => {
+    expect((await create()).status).toBe(200);
+    const res = await app.request('/v1/admin/blog', { method: 'POST', headers: auth(), body: JSON.stringify(body) });
+    expect(res.status).toBe(409);
+    expect(JSON.stringify(await res.json())).toContain('A blog post with slug \\"fixture-article\\" already exists');
+    const { rows } = await withStore(STORE, tx => tx.execute(sql`SELECT count(*)::int AS count FROM blog_post`));
+    expect((rows[0] as { count: number }).count).toBe(1);
+  });
+  it('derives the slug from the title when none is given, and lets a manual slug override it', async () => {
+    const auto = await (await create('auto-slug', { slug: undefined, title: 'My First Post!' })).json() as { slug: string };
+    expect(auto.slug).toBe('my-first-post');
+    const manual = await (await create('manual-slug', { slug: 'Custom Slug', title: 'Other' })).json() as { slug: string };
+    expect(manual.slug).toBe('custom-slug');
+  });
+  it('changes the slug on PATCH, rejects one already taken, and leaves an unchanged slug alone', async () => {
+    const a = await (await create('slug-a', { slug: 'post-a' })).json() as { id: string };
+    await create('slug-b', { slug: 'post-b' });
+    expect((await patchPost(a.id, { slug: 'post-b' })).status).toBe(409);
+    expect((await patchPost(a.id, { slug: 'post-a' , title: 'Renamed' })).status).toBe(200);
+    expect((await patchPost(a.id, { slug: 'post-c' })).status).toBe(200);
+    expect((await (await app.request(`/v1/admin/blog/${a.id}`, { headers: auth() })).json() as { slug: string }).slug).toBe('post-c');
+    expect((await patchPost(a.id, { slug: '---' })).status).toBe(400);
+  });
+  it('never defaults the author to the staff email', async () => {
+    const { id } = await (await create('no-author', { authorName: undefined })).json() as { id: string };
+    const post = await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { authorName: string };
+    expect(post.authorName).toBe('');
+  });
+  it('auto-generates a <=160 char excerpt when blank, computes 225wpm reading time, and keeps a supplied excerpt', async () => {
+    const long = `<p>${'lorem '.repeat(500)}</p>`;
+    const { id } = await (await create('excerpt', { body: long, excerpt: '  ' })).json() as { id: string };
+    const post = await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { excerpt: string; readingTime: number; seoRevision: string };
+    expect(post.excerpt.length).toBeLessThanOrEqual(160);
+    expect(post.excerpt.endsWith('lorem...')).toBe(true);
+    expect(post.readingTime).toBe(2); // 500 words / 225 = 2.2
+    expect((await patchPost(id, { excerpt: 'Hand written' })).status).toBe(200);
+    expect((await patchPost(id, { body: long })).status).toBe(200);
+    expect((await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { excerpt: string }).excerpt).toBe('Hand written');
+    expect((await patchPost(id, { excerpt: '', body: long })).status).toBe(200);
+    expect((await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { excerpt: string }).excerpt.endsWith('lorem...')).toBe(true);
+  });
+  it('lists newest-created first with read time and tags, and the detail carries the featured image path', async () => {
+    const first = await (await create('first', { slug: 'first', tags: [' a ', '', 'b'] })).json() as { id: string };
+    await new Promise(r => setTimeout(r, 15));
+    const second = await (await create('second', { slug: 'second', featuredAssetId: ASSET })).json() as { id: string };
+    const list = await (await app.request('/v1/admin/blog', { headers: auth() })).json() as { items: { id: string; tags: string[]; readingTime: number; createdAt: string }[] };
+    expect(list.items.map(i => i.id)).toEqual([second.id, first.id]);
+    expect(list.items[1]).toMatchObject({ tags: ['a', 'b'], readingTime: 1 });
+    expect(list.items[0]!.createdAt).toMatch(/^\d{4}-/);
+    const detailRow = await (await app.request(`/v1/admin/blog/${second.id}`, { headers: auth() })).json() as { featuredAssetPath: string | null; seoRevision: string };
+    expect(detailRow.featuredAssetPath).toBe('blog-test/fixture.webp');
+    // The display-only path never enters the revision: a no-op revision read still matches the stored row.
+    expect((await patchPost(second.id, { title: 'Same revision', expectedRevision: detailRow.seoRevision })).status).toBe(200);
+  });
+  it('sanitises on write with the rich allowlist: an infographic post survives create -> read -> edit unchanged', async () => {
+    const rich = '<div class="chart" data-k="1" style="color:red"><svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="5" height="5" fill="#b87333"></rect></svg><table><tbody><tr><td colspan="2">x</td></tr></tbody></table></div><p>Tail <a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a></p>';
+    const { id } = await (await create('rich', { body: rich })).json() as { id: string };
+    const read = await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { bodyHtml: string };
+    expect(read.bodyHtml).toBe(rich);
+    expect((await patchPost(id, { body: read.bodyHtml })).status).toBe(200);
+    expect((await (await app.request(`/v1/admin/blog/${id}`, { headers: auth() })).json() as { bodyHtml: string }).bodyHtml).toBe(rich);
   });
 });

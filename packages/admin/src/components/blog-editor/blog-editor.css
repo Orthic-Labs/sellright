@@ -14,3 +14,8 @@
 .blog-editor .ProseMirror img { max-width: 100%; height: auto; border-radius: 6px; }
 .blog-editor .ProseMirror img.ProseMirror-selectednode { outline: 2px solid rgb(var(--accent)); }
 .blog-editor .ProseMirror hr { border: 0; border-top: 1px solid rgb(var(--border-strong)); }
+.blog-editor .ProseMirror .raw-html-block { border: 2px dashed rgb(var(--accent)); border-radius: 6px; padding: 8px; background: rgb(var(--surface-2)); }
+.blog-editor .ProseMirror .raw-html-block.ProseMirror-selectednode { outline: 2px solid rgb(var(--accent)); }
+.blog-editor .ProseMirror .raw-html-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgb(var(--accent)); margin-bottom: 6px; }
+.blog-editor .ProseMirror .raw-html-source { display: block; width: 100%; min-height: 120px; resize: vertical; box-sizing: border-box; padding: 8px; font: 12px ui-monospace, monospace; color: rgb(var(--text)); background: rgb(var(--surface)); border: 1px solid rgb(var(--border-strong)); border-radius: 4px; }
+.blog-editor .ProseMirror mark { background: rgb(var(--accent) / 0.25); color: inherit; }

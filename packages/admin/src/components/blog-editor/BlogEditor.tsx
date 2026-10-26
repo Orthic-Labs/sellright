@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
-import { Bold, Code2, Heading2, Heading3, Image as ImageIcon, Italic, Link as LinkIcon, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react';
+import { Bold, Braces, Code2, Heading2, Heading3, Image as ImageIcon, Italic, Link as LinkIcon, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react';
 import { blogExtensions, htmlOut, normalizeUrl } from './blog-editor-core';
 import './blog-editor.css';
 
@@ -24,7 +24,7 @@ function Btn({ label, active, disabled, onClick, children }: { label: string; ac
 
 /**
  * Rich-text editor for blog bodies. Stored format is HTML (API sanitises on
- * write). The original HTML is passed through untouched until the author makes
+ * write). Raw HTML blocks hold div/table/svg infographics the visual schema cannot express. The original HTML is passed through untouched until the author makes
  * an edit, so merely opening and re-saving a post never rewrites it.
  */
 export default function BlogEditor({ value, onChange }: Props) {
@@ -60,7 +60,7 @@ export default function BlogEditor({ value, onChange }: Props) {
   const applyUrl = () => {
     if (urlMode === 'link' && !url.trim()) { chain().extendMarkRange('link').unsetLink().run(); setUrlMode(null); return; }
     const clean = normalizeUrl(url, urlMode === 'link');
-    if (!clean) { setUrlError(urlMode === 'image' ? 'Enter a full http(s) image URL.' : 'Enter a full http(s) or mailto URL.'); return; }
+    if (!clean) { setUrlError(urlMode === 'image' ? 'Enter a full http(s) image URL.' : 'Enter a web address, /path, #anchor or mailto: link.'); return; }
     if (urlMode === 'link') chain().extendMarkRange('link').setLink({ href: clean }).run();
     else chain().setImage({ src: clean }).run();
     setUrlMode(null);
@@ -84,6 +84,7 @@ export default function BlogEditor({ value, onChange }: Props) {
           <Btn label="Numbered list" active={st.ol} onClick={() => chain().toggleOrderedList().run()}><ListOrdered size={16} /></Btn>
           <Btn label="Blockquote" active={st.quote} onClick={() => chain().toggleBlockquote().run()}><Quote size={16} /></Btn>
           <Btn label="Image by URL" onClick={() => openUrl('image')}><ImageIcon size={16} /></Btn>
+          <Btn label="Insert raw HTML block" onClick={() => chain().insertContent({ type: 'rawHtml', attrs: { html: '' } }).run()}><Braces size={16} /></Btn>
           <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           <Btn label="Undo" disabled={!st.canUndo} onClick={() => chain().undo().run()}><Undo2 size={16} /></Btn>
           <Btn label="Redo" disabled={!st.canRedo} onClick={() => chain().redo().run()}><Redo2 size={16} /></Btn>

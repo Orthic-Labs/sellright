@@ -21,7 +21,13 @@ export interface BlogPostFull extends BlogPostSummary {
     seoDescription: string;
 }
 
-function adaptPost(post: SrBlogPost): BlogPostSummary {
+// The shop API returns createdAt/updatedAt as ISO strings (shop-extra.ts); SrBlogPost in
+// utils/sellright.ts does not declare them yet, so widen locally.
+type SrBlogPostDated = SrBlogPost & { createdAt?: string | null; updatedAt?: string | null };
+
+const isoOrNull = (v: string | null | undefined): string | null => (v ? v : null);
+
+function adaptPost(post: SrBlogPostDated): BlogPostSummary {
     return {
         ...post,
         excerpt: post.excerpt ?? '',
@@ -29,8 +35,7 @@ function adaptPost(post: SrBlogPost): BlogPostSummary {
         authorName: post.authorName ?? '',
         tags: post.tags ?? [],
         featuredImage: post.featuredImage ? { id: post.featuredImage.id, preview: srAssetUrl(post.featuredImage.path) } : null,
-        // SellRight does not store creation timestamps; do not invent one.
-        createdAt: null,
+        createdAt: isoOrNull(post.createdAt),
     };
 }
 
@@ -42,7 +47,7 @@ export const getBlogPosts = async (take = 20, skip = 0): Promise<{ items: BlogPo
 export const getBlogPostBySlug = async (slug: string): Promise<BlogPostFull | null> => {
     try {
         const post = await srBlogPost(slug);
-        return { ...adaptPost(post), bodyHtml: post.bodyHtml ?? '', isPublished: true, updatedAt: null, seoTitle: post.seoTitle ?? '', seoDescription: post.seoDescription ?? '' };
+        return { ...adaptPost(post), bodyHtml: post.bodyHtml ?? '', isPublished: true, updatedAt: isoOrNull((post as SrBlogPostDated).updatedAt), seoTitle: post.seoTitle ?? '', seoDescription: post.seoDescription ?? '' };
     } catch (error) {
         if (srErrorStatus(error) === 404) return null;
         throw error;

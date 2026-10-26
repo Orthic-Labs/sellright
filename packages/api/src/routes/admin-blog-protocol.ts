@@ -1,6 +1,6 @@
 /** Optimistic blog writes and durable create receipts within the existing store transaction. */
 import { createHash } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError } from './admin-helpers.js';
@@ -88,4 +88,29 @@ export async function readCreate(tx: StoreTx, storeId: string, key: string) {
   if (!receipt || receipt.storeId !== storeId || receipt.entity !== 'blog_post' || receipt.action !== 'idempotent_create' ||
       !data || !data.requestHash || !data.postId || !data.slug) throw new HttpError(404, 'create receipt not found');
   return { storeId, id: data.postId, slug: data.slug, requestHash: data.requestHash };
+}
+
+/** Normalise a typed or generated slug (lowercase a-z0-9 and single hyphens, max 200 like the previous platform). Empty -> 400. */
+export function blogSlug(raw: string): string {
+  const slug = raw.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200).replace(/-+$/, '');
+  if (!slug) throw new HttpError(400, 'slug must contain at least one letter or number');
+  return slug;
+}
+
+const slugTaken = (slug: string) => new HttpError(409, `A blog post with slug "${slug}" already exists. Choose a different slug.`, 'blog_slug_taken');
+
+/** A duplicate slug is an error the author must resolve (the previous platform ensureSlugUnique), never a silent suffix. */
+export async function ensureSlugUnique(tx: StoreTx, storeId: string, slug: string, excludeId?: string): Promise<void> {
+  const [dupe] = await tx.select({ id: s.blogPost.id }).from(s.blogPost)
+    .where(and(eq(s.blogPost.storeId, storeId), eq(s.blogPost.slug, slug), excludeId ? ne(s.blogPost.id, excludeId) : undefined)).limit(1);
+  if (dupe) throw slugTaken(slug);
+}
+
+/** Maps the (store_id, slug) unique-violation of a racing writer to the same clear 409. */
+export function rethrowSlugConflict(e: unknown, slug: string | undefined): never {
+  const err = e as { code?: string; constraint_name?: string; constraint?: string; cause?: { code?: string; constraint_name?: string; constraint?: string } };
+  const code = err?.code ?? err?.cause?.code;
+  const constraint = err?.constraint_name ?? err?.constraint ?? err?.cause?.constraint_name ?? err?.cause?.constraint;
+  if (code === '23505' && constraint === 'blog_store_slug') throw slugTaken(slug ?? '');
+  throw e;
 }

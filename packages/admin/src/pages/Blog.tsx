@@ -1,72 +1,75 @@
-import { lazy, Suspense, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
+import { Loading, ErrorNote, PageHeader, EmptyState, Badge } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
+import BlogPostForm from '../components/BlogPostForm';
+import { EMPTY_BLOG_FORM, detailToForm, formToPayload, type BlogDetail, type BlogForm, type BlogListItem } from '../components/blog-editor/blog-post-fields';
 import { date } from '../lib/format';
-
-// Editor (TipTap/ProseMirror) is its own chunk, fetched only when a post is opened.
-const BlogEditor = lazy(() => import('../components/blog-editor/BlogEditor'));
-
-interface Post { id: string; title: string; slug: string; isPublished: boolean; publishDate: string | null; authorName: string | null; }
-interface Draft { id?: string; title: string; body: string; excerpt: string; isPublished: boolean; }
 
 export default function Blog() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const key = ['blog', store?.slug];
-  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Post[] }>('/blog') });
-  const [draft, setDraft] = useState<Draft | null>(null);
+  // The API lists newest-created first (the Vendure list sorted createdAt DESC).
+  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: BlogListItem[] }>('/blog') });
+  const [draft, setDraft] = useState<BlogForm | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
 
-  const open = async (id: string) => { const p = await api.get<any>(`/blog/${id}`); setDraft({ id: p.id, title: p.title, body: p.bodyHtml ?? p.body ?? '', excerpt: p.excerpt ?? '', isPublished: p.isPublished }); };
+  const load = async (id: string) => detailToForm(await api.get<BlogDetail>(`/blog/${id}`));
+  const open = async (id: string) => { setSaveError(null); setDraft(await load(id)); };
   const save = useMutation({
-    mutationFn: () => draft!.id ? api.patch(`/blog/${draft!.id}`, draft) : api.post('/blog', draft),
-    onSuccess: () => { setDraft(null); invalidate(); },
+    mutationFn: async (f: BlogForm) => {
+      let id = f.id;
+      if (id) await api.patch(`/blog/${id}`, formToPayload(f));
+      else id = (await api.post<{ id: string }>('/blog', formToPayload(f))).id;
+      return load(id); // re-read: slug, auto excerpt and revision are server-decided
+    },
+    onSuccess: (fresh, f) => {
+      setSaveError(null);
+      // An update keeps the mounted editor's content; a created post switches to its own id (and so re-keys the editor).
+      setDraft((cur) => (cur ? { ...fresh, body: f.id ? cur.body : fresh.body } : cur));
+      toast.success(f.id ? 'Post saved' : 'Post created');
+      invalidate();
+    },
+    // 409 carries the clear message (slug already in use / post changed in another tab).
+    onError: (e) => setSaveError((e as Error).message),
   });
   const del = useMutation({ mutationFn: (id: string) => api.del(`/blog/${id}`), onSuccess: () => { setDraft(null); invalidate(); } });
+  const confirmDelete = async (id: string) => { if (await confirm({ title: 'Delete this post?', tone: 'danger', confirmLabel: 'Delete' })) del.mutate(id); };
 
   return (
     <>
       {confirmDialog}
       <PageHeader title="Blog" subtitle="Posts for the storefront blog." actions={
-        <button className="btn-primary" onClick={() => setDraft({ title: '', body: '', excerpt: '', isPublished: false })}><Plus size={16} /> New post</button>
+        <button className="btn-primary" onClick={() => { setSaveError(null); setDraft({ ...EMPTY_BLOG_FORM }); }}><Plus size={16} /> New post</button>
       } />
 
       {draft && (
-        <div className="card p-4 mb-5 stack-y-3 max-w-3xl">
-          <div><label className="label">Title</label><input className="input" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></div>
-          <div><label className="label">Excerpt</label><input className="input" value={draft.excerpt} onChange={(e) => setDraft({ ...draft, excerpt: e.target.value })} /></div>
-          <div>
-            <label className="label">Body</label>
-            <Suspense fallback={<Loading label="Loading editor" />}>
-              <BlogEditor key={draft.id ?? 'new'} value={draft.body} onChange={(body) => setDraft((d) => (d ? { ...d, body } : d))} />
-            </Suspense>
-          </div>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={draft.isPublished} onChange={(e) => setDraft({ ...draft, isPublished: e.target.checked })} /> Published</label>
-          {save.error && <ErrorNote message={(save.error as Error).message} />}
-          <div className="flex gap-2">
-            <button className="btn-primary" disabled={save.isPending || !draft.title.trim()} onClick={() => save.mutate()}>{save.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
-            <button className="btn-ghost" onClick={() => setDraft(null)}>Cancel</button>
-            {draft.id && <button className="btn-danger ml-auto" onClick={async () => { if (await confirm({ title: 'Delete this post?', tone: 'danger', confirmLabel: 'Delete' })) del.mutate(draft.id!); }}><Trash2 size={15} /> Delete</button>}
-          </div>
-        </div>
+        <BlogPostForm key={draft.id ?? 'new'} value={draft} onChange={setDraft} saving={save.isPending} error={saveError}
+          onSave={() => save.mutate(draft)} onCancel={() => setDraft(null)}
+          onDelete={draft.id ? () => confirmDelete(draft.id!) : undefined} />
       )}
 
       <div className="card overflow-hidden">
-        {isLoading ? <Loading /> : error ? <ErrorNote message={(error as Error).message} /> : !data || data.items.length === 0 ? <EmptyState title="No posts yet" /> : (
+        {isLoading ? <Loading /> : error ? <ErrorNote message={(error as Error).message} /> : !data || data.items.length === 0 ? <EmptyState title="No posts yet" hint="Create your first post to get started." /> : (
           <table className="w-full">
-            <thead><tr><th className="th">Title</th><th className="th">Author</th><th className="th">Status</th><th className="th">Date</th></tr></thead>
+            <thead><tr><th className="th">Title</th><th className="th">Status</th><th className="th">Date</th><th className="th">Read</th><th className="th">Tags</th><th className="th" /></tr></thead>
             <tbody>
               {data.items.map((p) => (
                 <tr key={p.id} className="row-link" onClick={() => open(p.id)}>
                   <td className="td font-medium">{p.title}</td>
-                  <td className="td text-gray-500">{p.authorName}</td>
-                  <td className="td"><Badge value={p.isPublished ? 'active' : 'draft'} /></td>
-                  <td className="td text-gray-500">{p.publishDate ? date(p.publishDate) : '—'}</td>
+                  <td className="td"><Badge value={p.isPublished ? 'active' : 'draft'} label={p.isPublished ? 'Published' : 'Draft'} /></td>
+                  <td className="td text-gray-500">{date(p.publishDate ?? p.createdAt)}</td>
+                  <td className="td text-gray-500">{p.readingTime ? `${p.readingTime} min` : '—'}</td>
+                  <td className="td text-gray-500 text-sm">{p.tags?.length ? p.tags.join(', ') : '—'}</td>
+                  <td className="td"><button type="button" className="btn-ghost text-danger" aria-label={`Delete ${p.title}`} onClick={(e) => { e.stopPropagation(); void confirmDelete(p.id); }}><Trash2 size={14} /></button></td>
                 </tr>
               ))}
             </tbody>
