@@ -29,6 +29,7 @@ import { OrderProcessingModal as RawOrderProcessingModal } from '~/components/Or
 import RawComingSoon from '~/components/coming-soon/ComingSoon';
 import RawMaintenanceScreen from '~/components/maintenance/MaintenanceScreen';
 import { QuantityDropdown as RawQuantityDropdown } from '~/components/ui/QuantityDropdown';
+import { FreeShippingProgress as RawFreeShippingProgress } from '~/components/free-shipping-progress/FreeShippingProgress';
 import RawProductCard from '~/components/products/ProductCard';
 import RawPrice from '~/components/products/Price';
 import { HomeHero as RawHomeHero } from '~/components/home/HomeHero';
@@ -78,6 +79,21 @@ export const ORDER_SUMMARY = obj({
 	placedAt: nul(str),
 	state: str,
 	status: lit('open', 'completed', 'cancelled', 'archived'),
+	// #393 order-history parity: totals breakdown, tracking, line thumbnails and pre-order facts.
+	subtotal: num,
+	shippingTotal: num,
+	taxTotal: num,
+	discountTotal: num,
+	shippingMethodName: nul(str),
+	trackingCode: nul(str),
+	carrier: nul(str),
+	isPreOrder: bool,
+	shipDate: nul(str),
+	shipDateLabel: nul(str),
+	items: arr(obj({
+		sku: str, name: str, productName: nul(str), quantity: num, unitPrice: num, lineTotal: num,
+		image: nul(str), isPreOrder: bool, shipDate: nul(str), shipDateLabel: nul(str),
+	})),
 });
 
 // ---------------------------------------------------------------------------------------------------- icons
@@ -266,7 +282,8 @@ export const FREE_SHIPPING_DATA = obj({
 	discountedSubtotalCents: num,
 	freeShipping: nul(obj({ threshold: num, remaining: num })),
 });
-export const FreeShippingProgressView = /*#__PURE__*/ slotGate('cart.free-shipping-progress', { data: FREE_SHIPPING_DATA });
+/** A brand's slot wins; otherwise the base bar (#394). The caller decides where the base bar may show. */
+export const FreeShippingProgressView = /*#__PURE__*/ slotGate('cart.free-shipping-progress', { data: FREE_SHIPPING_DATA }, RawFreeShippingProgress);
 export const LOYALTY_DATA = obj({ balance: num, minRedeemPoints: num, offer: REDEMPTION, applied: REDEMPTION, discountableCents: num, currencyCode: str });
 /** Fallback: the base LoyaltyRedeem (L1), given the same validated props. */
 export const LoyaltyRedemptionView = /*#__PURE__*/ slotGate('checkout.loyalty-redemption', { data: LOYALTY_DATA, actions: { onRedeemToggle$: action('loyalty.redeem-toggle') } }, LoyaltyRedeem);

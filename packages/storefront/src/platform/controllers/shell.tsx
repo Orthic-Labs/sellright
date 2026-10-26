@@ -3,7 +3,7 @@
 import { $, component$, useComputed$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { useLocation, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
-import { useCart } from '~/contexts/CartContext';
+import { useCart, cartBadgeCount } from '~/contexts/CartContext';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
 import { logout as logoutAccount } from '~/providers/shop/account/account';
 import { clearStoredAddress } from '~/utils/addressStorage';
@@ -38,7 +38,8 @@ export const BrandHeaderMount = component$(() => {
 			isCheckout: isCheckoutPage(location.url.toString()),
 			isConfirmation: location.url.pathname.includes('/checkout/confirmation/'),
 			isNavigating: location.isNavigating,
-			cartQuantity: cart.cart.lines.reduce((sum, line) => sum + line.quantity, 0),
+			// #394: brand header slots (e.g. Damned's) show the same badge as the core header, persisted count first.
+			cartQuantity: cartBadgeCount(cart),
 			cartOpen: appState.showCart,
 			account: { signedIn: appState.customer.id !== CUSTOMER_NOT_DEFINED_ID, displayName: appState.customer.id !== CUSTOMER_NOT_DEFINED_ID ? appState.customer.firstName || null : null },
 		}),

@@ -1,5 +1,5 @@
 import { $, component$, useContext, useComputed$, useOnWindow, useSignal, useStyles$ } from '@qwik.dev/core';
-import { useCart } from '~/contexts/CartContext';
+import { useCart, cartBadgeCount } from '~/contexts/CartContext';
 import { useCartToggle } from '~/platform/cart';
 import { useLocation, Link, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
@@ -28,7 +28,8 @@ export default component$(() => {
 	// truth — see CartContext.tsx) so this recomputes on every mutation
 	// (add/update/remove/refresh) with no separate event listener or
 	// qinit-from-storage bootstrap needed, unlike the retired local-cart mirror.
-	const totalQuantity = useComputed$(() => cart.cart.lines.reduce((sum, line) => sum + line.quantity, 0));
+	// #394: the persisted count until the first cart read lands (no 0 flash), then the live lines.
+	const totalQuantity = useComputed$(() => cartBadgeCount(cart));
 	const isOnCheckoutPage = isCheckoutPage(location.url.toString());
 	const isOnConfirmationPage = location.url.pathname.includes('/checkout/confirmation/');
 	const isHomePage = location.url.pathname === '/';

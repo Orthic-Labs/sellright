@@ -21,7 +21,7 @@ import type {
 } from '~/platform/views';
 
 export interface SlotPropsMap {
-	/** Cart drawer / checkout summary lines: a progress hint under the line list. No base fallback (renders nothing). */
+	/** Cart drawer / checkout summary lines: a progress hint under the line list. Fallback: the base FreeShippingProgress bar in the cart drawer (nothing on the checkout summary). */
 	'cart.free-shipping-progress': {
 		currencyCode: string;
 		/** Cart subtotal in minor units (cents). */

@@ -10,7 +10,7 @@ import { isImageCached } from '~/utils/image-cache';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
-import { FreeShippingProgressView, QuantityDropdown, TrashIcon, platformAction } from '~/platform/gateway';
+import { FreeShippingProgressView, QuantityDropdown, TrashIcon, hasView, platformAction } from '~/platform/gateway';
 import { projectQuantityOptions } from '~/platform/controllers/project';
 import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
 import { productPath } from '~/platform/product-path';
@@ -244,16 +244,19 @@ export default component$(() => {
 				})}
 
 			</ul>
-			{/* A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing. */}
-			<FreeShippingProgressView
-				currencyCode={currencyCode}
-				subtotalCents={cartState.cart.subtotal}
-				lineCount={cartState.cart.lines.length}
-				isCheckoutView={isCheckoutView}
-				countryCode={shippingCountry(appState.shippingAddress.countryCode)}
-				discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
-				freeShipping={appState.freeShipping ?? null}
-			/>
+			{/* A17 mount point: a free-shipping progress hint under the line list. A brand's slot wins; without one the drawer (not the
+			    checkout summary) shows the base bar, fed by the server's tier. */}
+			{(hasView('cart.free-shipping-progress') || !isCheckoutView) && (
+				<FreeShippingProgressView
+					currencyCode={currencyCode}
+					subtotalCents={cartState.cart.subtotal}
+					lineCount={cartState.cart.lines.length}
+					isCheckoutView={isCheckoutView}
+					countryCode={shippingCountry(appState.shippingAddress.countryCode)}
+					discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+					freeShipping={appState.freeShipping ?? null}
+				/>
+			)}
 		</div>
 	);
 });

@@ -1,4 +1,4 @@
-import { $, component$, useSignal, useComputed$, type Signal } from '@qwik.dev/core';
+import { $, component$, useSignal, useComputed$, useTask$, type Signal } from '@qwik.dev/core';
 
 import { useCart, applyCoupon, removeCoupon, type CartContextState } from '~/contexts/CartContext';
 import { formatPrice } from '~/utils';
@@ -72,6 +72,14 @@ export default component$<{
 	const removeCoupon$ = $(async (code: string) => {
 		await removeCoupon(cartState, code);
 		errorSignal.value = '';
+	});
+
+	// The coupon error clears itself after 3 s (the previous platform's cart's behaviour); a new message restarts the timer.
+	useTask$(({ track, cleanup }) => {
+		const message = track(() => errorSignal.value);
+		if (!message) return;
+		const timer = setTimeout(() => { errorSignal.value = ''; }, 3000);
+		cleanup(() => clearTimeout(timer));
 	});
 
 	const isDarkRows = promoPlacement === 'rows';

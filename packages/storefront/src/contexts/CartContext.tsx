@@ -5,10 +5,11 @@ import {
   useContextProvider,
   useStore,
   useOnDocument,
+  useOnWindow,
   $,
   Slot,
 } from '@qwik.dev/core';
-import { CartService, CartError } from '~/services/CartService';
+import { CartService, CartError, CART_COUNT_KEY } from '~/services/CartService';
 import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
 import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
@@ -30,6 +31,9 @@ export interface CartContextState extends Live {
   /** Non-null exactly once, right after a mutation dropped lines the caller
    *  didn't ask to remove — consumers must show this, then clear it. */
   notice: string | null;
+  /** The persisted item count from the last session of this browser's cart (null = none). The header badge shows it until
+   *  the first server read lands (`hasLoadedOnce`); after that the lines are the count. Never cart data. */
+  lastKnownQuantity?: number | null;
 }
 
 export const CartContextId = createContextId<CartContextState>('cart-context');
@@ -42,6 +46,7 @@ export const CartProvider = component$(() => {
     hasLoadedOnce: false,
     isRefreshingStock: false,
     notice: null,
+    lastKnownQuantity: null,
   });
 
   // Init on page boot: paint whatever CartService already has in memory (SPA
@@ -56,6 +61,8 @@ export const CartProvider = component$(() => {
       bindCartMirror(cartState);
       if (cartState.hasLoadedOnce) return;
       cartState.cart = CartService.getCart();
+      // Paint the last known count at once; the bootstrap read below replaces it.
+      cartState.lastKnownQuantity = CartService.lastKnownQuantity();
       CartService.bootstrap()
         .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
@@ -66,10 +73,34 @@ export const CartProvider = component$(() => {
     }),
   );
 
+  // Cross-tab sync: another tab's cart change rewrites CART_COUNT_KEY (`storage` fires only in the OTHER tabs; `null` key =
+  // storage cleared). Re-read the live cart; the mirror binding above commits it. Before the first read lands the boot read
+  // is already the latest, and a read that writes the same value does not wake the sender again.
+  useOnWindow(
+    'storage',
+    $((event: Event) => {
+      const key = (event as StorageEvent).key;
+      if (key !== null && key !== CART_COUNT_KEY) return;
+      if (!cartState.hasLoadedOnce) return;
+      CartService.syncFromOtherTab().catch((e) => {
+        console.error('CartContext: cross-tab cart refresh failed:', e);
+        reportError(cartState, e, 'Failed to refresh cart');
+      });
+    }),
+  );
+
   useContextProvider(CartContextId, cartState);
 
   return <Slot />;
 });
+
+/** #394: the header badge count. Before the first server read lands it is the persisted count from this browser's
+ *  last session (so the badge does not flash 0); after that it is the live lines. Brand headers (layer slots) use the
+ *  same helper so every header shows the same number. */
+export function cartBadgeCount(state: { hasLoadedOnce?: boolean; lastKnownQuantity?: number | null; cart: { lines: ReadonlyArray<{ quantity: number }> } }): number {
+  if (!state.hasLoadedOnce && typeof state.lastKnownQuantity === 'number') return state.lastKnownQuantity;
+  return state.cart.lines.reduce((sum, line) => sum + line.quantity, 0);
+}
 
 export const useCart = () => useContext(CartContextId);
 

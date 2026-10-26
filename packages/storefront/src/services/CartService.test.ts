@@ -1014,3 +1014,72 @@ describe('addLine — the add\'s own outcome (brand views PR2 §5)', () => {
 		expect(CartService.getCart().lines).toEqual([]);
 	});
 });
+
+describe('last known count and cross-tab sync (#394)', () => {
+	const stored = () => localStorage.getItem('sr_cart_count');
+	const twoLines = () => serverCart({ lines: [
+		{ ...serverCart().lines[0], quantity: 2 },
+		{ ...serverCart().lines[0], sku: 'SKU2', quantity: 3 },
+	] });
+
+	it('persists the item count of an installed snapshot, keyed by its token', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, twoLines()));
+		await CartService.refresh();
+		expect(JSON.parse(stored()!)).toEqual({ token: 'tok_srv', count: 5 });
+		expect(CartService.lastKnownQuantity()).toBe(5);
+	});
+
+	it('shows no count for another cart, a cleared cookie, or garbage', () => {
+		localStorage.setItem('sr_cart_count', JSON.stringify({ token: 'tok_other', count: 4 }));
+		setCookie('tok_srv');
+		expect(CartService.lastKnownQuantity()).toBeNull();
+		localStorage.setItem('sr_cart_count', JSON.stringify({ token: 'tok_srv', count: -1 }));
+		expect(CartService.lastKnownQuantity()).toBeNull();
+		localStorage.setItem('sr_cart_count', 'not json');
+		expect(CartService.lastKnownQuantity()).toBeNull();
+		localStorage.setItem('sr_cart_count', JSON.stringify({ token: 'tok_srv', count: 4 }));
+		clearCookie();
+		expect(CartService.lastKnownQuantity()).toBeNull();
+	});
+
+	it('does not rewrite an unchanged count (a same-value write must not wake the other tabs)', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, twoLines()), respond(200, { ...twoLines(), revision: 2 }));
+		await CartService.refresh();
+		const set = vi.spyOn(Storage.prototype, 'setItem');
+		await CartService.refresh();
+		expect(set.mock.calls.filter(([k]) => k === 'sr_cart_count')).toHaveLength(0);
+	});
+
+	it('clears the count when the cart is retired', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, twoLines()));
+		await CartService.refresh();
+		await CartService.discard();
+		expect(stored()).toBeNull();
+	});
+
+	it('syncFromOtherTab re-reads the live cart another tab changed and notifies', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart()));
+		await CartService.refresh();
+		const changed = vi.fn();
+		const off = CartService.onChange(changed);
+		enqueue(respond(200, serverCart({ revision: 2, lines: [{ ...serverCart().lines[0], quantity: 4 }] })));
+		const res = await CartService.syncFromOtherTab();
+		off();
+		expect(res.cart.lines[0].quantity).toBe(4);
+		expect(changed).toHaveBeenCalled();
+	});
+
+	it('syncFromOtherTab drops the mirror when the other tab cleared the cart', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart()));
+		await CartService.refresh();
+		clearCookie();
+		const res = await CartService.syncFromOtherTab();
+		expect(res.cart.lines).toEqual([]);
+		expect(CartService.getCart().lines).toEqual([]);
+	});
+});

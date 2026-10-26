@@ -39,6 +39,13 @@ const TOKEN_COOKIE = 'sr_cart';
 export const LEGACY_CART_KEY = 'vendure_local_cart';
 const LEGACY_CLAIM_KEY = 'sr_legacy_cart_claim';
 const CART_INTENT_KEY = 'sr_cart_intent';
+/**
+ * Last known item count of this browser's cart, written on every mirror install (`{ token, count }`). Two jobs: the header badge
+ * paints it before the bootstrap read returns, and a change to it is the cross-tab signal (the `storage` event fires only when the
+ * value changes, so a tab that re-reads and writes the same value never wakes the others). A hint, never cart data: the token must
+ * still name the cookie's cart, and the count is replaced by the server's first read.
+ */
+export const CART_COUNT_KEY = 'sr_cart_count';
 // SSR carries only presence of legacy transport; this flag never authorizes adoption.
 const LEGACY_PENDING_COOKIE = 'sr_legacy_cart';
 /** The single origin-wide lock every cart operation of a cooperating tab runs under. */
@@ -213,6 +220,38 @@ export class CartService {
     return this.cart.revision;
   }
 
+  /** The persisted item count for the cart the cookie names, or null (nothing stored, another cart, no storage). Display hint only. */
+  static lastKnownQuantity(): number | null {
+    try {
+      const value = JSON.parse(localStorage.getItem(CART_COUNT_KEY) ?? 'null');
+      const token = this.readTokenCookie();
+      if (!token || value?.token !== token) return null;
+      return Number.isInteger(value.count) && value.count >= 0 ? value.count : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private static persistCount(token: string, count: number): void {
+    try {
+      const next = JSON.stringify({ token, count });
+      if (localStorage.getItem(CART_COUNT_KEY) !== next) localStorage.setItem(CART_COUNT_KEY, next);
+    } catch { /* The badge just waits for the server read. */ }
+  }
+
+  private static clearCount(): void {
+    try { localStorage.removeItem(CART_COUNT_KEY); } catch { /* ignore */ }
+  }
+
+  /**
+   * Another tab changed this browser's cart (its `CART_COUNT_KEY` write): follow the cookie (a cart another tab replaced or cleared
+   * resets the mirror) and re-read the live cart. The read installs under the usual token checks and notifies `onChange`.
+   */
+  static syncFromOtherTab(): Promise<CartMutationResult> {
+    this.syncToCookie();
+    return this.refresh();
+  }
+
   // ── token cookie (non-httpOnly — the API has no cookie of its own) ─────
   private static readTokenCookie(): string | null {
     if (typeof document === 'undefined') return null;
@@ -294,6 +333,8 @@ export class CartService {
     this.pendingIntentMigration = false;
     this.enrichment.clear();
     this.cart = EMPTY_CART;
+    // The cookie is gone (retired or discarded): no cart, so no count. A cookie that merely names another cart is that cart's to write.
+    if (!this.readTokenCookie()) this.clearCount();
     this.notify();
   }
 
@@ -340,6 +381,7 @@ export class CartService {
     for (const sku of [...this.enrichment.keys()]) {
       if (!next.has(sku)) this.enrichment.delete(sku);
     }
+    this.persistCount(server.token, this.cart.lines.reduce((sum, line) => sum + line.quantity, 0));
     this.notify();
     return dropped;
   }
