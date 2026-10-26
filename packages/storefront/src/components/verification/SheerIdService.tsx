@@ -1,5 +1,6 @@
 import { component$, useSignal, useStore, useVisibleTask$, noSerialize, type NoSerialize, type QRL } from '@qwik.dev/core';
 import type { VerificationProgram } from './types';
+import { sellright } from '~/sellright/client';
 
 interface SheerIdServiceProps {
   program: VerificationProgram;
@@ -77,9 +78,17 @@ export const SheerIdService = component$<SheerIdServiceProps>(({
         const sheerId = (window as any).sheerId;
         console.log('SheerIdService: SheerID library loaded successfully');
         
-        // Create program URL
-        const programUrl = `https://services.sheerid.com/verify/${program.sheerIdProgramId}/`;
-        console.log('SheerIdService: Loading inline iframe for URL:', programUrl);
+        // The verification must be tied to the signed-in customer or the webhook has nobody to grant the
+        // discount to ("skipped: no customer metadata"). POST /v1/shop/sheerid/start (api/src/routes/sheerid.ts)
+        // records a pending attempt for the session's customer and returns the hosted URL carrying
+        // ?metadata={"customerId"} (provider.ts verificationUrl) — the key personInfo.metadata.customerId the webhook reads.
+        if (!customerId) {
+          throw new Error('Please sign in to your account before verifying so your discount can be applied.');
+        }
+        const { data: started } = await sellright().POST('/v1/shop/sheerid/start', { body: { programId: program.sheerIdProgramId } });
+        if (!started?.verificationUrl) throw new Error('Verification is unavailable right now. Please try again later.');
+        const programUrl = started.verificationUrl;
+        console.log('SheerIdService: Loading inline iframe for program:', program.sheerIdProgramId);
 
         // Load inline into our container — NOT as a modal (which would create a conflicting overlay)
         const myForm = sheerId.loadInlineIframe(containerRef.value!, programUrl);

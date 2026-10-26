@@ -156,6 +156,28 @@ describe.skipIf(!isTestDb)('sheerid lifecycle — DB integration', () => {
     expect(await activeOf(customerId)).toEqual([]);
   });
 
+  it('a failed re-verification revokes the category an earlier success granted (previous-platform parity)', async () => {
+    const customerId = await seed();
+    await withStore(STORE, (tx) => applyVerificationDetails(tx, STORE, successDetails(customerId, 'vid-ok'), sheeridConfig({ sheerid: CFG })));
+    expect(await activeOf(customerId)).toEqual(['military']);
+
+    // A different category is unaffected by a failure in 'military'.
+    await withStore(STORE, (tx) => applyVerificationDetails(tx, STORE, {
+      verificationId: 'vid-teacher', lastResponse: { currentStep: 'success', segment: 'teacher' },
+      personInfo: { metadata: { customerId } },
+    }, sheeridConfig({ sheerid: CFG })));
+    expect([...(await activeOf(customerId))].sort()).toEqual(['military', 'teacher']);
+
+    const res = await withStore(STORE, (tx) => applyVerificationDetails(tx, STORE, {
+      verificationId: 'vid-fail', lastResponse: { currentStep: 'error', segment: 'military' },
+      personInfo: { metadata: { customerId } },
+    }, sheeridConfig({ sheerid: CFG })));
+    expect(res.outcome).toBe('failed');
+    expect(await activeOf(customerId)).toEqual(['teacher']);
+    const rows = await withStore(STORE, (tx) => tx.execute(sql`SELECT verification_id AS v, status FROM sheerid_verification WHERE category = 'military' ORDER BY verification_id`));
+    expect(rows.rows).toEqual([{ v: 'vid-fail', status: 'failed' }, { v: 'vid-ok', status: 'revoked' }]);
+  });
+
   it('expiry sweep flips stale rows and drops the category', async () => {
     const customerId = await seed();
     await withStore(STORE, (tx) => applyVerificationDetails(tx, STORE, successDetails(customerId), sheeridConfig({ sheerid: CFG })));

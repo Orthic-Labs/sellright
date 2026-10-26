@@ -157,7 +157,10 @@ adminOrders.openapi(
       if (currentPromotion && currentPromotion.type !== 'account_credit') {
         const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
         const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
-        const ev = evaluateCoupon({ type: currentPromotion.type, value: currentPromotion.value, conditions: currentPromotion.conditions, freeShipping: currentPromotion.freeShipping }, { subtotal: subtotalCents, activeVerifications: [], items: couponItems });
+        // #385: a verified_customer coupon keeps applying for a customer whose SheerID verification is still active.
+        const [verifiedRow] = o.customerId ? await tx.select({ active: s.customer.activeVerifications }).from(s.customer)
+          .where(eq(s.customer.id, o.customerId)).limit(1) : [];
+        const ev = evaluateCoupon({ type: currentPromotion.type, value: currentPromotion.value, conditions: currentPromotion.conditions, freeShipping: currentPromotion.freeShipping }, { subtotal: subtotalCents, activeVerifications: verifiedRow?.active ?? [], items: couponItems });
         if (ev.valid && ev.promotion) promotion = ev.promotion;
       }
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: o.shippingTotal, taxRate, taxInclusive: storeRow!.taxInclusive, shippingTaxable: storeRow!.shippingTaxable, promotion });

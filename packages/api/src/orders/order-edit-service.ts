@@ -36,6 +36,7 @@ import { loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { resolvePromotionStack } from '../money/promotion-resolver.js';
+import { resolveOrderRecipient } from './recipient.js';
 import { migrationId } from '../import/context.js';
 import { calculatePromotionStack, type StackInput } from '../money/promotion-stack.js';
 import { buildOrderPricingSnapshot, type OrderPricingSnapshotV1 } from '../money/pricing-snapshot.js';
@@ -450,6 +451,13 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   // Every line, including zero rows, needs exact authoritative product facts.
   const facts = await loadCouponMatchContext(tx, [...new Set(variantRows.map(variant => variant.productId))]);
+  // The order's customer's real SheerID categories, read the same way checkout does (routes/checkout.ts:547, the
+  // customer column) so a verified_customer discount is not dropped when an admin edits the order. Guest orders: none.
+  const [verifiedRow] = order.customerId ? await tx.select({ active: s.customer.activeVerifications }).from(s.customer)
+    .where(and(eq(s.customer.id, order.customerId), eq(s.customer.storeId, storeId))).limit(1) : [];
+  const activeVerifications = verifiedRow?.active ?? [];
+  // #383/#384: per-customer coupon limits count a guest by email (checkout contact, else account email).
+  const customerEmail = (await resolveOrderRecipient(tx, order)) ?? undefined;
   const items = working.lines.map(line => {
     const productId = productIdOf(line); const product = productId ? facts.get(productId) : undefined;
     if (!productId || !product) throw new OrderEditError(409, 'ORDER_PRICING_EDIT_UNSUPPORTED', 'Promotion line identity cannot be established.', { lineId: line.id });
@@ -470,7 +478,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const pricingBase: Omit<StackInput, 'lines' | 'promotions' | 'couponContext'> & { couponContext: { activeVerifications: string[]; items: typeof items } } = { currency: order.currency, phase: 'PaymentSettled' as const, pricesIncludeTax: snapshot?.pricesIncludeTax ?? importedBasis?.pricesIncludeTax ?? taxInclusive,
     ...(retainedShipping ? { retainedShipping } : {}),
     shipping: baseShipping, shippingTaxRateBps: retainedShipping ? 0 : calc?.taxRate ?? (storeRow.shippingTaxable ? taxRate : 0),
-    shippingIncludesTax: retainedShipping ? false : calc?.taxInclusive ?? taxInclusive, couponContext: { activeVerifications: [], items },
+    shippingIncludesTax: retainedShipping ? false : calc?.taxInclusive ?? taxInclusive, couponContext: { activeVerifications, items },
     pointsDiscount: storedMoney.pointsDiscount, adjustments: working.adjustments.map(({ id, label, amount }) => ({ label, amount, ...(id && sourceSurcharges.has(id) ? { sourceSurcharge: sourceSurcharges.get(id)! } : {}) })),
     couponCodes: working.couponCodes.filter(code => !retainedCreditPromotion?.code || code.toLowerCase() !== retainedCreditPromotion.code.toLowerCase()) };
   const workingBases = working.lines.map(line => {
@@ -499,9 +507,9 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     const legacyBase = { ...pricingBase, shipping: storedBase, couponCodes: initial.couponCodes,
       shippingTaxRateBps: storedCalculator?.taxRate ?? (storeRow.shippingTaxable ? beforeTaxRate : 0),
       shippingIncludesTax: storedCalculator?.taxInclusive ?? taxInclusive,
-      adjustments: dbAdjustments.map(({ label, amount }) => ({ label, amount })), couponContext: { activeVerifications: [], items: beforeItems },
+      adjustments: dbAdjustments.map(({ label, amount }) => ({ label, amount })), couponContext: { activeVerifications, items: beforeItems },
       lines: dbLines.map(line => ({ key: line.id, quantity: line.quantity, placedQuantity: line.quantity, unitListPrice: line.unitPrice, priceIncludesTax: taxInclusive, taxRateBps: beforeTaxRate })) };
-    legacyResult = await resolvePromotionStack(tx, { ...legacyBase, storeId, orderId: order.id, customerId: order.customerId ?? undefined });
+    legacyResult = await resolvePromotionStack(tx, { ...legacyBase, storeId, orderId: order.id, customerId: order.customerId ?? undefined, customerEmail });
     legacyInput = { ...legacyBase, promotions: legacyResult.resolvedPromotions ?? [] };
     const legacyPerLine = projectEditStackLines(legacyInput, legacyResult);
     if (!totalsInert(storedMoney, legacyResult) || dbLines.some(line => {
@@ -518,7 +526,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const afterLines = workingBases.map(line => line.change === 'untouched'
     ? { ...existingBasis.find(original => original.key === line.key)!, priorAdjustments: [] }
     : { ...line.basis, key: line.key, quantity: line.quantity });
-  let resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, mode: opts.lock ? 'payment' : 'quote' });
+  let resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, customerEmail, mode: opts.lock ? 'payment' : 'quote' });
   const listSubtotal = afterLines.reduce((total, line) => {
     const factor = 1 + line.taxRateBps / 10000;
     const unit = pricingBase.pricesIncludeTax ? (line.priceIncludesTax ? line.unitListPrice : line.unitListPrice * factor)
@@ -556,7 +564,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     methodCode = retainedShipping.carriers?.[0]?.methodCode ?? null;
     pricingBase.retainedShipping = retainedShipping; pricingBase.shipping = baseShipping;
     pricingBase.shippingTaxRateBps = 0; pricingBase.shippingIncludesTax = false;
-    resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, mode: opts.lock ? 'payment' : 'quote' });
+    resolved = await resolvePromotionStack(tx, { ...pricingBase, lines: afterLines, storeId, orderId: order.id, customerId: order.customerId ?? undefined, customerEmail, mode: opts.lock ? 'payment' : 'quote' });
   }
   if (!carrierPricing && calc && !isMethodEligible(calc, { subtotal: listSubtotal, country,
     discountedSubtotalWithTax: resolved.lineSnapshots.reduce((total, line) => total + line.lineGross, 0) })) {

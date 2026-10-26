@@ -320,6 +320,19 @@ describe('line operations', () => {
     const r = await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'leave_due' });
     expect(r.grandTotal).toBe(2700 + 500); // (2000+1000)*0.9 + 500
   });
+
+  it('a verified_customer discount survives an edit when the customer is verified (real active verifications, not [])', async () => {
+    const o = await makeOrder({ customer: true, lines: [{ sku: 'B', qty: 1 }], promotion: true }); // 1800 + 500
+    await withStore(STORE, async (tx) => {
+      await tx.update(s.promotion).set({ conditions: [{ code: 'verified_customer', args: [{ name: 'categories', value: '["student"]' }] }] }).where(eq(s.promotion.code, 'TEN'));
+      await tx.update(s.customer).set({ activeVerifications: ['student'] }).where(eq(s.customer.id, o.customerId!));
+    });
+    const prev = await previewOrderEdit(STORE, o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }]);
+    expect(prev.after.grandTotal).toBe(2700 + 500); // 10% still taken: (2000+1000)*0.9 + 500
+    const r = await commit(o.code, [{ op: 'add_item', sku: 'A', quantity: 1 }], {}, { type: 'leave_due' });
+    expect(r.grandTotal).toBe(2700 + 500);
+    expect((await orderRow(o.code)).promotionId).not.toBeNull();
+  });
 });
 
 describe('shipping and adjustments', () => {

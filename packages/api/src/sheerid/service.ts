@@ -238,7 +238,16 @@ export async function applyVerificationDetails(
     return { outcome: 'skipped', verificationId, reason: 'no customer metadata' };
   }
 
-  await recomputeCustomerVerifications(tx, storeId, customerId);
+  // Vendure parity (sheerid.service.ts:258-265): a non-success outcome for a
+  // category removes that category from the customer, even if an earlier
+  // attempt had granted it — the failed re-verification revokes. revoke flips
+  // prior 'success' rows to 'revoked', strips imported row-less entries, and
+  // recomputes; the failed row written above is untouched.
+  if (!succeeded && category) {
+    await revokeVerification(tx, storeId, { customerId, category }, 'sheerid:webhook');
+  } else {
+    await recomputeCustomerVerifications(tx, storeId, customerId);
+  }
   await tx.insert(s.auditLog).values({
     storeId,
     actor: 'sheerid:webhook',

@@ -154,6 +154,7 @@ sheeridRoutes.openapi(
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const cfg = sheeridConfig(row?.config ?? null);
     return c.json({
+      storeId: st.storeId, // lets the settings page show this store's webhook URL (/v1/webhooks/sheerid/{storeId})
       configured: !!cfg?.programId,
       programId: cfg?.programId ?? null,
       theme: cfg?.theme ?? null,
