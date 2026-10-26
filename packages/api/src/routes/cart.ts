@@ -25,6 +25,7 @@ import { clientIp } from '../auth/rate-limit.js';
 import { consumeCartAttempt } from './apps.limit.js';
 import { MAX_CART_LINES, CartTooLargeError, boundedCartItems, cartTooLargeFields, normalizeCartLines, type CartBoundReason } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { reopenConvertedCart } from '../cart/reopen.js';
 
 /** Per-store effective-price rule (see money/pricing.ts) — resolved from
  *  store.config.pricing.variantRule so cart and checkout price identically. */
@@ -717,6 +718,38 @@ cart.openapi(
     if (out.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (out.code === 409) return c.json(out.body, 409);
     return c.json(out.body, 200);
+  },
+);
+
+// POST /v1/shop/cart/{token}/reopen — #370: the shopper changes a cart whose checkout was never paid. Its unpaid
+// order is cancelled and the same cart (lines intact) is active again; a paid order or a payment in flight is refused.
+cart.openapi(
+  createRoute({
+    method: 'post', path: '/v1/shop/cart/{token}/reopen', summary: 'Reopen a cart whose order is unpaid',
+    request: { params: z.object({ token: z.string().min(1) }) },
+    responses: {
+      200: { description: 'The reopened cart', content: { 'application/json': { schema: CartOut } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'The order is paid, or a payment is in progress', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'private, no-store');
+    const st = await resolveStoreFromCtx(c);
+    const { token } = c.req.valid('param');
+    const out = await reopenConvertedCart(st, token, (now) => cartExpiry(now, lifecycle(st).ttlDays));
+    if (!out.ok) {
+      if (out.reason === 'not_found') return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
+      if (out.reason === 'paid') return errJson(c, 409, 'ORDER_ALREADY_PAID', 'this order is already paid');
+      return errJson(c, 409, 'PAYMENT_IN_PROGRESS', 'a payment for this order is in progress');
+    }
+    const authTok = customerToken(c);
+    const body = await withStore(st.id, async (tx) => {
+      const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
+      return row ? cartResponse(tx, st, row, undefined, authTok) : null;
+    });
+    if (!body) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
+    return c.json(body, 200);
   },
 );
 

@@ -72,6 +72,12 @@ export class ConvertedCartError extends CartError {
   }
 }
 
+const ORDER_PAID_MESSAGE = 'This order is already paid. Start a new cart to order something else.';
+const PAYMENT_IN_PROGRESS_MESSAGE = 'Your payment is still processing. Continue to checkout to see it through.';
+
+/** Outcome of reopening a converted cart (#370). */
+export type ReopenResult = { ok: true } | { ok: false; message: string };
+
 /** The original order behind a converted cart, as `GET /v1/shop/cart/{token}/checkout` reports it. */
 export interface ConvertedCheckout {
   code: string;
@@ -597,21 +603,23 @@ export class CartService {
   static addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddLineResult> {
     return this.exclusive(async () => {
       this.setEnrichment(sku, enrichment);
-      const token = await this.ensureCart();
-      try {
-        const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
-          params: { path: { token } },
-          body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
-        });
-        if (!data) throw new CartError(undefined, "Couldn't add item to cart");
-        const quoted = await this.inQuoteContext(data, token);
-        const installed = this.install(quoted, token);
-        const line = quoted.lines.find((l) => l.sku === sku) ?? null;
-        return { cart: this.cart, dropped: installed ?? [], applied: installed !== null, line };
-      } catch (e) {
-        // No automatic retry of the append after an uncertain result.
-        throw this.classify(e, token);
-      }
+      return this.reopeningConverted(async () => {
+        const token = await this.ensureCart();
+        try {
+          const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
+            params: { path: { token } },
+            body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
+          });
+          if (!data) throw new CartError(undefined, "Couldn't add item to cart");
+          const quoted = await this.inQuoteContext(data, token);
+          const installed = this.install(quoted, token);
+          const line = quoted.lines.find((l) => l.sku === sku) ?? null;
+          return { cart: this.cart, dropped: installed ?? [], applied: installed !== null, line };
+        } catch (e) {
+          // No automatic retry of the append after an uncertain result. A converted cart is certain: nothing was added.
+          throw this.classify(e, token);
+        }
+      });
     });
   }
 
@@ -620,7 +628,7 @@ export class CartService {
     return this.exclusive(async () => {
       this.setEnrichment(sku, enrichment);
       const qty = Math.max(0, quantity);
-      return this.withRevisionRetryInLock(
+      return this.reopeningConverted(() => this.withRevisionRetryInLock(
         (token, revision) =>
           sellright().PATCH('/v1/shop/cart/{token}/lines', {
             params: { path: { token } },
@@ -631,7 +639,7 @@ export class CartService {
             },
           }),
         qty <= 0 ? sku : undefined,
-      );
+      ));
     });
   }
 
@@ -801,6 +809,50 @@ export class CartService {
   }
 
   // ── converted carts ───────────────────────────────────────────────────
+  /**
+   * #370: ask the server to reopen the converted cart `token`. Its unpaid order is cancelled and the same cart, lines
+   * intact, is active again; a paid order or a payment in flight is refused. Runs inside the lock. Success installs the
+   * reopened snapshot; a refusal leaves the converted mirror as it is and says why.
+   */
+  private static async reopenInLock(token: string): Promise<ReopenResult> {
+    this.assertHeld();
+    try {
+      const { data } = await sellright().POST('/v1/shop/cart/{token}/reopen', { params: { path: { token } } });
+      if (!data) throw emptyCartResponse();
+      this.install(await this.inQuoteContext(data, token), token);
+      return { ok: true };
+    } catch (e) {
+      if (e instanceof SellRightError && e.status === 409) {
+        return { ok: false, message: e.code === 'ORDER_ALREADY_PAID' ? ORDER_PAID_MESSAGE : PAYMENT_IN_PROGRESS_MESSAGE };
+      }
+      throw this.classify(e, token);
+    }
+  }
+
+  /** Run a cart change; when the cart turns out to be converted (checkout reached payment and the order is unpaid),
+   *  reopen it and run the change once more. A refused reopen keeps the ConvertedCartError, with the reason. */
+  private static async reopeningConverted<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (e) {
+      if (!(e instanceof ConvertedCartError)) throw e;
+      const token = this.readTokenCookie();
+      if (!token) throw e;
+      const reopened = await this.reopenInLock(token);
+      if (!reopened.ok) throw new ConvertedCartError(reopened.message);
+      return run();
+    }
+  }
+
+  /** The drawer's "Edit cart": reopen the cookie's converted cart (see `reopenInLock`). */
+  static reopen(): Promise<ReopenResult> {
+    return this.exclusive(async () => {
+      const token = this.readTokenCookie();
+      if (!token) return { ok: false, message: MISSING_CART_MESSAGE };
+      return this.reopenInLock(token);
+    });
+  }
+
   /** Read-only lookup of the original order behind a converted cart. Writes nothing, so it needs no lock and stays
    *  available without Web Locks (an unpaid order must stay payable). Never creates an order. */
   static async lookupConvertedCheckout(token: string): Promise<ConvertedLookup> {

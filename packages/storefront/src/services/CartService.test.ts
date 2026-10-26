@@ -182,19 +182,20 @@ describe('updateLine — revisioned absolute set', () => {
 		expect(patchCalls()).toHaveLength(2); // exactly one retry, never a loop
 	});
 
-	it('409 converted KEEPS the token, shows the converted snapshot and does not retry', async () => {
+	it('409 converted with a refused reopen KEEPS the token, shows the converted snapshot and does not retry', async () => {
 		setCookie('tok_srv');
 		enqueue(
 			respond(200, serverCart({ revision: 4 })),
 			respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }),
+			respond(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'a payment for this order is in progress' } }),
 		);
 		const outcome = await CartService.updateLine('SKU1', 2).catch((e) => e);
 		expect(outcome).toBeInstanceOf(ConvertedCartError);
-		expect(outcome.message).toMatch(/checked out/);
+		expect(outcome.message).toMatch(/payment is still processing/);
 		expect(cookieValue()).toBe('tok_srv');
 		expect(CartService.getCart().status).toBe('converted');
 		expect(patchCalls()).toHaveLength(1);
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 	});
 
 	it.each([undefined, 'stale', 'revision_required', 'converted', 'merged'] as const)(
@@ -666,31 +667,79 @@ describe('retirement needs proof (I1, I2, I5)', () => {
 
 	it('converted 409 on the first attempt and on the retry → token kept, mirror converted, no further request', async () => {
 		await seedMirror('tok_srv', 4);
-		enqueue(converted409());
+		enqueue(converted409(), respond(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'a payment for this order is in progress' } }));
 		await expect(CartService.updateLine('SKU1', 2)).rejects.toMatchObject({ code: 'converted' });
 		expect(patchCalls()).toHaveLength(1);
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(cookieValue()).toBe('tok_srv');
 		expect(CartService.getCart().status).toBe('converted');
 
 		resetService();
 		calls.length = 0;
 		await seedMirror('tok_srv', 4);
-		enqueue(stale409(6), converted409());
+		enqueue(stale409(6), converted409(), respond(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'a payment for this order is in progress' } }));
 		const outcome = await CartService.updateLine('SKU1', 2).catch((e) => e);
 		expect(outcome).toBeInstanceOf(ConvertedCartError); // not a generic "cart changed"
 		expect(patchCalls()).toHaveLength(2); // one retry, never a third
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 		expect(cookieValue()).toBe('tok_srv');
 		expect(CartService.getCart().status).toBe('converted');
 	});
 
-	it('an add against a converted cart is reported as converted and keeps the token', async () => {
+	it('an add against a converted cart whose order is paid is reported as converted and keeps the token', async () => {
 		setCookie('tok_srv');
-		enqueue(converted409());
-		await expect(CartService.addLine('SKU1', 1)).rejects.toMatchObject({ code: 'converted' });
+		enqueue(converted409(), respond(409, { error: { code: 'ORDER_ALREADY_PAID', message: 'this order is already paid' } }));
+		const outcome = await CartService.addLine('SKU1', 1).catch((e) => e);
+		expect(outcome).toMatchObject({ code: 'converted' });
+		expect(outcome.message).toMatch(/already paid/);
 		expect(cookieValue()).toBe('tok_srv');
 		expect(CartService.getCart().status).toBe('converted');
+		expect(patchCalls()).toHaveLength(1); // the add is not retried against a paid order
+	});
+
+	it('#370: an add against a converted cart with an unpaid order reopens it and adds once more', async () => {
+		setCookie('tok_srv');
+		enqueue(
+			converted409({ lines: oneLine('SKU1') }),
+			respond(200, serverCart({ token: 'tok_srv', status: 'active', revision: 5, lines: oneLine('SKU1') })),
+			respond(200, serverCart({ token: 'tok_srv', status: 'active', revision: 6, lines: [...oneLine('SKU1'), ...oneLine('SKU2')] })),
+		);
+		const res = await CartService.addLine('SKU2', 1);
+		expect(res.applied).toBe(true);
+		expect(calls.map((c) => `${c.init.method} ${new URL(c.url).pathname}`)).toEqual([
+			'PATCH /v1/shop/cart/tok_srv/lines', 'POST /v1/shop/cart/tok_srv/reopen', 'PATCH /v1/shop/cart/tok_srv/lines',
+		]);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('active');
+		expect(CartService.getCart().lines.map((l) => l.sku)).toEqual(['SKU1', 'SKU2']);
+	});
+
+	it('#370: a quantity change on a converted cart reopens it and retries on the reopened revision', async () => {
+		await seedMirror('tok_srv', 4);
+		enqueue(
+			converted409(),
+			respond(200, serverCart({ token: 'tok_srv', status: 'active', revision: 5 })),
+			respond(200, serverCart({ token: 'tok_srv', status: 'active', revision: 6 })),
+		);
+		await CartService.updateLine('SKU1', 2);
+		expect(patchCalls()).toHaveLength(2);
+		expect(JSON.parse(String(patchCalls()[1]!.init.body)).expectedRevision).toBe(5);
+		expect(CartService.getCart().status).toBe('active');
+	});
+
+	it('#370: Edit cart reopens the cookie cart; a refusal leaves it converted and says why', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ token: 'tok_srv', status: 'active', revision: 5 })));
+		expect(await CartService.reopen()).toEqual({ ok: true });
+		expect(CartService.getCart().status).toBe('active');
+
+		resetService();
+		calls.length = 0;
+		await seedMirror('tok_srv', 4);
+		enqueue(respond(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'a payment for this order is in progress' } }));
+		const refused = await CartService.reopen();
+		expect(refused.ok).toBe(false);
+		expect(cookieValue()).toBe('tok_srv');
 	});
 
 	it('cold-start revision read hitting CART_NOT_FOUND retires the token: one GET, no PATCH', async () => {

@@ -1,4 +1,3 @@
-import { importedFinancialReconciliationPath } from '../import/source-compatibility.js';
 /**
  * Reservation expiry — the "release on timeout" half of the soft-reservation
  * pattern (rulebook: allocate at order-creation + release on timeout; research
@@ -27,38 +26,19 @@ import { importedFinancialReconciliationPath } from '../import/source-compatibil
  * instance) cannot apply the same release twice — a claimed order is either
  * fully processed in one UPDATE or not processed at all.
  */
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { currentLeaseSignal, pool, withStore } from '../db/client.js';
 import { LockSetUnstable, withLockedSet } from '../db/locks.js';
-import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
-import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { sweepStaleStripeIntents, sweepStaleBalanceIntents, sweepOrphanPreMints, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
-import { release } from '../payments/reservation.js';
+import { cancelUnpaidOrderInSet, unpaidCancellablePredicate } from '../orders/cancel-unpaid.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
 const DEFAULT_BATCH_LIMIT = 200;
 
 /** Stale-unpaid predicates (shared by the unlocked candidate read and the re-check under the set). */
-function stalePredicate(storeId: string, cutoff: Date, requireDiscovery: boolean) {
-  return sql`state = 'PendingPayment' AND created_at < ${cutoff} AND store_id = ${storeId}
-    -- A present marker (including JSON null) holds imported history outside expiry batches.
-    AND (metadata #> ARRAY[${importedFinancialReconciliationPath[0]}, ${importedFinancialReconciliationPath[1]}]::text[]) IS NULL
-    AND NOT EXISTS (SELECT 1 FROM payment_attempt pa
-      WHERE pa.order_id = "order".id AND pa.store_id = "order".store_id
-        AND (pa.status IN ('processing', 'unknown', 'pending')
-          -- D5: a tracked Stripe intent not yet resolved at Stripe
-          OR (pa.operation = 'intent' AND pa.status IN ('open', 'failed', 'action_required'))))
-    -- untracked-intent discovery failed: hold, never cancel blindly
-    AND coalesce((metadata->'stripeDiscovery'->>'hold')::boolean, false) = false
-    AND (${!requireDiscovery}
-      OR EXISTS (SELECT 1 FROM payment_attempt pi WHERE pi.order_id = "order".id AND pi.store_id = "order".store_id AND pi.operation = 'intent')
-      OR (metadata->'stripeDiscovery'->>'checkedAt') IS NOT NULL)
-    AND NOT EXISTS (SELECT 1 FROM payment p
-      WHERE p.order_id = "order".id AND p.store_id = "order".store_id
-        AND p.state IN ('Pending', 'Authorized'))`;
-}
+const stalePredicate = unpaidCancellablePredicate;
 
 /**
  * One idempotent pass: cancel stale unpaid orders and release their stock
@@ -122,53 +102,10 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
           const stale = (claimed as unknown as { rows: Array<{ id: string; code: string; created_at: Date }> }).rows;
           if (!stale.length) return { count: 0, released: 0 };
 
-          const lines = await tx
-            .select({ orderId: s.orderLine.orderId, variantId: s.orderLine.variantId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty })
-            .from(s.orderLine)
-            .where(eq(s.orderLine.orderId, orderId));
-
-          // Aggregate the release per variant BEFORE writing anything, so the stock
-          // UPDATE is a single batched statement for the order.
-          const releaseByVariant = new Map<string, number>();
-          let released = 0;
-          for (const l of lines) {
-            const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
-            if (rel > 0 && l.variantId) {
-              releaseByVariant.set(l.variantId, (releaseByVariant.get(l.variantId) ?? 0) + rel);
-              released += rel;
-            }
-          }
-
-          if (apply) {
-            if (releaseByVariant.size) {
-              const variantIds = [...releaseByVariant.keys()];
-              const amounts = variantIds.map((id) => releaseByVariant.get(id)!);
-              // sql.param() is required (drizzle would otherwise expand the array into a
-              // row expression): one array-valued parameter per column for unnest().
-              await tx.execute(
-                sql`UPDATE stock
-                    SET allocated = greatest(allocated - v.amount, 0)
-                    FROM (SELECT * FROM unnest(${sql.param(variantIds)}::uuid[], ${sql.param(amounts)}::int[]) AS t(variant_id, amount)) AS v
-                    WHERE stock.variant_id = v.variant_id AND stock.store_id = ${st.id}`,
-              );
-            }
-            // D6: record the released units as cancelled on the line, so a later refund
-            // of a paid-after-cancel order (MONEY-4) computes unfulfilled = 0.
-            await tx.execute(
-              sql`UPDATE order_line SET cancelled_qty = quantity - fulfilled_qty
-                  WHERE order_id = ${orderId} AND quantity - fulfilled_qty - cancelled_qty > 0`,
-            );
-            await tx.execute(sql`UPDATE "order" SET state = 'Cancelled', updated_at = now() WHERE id = ${orderId}`);
-            // LOYALTY-1: an unpaid order that times out gives its reserved points back.
-            await releaseOrderLoyalty(tx, st.id, orderId, 'system:reservation-expiry');
-            // PAYMENT-TIMING §5.2 (R3/R4): the claim above already excludes unresolved provider work; the call records the proof.
-            await release(tx, held, { storeId: st.id, orderId, reason: 'order_cancelled', stripeDiscoverable: requireDiscovery });
-            await tx.insert(s.auditLog).values({
-              storeId: st.id, actor: 'system:reservation-expiry', entity: 'order', entityId: orderId,
-              action: 'cancel', fromState: 'PendingPayment', toState: 'Cancelled', data: { reason: 'stale_unpaid', ttlMin },
-            });
-          }
-
+          const released = await cancelUnpaidOrderInSet(tx, held, {
+            storeId: st.id, orderId, actor: 'system:reservation-expiry', reason: { reason: 'stale_unpaid', ttlMin },
+            stripeDiscoverable: requireDiscovery, apply,
+          });
           return { count: 1, released };
         });
         storeCount += res.count;

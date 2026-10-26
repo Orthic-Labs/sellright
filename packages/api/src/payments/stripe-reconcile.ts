@@ -671,6 +671,46 @@ export async function sweepOrphanPreMints(storeId: string, limit: number, log: (
 interface DiscoveryState { tries: number; nextAt?: string; lastError?: string; hold?: boolean; manual?: boolean; checkedAt?: string }
 
 /**
+ * Search Stripe for intents on one order that has none tracked, and record the outcome on the order
+ * (`metadata.stripeDiscovery`): searched clean (`checkedAt`) or held with backoff, flagged manual with a payment alert
+ * after STRIPE_SWEEP_MAX_TRIES. Shared by the stale sweep and the shopper's cart reopen (#370).
+ */
+export async function discoverUntrackedForOrder(
+  storeId: string,
+  o: { id: string; code: string; metadata: unknown; grandTotal: number; currency: string },
+  now = new Date(),
+  log: (m: string) => void = () => {},
+): Promise<{ found: number; held: boolean; flagged: boolean }> {
+  const d = await discoverStripeIntents(storeId, o.code);
+  const prev = ((o.metadata as { stripeDiscovery?: DiscoveryState } | null)?.stripeDiscovery) ?? { tries: 0 };
+  let next: DiscoveryState;
+  let flag = false;
+  if (d.errors.length && !d.found) {
+    const tries = prev.tries + 1;
+    flag = tries >= STRIPE_SWEEP_MAX_TRIES;
+    next = { tries, hold: true, lastError: d.errors.join('; ').slice(0, 200),
+      ...(flag ? { manual: true } : { nextAt: new Date(now.getTime() + recoveryBackoffMs(tries, STRIPE_SWEEP_BACKOFF_MIN)).toISOString() }) };
+    log(`[release-stale] stripe discovery for ${o.code} failed: ${next.lastError}`);
+  } else {
+    next = { tries: prev.tries, hold: false, checkedAt: now.toISOString() };
+  }
+  await withStore(storeId, async (tx) => {
+    await tx.update(s.order).set({
+      metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('stripeDiscovery', ${JSON.stringify(next)}::jsonb)`,
+    }).where(eq(s.order.id, o.id));
+    if (flag) {
+      await recordPaymentAlert(tx, storeId, {
+        kind: 'stripe_intent_unresolvable', actor: 'system:reservation-expiry', orderId: o.id, orderCode: o.code,
+        providerRef: null, amount: o.grandTotal, currency: o.currency,
+        detail: `Could not check Stripe for payments on this order after ${next.tries} tries (${next.lastError}). The order is held, not cancelled, until it is reconciled.`,
+        data: { tries: next.tries, discovery: true },
+      });
+    }
+  });
+  return { found: d.found, held: next.hold === true, flagged: flag };
+}
+
+/**
  * Untracked-intent gap: before the stale sweeper may cancel a PendingPayment
  * order that has NO intent attempt on a Stripe-enabled store, search Stripe
  * for PIs bound to it. Found → recorded as intent attempts (the tracked-intent
@@ -693,35 +733,10 @@ export async function discoverStaleUntrackedIntents(storeId: string, config: unk
     )).orderBy(asc(s.order.createdAt)).limit(limit));
   for (const o of rows) {
     stats.checked++;
-    const d = await discoverStripeIntents(storeId, o.code);
-    stats.found += d.found;
-    const prev = ((o.metadata as { stripeDiscovery?: DiscoveryState } | null)?.stripeDiscovery) ?? { tries: 0 };
-    let next: DiscoveryState;
-    let flag = false;
-    if (d.errors.length && !d.found) {
-      const tries = prev.tries + 1;
-      flag = tries >= STRIPE_SWEEP_MAX_TRIES;
-      next = { tries, hold: true, lastError: d.errors.join('; ').slice(0, 200),
-        ...(flag ? { manual: true } : { nextAt: new Date(now.getTime() + recoveryBackoffMs(tries, STRIPE_SWEEP_BACKOFF_MIN)).toISOString() }) };
-      stats.held++;
-      log(`[release-stale] stripe discovery for ${o.code} failed: ${next.lastError}`);
-    } else {
-      next = { tries: prev.tries, hold: false, checkedAt: now.toISOString() };
-    }
-    await withStore(storeId, async (tx) => {
-      await tx.update(s.order).set({
-        metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('stripeDiscovery', ${JSON.stringify(next)}::jsonb)`,
-      }).where(eq(s.order.id, o.id));
-      if (flag) {
-        stats.flagged++;
-        await recordPaymentAlert(tx, storeId, {
-          kind: 'stripe_intent_unresolvable', actor: 'system:reservation-expiry', orderId: o.id, orderCode: o.code,
-          providerRef: null, amount: o.grandTotal, currency: o.currency,
-          detail: `Could not check Stripe for payments on this order after ${next.tries} tries (${next.lastError}). The order is held, not cancelled, until it is reconciled.`,
-          data: { tries: next.tries, discovery: true },
-        });
-      }
-    });
+    const r = await discoverUntrackedForOrder(storeId, o, now, log);
+    stats.found += r.found;
+    if (r.held) stats.held++;
+    if (r.flagged) stats.flagged++;
   }
   return stats;
 }

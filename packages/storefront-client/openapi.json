@@ -67,6 +67,7 @@
           "OUT_OF_STOCK",
           "PASSKEY_INVALID",
           "PASSWORD_INCORRECT",
+          "PAYMENT_IN_PROGRESS",
           "PAYMENT_METHOD_DISABLED",
           "PAYMENT_METHOD_UNKNOWN",
           "PAYMENT_NOT_FOUND",
@@ -4112,6 +4113,271 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/cart/{token}/reopen": {
+      "post": {
+        "summary": "Reopen a cart whose order is unpaid",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "token",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reopened cart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pricingIntent": {
+                      "type": "string",
+                      "enum": [
+                        "preview",
+                        "checkout"
+                      ]
+                    },
+                    "couponCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "maxItems": 100
+                    },
+                    "quoteHash": {
+                      "type": "string"
+                    },
+                    "shippingMethodCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    },
+                    "coupons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "appliedAmount": {
+                            "type": "integer"
+                          },
+                          "availableAmount": {
+                            "type": "integer"
+                          },
+                          "remainingAmount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "applied",
+                          "appliedAmount"
+                        ]
+                      }
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sku": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "unitPrice": {
+                            "type": "integer"
+                          },
+                          "quantity": {
+                            "type": "integer"
+                          },
+                          "lineSubtotal": {
+                            "type": "integer"
+                          },
+                          "lineDiscount": {
+                            "type": "integer"
+                          },
+                          "lineTotal": {
+                            "type": "integer"
+                          },
+                          "isPreOrder": {
+                            "type": "boolean"
+                          },
+                          "shipDate": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipDateLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "image": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "availableQuantity": {
+                            "type": "integer",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "sku",
+                          "name",
+                          "unitPrice",
+                          "quantity",
+                          "lineSubtotal",
+                          "lineDiscount",
+                          "lineTotal",
+                          "available",
+                          "availableQuantity"
+                        ]
+                      }
+                    },
+                    "subtotal": {
+                      "type": "integer"
+                    },
+                    "discountTotal": {
+                      "type": "integer"
+                    },
+                    "shippingTotal": {
+                      "type": "integer"
+                    },
+                    "taxTotal": {
+                      "type": "integer"
+                    },
+                    "grandTotal": {
+                      "type": "integer"
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "coupon": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "applied": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "applied"
+                      ]
+                    },
+                    "pointsToEarn": {
+                      "type": "integer"
+                    },
+                    "token": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "customerId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "revision": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "pricingIntent",
+                    "couponCodes",
+                    "quoteHash",
+                    "shippingMethodCode",
+                    "pointsDiscount",
+                    "coupons",
+                    "currency",
+                    "lines",
+                    "subtotal",
+                    "discountTotal",
+                    "shippingTotal",
+                    "taxTotal",
+                    "grandTotal",
+                    "unavailable",
+                    "coupon",
+                    "token",
+                    "status",
+                    "email",
+                    "customerId",
+                    "revision"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is paid, or a payment is in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

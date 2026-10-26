@@ -237,6 +237,25 @@ export const retireSettledCart = $(async (cartState: CartContextState, expectedC
   }
 });
 
+/** #370: the drawer's "Edit cart" — reopen a converted cart whose order is unpaid or cancelled, items kept. A refusal
+ *  (the order is paid, or a payment is in flight) leaves the cart as it is and shows why. */
+export const reopenCart = $(async (cartState: CartContextState): Promise<boolean> => {
+  try {
+    const res = await CartService.reopen();
+    commitMirror(cartState);
+    if (res.ok) {
+      cartState.lastError = null;
+      cartState.notice = null;
+      return true;
+    }
+    cartState.lastError = res.message;
+    return false;
+  } catch (error) {
+    reportError(cartState, error, 'Failed to update your cart');
+    return false;
+  }
+});
+
 export const applyCoupon = $(async (cartState: CartContextState, code: string): Promise<{ valid: boolean; reason?: string }> => {
   try {
     const res = await CartService.applyCoupon(code);

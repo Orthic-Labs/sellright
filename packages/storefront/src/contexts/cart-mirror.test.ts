@@ -65,12 +65,13 @@ afterEach(() => {
 });
 
 describe('cart context follows the service mirror', () => {
-	it('after a converted 409 the context shows the converted cart, not the old active one', async () => {
+	it('after a converted 409 (reopen refused) the context shows the converted cart, not the old active one', async () => {
 		setCookie('tok_srv');
 		const ctx = newContext();
 		bindCartMirror(ctx);
 		queue.push(respond(200, serverCart())); // cold-start revision read
 		queue.push(respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }));
+		queue.push(respond(409, { error: { code: 'PAYMENT_IN_PROGRESS', message: 'a payment for this order is in progress' } }));
 
 		await expect(CartService.updateLine('SKU1', 3)).rejects.toMatchObject({ code: 'converted' });
 

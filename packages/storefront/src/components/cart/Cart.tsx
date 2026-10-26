@@ -6,7 +6,7 @@ import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
 import { isBrowser } from '@qwik.dev/core/build';
-import { useCart, retireSettledCart } from '~/contexts/CartContext';
+import { useCart, retireSettledCart, reopenCart } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryService } from '~/services/CountryService';
@@ -92,6 +92,9 @@ export default component$(() => {
 		if (!cancelled) convertedLookup.value = result;
 	});
 	const banner = cartBannerFor(cartState.cart.status, convertedLookup.value);
+	// A converted cart gets its own footer (continue / edit / start new) instead of the checkout footer.
+	const convertedFooter = banner.continueCheckout || banner.editCart || banner.startNewCart;
+	const reopening = useSignal(false);
 
 	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
@@ -320,7 +323,7 @@ export default component$(() => {
 								</div>
 							) : totalQuantity.value > 0 ? (
 								<CartContents />
-							) : banner.continueCheckout ? null : (
+							) : convertedFooter ? null : (
 								<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center px-4">
 									<svg class="w-10 h-10 text-[#C9C3BA] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
@@ -341,18 +344,36 @@ export default component$(() => {
 						</div>
 
 						{/* Compact sticky footer */}
-						{banner.continueCheckout && (
+						{convertedFooter && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
-								<button
-									onClick$={$(async () => {
-										appState.showCart = false;
-										await navigate('/checkout/');
-									})}
-									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
-									       hover:opacity-90 active:opacity-85 transition-opacity duration-300 cursor-pointer"
-								>
-									Continue checkout
-								</button>
+								{banner.continueCheckout && (
+									<button
+										onClick$={$(async () => {
+											appState.showCart = false;
+											await navigate('/checkout/');
+										})}
+										class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
+										       hover:opacity-90 active:opacity-85 transition-opacity duration-300 cursor-pointer"
+									>
+										Continue checkout
+									</button>
+								)}
+								{banner.editCart && (
+									<button
+										disabled={reopening.value}
+										onClick$={$(async () => {
+											reopening.value = true;
+											try {
+												await reopenCart(cartState);
+											} finally {
+												reopening.value = false;
+											}
+										})}
+										class="w-full py-2 mb-1.5 border border-[#141210] bg-transparent text-[#141210] text-[11px] tracking-[0.2em] uppercase cursor-pointer disabled:opacity-50"
+									>
+										{reopening.value ? 'Opening your cart…' : 'Edit cart'}
+									</button>
+								)}
 								{banner.startNewCart && (
 									<button
 										onClick$={$(async () => {
@@ -371,7 +392,7 @@ export default component$(() => {
 								</button>
 							</div>
 						)}
-						{!banner.continueCheckout && totalQuantity.value > 0 && isInEditableUrl && (
+						{!convertedFooter && totalQuantity.value > 0 && isInEditableUrl && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
 
 								{/* M4: Removed dynamic key to prevent re-mount on country change; M8: Added aria-label for accessibility */}
