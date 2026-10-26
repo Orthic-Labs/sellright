@@ -1,4 +1,1 @@
-{
-  "name": "@fixture/base",
-  "version": "1.0.0"
-}
+{ "name": "@fixture/base", "version": "1.0.0", "scripts": { "build": "echo base" } }
