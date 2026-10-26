@@ -67,12 +67,15 @@ async function seed() {
     await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, subtotal, discount_total, promotion_id, placed_at)
       VALUES ('88888888-8888-8888-8888-888888880002', ${STORE_ID}, 'ORDDISC00002', 'Paid', 4000, 600, ${PROMOTION_ID}, now())
       ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO order_line (id, store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_discount, line_total)
+      VALUES ('99999999-9999-9999-9999-999999990002', ${STORE_ID}, '88888888-8888-8888-8888-888888880002', NULL, 'AFF-SKU-2', 'Other Thing', 1, 4000, 4000, 600, 3400)
+      ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, subtotal, promotion_id, placed_at)
       VALUES ('88888888-8888-8888-8888-888888880003', ${STORE_ID}, 'ORDREFD00003', 'Refunded', 9000, ${PROMOTION_ID}, now() - interval '1 day')
       ON CONFLICT (id) DO NOTHING`);
 
-    await tx.execute(sql`INSERT INTO affiliate_settle (id, store_id, promotion_id, amount_cents, period_end_at, settled_at, tx_ref)
-      VALUES (${SETTLE_ID}, ${STORE_ID}, ${PROMOTION_ID}, 500, now(), now(), 'REF-1')
+    await tx.execute(sql`INSERT INTO affiliate_settle (id, store_id, promotion_id, amount_cents, period_start_at, period_end_at, settled_at, tx_ref)
+      VALUES (${SETTLE_ID}, ${STORE_ID}, ${PROMOTION_ID}, 500, '2026-01-01T00:00:00Z', now(), now(), 'REF-1')
       ON CONFLICT (id) DO NOTHING`);
   });
 }
@@ -118,16 +121,47 @@ describe('GET /v1/shop/affiliate — public self-serve dashboard contract', () =
     expect(discounted.commissionUsd).toBeCloseTo(3.4);
     expect(body.orders.some((o: any) => o.redactedCode === '0003')).toBe(false);
 
-    expect(Array.isArray(body.topProducts)).toBe(true);
+    // Top sellers: top 3 SKUs by quantity over counted orders (refunded excluded).
+    expect(body.topProducts).toHaveLength(2);
+    expect(body.topProducts[0]).toMatchObject({ sku: 'AFF-SKU', qtySold: 2 });
+    expect(body.topProducts[0].revenueUsd).toBeCloseTo(100);
+    expect(body.topProducts[1]).toMatchObject({ sku: 'AFF-SKU-2', qtySold: 1 });
+    expect(body.topProducts[1].revenueUsd).toBeCloseTo(34); // net of the order discount
+
+    // Covered range = oldest..newest listed order.
+    expect(body.totals.rangeStart).toBeTruthy();
+    expect(new Date(body.totals.rangeStart).getTime()).toBeLessThanOrEqual(new Date(body.totals.rangeEnd).getTime());
 
     expect(body.settles).toHaveLength(1);
     expect(body.settles[0].amountUsd).toBeCloseTo(5);
     expect(body.settles[0].txRef).toBe('REF-1');
+    expect(body.settles[0].periodStartAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('404s for a token shorter than 16 chars without a lookup', async () => {
+    const app = createApp();
+    const res = await app.request('/v1/shop/affiliate?t=short', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(404);
   });
 
   it('404s for an unknown token', async () => {
     const app = createApp();
     const res = await app.request('/v1/shop/affiliate?t=0000000000000000invalidtoken', { headers: { 'x-store-slug': SLUG } });
     expect(res.status).toBe(404);
+  });
+});
+
+// Last in the file: it exhausts the per-IP budget (30 / minute) shared by every
+// request above.
+describe('GET /v1/shop/affiliate — rate limit', () => {
+  it('answers 429 with Retry-After once an IP exceeds 30 requests a minute', async () => {
+    const app = createApp();
+    let limited: Response | null = null;
+    for (let i = 0; i < 40 && !limited; i++) {
+      const res = await app.request(`/v1/shop/affiliate?t=${ACCESS_TOKEN}`, { headers: { 'x-store-slug': SLUG } });
+      if (res.status === 429) limited = res;
+    }
+    expect(limited).not.toBeNull();
+    expect(Number(limited!.headers.get('retry-after'))).toBeGreaterThan(0);
   });
 });

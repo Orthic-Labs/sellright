@@ -36,18 +36,30 @@ export const disputeAlert = (store: StoreCtx, data: {
        <tr><td style="padding:4px 0;color:${colorsOf(store).muted}">Status</td><td>${escape(data.status)}</td></tr>
      </table>`);
 
-/** Affiliate welcome (first onboard) — DD's AffiliateWelcomeEvent mail. */
+/** Affiliate welcome (first onboard) — DD's AffiliateWelcomeEvent mail
+ *  (static/email/templates/affiliate-welcome/body.hbs): the coupon code, what
+ *  it gives the audience, the 10% commission on product subtotal, monthly
+ *  payouts, and "reply to this email" to recover a lost link. */
 export const affiliateWelcome = (store: StoreCtx, data: {
   code: string; dashboardUrl: string; accessUrl: string;
-}) =>
-  wrap(store, `Your affiliate dashboard is ready — code ${data.code}`,
-    `<p>You're set up as a ${escape(store.name)} affiliate. Share your coupon code <strong>${escape(data.code)}</strong> — you earn commission on every settled order that uses it.</p>
-     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Open your dashboard</a></p>
-     <p>Your dashboard link (keep it private — it IS the credential): ${escape(data.accessUrl)}</p>`);
+  /** "15%" / "5.00 USD"; null when the coupon's value can't be shown. */
+  discount?: string | null; commissionPct?: number;
+}) => {
+  const pct = data.commissionPct ?? 10;
+  const gives = data.discount ? `gives your audience <strong>${escape(data.discount)} off</strong>` : 'gives your audience a discount';
+  return wrap(store, `You're a ${store.name} affiliate — here's your dashboard`,
+    `<p>Welcome aboard. You're now a ${escape(store.name)} affiliate.</p>
+     <p>Your code <strong>${escape(data.code)}</strong> ${gives}, and you earn <strong>${pct}%</strong> of every order's product subtotal (shipping and tax excluded). Payouts go out monthly.</p>
+     <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Open my dashboard</a></p>
+     <p>Your dashboard link (keep it private — it IS the credential): ${escape(data.accessUrl)}</p>
+     <p>Bookmark the link above — it's unique to you and won't expire. If you ever lose it, just reply to this email and we'll send a new one.</p>
+     <p>Reply to this email with any questions.</p>`);
+};
 
 /** Affiliate recipient changed — the token rotated; the old link is dead. */
 export const affiliateTokenRotated = (store: StoreCtx, data: {
   code: string; dashboardUrl: string; accessUrl: string;
+  discount?: string | null; commissionPct?: number;
 }) =>
   wrap(store, `Your ${store.name} affiliate link changed — code ${data.code}`,
     `<p>This affiliate coupon (<strong>${escape(data.code)}</strong>) was reassigned to you. For security the previous access link was revoked — use the new one below.</p>

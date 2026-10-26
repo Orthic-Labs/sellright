@@ -28,6 +28,7 @@ import * as s from '../db/schema.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { affiliateWelcome, affiliateTokenRotated } from '../email/templates-ops.js';
 import { env } from '../env.js';
+import { COMMISSION_PCT } from './constants.js';
 
 export const newAffiliateToken = () => randomBytes(24).toString('hex'); // 48 chars
 
@@ -49,6 +50,18 @@ async function storeCtx(tx: Tx, storeId: string) {
   return { name: store?.name ?? 'Store', currency: store?.currency ?? 'USD', storefrontUrl, fromEmail: env.SMTP_FROM ?? '' };
 }
 
+/** "15%" / "5.00 USD" — what the affiliate's coupon gives their audience
+ *  (DD's welcome mail named the discount). null when the code is unknown. */
+async function discountLabel(tx: Tx, code: string | null, currency: string): Promise<string | null> {
+  if (!code) return null;
+  const [p] = await tx.select({ type: s.promotion.type, value: s.promotion.value })
+    .from(s.promotion).where(eq(s.promotion.code, code)).limit(1);
+  if (!p) return null;
+  if (p.type === 'percentage') return `${p.value}%`;
+  if (p.type === 'fixed') return `${(p.value / 100).toFixed(2)} ${currency}`;
+  return null;
+}
+
 /** Enqueue the affiliate welcome/rotation mail via the transactional outbox
  *  (dedupe-keyed — a replayed save can't double-send). Exported for
  *  routes/admin-affiliate.ts's manual onboard path. */
@@ -58,9 +71,12 @@ export async function enqueueAffiliateMail(
 ) {
   const ctx = await storeCtx(tx, storeId);
   const dashboardUrl = `${ctx.storefrontUrl.replace(/\/$/, '')}/affiliate`;
-  const accessUrl = `${dashboardUrl}?t=${token}`;
+  // The token rides in the URL FRAGMENT (DD: prefilledUrl = /affiliate#t=…) so
+  // it never reaches server logs or Referer headers; the dashboard page still
+  // accepts the legacy ?t= form for links already in inboxes.
+  const accessUrl = `${dashboardUrl}#t=${token}`;
   const tpl = kind === 'welcome' ? affiliateWelcome : affiliateTokenRotated;
-  const rendered = tpl(ctx, { code: code ?? '', dashboardUrl, accessUrl });
+  const rendered = tpl(ctx, { code: code ?? '', dashboardUrl, accessUrl, discount: await discountLabel(tx, code, ctx.currency), commissionPct: COMMISSION_PCT });
   await enqueueEmail(tx, storeId, {
     kind: `affiliate_${kind}`,
     recipient: email,

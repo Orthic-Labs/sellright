@@ -54,6 +54,14 @@ describe.skipIf(!isTestDb)('promotion → affiliate onboarding', () => {
     expect(mails[0]!.recipient).toBe('creator@x.test');
     expect(mails[0]!.payload.text).toContain('INFLUENCER10');
     expect(mails[0]!.payload.text).toContain(affs[0]!.token); // access link carries the token
+    // Token rides in the URL fragment (not the query string), as the previous platform's mails did.
+    expect(mails[0]!.payload.text).toContain(`/affiliate#t=${affs[0]!.token}`);
+    expect(mails[0]!.payload.text).not.toContain('?t=');
+    // Terms: what the coupon gives, the commission, payout cadence, recovery.
+    expect(mails[0]!.payload.text).toContain('10% off');
+    expect(mails[0]!.payload.text).toContain('10%');
+    expect(mails[0]!.payload.text).toContain('Payouts go out monthly');
+    expect(mails[0]!.payload.text).toContain('reply to this email');
   });
 
   it('repeated saves with the same email are a no-op (no second mail, no new token)', async () => {

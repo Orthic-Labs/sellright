@@ -14,6 +14,8 @@
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import { dayRangeConditions, type DayRange } from '../lib/day-range.js';
+import { orderLineLabel } from '../orders/line-label.js';
+import { AFFILIATE_TOP_SELLERS } from './constants.js';
 
 export interface AffiliateSkuRow { sku: string; name: string; units: number; orders: number; revenue: number; commission: number }
 export interface AffiliateRangeStats {
@@ -70,4 +72,38 @@ export async function affiliateRangeStats(
     },
     bySku,
   };
+}
+
+export interface AffiliateTopSeller { name: string; sku: string; qtySold: number; revenue: number }
+
+/**
+ * Top sellers for an affiliate's promotion (DD affiliate-stats.service.ts
+ * getStats topRows: top 3 SKUs by quantity over the counted orders). Counted
+ * states match the totals; revenue is the NET line revenue (line_subtotal -
+ * line_discount, cents) so it reconciles with the order and commission
+ * columns. The name is the same "Product · Variant" label every order view
+ * uses (orderLineLabel; DD showed "Product — Variant").
+ */
+export async function affiliateTopSellers(
+  tx: Tx,
+  storeId: string,
+  promotionId: string,
+  limit: number = AFFILIATE_TOP_SELLERS,
+): Promise<AffiliateTopSeller[]> {
+  const res = await tx.execute(sql`
+    select l.variant_sku as sku,
+           max(l.product_name) as product_name, max(l.variant_name) as variant_name,
+           sum(l.quantity)::int as qty,
+           sum(l.line_subtotal - l.line_discount)::int as revenue
+    from order_line l
+    join "order" o on o.id = l.order_id
+    where l.store_id = ${storeId}
+      and o.store_id = ${storeId}
+      and o.promotion_id = ${promotionId}
+      and o.state = any(array['Paid','PartiallyRefunded']::order_state[])
+    group by l.variant_sku
+    order by sum(l.quantity) desc, l.variant_sku
+    limit ${limit}`);
+  return (res.rows as Array<{ sku: string; product_name: string | null; variant_name: string; qty: number; revenue: number }>)
+    .map((r) => ({ name: orderLineLabel({ productName: r.product_name, variantName: r.variant_name }), sku: r.sku, qtySold: Number(r.qty), revenue: Number(r.revenue) }));
 }

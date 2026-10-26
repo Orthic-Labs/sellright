@@ -1,8 +1,19 @@
-import { component$, useStyles$ } from '@qwik.dev/core';
-import { type DocumentHead, routeLoader$ } from '@qwik.dev/router';
+import { component$, useSignal, useStyles$, useVisibleTask$ } from '@qwik.dev/core';
+import { type DocumentHead, server$ } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
 import { fetchAffiliateStatsByToken, type AffiliateStatsResult } from '~/providers/shop/affiliate/affiliate';
+import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { theme } from '~/theme/theme.config';
+import { readAffiliateToken } from './affiliate-token';
+
+// Runs only on the server (the API call carries the store headers). The token
+// arrives in the URL fragment (#t=…), which the browser never sends to the
+// server, so it can't be a route loader: the client reads the fragment and
+// calls this explicitly.
+const fetchAffiliateStatsServer = server$(async function (token: string) {
+    // #390: forward the visitor's IP so the API's dashboard limit is per visitor, not one bucket for the storefront.
+    return withVisitorIp(this, () => fetchAffiliateStatsByToken(token));
+});
 
 const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const fmtDate = (iso: string) =>
@@ -35,17 +46,36 @@ const relativeDate = (iso: string): string => {
     return `${diffYr} yr ago`;
 };
 
-export const useAffiliateData = routeLoader$(async ({ url }) => {
-    const token = url.searchParams.get('t')?.trim() ?? null;
-    if (!token) return { token: null, result: null };
-    const result = await fetchAffiliateStatsByToken(token);
-    return { token, result };
-}, {
-    // Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
-    search: ['t'],
-});
-
 export default component$(() => {
+    const token = useSignal<string | null>(null);
+    const result = useSignal<AffiliateStatsResult | null>(null);
+    const loading = useSignal(true);
+
+    // Client-only: the token lives in the fragment (#t=…) so it never reaches
+    // server logs or Referer headers. Legacy emailed links still carry ?t=…;
+    // those are moved into the fragment and the query param is stripped
+    // immediately (history.replaceState) — it is in the URL log surface at
+    // most once.
+    useVisibleTask$(async () => {
+        const read = readAffiliateToken(location.href);
+        if (read.rewriteTo) history.replaceState(null, '', read.rewriteTo);
+        token.value = read.token;
+
+        if (!read.token) {
+            loading.value = false;
+            return;
+        }
+
+        try {
+            result.value = await fetchAffiliateStatsServer(read.token);
+        } catch (err) {
+            console.error('Affiliate stats fetch failed:', err);
+            result.value = { success: false, error: 'Could not reach the dashboard service.' };
+        } finally {
+            loading.value = false;
+        }
+    });
+
     useStyles$(`
         :root .aff-scope { --aff-accent: var(--color-accent); --aff-ink: var(--color-ink); --aff-muted: var(--color-ink-soft); --aff-bg: var(--color-parchment); --aff-surface: #ffffff; --aff-border: var(--color-card-border); --aff-soft: var(--color-parchment-hover); }
         @keyframes aff-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -94,10 +124,21 @@ export default component$(() => {
         }
     `);
 
-    const data = useAffiliateData();
+    if (loading.value) {
+        return (
+            <div class="aff-scope">
+                <div class="aff-page">
+                    <div class="aff-empty">
+                        <div class="aff-kicker">Affiliate dashboard</div>
+                        <h1 class="aff-empty-h">Loading…</h1>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     // No token: show a quiet "use the link from your email" prompt.
-    if (!data.value.token) {
+    if (!token.value) {
         return (
             <div class="aff-scope">
                 <div class="aff-page">
@@ -114,14 +155,14 @@ export default component$(() => {
     }
 
     // Token present but invalid / server error.
-    const result = data.value.result as AffiliateStatsResult | null;
-    if (!result?.success) {
+    const statsResult = result.value as AffiliateStatsResult | null;
+    if (!statsResult?.success) {
         return (
             <div class="aff-scope">
                 <div class="aff-page">
                     <div class="aff-empty">
                         <div class="aff-kicker">Affiliate dashboard</div>
-                        <h1 class="aff-empty-h">{result?.error ?? 'Could not load stats.'}</h1>
+                        <h1 class="aff-empty-h">{statsResult?.error ?? 'Could not load stats.'}</h1>
                         <p class="aff-empty-p">
                             Reply to your welcome email and we'll resend your access link.
                         </p>
@@ -131,7 +172,7 @@ export default component$(() => {
         );
     }
 
-    const r = result;
+    const r = statsResult;
     const totals = r.totals!;
     const orders = r.orders ?? [];
     const topProducts = r.topProducts ?? [];
