@@ -106,38 +106,100 @@ export function precheckRow(code: string, tracking: string): TrackingVerdict | n
   return null;
 }
 
-/**
- * Parse pasted/uploaded CSV text into rows. Accepts a header line, comma, tab
- * or semicolon separators and quoted cells; columns are order, tracking,
- * carrier (optional). Header names are matched loosely when present.
- */
-export function parseTrackingCsv(text: string): TrackingRowInput[] {
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return [];
-  const split = (line: string): string[] => {
-    const delim = line.includes('\t') ? '\t' : line.includes(';') && !line.includes(',') ? ';' : ',';
-    const out: string[] = []; let cur = ''; let q = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]!;
-      if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
-      else if (ch === '"') q = true;
-      else if (ch === delim) { out.push(cur.trim()); cur = ''; }
-      else cur += ch;
-    }
-    out.push(cur.trim());
-    return out;
-  };
-  let idx = { code: 0, tracking: 1, carrier: 2 };
-  const first = split(lines[0]!).map((h) => h.toLowerCase());
-  const looksLikeHeader = first.some((h) => /^(order|code|order[_ ]?(code|number|id)|tracking|tracking[_ ]?(number|code)|carrier)$/.test(h));
-  let body = lines;
-  if (looksLikeHeader) {
-    body = lines.slice(1);
-    const find = (re: RegExp, dflt: number) => { const i = first.findIndex((h) => re.test(h)); return i >= 0 ? i : dflt; };
-    idx = { code: find(/^(order|code|order[_ ]?(code|number|id))$/, 0), tracking: find(/^tracking/, 1), carrier: find(/^carrier/, 2) };
+/** How a tracking file was read (shown in the preview so the operator can see which columns were used). */
+export interface TrackingParseInfo {
+  /** The first line was a title (Avid/VeraCore "Product Shipment Datasheet - …"), not column names, and was skipped. */
+  titleSkipped: boolean;
+  /** Column names of the header row used, or null when the file has none (then: order, tracking, carrier by position). */
+  header: string[] | null;
+  columns: { order: string; tracking: string; carrier: string | null };
+  /** Data rows left out: no order or no tracking number, Amazon order ids, and repeats of the same order + tracking. */
+  skipped: { blank: number; amazon: number; duplicate: number };
+}
+
+// The previous admin importer's column names (the Damned order-tools tracking import), first match
+// wins, plus this importer's own simple headers. Matched case-insensitively.
+const ORDER_HEADERS = ['order code', 'orderid', 'order_code', 'order', 'code', 'order number', 'order_number', 'order id', 'order_id'];
+const TRACKING_HEADERS = ['shpack_trackingid', 'tracking code', 'tracking', 'tracking_code', 'tracking number', 'tracking_number'];
+const CARRIER_HEADERS = ['carrier', 'provider'];
+const KNOWN_HEADERS = new Set([...ORDER_HEADERS, ...TRACKING_HEADERS, ...CARRIER_HEADERS]);
+const AMAZON_ORDER = /^\d{3}-\d{7}-\d{7}$/;
+
+/** RFC 4180 records: quoted fields may hold the separator, doubled quotes and line breaks. */
+function csvRecords(text: string): string[][] {
+  const sample = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 3).join('\n');
+  const delim = sample.includes('\t') ? '\t' : sample.includes(';') && !sample.includes(',') ? ';' : ',';
+  const out: string[][] = [];
+  let row: string[] = []; let cur = ''; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (q) {
+      if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === delim) { row.push(cur.trim()); cur = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cur.trim()); cur = '';
+      if (row.some((c) => c !== '')) out.push(row);
+      row = [];
+    } else cur += ch;
   }
-  return body.map((l) => {
-    const c = split(l);
-    return { code: c[idx.code] ?? '', tracking: c[idx.tracking] ?? '', carrier: c[idx.carrier] || undefined };
-  });
+  row.push(cur.trim());
+  if (row.some((c) => c !== '')) out.push(row);
+  return out;
+}
+
+const isHeader = (rec: string[] | undefined) => !!rec && rec.some((c) => KNOWN_HEADERS.has(c.toLowerCase()));
+const pick = (header: string[], names: string[]) => {
+  const lower = header.map((h) => h.toLowerCase());
+  for (const n of names) { const i = lower.indexOf(n); if (i >= 0) return i; }
+  return -1;
+};
+
+/**
+ * Parse an uploaded/pasted tracking file. Accepts the Avid/VeraCore "Product Shipment Datasheet" export unchanged,
+ * with the previous admin importer's rules: a first line that names none of the known columns is a title and is skipped;
+ * order = order code | OrderId | order_code; tracking = shpack_trackingid | tracking code | tracking | tracking_code;
+ * carrier = carrier | provider (else detected from the number). Rows without an order or a tracking number, Amazon
+ * order ids (111-1234567-1234567) and repeats of the same order + tracking are left out. A file with no header row is
+ * read by position: order, tracking, carrier. Comma, tab or semicolon separated; quoted cells may span lines.
+ */
+export function parseTrackingFile(text: string): { rows: TrackingRowInput[]; info: TrackingParseInfo } {
+  const records = csvRecords(text.replace(/^\uFEFF/, ''));
+  let titleSkipped = false;
+  let header: string[] | null = null;
+  let body = records;
+  if (isHeader(records[0])) { header = records[0]!; body = records.slice(1); }
+  else if (isHeader(records[1])) { titleSkipped = true; header = records[1]!; body = records.slice(2); }
+  let idx = { code: 0, tracking: 1, carrier: 2 };
+  if (header) {
+    const c = pick(header, CARRIER_HEADERS);
+    idx = { code: pick(header, ORDER_HEADERS), tracking: pick(header, TRACKING_HEADERS), carrier: c };
+  }
+  const info: TrackingParseInfo = {
+    titleSkipped, header,
+    columns: header
+      ? { order: idx.code >= 0 ? header[idx.code]! : '(not found)', tracking: idx.tracking >= 0 ? header[idx.tracking]! : '(not found)', carrier: idx.carrier >= 0 ? header[idx.carrier]! : null }
+      : { order: 'column 1', tracking: 'column 2', carrier: 'column 3' },
+    skipped: { blank: 0, amazon: 0, duplicate: 0 },
+  };
+  const rows: TrackingRowInput[] = [];
+  const seen = new Set<string>();
+  for (const rec of body) {
+    const code = idx.code >= 0 ? (rec[idx.code] ?? '').trim() : '';
+    const tracking = idx.tracking >= 0 ? (rec[idx.tracking] ?? '').trim() : '';
+    if (!code || !tracking) { info.skipped.blank++; continue; }
+    if (AMAZON_ORDER.test(code)) { info.skipped.amazon++; continue; }
+    const key = `${code.toUpperCase()}:${tracking}`;
+    if (seen.has(key)) { info.skipped.duplicate++; continue; }
+    seen.add(key);
+    const carrier = idx.carrier >= 0 ? (rec[idx.carrier] ?? '').trim() : '';
+    rows.push({ code, tracking, carrier: carrier || undefined });
+  }
+  return { rows, info };
+}
+
+/** The rows of a tracking file (see parseTrackingFile). */
+export function parseTrackingCsv(text: string): TrackingRowInput[] {
+  return parseTrackingFile(text).rows;
 }

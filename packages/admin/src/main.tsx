@@ -136,6 +136,8 @@ function App() {
         <Route path="/orders/new" element={<DraftOrder />} />
         <Route path="/orders/import-tracking" element={<ImportTracking />} />
         <Route path="/orders/tracking-grid" element={<TrackingGrid />} />
+        <Route path="/fulfilment/upload" element={<ImportTracking />} />
+        <Route path="/fulfilment/manual" element={<TrackingGrid />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />

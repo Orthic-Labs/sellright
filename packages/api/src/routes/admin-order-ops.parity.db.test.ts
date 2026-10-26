@@ -144,8 +144,10 @@ describe('tracking import: preview, commit, history', () => {
     await seedOrder({ code: 'DD30284', lines: [A, B] });
     const res = await post('/v1/admin/import-tracking/preview', { csv: 'order,tracking\nDD30284,1Z999AA10123456784\nDD30285,9400111899223817200000\nDD30284,\n,T1' });
     expect(res.status).toBe(200);
-    const b = (await res.json()) as { rows: Array<{ status: string; carrier: string | null; suggestion?: string; items: Array<{ sku: string; quantity: number }> }>; summary: { importable: number } };
-    expect(b.rows.map((r) => r.status)).toEqual(['ready', 'unknown_order', 'missing_tracking', 'missing_code']);
+    const b = (await res.json()) as { rows: Array<{ status: string; carrier: string | null; suggestion?: string; items: Array<{ sku: string; quantity: number }> }>; summary: { importable: number }; parse: { skipped: { blank: number } } };
+    // #376 (previous-admin parity): rows without an order or a tracking number are left out of a file and counted, not listed.
+    expect(b.rows.map((r) => r.status)).toEqual(['ready', 'unknown_order']);
+    expect(b.parse.skipped.blank).toBe(2);
     expect(b.rows[0]!.carrier).toBe('UPS');
     // #346: items name the product (fixture product 'P') and the variant.
     expect(b.rows[0]!.items).toEqual([{ sku: 'SKU-A', name: 'P · Knife A', quantity: 2 }, { sku: 'SKU-B', name: 'P · Sheath B', quantity: 1 }]);
@@ -291,5 +293,42 @@ describe('orders list: date range, owner-facing "Open", customer name', () => {
     expect((await list('status=active&paymentStatus=paid')).map((o) => o.code)).toEqual(['L-1']);
     const exp = await get('/v1/admin/export/orders?from=2026-09-01&to=2026-09-30&status=active&columns=code');
     expect((await exp.text()).trim().split('\n').slice(1).sort()).toEqual(['L-1', 'L-3']);
+  });
+});
+
+describe('fulfilment parity with the previous admin (#376)', () => {
+  it('previews an Avid/VeraCore export as it comes: title skipped, OrderId + shpack_trackingid, ready rows for open orders', async () => {
+    await seedOrder({ code: 'DD30401', lines: [A] });
+    await seedOrder({ code: 'DD30402', lines: [B] });
+    const csv = [
+      'Product Shipment Datasheet - Start Date: 10/22/2026 - End Date: 10/26/2026',
+      'Owner,OrderId,Order Date,shpack_trackingid',
+      'DAMNED DESIGNS,DD30401,10/25/2026,9400111899223817200001',
+      'DAMNED DESIGNS,DD30401,10/25/2026,9400111899223817200001',
+      'DAMNED DESIGNS,111-6519371-0093803,10/25/2026,1Z999AA10123456784',
+      'DAMNED DESIGNS,DD30402,10/26/2026,1Z999AA10123456785',
+      'DAMNED DESIGNS,DD30403,10/26/2026,',
+    ].join('\n');
+    const res = await post('/v1/admin/import-tracking/preview', { csv });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as { rows: Array<{ code: string; status: string; carrier: string | null }>; parse: unknown };
+    expect(b.rows.map((r) => [r.code, r.status, r.carrier])).toEqual([['DD30401', 'ready', 'USPS'], ['DD30402', 'ready', 'UPS']]);
+    expect(b.parse).toEqual({ titleSkipped: true, header: ['Owner', 'OrderId', 'Order Date', 'shpack_trackingid'],
+      columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null }, skipped: { blank: 1, amazon: 1, duplicate: 1 } });
+  });
+
+  it('a file with no usable rows says which columns it read', async () => {
+    const res = await post('/v1/admin/import-tracking/preview', { csv: 'Some title\nOwner,OrderId,Note\nX,DD1,y' });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('tracking column: (not found)');
+  });
+
+  it('the open-orders feed filters by customer name as well as order number', async () => {
+    await seedOrder({ code: 'NAME-1', lines: [A] });
+    const byName = (await (await get('/v1/admin/fulfillment/open-orders?q=ada')).json()) as { items: Array<{ code: string }> };
+    expect(byName.items.map((i) => i.code)).toEqual(['NAME-1']);
+    const byCode = (await (await get('/v1/admin/fulfillment/open-orders?q=name-1')).json()) as { items: Array<{ code: string }> };
+    expect(byCode.items.map((i) => i.code)).toEqual(['NAME-1']);
+    expect((await get('/v1/admin/fulfillment/open-orders?limit=2000')).status).toBe(200);
   });
 });

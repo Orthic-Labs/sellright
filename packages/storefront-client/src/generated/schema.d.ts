@@ -4366,6 +4366,20 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            parse?: {
+                                columns: {
+                                    carrier: string | null;
+                                    order: string;
+                                    tracking: string;
+                                };
+                                header: string[] | null;
+                                skipped: {
+                                    amazon: number;
+                                    blank: number;
+                                    duplicate: number;
+                                };
+                                titleSkipped: boolean;
+                            } | null;
                             rows: {
                                 carrier: string | null;
                                 /** @enum {string} */

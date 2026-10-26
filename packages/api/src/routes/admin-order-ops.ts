@@ -36,7 +36,7 @@ import {
   parseExportColumnList, parseExportFilters, parseExportMode, resolveExportColumns,
 } from '../orders/export.js';
 import {
-  IMPORTABLE, classifyTrackingRow, normalizeOrderCode, normalizeTracking, parseTrackingCsv, precheckRow, remainingItems,
+  IMPORTABLE, classifyTrackingRow, normalizeOrderCode, normalizeTracking, parseTrackingFile, precheckRow, remainingItems, type TrackingParseInfo,
   resolveCarrier, suggestOrderCode, type TrackingRowInput, type TrackingStatus,
 } from '../orders/tracking-import.js';
 import { shippingRate } from '../shipping/calculator.js';
@@ -46,6 +46,7 @@ import { executeEffectsNow } from '../payments/settlement/effects.js';
 import { err as logErr } from '../lib/logger.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { orderLineLabel } from '../orders/line-label.js';
+import { orderContactSql, orderSearchSql } from '../orders/contact.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
@@ -323,8 +324,18 @@ const summarize = (rows: PlannedRow[]) => {
   for (const r of rows) by[r.status] = (by[r.status] ?? 0) + 1;
   return { total: rows.length, importable: rows.filter((r) => IMPORTABLE.has(r.status)).length, byStatus: by };
 };
-const rowsFromBody = (b: z.infer<typeof TrackingBody>): TrackingRowInput[] =>
-  (b.rows?.length ? b.rows : parseTrackingCsv(b.csv ?? '')).map((r) => ({ code: r.code ?? '', tracking: r.tracking ?? '', carrier: r.carrier }));
+const rowsFromBody = (b: z.infer<typeof TrackingBody>): TrackingRowInput[] => parsedBody(b).rows;
+/** Rows of the request plus, for an uploaded/pasted file, how it was read (#376: shown in the preview). */
+function parsedBody(b: z.infer<typeof TrackingBody>): { rows: TrackingRowInput[]; info: TrackingParseInfo | null } {
+  if (b.rows?.length) return { rows: b.rows.map((r) => ({ code: r.code ?? '', tracking: r.tracking ?? '', carrier: r.carrier })), info: null };
+  const { rows, info } = parseTrackingFile(b.csv ?? '');
+  return { rows, info };
+}
+const ParseInfoSchema = z.object({
+  titleSkipped: z.boolean(), header: z.array(z.string()).nullable(),
+  columns: z.object({ order: z.string(), tracking: z.string(), carrier: z.string().nullable() }),
+  skipped: z.object({ blank: z.number().int(), amazon: z.number().int(), duplicate: z.number().int() }),
+});
 
 const PlannedRowSchema = z.object({
   index: z.number().int(), code: z.string(), tracking: z.string(), carrier: z.string().nullable(), carrierSource: z.enum(['given', 'detected', 'unknown']),
@@ -336,16 +347,16 @@ adminOrderOps.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/import-tracking/preview', summary: 'Dry-run a tracking import (no writes): per-row verdict + items that would ship',
     request: { body: { content: J(TrackingBody) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ rows: z.array(PlannedRowSchema), summary: z.object({ total: z.number().int(), importable: z.number().int(), byStatus: z.record(z.string(), z.number().int()) }) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ rows: z.array(PlannedRowSchema), summary: z.object({ total: z.number().int(), importable: z.number().int(), byStatus: z.record(z.string(), z.number().int()) }), parse: ParseInfoSchema.nullable().optional() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
-    const rows = rowsFromBody(c.req.valid('json'));
-    if (!rows.length) throw new HttpError(400, 'no rows found');
+    const { rows, info } = parsedBody(c.req.valid('json'));
+    if (!rows.length) throw new HttpError(400, info ? `no tracking rows found (order column: ${info.columns.order}, tracking column: ${info.columns.tracking}; skipped ${info.skipped.blank} without order or tracking, ${info.skipped.amazon} Amazon, ${info.skipped.duplicate} repeated)` : 'no rows found');
     if (rows.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
     const planned = await withStore(st.storeId, (tx) => planTrackingRows(tx, rows, false));
-    return c.json({ rows: planned.map(publicRow), summary: summarize(planned) } as never, 200);
+    return c.json({ rows: planned.map(publicRow), summary: summarize(planned), parse: info } as never, 200);
   }),
 );
 
@@ -449,18 +460,21 @@ adminOrderOps.openapi(
 adminOrderOps.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/fulfillment/open-orders', summary: 'Paid orders awaiting shipment (unfulfilled or partially fulfilled)',
-    request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) }) },
+    // #376: The previous admin's manual page loaded every open order at once; 2000 covers any realistic backlog in one table.
+    request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(2000).default(200) }) },
     responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), total: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const { q, limit } = c.req.valid('query');
+    const contact = orderContactSql('cust');
     const out = await withStore(st.storeId, async (tx) => {
-      const where = sql`"order"."deleted_at" is null and "order"."state" in ('Paid','PartiallyRefunded') and ${fulfillmentStatusSql()} in ('unfulfilled','partially_fulfilled')${q ? sql` and ("order"."code" ilike ${`%${q}%`} or cust.email ilike ${`%${q}%`})` : sql``}`;
+      // Search by order code, email, name or phone; guests by their own checkout contact (#374/#376).
+      const where = sql`"order"."deleted_at" is null and "order"."state" in ('Paid','PartiallyRefunded') and ${fulfillmentStatusSql()} in ('unfulfilled','partially_fulfilled')${q ? sql` and ${orderSearchSql(q, 'cust')}` : sql``}`;
       const r = await tx.execute(sql`
         select "order"."id" as id, "order"."code" as code, "order"."placed_at" as placed_at, "order"."created_at" as created_at, "order"."is_pre_order" as is_pre_order,
-          cust.email as email, nullif(trim(coalesce(cust.first_name, '') || ' ' || coalesce(cust.last_name, '')), '') as name,
+          ${contact.email} as email, ${contact.name} as name,
           "order"."shipping_address"->>'country' as country, ${fulfillmentStatusSql()} as fulfillment_status
         from "order" left join customer cust on cust.id = "order"."customer_id"
         where ${where}

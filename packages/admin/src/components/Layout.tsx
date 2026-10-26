@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe, FileUp, ListChecks,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -27,6 +27,11 @@ const GROUPS: NavGroup[] = [
     { to: '/returns', label: 'Returns', icon: RotateCcw },
     { to: '/customers', label: 'Customers', icon: Users },
   ]},
+  // #376: Vendure had its own Fulfilment section (order-tools); same two tools here.
+  { id: 'fulfilment', label: 'Fulfilment', defaultOpen: true, items: [
+    { to: '/fulfilment/upload', label: 'Upload', icon: FileUp },
+    { to: '/fulfilment/manual', label: 'Manual', icon: ListChecks },
+  ] },
   { id: 'catalog', label: 'Catalog', defaultOpen: true, items: [
     { to: '/products', label: 'Products', icon: Package },
     { to: '/collections', label: 'Collections', icon: Layers },
@@ -70,6 +75,7 @@ const groupContainsPath = (g: NavGroup, path: string) =>
  */
 const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/orders', 'Orders'],
+  ['/fulfilment', 'Fulfilment'],
   ['/subscriptions', 'Subscriptions'],
   ['/returns', 'Returns'],
   ['/customers', 'Customers'],

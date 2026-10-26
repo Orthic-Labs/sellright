@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { classifyTrackingRow, levenshtein, normalizeOrderCode, parseTrackingCsv, precheckRow, resolveCarrier, suggestOrderCode, type OrderFacts } from './tracking-import.js';
+import { classifyTrackingRow, levenshtein, normalizeOrderCode, parseTrackingCsv, parseTrackingFile, precheckRow, resolveCarrier, suggestOrderCode, type OrderFacts } from './tracking-import.js';
+import { inferCarrier } from '../routes/admin-order-utils.js';
 
 const facts = (over: Partial<OrderFacts> = {}): OrderFacts => ({
   state: 'Paid', deleted: false,
@@ -71,5 +72,65 @@ describe('parseTrackingCsv', () => {
   });
   it('honours reordered headers', () => {
     expect(parseTrackingCsv('tracking,order\nT9,DD9')).toEqual([{ code: 'DD9', tracking: 'T9', carrier: undefined }]);
+  });
+});
+
+// #376: the Avid/VeraCore "Product Shipment Datasheet" export, read with the previous admin importer's rules
+// (the Damned order-tools tracking import). Only that importer's column names are relied on.
+const AVID = [
+  'Product Shipment Datasheet - Start Date: 10/22/2026 - End Date: 10/26/2026',
+  'Owner,OrderId,Order Date,ShipTo Name,shpack_trackingid',
+  'DAMNED DESIGNS,DD30331,10/25/2026,"Thomsen, Dan",9400111899223817200001',
+  'DAMNED DESIGNS,DD30331,10/25/2026,"Thomsen, Dan",9400111899223817200001',
+  'DAMNED DESIGNS,111-6519371-0093803,10/25/2026,Amazon Customer,1Z999AA10123456784',
+  'DAMNED DESIGNS,DD30360,10/26/2026,Not Yet Shipped,',
+  'DAMNED DESIGNS,DD30361,10/26/2026,"Ada ""Q"" Lovelace",1Z999AA10123456785',
+  '',
+].join('\r\n');
+
+describe('parseTrackingFile — Avid/VeraCore export as it comes (#376)', () => {
+  it('skips the title line, uses OrderId + shpack_trackingid, leaves out blank, Amazon and repeated rows', () => {
+    const { rows, info } = parseTrackingFile(AVID);
+    expect(rows).toEqual([
+      { code: 'DD30331', tracking: '9400111899223817200001', carrier: undefined },
+      { code: 'DD30361', tracking: '1Z999AA10123456785', carrier: undefined },
+    ]);
+    expect(info).toEqual({
+      titleSkipped: true,
+      header: ['Owner', 'OrderId', 'Order Date', 'ShipTo Name', 'shpack_trackingid'],
+      columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null },
+      skipped: { blank: 1, amazon: 1, duplicate: 1 },
+    });
+  });
+
+  it('never takes the title or the owner column as order numbers (the reported failure)', () => {
+    const codes = parseTrackingCsv(AVID).map((r) => r.code);
+    expect(codes.some((c) => /datasheet|owner|damned/i.test(c))).toBe(false);
+  });
+
+  it('accepts a header without a title line, a BOM, tabs, the previous admin alternates and a carrier/provider column', () => {
+    expect(parseTrackingFile('\uFEFForder code\ttracking code\tprovider\nDD1\tT-1\tDHL\n').rows).toEqual([{ code: 'DD1', tracking: 'T-1', carrier: 'DHL' }]);
+    expect(parseTrackingFile('order_code,tracking_code\nDD2,T-2').info).toMatchObject({ titleSkipped: false, columns: { order: 'order_code', tracking: 'tracking_code' } });
+  });
+
+  it('a quoted cell may span lines', () => {
+    expect(parseTrackingFile('OrderId,Note,shpack_trackingid\nDD3,"two\nlines",T-3\n').rows).toEqual([{ code: 'DD3', tracking: 'T-3', carrier: undefined }]);
+  });
+
+  it('reports the columns it could not find', () => {
+    const { rows, info } = parseTrackingFile('Title line\nOwner,OrderId,Something\nX,DD4,1Z999AA10123456784');
+    expect(rows).toEqual([]);
+    expect(info.columns).toMatchObject({ order: 'OrderId', tracking: '(not found)' });
+    expect(info.skipped.blank).toBe(1);
+  });
+});
+
+describe('inferCarrier — previous-admin parity (#376)', () => {
+  it('detects USPS 92/94 + 18–20 digits, FedEx 3 + 11/14 digits, UPS 1Z', () => {
+    expect(inferCarrier('92001901755477000000')).toBe('USPS'); // 20 digits: was read as FedEx before
+    expect(inferCarrier('9400111899223817200001')).toBe('USPS');
+    expect(inferCarrier('312345678901')).toBe('FedEx');
+    expect(inferCarrier('312345678901234')).toBe('FedEx');
+    expect(inferCarrier('1Z999AA10123456784')).toBe('UPS');
   });
 });

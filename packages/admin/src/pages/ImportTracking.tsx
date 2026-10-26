@@ -8,7 +8,7 @@ import { dateTime } from '../lib/format';
 import { PageHeader, Spinner, InlineAlert, Badge } from '../components/ui';
 import TrackingPreviewTable from '../components/TrackingPreviewTable';
 import { TRACKING_TEMPLATE, saveTextFile, toCsv } from '../lib/carrier';
-import { STATUS_LABEL, isImportable, type ImportResponse, type PreviewResponse, type PreviewRow, type RecentImport } from '../lib/tracking';
+import { STATUS_LABEL, isImportable, type ImportResponse, type PreviewResponse, type PreviewRow, type RecentImport, parseSummary } from '../lib/tracking';
 
 const MAX_FILE_BYTES = 2_000_000;
 
@@ -73,8 +73,8 @@ export default function ImportTracking() {
   return (
     <>
       <Link to="/orders" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Orders</Link>
-      <PageHeader title="Import tracking" subtitle="Upload a CSV or paste rows (order, tracking, carrier). You review every row before anything ships." actions={
-        <Link to="/orders/tracking-grid" className="btn-ghost whitespace-nowrap"><ListChecks size={15} /> Open orders grid</Link>
+      <PageHeader title="Upload tracking" subtitle="Upload the Avid shipment file exactly as it comes, or any CSV with order and tracking columns. You review every row before anything ships." actions={
+        <Link to="/fulfilment/manual" className="btn-ghost whitespace-nowrap"><ListChecks size={15} /> Enter manually</Link>
       } />
       {err && <div className="mb-4"><InlineAlert tone="critical">{err}</InlineAlert></div>}
 
@@ -91,12 +91,13 @@ export default function ImportTracking() {
           <button className="btn-primary" disabled={!text.trim() || doPreview.isPending} onClick={() => doPreview.mutate({ csv: text })}>
             {doPreview.isPending ? <Spinner className="text-white" /> : preview ? 'Preview again' : 'Preview import'}
           </button>
-          <p className="text-xs text-gray-400">Carrier is detected from the tracking number (UPS, USPS, FedEx) unless you give one. Preview changes nothing.</p>
+          <p className="text-xs text-gray-400">Avid/VeraCore files: the title line is skipped and OrderId + shpack_trackingid are used; Amazon orders and repeated rows are left out. Carrier is detected from the tracking number (UPS, USPS, FedEx) unless the file gives one. Preview changes nothing.</p>
         </div>
 
         <div className="stack-y-3 min-w-0">
           {preview && (
             <>
+              {preview.parse && <p className="text-xs text-gray-600" aria-live="polite">{parseSummary(preview.parse)}</p>}
               <div className="flex flex-wrap items-center gap-2" aria-live="polite">
                 <Badge value="ready" tone="positive" label={`${importable.length} ready`} />
                 {Object.entries(byStatus).filter(([s]) => !isImportable(s as PreviewRow['status'])).map(([s, n]) => <Badge key={s} value={s} tone={STATUS_LABEL[s as PreviewRow['status']].tone} label={`${n} ${STATUS_LABEL[s as PreviewRow['status']].label.toLowerCase()}`} />)}

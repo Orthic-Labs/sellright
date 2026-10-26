@@ -21916,6 +21916,67 @@
                         "importable",
                         "byStatus"
                       ]
+                    },
+                    "parse": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "titleSkipped": {
+                          "type": "boolean"
+                        },
+                        "header": {
+                          "type": "array",
+                          "nullable": true,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "columns": {
+                          "type": "object",
+                          "properties": {
+                            "order": {
+                              "type": "string"
+                            },
+                            "tracking": {
+                              "type": "string"
+                            },
+                            "carrier": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "order",
+                            "tracking",
+                            "carrier"
+                          ]
+                        },
+                        "skipped": {
+                          "type": "object",
+                          "properties": {
+                            "blank": {
+                              "type": "integer"
+                            },
+                            "amazon": {
+                              "type": "integer"
+                            },
+                            "duplicate": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "blank",
+                            "amazon",
+                            "duplicate"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "titleSkipped",
+                        "header",
+                        "columns",
+                        "skipped"
+                      ]
                     }
                   },
                   "required": [
@@ -22205,7 +22266,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 500,
+              "maximum": 2000,
               "default": 200
             },
             "required": false,

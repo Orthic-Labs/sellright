@@ -15,7 +15,8 @@ interface OpenOrder {
 }
 interface Entry { tracking: string; carrier: string }
 
-/** Manual tracking grid: every paid order still to ship, paste tracking per row, dry run, then confirm. */
+/** Manual tracking (Vendure order-tools parity, #376): every paid order still to ship in one table, filter by order or
+ *  name, a tracking number per row, one Submit for all filled rows (the server applies only rows that validate). */
 export default function TrackingGrid() {
   const { store } = useAuth();
   const qc = useQueryClient();
@@ -29,7 +30,7 @@ export default function TrackingGrid() {
 
   const open = useQuery({
     queryKey: ['open-orders', store?.slug, q],
-    queryFn: ({ signal }) => api.get<{ items: OpenOrder[]; total: number }>(`/fulfillment/open-orders?${new URLSearchParams({ q, limit: '200' })}`, { signal }),
+    queryFn: ({ signal }) => api.get<{ items: OpenOrder[]; total: number }>(`/fulfillment/open-orders?${new URLSearchParams({ q, limit: '2000' })}`, { signal }),
     placeholderData: keepPreviousData,
   });
   const orders = open.data?.items ?? [];
@@ -76,8 +77,8 @@ export default function TrackingGrid() {
   return (
     <>
       <Link to="/orders" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Orders</Link>
-      <PageHeader title="Add tracking to open orders" subtitle={open.data ? `${open.data.total} paid order${open.data.total === 1 ? '' : 's'} waiting to ship, oldest first.` : 'Paid orders waiting to ship, oldest first.'} actions={
-        <Link to="/orders/import-tracking" className="btn-ghost whitespace-nowrap"><FileUp size={15} /> Import a CSV instead</Link>
+      <PageHeader title="Manual tracking" subtitle="Paid orders waiting to ship, oldest first. Type or paste a tracking number on each order you shipped, then Submit." actions={
+        <Link to="/fulfilment/upload" className="btn-ghost whitespace-nowrap"><FileUp size={15} /> Upload a file instead</Link>
       } />
       {err && <div className="mb-3"><InlineAlert tone="critical">{err}</InlineAlert></div>}
       {result && (
@@ -87,15 +88,15 @@ export default function TrackingGrid() {
       )}
 
       <div className="flex flex-wrap items-center gap-3 mb-3">
-        <SearchInput value={q} onChange={setQ} placeholder="Search order or email" />
+        <SearchInput value={q} onChange={setQ} placeholder="Filter by order number or name" />
         <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> Email customers</label>
         <span className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-gray-500">{filled.length} row{filled.length === 1 ? '' : 's'} filled</span>
-          <button className="btn-ghost" disabled={filled.length === 0 || dryRun.isPending || confirm.isPending} onClick={() => dryRun.mutate()}>{dryRun.isPending ? <Spinner /> : preview && !stale ? 'Dry run again' : 'Dry run'}</button>
-          <button className="btn-primary" disabled={!preview || stale || ready.length === 0 || confirm.isPending} onClick={() => confirm.mutate()}>{confirm.isPending ? <Spinner className="text-white" /> : `Confirm and ship ${ready.length}`}</button>
+          <span className="text-xs text-gray-500" aria-live="polite">{open.data ? `${open.data.total} open order${open.data.total === 1 ? '' : 's'}, ` : ''}{filled.length} tracking number{filled.length === 1 ? '' : 's'} entered</span>
+          <button className="btn-ghost" disabled={filled.length === 0 || dryRun.isPending || confirm.isPending} onClick={() => dryRun.mutate()}>{dryRun.isPending ? <Spinner /> : 'Check first'}</button>
+          <button className="btn-primary" disabled={filled.length === 0 || confirm.isPending || (!!preview && !stale && ready.length === 0)} onClick={() => confirm.mutate()}>{confirm.isPending ? <Spinner className="text-white" /> : `Submit ${filled.length}`}</button>
         </span>
       </div>
-      {stale && <div className="mb-3"><InlineAlert tone="attention">You changed rows after the dry run. Run it again before confirming.</InlineAlert></div>}
+      {stale && <div className="mb-3"><InlineAlert tone="attention">You changed rows after checking them; the check column is cleared. Submit still validates every row.</InlineAlert></div>}
 
       {open.error ? <div className="card"><ErrorState message={(open.error as Error).message} onRetry={() => open.refetch()} /></div> : (
         <div className="card overflow-x-auto">

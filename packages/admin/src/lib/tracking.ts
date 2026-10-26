@@ -8,7 +8,20 @@ export interface PreviewRow {
   status: TrackingStatus; message: string; items: { sku: string; name: string; quantity: number }[];
   suggestion?: string; customerEmail?: string | null;
 }
-export interface PreviewResponse { rows: PreviewRow[]; summary: { total: number; importable: number; byStatus: Record<string, number> } }
+/** How an uploaded/pasted file was read (#376). */
+export interface ParseInfo {
+  titleSkipped: boolean; header: string[] | null;
+  columns: { order: string; tracking: string; carrier: string | null };
+  skipped: { blank: number; amazon: number; duplicate: number };
+}
+export interface PreviewResponse { rows: PreviewRow[]; summary: { total: number; importable: number; byStatus: Record<string, number> }; parse?: ParseInfo | null }
+/** One plain sentence: which columns were used and what was left out. */
+export function parseSummary(p: ParseInfo): string {
+  const cols = `Order numbers from "${p.columns.order}", tracking from "${p.columns.tracking}"${p.columns.carrier ? `, carrier from "${p.columns.carrier}"` : ', carrier detected from the number'}.`;
+  const title = p.titleSkipped ? ' The title line was skipped.' : '';
+  const left = [p.skipped.blank && `${p.skipped.blank} without an order or tracking number`, p.skipped.amazon && `${p.skipped.amazon} Amazon order${p.skipped.amazon === 1 ? '' : 's'}`, p.skipped.duplicate && `${p.skipped.duplicate} repeated`].filter(Boolean);
+  return `${cols}${title}${left.length ? ` Left out: ${left.join(', ')}.` : ''}`;
+}
 export interface ImportResponse {
   updated: number; skipped: number; emailsQueued: number; batchId: string;
   errors: { code: string; error: string }[]; rows: (PreviewRow & { imported: boolean })[];
