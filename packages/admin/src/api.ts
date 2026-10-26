@@ -85,6 +85,28 @@ export async function downloadFile(path: string, filename: string): Promise<void
   URL.revokeObjectURL(url);
 }
 
+/** Like downloadFile, but the filename and counts come from the response (#381 Order Export: "Downloaded: … — N orders, M rows"). */
+export async function downloadExport(path: string): Promise<{ filename: string; orders: number; rows: number }> {
+  // QA preview (VITE_QA_MOCK + ?qa=1 only): report a mocked download instead of fetching.
+  const mock = maybeMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
+  if (mock) return mock.data as { filename: string; orders: number; rows: number };
+  const headers: Record<string, string> = {};
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { error?: string | { message?: string } } | null;
+    const msg = typeof body?.error === 'string' ? body.error : body?.error?.message;
+    throw new ApiError(res.status, msg || `export failed (${res.status})`);
+  }
+  const filename = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'orders_export.xlsx';
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  return { filename, orders: Number(res.headers.get('x-export-orders') ?? 0), rows: Number(res.headers.get('x-export-rows') ?? 0) };
+}
+
 export interface AssetRow { id: string; path: string; url: string; width: number | null; height: number | null; alt: string | null }
 
 /** Upload an image (multipart). The browser sets the multipart boundary, so we

@@ -206,6 +206,38 @@ export function createIntegrationCases(fixture: MatrixIntegrationFixture): Matri
       }
     } };
   }, undefined, true);
+  // #381 Order Export page: count + download (plain-error handlers like the order export above) and per-admin preferences.
+  const ALL_EXPORT_STATUSES = 'Processing,Pre-ordered,PaymentAuthorized,PartiallyShipped,Shipped,PartiallyDelivered,Delivered,Modifying,ArrangingAdditionalPayment,Refunded,Cancelled';
+  const exportOrder = async (unique: string) => {
+    const order = await paidOrder(unique);
+    await query(fixture, 'insert into order_line(store_id,order_id,variant_sku,product_name,variant_name,quantity,unit_price,line_subtotal,line_total) values ($1,$2,$3,$4,$5,1,10000,10000,10000)',
+      [fixture.storeId, order.id, 'SKU-' + unique, 'Matrix', 'Export']);
+    return order;
+  };
+  add('GET /v1/admin/order-export/count', 'read', async ({ unique }) => {
+    await exportOrder(unique);
+    const expected = Number((await one(fixture, 'select count(*)::int as n from "order" where store_id=$1 and deleted_at is null and is_demo=false and state <> $2', [fixture.storeId, 'PendingPayment'])).n);
+    return { url: '/v1/admin/order-export/count?statuses=' + ALL_EXPORT_STATUSES, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(await json(response), { totalOrders: expected }, 'exact count of exportable tenant orders');
+    } };
+  }, undefined, true);
+  add('GET /v1/admin/order-export', 'read', async ({ unique }) => {
+    const order = await exportOrder(unique);
+    return { url: '/v1/admin/order-export?format=csv&rows=order&columns=orderCode,sku,orderTotalUsd&statuses=' + ALL_EXPORT_STATUSES, async verify(response: Response, proof: MatrixProof) {
+      proof.equal(response.headers.get('content-type'), 'text/csv; charset=utf-8', 'order export CSV media type');
+      proof.ok(/^attachment; filename="orders_export_\d{4}-\d{2}-\d{2}\.csv"$/.test(response.headers.get('content-disposition') ?? ''), 'dated export filename');
+      const text = await response.text();
+      proof.ok(text.startsWith('Order Code,Items,Order Total (USD)\r\n'), 'previous-admin headers with the Items column');
+      proof.ok(text.includes(order.code + ',1x Matrix - Export (SKU-' + unique + '),100.00'), 'fresh tenant order exported with its line item');
+    } };
+  }, undefined, true);
+  add('GET /v1/admin/preferences/{key}', 'read', async () => ({ url: '/v1/admin/preferences/matrix.unset', async verify(response: Response, proof: MatrixProof) {
+    proof.equal(await json(response), { key: 'matrix.unset', value: null }, 'no saved preference reads as null');
+  } }));
+  add('PUT /v1/admin/preferences/{key}', 'read', async ({ unique }) => ({ url: '/v1/admin/preferences/matrix.probe', body: { value: { unique } }, async verify(response: Response, proof: MatrixProof) {
+    proof.equal(await json(response), { key: 'matrix.probe', value: { unique } }, 'saved preference echoed');
+    proof.equal((await query(fixture, "select count(*)::int as n from admin_preference where store_id=$1 and key='matrix.probe' and value->>'unique'=$2", [fixture.storeId, unique]))[0]!.n, 1, 'preference committed for the calling admin', 'state');
+  } }));
   add('GET /v1/admin/subscribers/export', 'read', async ({ unique }, principal) => {
     const email = 'subscriber-' + unique + '@matrix.invalid', name = '=Matrix, Export', topic = 'matrix-' + unique;
     const row = await one(fixture, "insert into subscriber(store_id,email,name,kind,topic,status,source,confirmed_at) values ($1,$2,$3,'newsletter',$4,'confirmed','api','2002-03-04T00:00:00Z') returning confirmed_at::text,created_at::text", [fixture.storeId,email,name,topic]);

@@ -249,6 +249,11 @@ export function maybeMock(path: string, qs: URLSearchParams, init?: RequestInit)
       { code: 'DD30366', placedAt: '2026-10-25T18:20:00Z', isPreOrder: true, email: 'alex@example.com', name: 'Alex Chen', state: 'Paid', country: 'CA', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
       { code: 'DD30367', placedAt: '2026-10-26T11:05:00Z', isPreOrder: false, email: 'casey@example.com', name: null, state: 'Paid', country: 'US', fulfillmentStatus: 'unfulfilled', items: [], shippedTracking: [] },
     ] } };
+    // #381 Order Export page: the count, this admin's saved settings and presets, and the download result.
+    if (path === '/order-export/count') return { data: { totalOrders: qs.get('statuses') ? Math.min(qs.get('statuses')!.split(',').length, 5) + 3 : 0 } };
+    if (path === '/preferences/order-export.last') return { data: { key: 'order-export.last', value: null } };
+    if (path === '/preferences/order-export.presets') return { data: { key: 'order-export.presets', value: [{ name: 'Avid picking list', settings: { statuses: ['Processing', 'Pre-ordered', 'PartiallyShipped'], rows: 'line', format: 'xlsx' } }] } };
+    if (path === '/order-export') return { data: { filename: `orders_export_${new Date().toISOString().slice(0, 10)}.${qs.get('format') === 'csv' ? 'csv' : 'xlsx'}`, orders: 8, rows: 11 } };
     if (path === '/import-tracking/recent') return { data: { items: [
       { id: 'r1', at: '2026-10-24T16:10:00Z', actor: 'adrian@example.com', source: 'csv', fileName: 'ProductShipmentDatasheet_1024.csv', total: 14, shipped: 12, skipped: 2, emailsQueued: 12, notify: true },
       { id: 'r2', at: '2026-10-23T15:42:00Z', actor: 'adrian@example.com', source: 'grid', fileName: null, total: 3, shipped: 3, skipped: 0, emailsQueued: 3, notify: true },

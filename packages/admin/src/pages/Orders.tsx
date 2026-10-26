@@ -7,7 +7,6 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { useForcePurgeDialog, isPaidPurgeState } from '../components/ForcePurgeDialog';
-import OrderExportDialog from '../components/OrderExportDialog';
 import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
 import {
@@ -46,7 +45,6 @@ export default function Orders() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const filters = useMemo(() => filtersFromParams(params), [paramsKey]);
   const [page, setPage] = useState(1);
-  const [exportOpen, setExportOpen] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const trashed = filters.status === 'archived';
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -204,12 +202,11 @@ export default function Orders() {
     <>
       {confirmDialog}
       {forcePurgeDialog}
-      <OrderExportDialog open={exportOpen} onClose={() => setExportOpen(false)} filters={filters} />
       <AutoDeliverDialog open={deliverOpen} onClose={() => setDeliverOpen(false)} />
       <PageHeader title="Orders" subtitle={data ? `${data.total} ${isFiltered ? 'matching' : 'total'}` : undefined} actions={
         <div className="flex items-center gap-2">
           <ActionMenu label="Actions" items={[
-            { label: 'Export orders…', icon: <Download size={15} />, onClick: () => setExportOpen(true) },
+            { label: 'Export orders…', icon: <Download size={15} />, to: '/fulfilment/export' },
             { label: 'Import tracking (CSV)', icon: <Upload size={15} />, to: '/orders/import-tracking' },
             { label: 'Add tracking to open orders', icon: <ListChecks size={15} />, to: '/orders/tracking-grid' },
             { label: 'Mark old shipments delivered…', icon: <PackageCheck size={15} />, onClick: () => setDeliverOpen(true) },

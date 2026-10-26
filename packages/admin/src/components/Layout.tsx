@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe, FileUp, ListChecks,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe, FileUp, ListChecks, Download,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -31,6 +31,7 @@ const GROUPS: NavGroup[] = [
   { id: 'fulfilment', label: 'Fulfilment', defaultOpen: true, items: [
     { to: '/fulfilment/upload', label: 'CSV Upload', icon: FileUp },
     { to: '/fulfilment/manual', label: 'Manual', icon: ListChecks },
+    { to: '/fulfilment/export', label: 'Order Export', icon: Download },
   ] },
   { id: 'catalog', label: 'Catalog', defaultOpen: true, items: [
     { to: '/products', label: 'Products', icon: Package },

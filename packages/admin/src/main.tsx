@@ -44,6 +44,7 @@ const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
 const DraftOrder = lazy(() => import('./pages/DraftOrder'));
 const ImportTracking = lazy(() => import('./pages/ImportTracking'));
 const TrackingGrid = lazy(() => import('./pages/TrackingGrid'));
+const OrderExport = lazy(() => import('./pages/OrderExport'));
 const AbandonedCarts = lazy(() => import('./pages/AbandonedCarts'));
 const Affiliates = lazy(() => import('./pages/Affiliates'));
 const AffiliateDetail = lazy(() => import('./pages/AffiliateDetail'));
@@ -138,6 +139,7 @@ function App() {
         <Route path="/orders/tracking-grid" element={<TrackingGrid />} />
         <Route path="/fulfilment/upload" element={<ImportTracking />} />
         <Route path="/fulfilment/manual" element={<TrackingGrid />} />
+        <Route path="/fulfilment/export" element={<OrderExport />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />

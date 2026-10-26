@@ -235,6 +235,15 @@ export const adminAuthChallenge = pgTable('admin_auth_challenge', {
 }, (t) => [index('admin_auth_challenge_admin').on(t.adminUserId, t.kind), index('admin_auth_challenge_expires').on(t.expiresAt)]);
 
 // #355 phase 1 (0113): one-use sign-in handoff codes for a registered hub client (auth/admin-handoff.ts).
+// #381 (0114): per-admin, per-store UI preferences (Order Export last settings + presets). FORCE RLS on store_id.
+export const adminPreference = pgTable('admin_preference', {
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  key: text().notNull(),
+  value: jsonb().notNull(),
+  updatedAt: ts(),
+}, (t) => [primaryKey({ columns: [t.storeId, t.adminUserId, t.key] })]);
+
 export const adminHandoffCode = pgTable('admin_handoff_code', {
   codeHash: text().primaryKey(),
   clientId: text().notNull(),

@@ -25,6 +25,8 @@ import { adminProducts } from './routes/admin-products.js';
 import { adminOrders } from './routes/admin-orders.js';
 import { adminOrderEdit } from './routes/admin-order-edit.js';
 import { adminOrderOps } from './routes/admin-order-ops.js';
+import { adminOrderExport } from './routes/admin-order-export.js';
+import { adminPreferences } from './routes/admin-preferences.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminSecurity } from './routes/admin-security.js';
@@ -564,6 +566,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
   app.route('/', adminOrderEdit); // G13/G5: Shopify-style edit of paid orders + direct address edit
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
+  app.route('/', adminOrderExport); // #381 Order Export page: count + download
+  app.route('/', adminPreferences); // #381 per-admin UI preferences (export settings + presets)
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminSecurity); // P1b: 2FA enrolment + recovery codes, password change, per-store 2FA requirement
