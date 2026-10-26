@@ -15,7 +15,7 @@ import {
   ActionMenu, EmptyStateActionPanel, InlineAlert, type Column,
 } from '../components/ui';
 import {
-  BUILTIN_VIEWS, EMPTY_FILTERS, FULFILLMENT_OPTIONS, ORDER_OPTIONS, PAYMENT_OPTIONS, customerLabel, filtersFromParams,
+  ALL_ORDERS, BUILTIN_VIEWS, EMPTY_FILTERS, apiOrderStatus, FULFILLMENT_OPTIONS, ORDER_OPTIONS, PAYMENT_OPTIONS, customerLabel, filtersFromParams,
   filtersToApiQuery, filtersToParams, fulfillmentDef, orderDef, paymentDef, sameFilters, type OrderFilters,
 } from '../lib/order-status';
 
@@ -247,7 +247,7 @@ export default function Orders() {
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
             <FilterSelect label="Payment" value={filters.paymentStatus} onChange={(v) => patchFilters({ paymentStatus: v })} options={PAYMENT_OPTIONS} />
             <FilterSelect label="Fulfillment" value={filters.fulfillmentStatus} onChange={(v) => patchFilters({ fulfillmentStatus: v })} options={FULFILLMENT_OPTIONS} />
-            <FilterSelect label="Order" value={filters.status} onChange={(v) => patchFilters({ status: v })} options={ORDER_OPTIONS} />
+            <FilterSelect label="Order" value={apiOrderStatus(filters.status)} onChange={(v) => patchFilters({ status: v || ALL_ORDERS })} options={ORDER_OPTIONS} />
             <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">
               <input type="checkbox" className="accent-brand" checked={filters.excludeDemo} onChange={(e) => patchFilters({ excludeDemo: e.target.checked })} />
               Exclude demo orders
@@ -261,7 +261,7 @@ export default function Orders() {
             {isFiltered && <button className="btn-ghost btn-sm" onClick={() => setFilters(EMPTY_FILTERS)}>Clear</button>}
           </div>
         }
-        right={<SearchInput value={filters.q} onChange={(v) => patchFilters({ q: v })} placeholder="Search code or email" />}
+        right={<SearchInput value={filters.q} onChange={(v) => patchFilters({ q: v })} placeholder="Search code, email, name or phone" />}
       />
       {dateInvalid && <div className="mb-3"><InlineAlert tone="attention">The start date is after the end date, so no orders can match.</InlineAlert></div>}
 

@@ -6,7 +6,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const JOBS: Array<[string, number]> = [
   ['gateway-events', MIN], ['passkey-prune', 10 * MIN], ['gateway-recovery', 5 * MIN], ['catalog-manifest-drain', 2 * MIN],
-  ['auto-deliver', HOUR], ['release-stale', 15 * MIN], ['reservation-release-sweep', 15 * MIN], ['cart-maintenance', 15 * MIN],
+  ['auto-deliver', HOUR], ['release-stale', 15 * MIN], ['purge-cancelled', 15 * MIN], ['reservation-release-sweep', 15 * MIN], ['cart-maintenance', 15 * MIN],
   ['webhooks', MIN], ['emails', MIN], ['push', MIN], ['listmonk-sync', 5 * MIN], ['sheerid-expiry', HOUR],
   ['birthday-bonus', HOUR], ['restock-notify', MIN], ['webhook-reaper', 5 * MIN], ['processed-event-reaper', HOUR],
   ['rate-limit-reaper', HOUR],

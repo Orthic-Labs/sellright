@@ -368,9 +368,10 @@ export default function OrderDetailPage() {
               <Link to={`/customers/${o.customer.id}`} className="text-sm text-brand hover:underline">
                 {[o.customer.firstName, o.customer.lastName].filter(Boolean).join(' ') || o.customer.email}
               </Link>
-            ) : <span className="text-sm text-gray-400">Guest</span>}
-            {o.customer?.email && <div className="text-sm text-gray-500 mt-0.5">{o.customer.email}</div>}
-            {o.customer?.phone && <div className="text-sm text-gray-500">{o.customer.phone}</div>}
+            ) : <span className={`text-sm ${o.contact?.name ? 'font-medium text-gray-800' : 'text-gray-400'}`}>{o.contact?.name ?? 'Guest'}</span>}
+            {/* #374: a guest order shows the contact captured at checkout. */}
+            {(o.customer?.email ?? o.contact?.email) && <div className="text-sm text-gray-500 mt-0.5">{o.customer?.email ?? o.contact?.email}</div>}
+            {(o.customer?.phone ?? o.contact?.phone) && <div className="text-sm text-gray-500">{o.customer?.phone ?? o.contact?.phone}</div>}
           </FormSection>
 
           {o.attribution && (

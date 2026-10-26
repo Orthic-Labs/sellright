@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_VIEWS, EMPTY_FILTERS, FULFILLMENT_OPTIONS, PAYMENT_OPTIONS, customerLabel, filtersFromParams, filtersToApiQuery, filtersToExportQuery, filtersToParams, orderDef, paymentDef, sameFilters } from './order-status';
+import { ALL_ORDERS, BUILTIN_VIEWS, DEFAULT_ORDER_STATUS, EMPTY_FILTERS, apiOrderStatus, FULFILLMENT_OPTIONS, PAYMENT_OPTIONS, customerLabel, filtersFromParams, filtersToApiQuery, filtersToExportQuery, filtersToParams, orderDef, paymentDef, sameFilters } from './order-status';
 
 describe('owner-facing statuses', () => {
   it('never offers authorized or voided as filters', () => {
@@ -32,12 +32,31 @@ describe('filters <-> URL', () => {
   });
   it('built-in views are mutually distinguishable', () => {
     const matches = (f: typeof EMPTY_FILTERS) => BUILTIN_VIEWS.filter((v) => sameFilters(f, v.filters)).map((v) => v.id);
-    expect(matches(EMPTY_FILTERS)).toEqual(['all']);
+    expect(matches(EMPTY_FILTERS)).toEqual(['orders']);
+    expect(matches({ ...EMPTY_FILTERS, status: ALL_ORDERS })).toEqual(['all']);
+    expect(matches({ ...EMPTY_FILTERS, status: 'open' })).toEqual(['unpaid']);
     expect(matches({ ...EMPTY_FILTERS, status: 'cancelled' })).toEqual(['cancelled']);
     expect(matches({ ...EMPTY_FILTERS, paymentStatus: 'paid', fulfillmentStatus: 'unfulfilled', status: 'active', excludeDemo: true })).toEqual(['unfulfilled']);
   });
   it('shows name over email when a name exists', () => {
     expect(customerLabel({ firstName: 'Ada', lastName: 'B', email: 'a@x.co' })).toEqual({ name: 'Ada B', email: 'a@x.co' });
     expect(customerLabel({ email: 'a@x.co' }).name).toBeNull();
+    // #374: the API's resolved name (a guest's checkout name) is shown when there is no linked customer.
+    expect(customerLabel({ customerName: 'Gus Guest', email: 'g@x.co' })).toEqual({ name: 'Gus Guest', email: 'g@x.co' });
+  });
+  it('opens on paid orders by default; status=all lifts the filter (#374)', () => {
+    expect(EMPTY_FILTERS.status).toBe(DEFAULT_ORDER_STATUS);
+    expect(filtersFromParams(new URLSearchParams('')).status).toBe('completed');
+    expect(filtersToParams(EMPTY_FILTERS).has('status')).toBe(false); // the default keeps a clean URL
+    expect(filtersToApiQuery(EMPTY_FILTERS, 1).get('status')).toBe('completed');
+    expect(filtersFromParams(new URLSearchParams('status=all')).status).toBe(ALL_ORDERS);
+    expect(filtersToParams({ ...EMPTY_FILTERS, status: ALL_ORDERS }).get('status')).toBe('all');
+    expect(filtersToApiQuery({ ...EMPTY_FILTERS, status: ALL_ORDERS }, 1).has('status')).toBe(false);
+    expect(filtersToExportQuery({ ...EMPTY_FILTERS, status: ALL_ORDERS }).has('status')).toBe(false);
+    expect(filtersToApiQuery({ ...EMPTY_FILTERS, status: 'open' }, 1).get('status')).toBe('open');
+    // A view saved before #374 (empty status) means every order, never the API's invalid ''.
+    expect(filtersToParams({ ...EMPTY_FILTERS, status: '' }).get('status')).toBe('all');
+    expect(apiOrderStatus('')).toBe('');
+    expect(filtersFromParams(new URLSearchParams('status=bogus')).status).toBe('completed');
   });
 });

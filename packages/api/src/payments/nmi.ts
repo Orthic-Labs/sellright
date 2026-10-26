@@ -14,7 +14,7 @@ const DUPLICATE = /duplicate/i;
  *  leak processor/fraud-rule detail); parity with the storefront's generic
  *  "try a different card" message. */
 export const NMI_DECLINE_MESSAGE = 'Payment declined. Please try a different card or payment method.';
-export const NMI_DUPLICATE_MESSAGE = 'Duplicate transaction detected. Please try again.';
+export const NMI_DUPLICATE_MESSAGE = 'Payment declined: it matches a payment just made with the same card and amount. Check your email for an order confirmation before trying again.';
 export const NMI_VERIFICATION_MESSAGE = 'Payment rejected: the card address or security code did not match. Please check your details or use a different card.';
 function configFault(text: string | null, where: string) {
   if (text && CONFIG_FAULT.test(text)) logErr.error('NMI CONFIG FAULT', undefined, { where, responseText: text.slice(0, 200) });
@@ -102,13 +102,15 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
       }
       if (result.get('response') === '3') {
         configFault(responseText, 'sale');
-        // A duplicate-check rejection means an EARLIER identical sale may have
-        // gone through — keep the attempt reserved for reconciliation (never
-        // a free retry that could double-charge). Any other response=3 is a
-        // gateway/data error: no transaction was processed.
+        // #374: a duplicate-check rejection is NMI refusing THIS sale — nothing
+        // was processed for it. An earlier identical sale is its own attempt
+        // with its own recorded outcome (an unresolved one still holds the
+        // order), so this attempt is Declined and the unpaid sweep may cancel
+        // the order. Any other response=3 is a gateway/data error: no
+        // transaction was processed either.
         if (DUPLICATE.test(responseText ?? '')) {
-          return { ...unknownPayment(ref, 'duplicate_transaction'), errorMessage: NMI_DUPLICATE_MESSAGE,
-            metadata: { needsReconciliation: true, reason: 'duplicate_transaction', responseText } };
+          return { state: 'Declined', providerRef: ref, errorMessage: NMI_DUPLICATE_MESSAGE,
+            metadata: { reason: 'duplicate_transaction', responseText, responseCode: result.get('response_code') } };
         }
         if (!ref) {
           return { state: 'Failed', providerRef: null, errorMessage: NMI_DECLINE_MESSAGE,

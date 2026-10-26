@@ -7,7 +7,7 @@ import { hasUnresolvedPayment } from '../payments/hold.js';
 import { assertNoPendingOrderEdit } from '../orders/edit-stage.js';
 import { OrderEditError } from '../orders/order-edit.js';
 import { errJson } from '../lib/api-error.js';
-import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
@@ -34,6 +34,7 @@ import { verifyLoginFactor } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { resolveOrderRecipient } from '../orders/recipient.js';
+import { orderContact, orderContactSql, orderSearchSql } from '../orders/contact.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
@@ -365,13 +366,16 @@ admin.openapi(
       if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
-      if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
+      if (q) conds.push(orderSearchSql(q, 'customer') as never);
       const where = conds.length ? and(...conds) : undefined;
+      const contactSql = orderContactSql('customer');
       const base = tx
         .select({
           code: s.order.code, state: s.order.state, status: s.order.status,
           paymentStatus: paymentStatusWithBalanceSql(), shippingMethodName: s.order.shippingMethodName, fulfillmentStatus: fulfillmentStatusSql(),
-          isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email,
+          isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt,
+          // #374: a guest order (no linked customer) shows its own checkout contact.
+          email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
         })
         .from(s.order)
@@ -468,6 +472,8 @@ admin.openapi(
         attribution: orderAttribution(o.metadata),
         shippingAddress: o.shippingAddress ?? null, billingAddress: admin.kind === 'agent' ? null : (o.billingAddress ?? null), // D6: billing address stripped for agents
         customer,
+        // #374: the order's own checkout contact; the admin shows it when no customer is linked (guest checkout).
+        contact: orderContact(admin.kind === 'agent' ? { metadata: o.metadata, shippingAddress: o.shippingAddress } : o), // D6: no billing fallback for agents
         // `id` is the order_line id the refund/return endpoints key their
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.

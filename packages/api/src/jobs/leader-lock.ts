@@ -80,6 +80,8 @@ const JOB_KEYS = {
   'reservation-release-sweep': NAMESPACE | 41n,
   // Passkeys (0108): expired ceremony/grant rows (jobs/passkey-prune.ts).
   'passkey-prune': NAMESPACE | 42n,
+  // #374: deletes Cancelled, money-free orders after the retention window (jobs/purge-cancelled-orders.ts).
+  'purge-cancelled': NAMESPACE | 43n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;

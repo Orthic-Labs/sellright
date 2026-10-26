@@ -27,6 +27,13 @@
       "mixed": false,
       "orderViolation": true,
       "why": "STOREKIT §5.3/#8: requestRefund, reconcileSezzleRefunds, reconcileRefundAttempt & Stripe runMoney callers acquire the refund order with withLockedSet (L2 licences, L3 order, L4 reservations) before this helper takes the L5 attempt. Its later order write re-takes held L3; licence revocation is shared in revokeRefundLicenses. Syntactic audit does not follow caller lock sets or helper calls."
+    },
+    {
+      "key": "src/orders/purge.ts::purgeOrderInSet",
+      "sequence": "L5:licenseActivation L2:license",
+      "mixed": false,
+      "orderViolation": true,
+      "why": "#374: the purge cascade moved out of routes/admin-order-ops.ts bulk-purge unchanged; helper only, called exclusively inside withLockedSet({order}) (bulk-purge route, jobs/purge-cancelled-orders.ts), whose plan already holds the order's licences (L2) before the order, so the licence_activation/licence deletes take no new lock out of order."
     }
   ]
 }

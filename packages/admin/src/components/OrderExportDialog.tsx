@@ -4,7 +4,7 @@ import { api, downloadFile } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from './Toast';
 import { Modal, Field, InlineAlert, Spinner } from './ui';
-import { FULFILLMENT_OPTIONS, ORDER_OPTIONS, PAYMENT_OPTIONS, type OrderFilters } from '../lib/order-status';
+import { FULFILLMENT_OPTIONS, ORDER_OPTIONS, PAYMENT_OPTIONS, apiOrderStatus, type OrderFilters } from '../lib/order-status';
 import { RANGE_LABELS, loadPresets, rangeFor, savePresets, upsertPreset, type ExportPreset, type RangePreset } from '../lib/export-presets';
 
 interface Catalog { columns: { key: string; label: string; group: string; lineOnly: boolean }[]; defaults: string[]; lineDefaults: string[]; cap: number }
@@ -36,7 +36,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
     if (!open) return;
     const hasRange = !!(filters.from || filters.to);
     setRange(hasRange ? 'custom' : 'last365'); setFrom(filters.from); setTo(filters.to);
-    setPayment(filters.paymentStatus); setFulfillment(filters.fulfillmentStatus); setOrderStatus(filters.status);
+    setPayment(filters.paymentStatus); setFulfillment(filters.fulfillmentStatus); setOrderStatus(apiOrderStatus(filters.status));
     setPreOrder(filters.preOrder); setExcludeDemo(filters.excludeDemo); setQ(filters.q);
     setShipMethod(''); setMethod(''); setCountry(''); setCoupon(''); setRows('order'); setFormat('csv'); setPresetName(''); setPresets(loadPresets());
   }, [open, filters]);
@@ -115,7 +115,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
           </div>
           <Field label="Payment status" htmlFor="ex-pay"><Select id="ex-pay" value={payment} onChange={setPayment} options={PAYMENT_OPTIONS} any="Any payment status" /></Field>
           <Field label="Fulfillment status" htmlFor="ex-ful"><Select id="ex-ful" value={fulfillment} onChange={setFulfillment} options={FULFILLMENT_OPTIONS} any="Any fulfillment status" /></Field>
-          <Field label="Order" htmlFor="ex-ord"><Select id="ex-ord" value={orderStatus} onChange={setOrderStatus} options={ORDER_OPTIONS} any="Any (open and cancelled)" /></Field>
+          <Field label="Order" htmlFor="ex-ord"><Select id="ex-ord" value={orderStatus} onChange={setOrderStatus} options={ORDER_OPTIONS} any="Any order status" /></Field>
           <Field label="Pre-orders" htmlFor="ex-pre">
             <select id="ex-pre" className="input" value={preOrder ? '1' : ''} onChange={(e) => setPreOrder(e.target.value === '1')}><option value="">All orders</option><option value="1">Pre-orders only</option></select>
           </Field>

@@ -11,12 +11,13 @@ describe('NMI parity (legacy-store spec A)', () => {
     const r = await createNmiProvider(t).createPayment(input);
     expect(r).toMatchObject({ state: 'Declined', errorMessage: NMI_DECLINE_MESSAGE, metadata: { responseText: 'DECLINE R05' } });
   });
-  it('holds a duplicate (response=3) for reconciliation with the duplicate message', async () => {
+  it('declines a duplicate (response=3) with the duplicate message; nothing is held for reconciliation (#374)', async () => {
     const t = vi.fn().mockResolvedValue(reply('response=3&responsetext=Duplicate+transaction+REFID:1'));
     const r = await createNmiProvider(t).createPayment(input);
-    expect(r.state).toBe('Pending');
+    expect(r.state).toBe('Declined');
     expect(r.errorMessage).toBe(NMI_DUPLICATE_MESSAGE);
-    expect((r.metadata as { needsReconciliation: boolean }).needsReconciliation).toBe(true);
+    expect(r.metadata).toMatchObject({ reason: 'duplicate_transaction', responseText: 'Duplicate transaction REFID:1' });
+    expect((r.metadata as { needsReconciliation?: boolean }).needsReconciliation).toBeUndefined();
   });
   it('fails a non-duplicate response=3 with no transaction (nothing was processed)', async () => {
     const t = vi.fn().mockResolvedValue(reply('response=3&responsetext=Invalid+amount'));

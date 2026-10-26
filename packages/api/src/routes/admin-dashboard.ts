@@ -5,6 +5,7 @@ import * as s from '../db/schema.js';
 import { J, errBody, money, PAID_STATES, requireAdmin, requireStore, guard } from './admin-helpers.js';
 import { isStorePublished } from '../store-publish.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
+import { orderContactSql } from '../orders/contact.js';
 
 export const adminDashboard = new OpenAPIHono();
 
@@ -46,7 +47,7 @@ adminDashboard.openapi(
         .from(s.stock)
         .where(sql`${s.stock.onHand} - ${s.stock.allocated} <= 3`);
       const recent = await tx
-        .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, email: s.customer.email, isDemo: s.order.isDemo })
+        .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, email: orderContactSql('customer').email, isDemo: s.order.isDemo })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .where(isNull(s.order.deletedAt))

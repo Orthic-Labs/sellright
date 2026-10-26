@@ -12,6 +12,7 @@ import { withStore } from '../db/client.js';
 import { paymentStatusWithBalanceSql, fulfillmentStatusSql } from './status-sql.js';
 import { ORDER_STATUS_VALUES, ORDER_PAYMENT_FILTER_VALUES, ORDER_FULFILLMENT_STATUS_VALUES } from './status.js';
 import { orderLineLabel } from './line-label.js';
+import { orderContactSql, orderSearchSql } from './contact.js';
 
 export const EXPORT_ROW_CAP = 50_000;
 
@@ -30,7 +31,7 @@ export type ExportFilters = {
 export type ExportMode = 'order' | 'line';
 
 type ExportRow = {
-  code: string; placed_at: Date | null; created_at: Date; email: string | null; customer_name: string | null;
+  code: string; placed_at: Date | null; created_at: Date; email: string | null; customer_name: string | null; customer_phone: string | null;
   state: string; status: string; payment_status: string; fulfillment_status: string;
   is_pre_order: boolean; tracking: string | null; fulfillment_state: string | null;
   subtotal: number; discount_total: number; shipping_total: number; tax_total: number; grand_total: number; currency: string;
@@ -51,6 +52,7 @@ export const EXPORT_COLUMNS: Col[] = [
   { key: 'date', label: 'Date', group: 'Order', get: date10 },
   { key: 'email', label: 'Email', group: 'Customer', get: (r) => r.email ?? '' },
   { key: 'customerName', label: 'Customer name', group: 'Customer', get: (r) => r.customer_name ?? '' },
+  { key: 'customerPhone', label: 'Customer phone', group: 'Customer', get: (r) => r.customer_phone ?? '' },
   { key: 'state', label: 'Internal state', group: 'Status', get: (r) => r.state },
   { key: 'paymentStatus', label: 'Payment status', group: 'Status', get: (r) => r.payment_status },
   { key: 'fulfillmentStatus', label: 'Fulfillment status', group: 'Status', get: (r) => r.fulfillment_status },
@@ -153,7 +155,7 @@ export function exportConditions(f: ExportFilters): SQL[] {
   if (f.shippingMethod) c.push(f.shippingMethod === '__none__' ? sql`"order"."shipping_method_code" is null` : sql`"order"."shipping_method_code" = ${f.shippingMethod}`);
   if (f.country) c.push(sql`upper("order"."shipping_address"->>'country') = ${f.country}`);
   if (f.coupon) c.push(sql`lower(promo.code) = ${f.coupon.toLowerCase()}`);
-  if (f.q) c.push(sql`("order"."code" ilike ${`%${f.q}%`} or cust.email ilike ${`%${f.q}%`})`);
+  if (f.q) c.push(orderSearchSql(f.q, 'cust'));
   return c;
 }
 
@@ -164,10 +166,12 @@ export async function fetchExportRows(storeId: string, f: ExportFilters, mode: E
     : sql`null::text as line_sku, null::text as line_name, null::text as line_product, null::int as line_qty, null::int as line_unit, null::int as line_total, null::int as line_discount`;
   const lineJoin = mode === 'line' ? sql`join order_line ol on ol.order_id = "order"."id"` : sql``;
   const lineOrder = mode === 'line' ? sql`, ol.id` : sql``;
+  // #374: a guest order (no linked customer) exports its own checkout contact.
+  const contact = orderContactSql('cust');
   return withStore(storeId, async (tx) => {
     const r = await tx.execute(sql`
       select "order"."code" as code, "order"."placed_at" as placed_at, "order"."created_at" as created_at,
-        cust.email as email, nullif(trim(coalesce(cust.first_name, '') || ' ' || coalesce(cust.last_name, '')), '') as customer_name,
+        ${contact.email} as email, ${contact.name} as customer_name, ${contact.phone} as customer_phone,
         "order"."state"::text as state, "order"."status" as status,
         ${paymentStatusWithBalanceSql()} as payment_status, ${fulfillmentStatusSql()} as fulfillment_status,
         "order"."is_pre_order" as is_pre_order,

@@ -113,7 +113,7 @@ export interface LoginResp {
 }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
-export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; firstName?: string | null; lastName?: string | null; }
+export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
@@ -125,6 +125,8 @@ export interface OrderDetail {
   placedAt: string | null; createdAt: string;
   shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
   customer: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
+  /** #374: the order's own checkout contact (shown when no customer is linked). */
+  contact?: { name: string | null; email: string | null; phone: string | null } | null;
   hasPostedCredit?: boolean;
   lines: { id: string; sku: string; name: string; quantity: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
   payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
