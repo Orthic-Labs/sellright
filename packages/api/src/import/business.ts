@@ -211,6 +211,9 @@ export async function importBusiness(ctx: ImportContext): Promise<void> {
       const signupGroup = ctx.id('waitlist-signup', row.id);
       for (const variantId of variantIds) {
         const topic = 'restock:' + variantId;
+        // kind 'waitlist' is restock-only consent: jobs/listmonk-sync.ts claims
+        // LISTMONK_SYNC_KINDS (newsletter, order) only, so these 'confirmed'
+        // rows are never pushed to the marketing list.
         labels[topic] = row.productName ?? row.productSlug ?? topic;
         await tx.insert(s.subscriber).values({
           id: ctx.id('waitlist-signup', row.id + ':' + variantId), storeId,

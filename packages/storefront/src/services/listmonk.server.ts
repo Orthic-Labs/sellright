@@ -1,44 +1,15 @@
 /**
  * Listmonk compatibility for the legacy newsletter links `/newsletter/confirm/{uuid}` and
- * `/newsletter/unsubscribe/{uuid}` (mail already sent by a Listmonk install keeps working). SERVER-ONLY: the
- * `.server.ts` suffix keeps it out of the client bundle, so no Listmonk credential ever reaches the browser.
+ * `/newsletter/unsubscribe/{uuid}` (mail already sent by the previous Listmonk install keeps working). SERVER-ONLY.
  *
- * Native SellRight newsletter signup (`/newsletter-signup`, `/subscriber/*`) stays the default path; this is only
- * reached when a store configures a Listmonk endpoint. Configuration is per store: `LISTMONK_STORES`, a JSON object
- * keyed by the store's public host (lowercase, no port), each value
- *   { baseUrl, user, token, listId, rootUrl?, brandName? }
- * The entry is looked up from a VALIDATED host on every call (`newsletterRequestHost`: the connection's Host header,
- * or X-Forwarded-Host only when the deployment declares a trusted proxy with `SELLRIGHT_TRUST_FORWARDED_HOST=1`). A
- * deployment pinned to one store (`VITE_SELLRIGHT_STORE_SLUG`) serves only the entry that declares that `storeSlug`. There is no process-wide fallback entry, so one
- * store's endpoint and credentials can never serve another store's request; a host with no entry answers 404.
+ * The Listmonk call itself is made by the SellRight API (`POST /v1/shop/newsletter/legacy/{action}/{uuid}`, api
+ * `marketing/listmonk-legacy-links.ts`), using the store's own connection (`store.config.listmonk`, the one the admin
+ * Marketing screen configures). The storefront holds no Listmonk URL or credential and needs no env for this: it
+ * renders the pages and forwards the validated request host so the API resolves the right store. The store is chosen
+ * from a VALIDATED host (`newsletterRequestHost`: the connection's Host header, or X-Forwarded-Host only when the
+ * deployment declares a trusted proxy with `SELLRIGHT_TRUST_FORWARDED_HOST=1`); a deployment pinned to one store
+ * (`VITE_SELLRIGHT_STORE_SLUG`) sends that slug instead. A store with no Listmonk connection answers 404.
  */
-
-export interface ListmonkStoreConfig {
-	baseUrl: string;
-	user: string;
-	token: string;
-	listId: number;
-	/** Value sent as the Origin header (Listmonk checks it against its root URL). Defaults to the store's https origin. */
-	rootUrl: string;
-	/** Required when the deployment is pinned to one store (`VITE_SELLRIGHT_STORE_SLUG`): must equal that slug. */
-	storeSlug?: string;
-	/** Optional display name used in the page copy; the pages are neutral without it. */
-	brandName?: string;
-}
-
-export interface ListmonkSubscriber {
-	id: number;
-	uuid: string;
-	email: string;
-	listStatus: 'confirmed' | 'unconfirmed' | 'unsubscribed' | 'not_subscribed';
-}
-
-type RawSubscriber = {
-	id: number;
-	uuid: string;
-	email: string;
-	lists: { id: number; subscription_status: 'confirmed' | 'unconfirmed' | 'unsubscribed' }[];
-};
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIMEOUT_MS = 8000;
@@ -76,93 +47,6 @@ export function deploymentStorePin(): string {
 	return ((import.meta.env.VITE_SELLRIGHT_STORE_SLUG as string | undefined) || storePinFrom(process.env)).trim();
 }
 
-/**
- * The Listmonk entry for this host, or null when the store has none (or the entry is unusable). Reads the env map
- * passed in, so a caller resolves it per request.
- */
-export function resolveListmonkConfig(
-	host: string | undefined | null,
-	env: Record<string, string | undefined> = process.env,
-	storePin: string = storePinFrom(env),
-): ListmonkStoreConfig | null {
-	const key = normalizeHost(host);
-	const raw = env.LISTMONK_STORES;
-	if (!key || !raw) return null;
-	let map: unknown;
-	try {
-		map = JSON.parse(raw);
-	} catch {
-		return null;
-	}
-	if (!map || typeof map !== 'object' || !Object.prototype.hasOwnProperty.call(map, key)) return null;
-	const e = (map as Record<string, Record<string, unknown>>)[key];
-	if (!e || typeof e !== 'object') return null;
-	if (storePin && e.storeSlug !== storePin) return null; // pinned deployment: only the pinned store's entry is served
-	const listId = Number(e.listId);
-	if (typeof e.baseUrl !== 'string' || typeof e.user !== 'string' || typeof e.token !== 'string' || !e.baseUrl || !e.user || !e.token) return null;
-	if (!Number.isInteger(listId) || listId <= 0) return null;
-	try {
-		const base = new URL(e.baseUrl);
-		if (base.protocol !== 'http:' && base.protocol !== 'https:') return null;
-	} catch {
-		return null;
-	}
-	return {
-		baseUrl: e.baseUrl.replace(/\/+$/, ''),
-		user: e.user,
-		token: e.token,
-		listId,
-		rootUrl: typeof e.rootUrl === 'string' && e.rootUrl ? e.rootUrl : `https://${key}`,
-		brandName: typeof e.brandName === 'string' && e.brandName.trim() ? e.brandName.trim() : undefined,
-	};
-}
-
-export class ListmonkClient {
-	constructor(
-		private config: ListmonkStoreConfig,
-		private fetchImpl: typeof fetch = fetch,
-	) {}
-
-	private async request<T>(path: string, init?: RequestInit): Promise<T> {
-		const res = await this.fetchImpl(`${this.config.baseUrl}${path}`, {
-			...init,
-			headers: {
-				Authorization: 'Basic ' + Buffer.from(`${this.config.user}:${this.config.token}`).toString('base64'),
-				'Content-Type': 'application/json',
-				Origin: this.config.rootUrl,
-			},
-			signal: AbortSignal.timeout(TIMEOUT_MS),
-		});
-		if (!res.ok) throw new Error(`Listmonk ${init?.method || 'GET'} ${path} -> ${res.status}`);
-		return res.json() as Promise<T>;
-	}
-
-	async lookupByUuid(uuid: string): Promise<ListmonkSubscriber | null> {
-		if (!UUID_RE.test(uuid)) return null;
-		const query = encodeURIComponent(`subscribers.uuid = '${uuid}'`);
-		const data = await this.request<{ data: { results: RawSubscriber[] } }>(`/api/subscribers?query=${query}&per_page=1`);
-		const raw = data.data.results[0];
-		if (!raw) return null;
-		const membership = raw.lists.find((l) => l.id === this.config.listId);
-		return { id: raw.id, uuid: raw.uuid, email: raw.email, listStatus: membership ? membership.subscription_status : 'not_subscribed' };
-	}
-
-	/** This store's list only; other lists on the same Listmonk are never touched. */
-	async unsubscribe(subscriberId: number): Promise<void> {
-		await this.request('/api/subscribers/lists', {
-			method: 'PUT',
-			body: JSON.stringify({ ids: [subscriberId], action: 'unsubscribe', target_list_ids: [this.config.listId] }),
-		});
-	}
-
-	async confirm(subscriberId: number): Promise<void> {
-		await this.request('/api/subscribers/lists', {
-			method: 'PUT',
-			body: JSON.stringify({ ids: [subscriberId], action: 'add', target_list_ids: [this.config.listId], status: 'confirmed' }),
-		});
-	}
-}
-
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 const page = (title: string, heading: string, body: string): string =>
@@ -173,21 +57,18 @@ export type ListmonkLinkResult = { status: number; html: string };
 
 const notFound = (): ListmonkLinkResult => ({ status: 404, html: page('Not found', 'Not found', '<p>This page does not exist.</p>') });
 
+
 /**
  * GET: the confirmation page for one legacy link. Mutates nothing and contacts no upstream (mail scanners and link
- * prefetchers issue GETs); the button submits a same-origin POST to the same path. Not configured or malformed id: 404.
+ * prefetchers issue GETs); the button submits a same-origin POST to the same path. Malformed id: 404. Whether the
+ * store has a Listmonk connection is only known to the API, so that is answered by the POST.
  */
-export function renderListmonkConfirmPage(
-	action: 'confirm' | 'unsubscribe',
-	opts: { host: string | undefined | null; uuid: string; env?: Record<string, string | undefined>; storePin?: string },
-): ListmonkLinkResult {
-	const config = resolveListmonkConfig(opts.host, opts.env, opts.storePin);
-	if (!config || !UUID_RE.test(opts.uuid)) return notFound();
-	const who = config.brandName ? ` ${config.brandName}` : '';
+export function renderListmonkConfirmPage(action: 'confirm' | 'unsubscribe', opts: { uuid: string }): ListmonkLinkResult {
+	if (!UUID_RE.test(opts.uuid)) return notFound();
 	const [title, heading, text, button] =
 		action === 'confirm'
-			? ['Confirm subscription', 'Confirm your subscription', `Confirm that you want to receive the${who} newsletter.`, 'Confirm subscription']
-			: ['Unsubscribe', 'Unsubscribe from the newsletter', `Confirm that you want to stop receiving the${who} marketing newsletter.`, 'Unsubscribe'];
+			? ['Confirm subscription', 'Confirm your subscription', 'Confirm that you want to receive our newsletter.', 'Confirm subscription']
+			: ['Unsubscribe', 'Unsubscribe from the newsletter', 'Confirm that you want to stop receiving our marketing newsletter.', 'Unsubscribe'];
 	const form = `<form method="post" action="/newsletter/${action}/${esc(opts.uuid)}"><button type="submit" style="padding:.6rem 1.2rem;font-size:1rem">${esc(button)}</button></form>`;
 	return { status: 200, html: page(title, heading, `<p>${esc(text)}</p>${form}`) };
 }
@@ -203,35 +84,50 @@ export function isSameOriginPost(origin: string | null | undefined, host: string
 	}
 }
 
+type LegacyApiResult = 'confirmed' | 'already_confirmed' | 'unsubscribed' | 'already_unsubscribed';
+
 /**
- * POST: perform one legacy link. `host` is the validated host (resolved per call). Not configured: 404 and nothing is
- * contacted. Unknown or malformed id: 404. Listmonk unreachable or erroring: 502. Both actions are idempotent.
+ * POST: perform one legacy link through the SellRight API. `host` is the validated host (resolved per call), `apiBase`
+ * the API origin. Unusable host, malformed id, unknown subscriber or a store with no Listmonk connection: 404. API or
+ * Listmonk unreachable: 502. Both actions are idempotent.
  */
 export async function handleListmonkLink(
 	action: 'confirm' | 'unsubscribe',
-	opts: { host: string | undefined | null; uuid: string; env?: Record<string, string | undefined>; storePin?: string; fetchImpl?: typeof fetch },
+	opts: { host: string | undefined | null; uuid: string; apiBase: string; storePin?: string; fetchImpl?: typeof fetch },
 ): Promise<ListmonkLinkResult> {
-	const config = resolveListmonkConfig(opts.host, opts.env, opts.storePin);
-	if (!config) return notFound();
-	const who = config.brandName ? ` ${config.brandName}` : '';
-	const client = new ListmonkClient(config, opts.fetchImpl);
+	const host = normalizeHost(opts.host);
+	if (!host || !UUID_RE.test(opts.uuid)) return notFound();
+	const invalid = (): ListmonkLinkResult => ({ status: 404, html: page('Link not valid', 'Link not valid', '<p>We could not find a subscriber matching this link.</p>') });
 	try {
-		const sub = await client.lookupByUuid(opts.uuid);
-		if (!sub) {
-			return { status: 404, html: page('Link not valid', 'Link not valid', '<p>We could not find a subscriber matching this link.</p>') };
+		const res = await (opts.fetchImpl ?? fetch)(`${opts.apiBase.replace(/\/+$/, '')}/v1/shop/newsletter/legacy/${action}/${opts.uuid}`, {
+			method: 'POST',
+			// The pin wins, exactly as `storeResolutionHeaders()` does for every other storefront call.
+			headers: opts.storePin ? { 'x-store-slug': opts.storePin } : { 'x-forwarded-host': host },
+			signal: AbortSignal.timeout(TIMEOUT_MS),
+		});
+		if (res.status === 404) return invalid();
+		if (!res.ok) throw new Error(`API ${res.status}`);
+		const body = (await res.json()) as { result?: LegacyApiResult; email?: string };
+		if (typeof body.email !== 'string' || !body.result) throw new Error('unexpected API response');
+		const email = `<strong>${esc(body.email)}</strong>`;
+		switch (body.result) {
+			case 'confirmed':
+			case 'already_confirmed':
+				return { status: 200, html: page('Newsletter confirmed', body.result === 'already_confirmed' ? "You're already in" : 'Subscription confirmed', `<p>${email} is confirmed on our newsletter.</p>`) };
+			case 'unsubscribed':
+			case 'already_unsubscribed':
+				return {
+					status: 200,
+					html: page('Unsubscribed', action === 'confirm' ? 'Not subscribed' : "You're unsubscribed",
+						action === 'confirm'
+							? `<p>${email} has unsubscribed from our marketing list. Sign up again from our website to resubscribe.</p>`
+							: `<p>${email} is no longer on the marketing list. You will still receive transactional emails such as order confirmations.</p>`),
+				};
+			default:
+				throw new Error('unexpected API result');
 		}
-		const email = `<strong>${esc(sub.email)}</strong>`;
-		if (action === 'confirm') {
-			if (sub.listStatus !== 'confirmed') await client.confirm(sub.id);
-			return { status: 200, html: page('Newsletter confirmed', sub.listStatus === 'confirmed' ? "You're already in" : 'Subscription confirmed', `<p>${email} is confirmed on our${who} newsletter.</p>`) };
-		}
-		if (sub.listStatus !== 'unsubscribed' && sub.listStatus !== 'not_subscribed') await client.unsubscribe(sub.id);
-		return {
-			status: 200,
-			html: page('Unsubscribed', "You're unsubscribed", `<p>${email} is no longer on the${who} marketing list. You will still receive transactional emails such as order confirmations.</p>`),
-		};
 	} catch (err) {
-		console.error(`[newsletter/${action}] listmonk error:`, err instanceof Error ? err.message : err);
+		console.error(`[newsletter/${action}] newsletter API error:`, err instanceof Error ? err.message : err);
 		return { status: 502, html: page('Temporarily unavailable', 'Temporarily unavailable', '<p>Our newsletter system is unreachable. Please try again in a minute.</p>') };
 	}
 }

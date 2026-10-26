@@ -1,80 +1,60 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleListmonkLink, isSameOriginPost, newsletterRequestHost, normalizeHost, renderListmonkConfirmPage, resolveListmonkConfig } from './listmonk.server';
+import { handleListmonkLink, isSameOriginPost, newsletterRequestHost, normalizeHost, renderListmonkConfirmPage } from './listmonk.server';
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
-const STORES = JSON.stringify({
-	'a.example': { baseUrl: 'http://listmonk-a:9000/', user: 'ua', token: 'secret-a', listId: 7, brandName: 'Store A' },
-	'b.example': { baseUrl: 'http://listmonk-b:9000', user: 'ub', token: 'secret-b', listId: 9 },
-});
-const env = { LISTMONK_STORES: STORES };
+const API = 'http://api.internal:3300';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const subscriber = (status: 'confirmed' | 'unconfirmed' | 'unsubscribed' | null, listId = 7) => ({
-	data: { results: [{ id: 42, uuid: UUID, email: 'jo@x.test', lists: status ? [{ id: listId, subscription_status: status }] : [] }] },
-});
+const api = (status: number, body: unknown) => vi.fn(async (_u: string, _i?: RequestInit) => json(status, body));
+const link = (action: 'confirm' | 'unsubscribe', fetchImpl: ReturnType<typeof api>, extra: Record<string, unknown> = {}) =>
+	handleListmonkLink(action, { host: 'a.example', uuid: UUID, apiBase: API, fetchImpl: fetchImpl as unknown as typeof fetch, ...extra });
 
-describe('listmonk legacy links', () => {
-	it('not configured: 404 and nothing is contacted (no map, unknown host, broken map)', async () => {
-		const fetchImpl = vi.fn();
-		for (const e of [{}, env, { LISTMONK_STORES: '{nope' }]) {
-			const host = e === env ? 'other.example' : 'a.example';
-			const r = await handleListmonkLink('confirm', { host, uuid: UUID, env: e, fetchImpl });
-			expect(r.status).toBe(404);
-		}
-		expect(fetchImpl).not.toHaveBeenCalled();
-	});
-
-	it("resolves per host: one store's endpoint and list are never used for another", async () => {
-		expect(resolveListmonkConfig('a.example:443', env)).toMatchObject({ baseUrl: 'http://listmonk-a:9000', listId: 7, rootUrl: 'https://a.example' });
-		expect(resolveListmonkConfig('B.example', env)).toMatchObject({ baseUrl: 'http://listmonk-b:9000', listId: 9 });
-		expect(resolveListmonkConfig('c.example', env)).toBeNull();
-		expect(resolveListmonkConfig('__proto__', env)).toBeNull();
-		const fetchImpl = vi.fn(async () => json(200, subscriber('confirmed', 9)));
-		await handleListmonkLink('confirm', { host: 'b.example', uuid: UUID, env, fetchImpl });
-		const [url] = fetchImpl.mock.calls[0] as unknown as [string];
-		expect(url.startsWith('http://listmonk-b:9000/api/subscribers')).toBe(true);
-	});
-
-	it('confirm: adds the subscriber to this store list as confirmed', async () => {
-		const fetchImpl = vi.fn(async (_u: string, init?: RequestInit) => (init?.method === 'PUT' ? json(200, { data: true }) : json(200, subscriber('unconfirmed'))));
-		const r = await handleListmonkLink('confirm', { host: 'a.example', uuid: UUID, env, fetchImpl: fetchImpl as unknown as typeof fetch });
+describe('listmonk legacy links (via the SellRight API)', () => {
+	it('posts to the API legacy endpoint with the validated host; no Listmonk credential or URL is involved', async () => {
+		const f = api(200, { result: 'confirmed', email: 'jo@x.test' });
+		const r = await link('confirm', f);
 		expect(r.status).toBe(200);
 		expect(r.html).toContain('jo@x.test');
-		const put = fetchImpl.mock.calls[1];
-		expect(JSON.parse(String(put[1]?.body))).toEqual({ ids: [42], action: 'add', target_list_ids: [7], status: 'confirmed' });
-		expect((put[1]?.headers as Record<string, string>).Authorization).toBe('Basic ' + Buffer.from('ua:secret-a').toString('base64'));
-		expect(r.html).not.toContain('secret-a');
+		const [url, init] = f.mock.calls[0]!;
+		expect(url).toBe(`${API}/v1/shop/newsletter/legacy/confirm/${UUID}`);
+		expect(init?.method).toBe('POST');
+		expect(init?.headers).toEqual({ 'x-forwarded-host': 'a.example' });
 	});
 
-	it('unsubscribe: removes from this list only, and is idempotent', async () => {
-		const fetchImpl = vi.fn(async (_u: string, init?: RequestInit) => (init?.method === 'PUT' ? json(200, {}) : json(200, subscriber('confirmed'))));
-		expect((await handleListmonkLink('unsubscribe', { host: 'a.example', uuid: UUID, env, fetchImpl: fetchImpl as unknown as typeof fetch })).status).toBe(200);
-		expect(JSON.parse(String(fetchImpl.mock.calls[1][1]?.body))).toMatchObject({ action: 'unsubscribe', target_list_ids: [7] });
-		const again = vi.fn(async () => json(200, subscriber('unsubscribed')));
-		const r = await handleListmonkLink('unsubscribe', { host: 'a.example', uuid: UUID, env, fetchImpl: again });
-		expect(r.status).toBe(200);
-		expect(again).toHaveBeenCalledTimes(1); // lookup only, no write
+	it('a store pin is sent as x-store-slug instead of the host', async () => {
+		const f = api(200, { result: 'unsubscribed', email: 'jo@x.test' });
+		await link('unsubscribe', f, { storePin: 'store-a', apiBase: API + '/' });
+		expect(f.mock.calls[0]![0]).toBe(`${API}/v1/shop/newsletter/legacy/unsubscribe/${UUID}`);
+		expect(f.mock.calls[0]![1]?.headers).toEqual({ 'x-store-slug': 'store-a' });
 	});
 
-	it('malformed or unknown id: 404', async () => {
-		const none = vi.fn(async () => json(200, { data: { results: [] } }));
-		expect((await handleListmonkLink('confirm', { host: 'a.example', uuid: 'not-a-uuid', env, fetchImpl: none })).status).toBe(404);
-		expect(none).not.toHaveBeenCalled();
-		expect((await handleListmonkLink('confirm', { host: 'a.example', uuid: UUID, env, fetchImpl: none })).status).toBe(404);
+	it('renders each API outcome and escapes the address', async () => {
+		expect((await link('confirm', api(200, { result: 'already_confirmed', email: 'jo@x.test' }))).html).toContain('You&#39;re already in');
+		expect((await link('confirm', api(200, { result: 'already_unsubscribed', email: 'jo@x.test' }))).html).toContain('Sign up again');
+		const un = await link('unsubscribe', api(200, { result: 'unsubscribed', email: 'a<b>@x.test' }));
+		expect(un.html).toContain('You&#39;re unsubscribed');
+		expect(un.html).toContain('a&lt;b&gt;@x.test');
 	});
 
-	it('upstream failure: 502 without leaking the credential', async () => {
+	it('unusable host, malformed id or an API 404: 404, and the API is not asked for the first two', async () => {
+		const f = api(200, { result: 'confirmed', email: 'jo@x.test' });
+		expect((await link('confirm', f, { host: '' })).status).toBe(404);
+		expect((await link('confirm', f, { uuid: 'not-a-uuid' })).status).toBe(404);
+		expect(f).not.toHaveBeenCalled();
+		expect((await link('confirm', api(404, { error: {} }))).status).toBe(404);
+	});
+
+	it('API failure, bad payload or network error: 502', async () => {
 		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-		for (const fetchImpl of [vi.fn(async () => json(500, {})), vi.fn(async () => { throw new Error('ECONNREFUSED'); })]) {
-			const r = await handleListmonkLink('unsubscribe', { host: 'a.example', uuid: UUID, env, fetchImpl: fetchImpl as unknown as typeof fetch });
-			expect(r.status).toBe(502);
-			expect(r.html).not.toContain('secret-a');
-		}
+		expect((await link('unsubscribe', api(502, {}))).status).toBe(502);
+		expect((await link('unsubscribe', api(200, { nope: true }))).status).toBe(502);
+		const down = vi.fn(async () => { throw new Error('ECONNREFUSED'); });
+		expect((await link('unsubscribe', down as unknown as ReturnType<typeof api>)).status).toBe(502);
 		spy.mockRestore();
 	});
 });
 
-describe('listmonk host validation, confirmation page and pin', () => {
+describe('listmonk host validation and confirmation page', () => {
 	it('uses the connection Host unless a trusted proxy is declared; never a lone X-Forwarded-Host', () => {
 		const h = { host: 'a.example:4100', forwardedHost: 'b.example' };
 		expect(newsletterRequestHost(h, {})).toBe('a.example');
@@ -86,26 +66,15 @@ describe('listmonk host validation, confirmation page and pin', () => {
 	});
 
 	it('rejects a host with unusable characters', () => {
-		for (const bad of ['a.example/evil', 'a b', '[::1]', '-a.example', 'a.example\n', '__proto__']) expect(normalizeHost(bad)).toBe('');
+		for (const bad of ['a.example/evil', 'a b', '[::1]', '-a.example', 'a.example\n', '__proto__x_']) expect(normalizeHost(bad)).toBe('');
 	});
 
-	it('a pinned deployment serves only the entry that declares the pinned store', () => {
-		const pinned = { LISTMONK_STORES: JSON.stringify({ 'a.example': { baseUrl: 'http://l:9000', user: 'u', token: 't', listId: 1, storeSlug: 'store-a' }, 'b.example': { baseUrl: 'http://l:9000', user: 'u', token: 't', listId: 2 } }) };
-		expect(resolveListmonkConfig('a.example', pinned, 'store-a')).toMatchObject({ listId: 1 });
-		expect(resolveListmonkConfig('a.example', pinned, 'other')).toBeNull();
-		expect(resolveListmonkConfig('b.example', pinned, 'store-a')).toBeNull();
-		expect(resolveListmonkConfig('b.example', pinned, '')).toMatchObject({ listId: 2 }); // no pin: unchanged
-		expect(resolveListmonkConfig('a.example', { ...pinned, VITE_SELLRIGHT_STORE_SLUG: 'other' })).toBeNull(); // pin read from env too
-	});
-
-	it('GET page: a form that POSTs, no upstream call; 404 for an unconfigured host or malformed id', () => {
-		const r = renderListmonkConfirmPage('unsubscribe', { host: 'a.example', uuid: UUID, env });
+	it('GET page: a form that POSTs, no upstream call; 404 for a malformed id', () => {
+		const r = renderListmonkConfirmPage('unsubscribe', { uuid: UUID });
 		expect(r.status).toBe(200);
 		expect(r.html).toContain(`<form method="post" action="/newsletter/unsubscribe/${UUID}">`);
-		expect(r.html).not.toContain('jo@x.test');
-		expect(renderListmonkConfirmPage('confirm', { host: 'a.example', uuid: UUID, env }).html).toContain(`action="/newsletter/confirm/${UUID}"`);
-		expect(renderListmonkConfirmPage('confirm', { host: 'c.example', uuid: UUID, env }).status).toBe(404);
-		expect(renderListmonkConfirmPage('confirm', { host: 'a.example', uuid: 'x"><script>', env }).status).toBe(404);
+		expect(renderListmonkConfirmPage('confirm', { uuid: UUID }).html).toContain(`action="/newsletter/confirm/${UUID}"`);
+		expect(renderListmonkConfirmPage('confirm', { uuid: 'x"><script>' }).status).toBe(404);
 	});
 
 	it('same-origin POST check fails closed', () => {

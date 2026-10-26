@@ -5,7 +5,10 @@
  * them to the store's configured Listmonk instance. Mirrors the email/webhook
  * outbox pattern (REL-4 / WP1.7) — the signup request path persists locally,
  * the scheduler owns the outbound push with retry. Pending addresses NEVER
- * reach the mailing list: the claim filter is `status='confirmed'`.
+ * reach the mailing list: the claim filter is `status='confirmed'`. Only the
+ * kinds in LISTMONK_SYNC_KINDS are ever claimed: `kind='waitlist'` rows are
+ * back-in-stock requests (and imported the previous platform waitlist signups), consent for
+ * restock mail only, and must never be enrolled in the marketing list.
  *
  * The Listmonk URL is admin-supplied config (not hardcoded), so the fetch
  * MUST go through `safeOutboundFetch` — the same SSRF guard admin-marketing.ts
@@ -38,6 +41,13 @@ import { withRequestDeadline } from '../security/request-deadline.js';
 import { normalizeEmail } from '../auth/email.js';
 
 const DEFAULT_BATCH_LIMIT = 200;
+
+/**
+ * Allowlist, not `kind <> 'waitlist'`: a kind added later stays out of the
+ * marketing list until someone decides it belongs. `newsletter` = explicit
+ * signup, `order` = paid-order enrollment (enrollOnPaidOrder below).
+ */
+export const LISTMONK_SYNC_KINDS = ['newsletter', 'order'] as const;
 
 /**
  * Paid-order enrollment (DD parity — listmonk.event-handler.ts enrolled
@@ -78,9 +88,9 @@ export async function enrollOnPaidOrder(
   return r.rows.length > 0;
 }
 
-interface ListmonkCfg { url: string; apiUser: string; apiToken: string; listId?: number; }
+export interface ListmonkCfg { url: string; apiUser: string; apiToken: string; listId?: number; }
 
-async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
+export async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
   const [row] = await withStore(storeId, async (tx) =>
     tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1),
   );
@@ -208,6 +218,7 @@ async function listmonkSyncPass(opts: { limit?: number; log?: (m: string) => voi
         sql`SELECT id, email, name, kind, topic
             FROM subscriber
             WHERE status = 'confirmed' AND listmonk_synced_at IS NULL
+              AND kind IN (${sql.join(LISTMONK_SYNC_KINDS.map((k) => sql`${k}`), sql`, `)})
             ORDER BY created_at
             LIMIT ${limit}
             FOR UPDATE SKIP LOCKED`,

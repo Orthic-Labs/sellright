@@ -3,12 +3,9 @@ import * as confirmRoute from './confirm/[subscriber]/index';
 import * as unsubscribeRoute from './unsubscribe/[subscriber]/index';
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
-const entry = (name: string, extra: Record<string, unknown> = {}) => ({ baseUrl: `http://listmonk-${name}:9000`, user: 'u', token: `secret-${name}`, listId: 7, brandName: `Store ${name.toUpperCase()}`, ...extra });
-const stores = (extra: Record<string, Record<string, unknown>> = {}) => JSON.stringify({ 'a.example': entry('a', extra.a), 'b.example': entry('b', extra.b) });
-
-const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-const upstream = vi.fn(async (_url: string, init?: RequestInit) =>
-	init?.method === 'PUT' ? json({ data: true }) : json({ data: { results: [{ id: 42, uuid: UUID, email: 'jo@x.test', lists: [{ id: 7, subscription_status: 'confirmed' }] }] } }));
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+// The SellRight API (not Listmonk) is the only upstream: it answers the legacy-link POST.
+const upstream = vi.fn(async (_url: string, _init?: RequestInit) => json(200, { result: 'confirmed', email: 'jo@x.test' }));
 
 type Out = { status?: number; html?: string; noStore?: boolean };
 async function call(handler: unknown, headers: Record<string, string>, method: 'GET' | 'POST' = 'GET'): Promise<Out> {
@@ -29,7 +26,9 @@ describe.each([
 	beforeEach(() => {
 		upstream.mockClear();
 		vi.stubGlobal('fetch', upstream);
-		vi.stubEnv('LISTMONK_STORES', stores());
+		// No LISTMONK_STORES anywhere: the links must work from the API's store config alone.
+		vi.stubEnv('LISTMONK_STORES', '');
+		vi.stubEnv('SELLRIGHT_API_URL', 'http://api.internal:3300/');
 		vi.stubEnv('SELLRIGHT_TRUST_FORWARDED_HOST', '');
 		vi.stubEnv('VITE_SELLRIGHT_STORE_SLUG', '');
 	});
@@ -46,41 +45,48 @@ describe.each([
 		expect(upstream).not.toHaveBeenCalled();
 	});
 
-	it('POST performs the action upstream (the store list only) and is idempotent', async () => {
+	it('POST asks the API to apply the action for the request host, with no Listmonk env needed', async () => {
+		upstream.mockResolvedValueOnce(json(200, { result: action === 'confirm' ? 'confirmed' : 'unsubscribed', email: 'jo@x.test' }));
 		const r = await call(route.onPost, { host: 'a.example', origin: 'https://a.example' }, 'POST');
 		expect(r.status).toBe(200);
-		const methods = upstream.mock.calls.map((c) => c[1]?.method ?? 'GET');
-		// A subscriber already confirmed / still subscribed gets lookup (+ a PUT only when the state has to change).
-		expect(methods[0]).toBe('GET');
-		expect(methods.filter((m) => m === 'PUT').length).toBe(action === 'unsubscribe' ? 1 : 0);
+		expect(r.html).toContain('jo@x.test');
+		expect(upstream).toHaveBeenCalledTimes(1);
+		const [url, init] = upstream.mock.calls[0]!;
+		expect(url).toBe(`http://api.internal:3300/v1/shop/newsletter/legacy/${action}/${UUID}`);
+		expect(init?.method).toBe('POST');
+		expect(init?.headers).toEqual({ 'x-forwarded-host': 'a.example' });
 	});
 
 	it('Host a + forged X-Forwarded-Host b without a trusted proxy uses a, never b', async () => {
-		const g = await call(route.onGet, { host: 'a.example', 'x-forwarded-host': 'b.example' });
-		expect(g.html).toContain('Store A');
-		expect(g.html).not.toContain('Store B');
 		await call(route.onPost, { host: 'a.example', 'x-forwarded-host': 'b.example', origin: 'https://a.example' }, 'POST');
-		expect(upstream).toHaveBeenCalled();
-		for (const [url, init] of upstream.mock.calls) {
-			expect(url.startsWith('http://listmonk-a:9000/')).toBe(true);
-			expect(String((init?.headers as Record<string, string>).Authorization)).toBe('Basic ' + Buffer.from('u:secret-a').toString('base64'));
-		}
+		expect(upstream.mock.calls[0]![1]?.headers).toEqual({ 'x-forwarded-host': 'a.example' });
 	});
 
 	it('a trusted proxy (SELLRIGHT_TRUST_FORWARDED_HOST=1) selects by X-Forwarded-Host', async () => {
 		vi.stubEnv('SELLRIGHT_TRUST_FORWARDED_HOST', '1');
-		const g = await call(route.onGet, { host: 'internal.invalid', 'x-forwarded-host': 'b.example' });
-		expect(g.status).toBe(200);
-		expect(g.html).toContain('Store B');
+		await call(route.onPost, { host: 'internal.invalid', 'x-forwarded-host': 'b.example', origin: 'https://b.example' }, 'POST');
+		expect(upstream.mock.calls[0]![1]?.headers).toEqual({ 'x-forwarded-host': 'b.example' });
 	});
 
-	it('an unknown host is 404 with no upstream call, on GET and POST, even with a forged X-Forwarded-Host', async () => {
-		const cases: Array<Record<string, string>> = [{ host: 'c.example' }, { host: 'c.example', 'x-forwarded-host': 'a.example' }, { host: 'internal.invalid', 'x-forwarded-host': 'a.example' }];
-		for (const headers of cases) {
-			expect((await call(route.onGet, headers)).status).toBe(404);
-			expect((await call(route.onPost, { ...headers, origin: `https://${headers.host}` }, 'POST')).status).toBe(404);
-		}
-		expect(upstream).not.toHaveBeenCalled();
+	it('a pinned deployment sends its store slug instead of a host', async () => {
+		vi.stubEnv('VITE_SELLRIGHT_STORE_SLUG', 'store-a');
+		await call(route.onPost, { host: 'a.example', origin: 'https://a.example' }, 'POST');
+		expect(upstream.mock.calls[0]![1]?.headers).toEqual({ 'x-store-slug': 'store-a' });
+	});
+
+	it('a store without a Listmonk connection (API 404) shows a not-valid page', async () => {
+		upstream.mockResolvedValueOnce(json(404, { error: { code: 'NOT_FOUND' } }));
+		const r = await call(route.onPost, { host: 'c.example', origin: 'https://c.example' }, 'POST');
+		expect(r.status).toBe(404);
+	});
+
+	it('API or upstream failure is a 502 page', async () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		upstream.mockResolvedValueOnce(json(502, {}));
+		expect((await call(route.onPost, { host: 'a.example', origin: 'https://a.example' }, 'POST')).status).toBe(502);
+		upstream.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+		expect((await call(route.onPost, { host: 'a.example', origin: 'https://a.example' }, 'POST')).status).toBe(502);
+		spy.mockRestore();
 	});
 
 	it('POST without a same-origin Origin is refused and contacts nothing', async () => {
@@ -88,14 +94,6 @@ describe.each([
 			const r = await call(route.onPost, origin ? { host: 'a.example', origin } : { host: 'a.example' }, 'POST');
 			expect(r.status).toBe(403);
 		}
-		expect(upstream).not.toHaveBeenCalled();
-	});
-
-	it('a pinned deployment serves only the entry for the pinned store', async () => {
-		vi.stubEnv('VITE_SELLRIGHT_STORE_SLUG', 'store-a');
-		vi.stubEnv('LISTMONK_STORES', stores({ a: { storeSlug: 'store-a' } }));
-		expect((await call(route.onGet, { host: 'a.example' })).status).toBe(200);
-		expect((await call(route.onGet, { host: 'b.example' })).status).toBe(404);
 		expect(upstream).not.toHaveBeenCalled();
 	});
 });

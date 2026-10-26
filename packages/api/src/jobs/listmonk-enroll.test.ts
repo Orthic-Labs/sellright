@@ -142,6 +142,27 @@ describe.skipIf(!isTestDb)('enrollOnPaidOrder + listmonkSync', () => {
     expect((await subscriberRows()).filter(row => row.synced !== null)).toHaveLength(1);
   });
 
+  it('never syncs waitlist (restock) rows, imported or live, even when confirmed', async () => {
+    await seedStore();
+    await pool.query(`INSERT INTO subscriber (store_id, email, kind, topic, status, source, signup_group) VALUES
+      ($1, 'imported@x.test', 'waitlist', 'restock:v1', 'confirmed', 'import', gen_random_uuid()::text),
+      ($1, 'imported@x.test', 'waitlist', 'restock:v2', 'confirmed', 'import', gen_random_uuid()::text),
+      ($1, 'live@x.test', 'waitlist', 'restock:v1', 'confirmed', 'storefront', gen_random_uuid()::text),
+      ($1, 'news@x.test', 'newsletter', '', 'confirmed', 'storefront', NULL::text)`, [STORE]);
+    expect(await listmonkSync({ log: () => {} })).toMatchObject({ synced: 1, failed: 0 });
+    // Only the newsletter address reached Listmonk.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0]! as unknown as [string, { body: string }];
+    expect(JSON.parse(init.body)).toMatchObject({ email: 'news@x.test' });
+    const rows = await subscriberRows();
+    expect(rows.filter((r) => r.kind === 'waitlist').every((r) => r.synced === null)).toBe(true);
+    expect(rows.filter((r) => r.kind === 'newsletter').every((r) => r.synced !== null)).toBe(true);
+    // A later pass still leaves them alone.
+    fetchMock.mockClear();
+    expect(await listmonkSync({ log: () => {} })).toMatchObject({ synced: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, 0, -1, 1.5])('keeps rows queued with a diagnostic when listId is %s', async (listId) => {
     await seedStore();
     await pool.query('UPDATE store SET config = $2::jsonb WHERE id = $1', [STORE, JSON.stringify({ listmonk: { url: 'https://listmonk.example.com', apiUser: 'u', apiToken: 't', listId } })]);

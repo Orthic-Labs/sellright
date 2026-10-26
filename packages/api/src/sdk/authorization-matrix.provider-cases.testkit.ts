@@ -242,7 +242,21 @@ export function createProviderCases(fixture: Fixture, transport: AuthorizationTr
       } };
     } },
   ];
-  return specs.map(spec => ({ key: spec.key, contract: 'admin' as const, cells: Object.fromEntries(PRINCIPALS.map(principal => {
+  // #391 public legacy Listmonk link: admin/service headers are inert; the configured list is the only effect.
+  const legacyLink: MatrixCase = { key: 'POST /v1/shop/newsletter/legacy/{action}/{uuid}', contract: 'public', cells: Object.fromEntries(PRINCIPALS.map(principal => [principal, {
+    effect: 'allow', status: 200, async prepare() {
+      await source.patchConfig({ listmonk: source.listmonk });
+      const uuid = randomUUID(), start = transport.calls.length, before = await config();
+      return { url: '/v1/shop/newsletter/legacy/confirm/' + uuid, init: { method: 'POST', headers: fixture.requestHeaders[principal] }, async verify(response: Response, proof: MatrixProof) {
+        proof.equal(await json(response), { result: 'confirmed', email: 'legacy-' + uuid + '@matrix.invalid' }, 'legacy link confirms the synthetic list member');
+        const calls = captured(start);
+        proof.equal(calls.length, 2, 'one lookup and one list update', 'state');
+        lmCall(calls[0]!, 'GET', '/api/subscribers?query=' + encodeURIComponent("subscribers.uuid = '" + uuid + "'") + '&per_page=1', null, proof);
+        lmCall(calls[1]!, 'PUT', '/api/subscribers/lists', { ids: [8600], target_list_ids: [P.listId], action: 'add', status: 'confirmed' }, proof);
+        proof.equal(await config(), before, 'public link never changes store settings', 'state');
+      } };
+    } } satisfies MatrixCell])) as Record<MatrixPrincipal, MatrixCell> };
+  return [legacyLink, ...specs.map(spec => ({ key: spec.key, contract: 'admin' as const, cells: Object.fromEntries(PRINCIPALS.map(principal => {
     const status = principal === 'release_service' || principal === 'cache_token' ? 401
       : principal === 'foreign_store' || (principal === 'agent' && spec.agentGroup)
         || (spec.access === 'manage' && !['owner', 'manager'].includes(principal)) || (spec.access === 'write' && principal === 'read_only') ? 403 : 200;
@@ -272,7 +286,7 @@ export function createProviderCases(fixture: Fixture, transport: AuthorizationTr
           } };
       } };
     return [principal, cell];
-  })) as Record<MatrixPrincipal, MatrixCell> }));
+  })) as Record<MatrixPrincipal, MatrixCell> }))];
 }
 
 /** Shared customer lane uses configured Stripe transport without duplicating its eight denial cells. */

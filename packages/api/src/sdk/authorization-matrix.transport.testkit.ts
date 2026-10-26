@@ -116,6 +116,15 @@ export function installAuthorizationTransport(calls: unknown[], options: Authori
       if (method === 'GET' && url.pathname === '/api/lists' && url.search === '?per_page=100') return { data: { results: [{ id: MATRIX_PROVIDER.listId, name: MATRIX_PROVIDER.listName, subscriber_count: 7, type: 'public' }] } };
       if (method === 'GET' && url.pathname === '/api/lists/' + MATRIX_PROVIDER.listId) return { data: { id: MATRIX_PROVIDER.listId } };
       if (method === 'POST' && url.pathname === '/api/subscribers') return { data: { id: 8500 } };
+      // #391 legacy confirm/unsubscribe links: any queried uuid is a synthetic unconfirmed member of the configured list.
+      const legacyUuid = /^subscribers\.uuid = '([0-9a-f-]{36})'$/.exec(url.searchParams.get('query') ?? '')?.[1];
+      if (method === 'GET' && url.pathname === '/api/subscribers' && legacyUuid && url.searchParams.get('per_page') === '1') {
+        const response = { data: { results: [{ id: 8600, uuid: legacyUuid, email: 'legacy-' + legacyUuid + '@matrix.invalid', status: 'enabled',
+          lists: [{ id: MATRIX_PROVIDER.listId, subscription_status: 'unconfirmed' }] }] } };
+        (calls.at(-1) as MatrixTransportCall).response = structuredClone(response);
+        return response;
+      }
+      if (method === 'PUT' && url.pathname === '/api/subscribers/lists') return { data: true };
       if (method === 'POST' && url.pathname === '/api/campaigns') {
         const response = { data: { id: ++campaignId } };
         (calls.at(-1) as MatrixTransportCall).response = structuredClone(response);
