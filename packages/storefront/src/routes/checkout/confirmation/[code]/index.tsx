@@ -64,7 +64,7 @@ const ConfirmationPage = component$(() => {
 			if (isOrderSettled(order.state)) {
 				// Plan v3.1 §3.5: purchase, once per order code (every settled checkout path lands here). The sessionStorage key holds
 				// analytics state only (never stock); GA4 also dedupes by transaction_id = the order code.
-				trackPurchaseOnce(order);
+				void trackPurchaseOnce(order);
 				// Free the cart slot — but only if the cookie's cart is the one that became THIS order: an old
 				// confirmation page opened while a newer cart exists must leave that cart alone. The retirement
 				// verifies the order server-side under the cart lock and announces the cart-updated event.

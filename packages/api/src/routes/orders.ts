@@ -80,6 +80,8 @@ orders.openapi(
               amountDue: z.number().int().nullable(),
               balanceChange: z.object({ previousGrandTotal: z.number().int().nullable(), changes: z.array(z.string()), editedAt: z.string().nullable() }).nullable(),
               loyalty: z.object({ earnPoints: z.number().int(), redeemPoints: z.number().int(), pointsDiscount: z.number().int() }).nullable(),
+              /** True when every settled gateway payment on the order ran in test mode (a test purchase): the storefront then reports no purchase conversion. False with no settled gateway payment. */
+              testMode: z.boolean(),
             }),
           },
         },
@@ -149,6 +151,9 @@ orders.openapi(
       const promotionCode = await loadOrderPromotionCode(tx, o.promotionId);
       const couponCodes = await loadOrderCouponCodes(tx, o);
       const { status, paymentStatus, fulfillmentStatus } = await loadOrderStatusFacts(tx, o);
+      const settledModes = await tx.selectDistinct({ mode: s.paymentAttempt.mode }).from(s.paymentAttempt)
+        .where(and(eq(s.paymentAttempt.orderId, o.id), eq(s.paymentAttempt.status, 'settled')));
+      const testMode = settledModes.length > 0 && settledModes.every((m) => m.mode === 'test');
       const balanceState = o.state === 'Paid' || o.state === 'PartiallyRefunded';
       const due = importedFinancialReconciliationRequired(o.metadata) ? null : balanceState ? Math.max(0, await amountDueForOrder(tx, st.id, o.id, o.grandTotal)) : 0;
       let balanceChange: ReturnType<typeof summarizeEdit> | null = null;
@@ -163,7 +168,7 @@ orders.openapi(
         shippingMethodName: o.shippingMethodName, subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
         shippingAddress: o.shippingAddress ?? null, customerEmail, contactEmail, promotionCode, couponCodes,
-        payments, fulfillments, lines, amountDue: due, balanceChange,
+        payments, fulfillments, lines, amountDue: due, balanceChange, testMode,
         loyalty: (() => { const l = orderLoyaltySnapshot(o.metadata); return l ? { earnPoints: l.earnPoints, redeemPoints: l.redeemPoints, pointsDiscount: l.pointsDiscount } : null; })(),
       };
     });

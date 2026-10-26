@@ -21874,6 +21874,7 @@ export interface paths {
                             status: "open" | "completed" | "cancelled" | "archived";
                             subtotal: number;
                             taxTotal: number;
+                            testMode: boolean;
                         };
                     };
                 };

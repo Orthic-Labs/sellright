@@ -1,7 +1,7 @@
 // Plan v3.1 §3.5 (brand views PR2): the server end of the storefront's ecommerce events (`/api/analytics/events/`, and a brand's
 // alias routes.json operational.analyticsPath, e.g. Rotten's /api/analytics/performance/). Ported from Rotten's endpoint without
 // its ad-pixel forwarding (no Meta CAPI: no ad pixels). It accepts view_item, add_to_cart and begin_checkout; `purchase` is refused
-// (the API's own conversion plugin owns server purchase, and a browser copy would double count or be forgeable). A GA4 Measurement
+// (purchase is pushed to the dataLayer only, from the confirmation page of a paid live order; a beaconed copy would double count or be forgeable). A GA4 Measurement
 // Protocol copy is sent only when the browser's tag manager did not deliver the event and the store configured GA4_MEASUREMENT_ID
 // and GA4_API_SECRET. Every response is private, no-store.
 import type { RequestHandler } from '@qwik.dev/router';

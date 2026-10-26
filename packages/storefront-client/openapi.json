@@ -12355,6 +12355,9 @@
                         "redeemPoints",
                         "pointsDiscount"
                       ]
+                    },
+                    "testMode": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -12380,7 +12383,8 @@
                     "lines",
                     "amountDue",
                     "balanceChange",
-                    "loyalty"
+                    "loyalty",
+                    "testMode"
                   ]
                 }
               }

@@ -57,6 +57,8 @@ export interface PurchaseEvent {
 	itemCount: number;
 	/** At most 20 order lines (minor units), for the dataLayer purchase. */
 	items?: AnalyticsLine[];
+	/** SHA-256 hex of the normalised email / E.164 phone (never raw), for ad platforms' enhanced matching. */
+	userData?: { sha256EmailAddress?: string; sha256PhoneNumber?: string };
 }
 
 export type AnalyticsEvent = ViewItemEvent | AddToCartEvent | BeginCheckoutEvent | PurchaseEvent;
