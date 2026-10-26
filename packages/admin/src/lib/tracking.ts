@@ -13,7 +13,13 @@ export interface ParseInfo {
   titleSkipped: boolean; header: string[] | null;
   columns: { order: string; tracking: string; carrier: string | null };
   skipped: { blank: number; amazon: number; duplicate: number };
+  skippedRows: { line: number; code: string; tracking: string; reason: 'blank' | 'amazon' | 'duplicate' }[];
 }
+export const SKIP_REASON: Record<ParseInfo['skippedRows'][number]['reason'], string> = {
+  blank: 'Skipped: no order or tracking number',
+  amazon: 'Skipped: Amazon order',
+  duplicate: 'Skipped: repeated row',
+};
 export interface PreviewResponse { rows: PreviewRow[]; summary: { total: number; importable: number; byStatus: Record<string, number> }; parse?: ParseInfo | null }
 /** One plain sentence: which columns were used and what was left out. */
 export function parseSummary(p: ParseInfo): string {

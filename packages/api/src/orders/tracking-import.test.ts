@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { classifyTrackingRow, levenshtein, normalizeOrderCode, parseTrackingCsv, parseTrackingFile, precheckRow, resolveCarrier, suggestOrderCode, type OrderFacts } from './tracking-import.js';
 import { inferCarrier } from '../routes/admin-order-utils.js';
+import { readFileSync } from 'node:fs';
 
 const facts = (over: Partial<OrderFacts> = {}): OrderFacts => ({
   state: 'Paid', deleted: false,
@@ -100,6 +101,11 @@ describe('parseTrackingFile — Avid/VeraCore export as it comes (#376)', () => 
       header: ['Owner', 'OrderId', 'Order Date', 'ShipTo Name', 'shpack_trackingid'],
       columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null },
       skipped: { blank: 1, amazon: 1, duplicate: 1 },
+      skippedRows: [
+        { line: 4, code: 'DD30331', tracking: '9400111899223817200001', reason: 'duplicate' },
+        { line: 5, code: '111-6519371-0093803', tracking: '1Z999AA10123456784', reason: 'amazon' },
+        { line: 6, code: 'DD30360', tracking: '', reason: 'blank' },
+      ],
     });
   });
 
@@ -132,5 +138,31 @@ describe('inferCarrier — previous-admin parity (#376)', () => {
     expect(inferCarrier('312345678901')).toBe('FedEx');
     expect(inferCarrier('312345678901234')).toBe('FedEx');
     expect(inferCarrier('1Z999AA10123456784')).toBe('UPS');
+  });
+});
+
+// #376: Adrian's real Avid "Product Shipment Datasheet" export (anonymised by Ads; 157 columns, CRLF). Lines 1-3 are the
+// file as exported (title, header, one Amazon order); lines 4-6 add a DD order, its repeat and a blank tracking cell
+// built from the same row.
+const REAL = readFileSync(new URL('./__fixtures__/avid-shipment-datasheet.csv', import.meta.url), 'utf8');
+const REAL_AS_EXPORTED = REAL.split('\r\n').slice(0, 3).join('\r\n') + '\r\n';
+
+describe('parseTrackingFile — the real Avid export (#376)', () => {
+  it('as exported: title skipped, header read, the one row left out as an Amazon order, no garbage rows', () => {
+    const { rows, info } = parseTrackingFile(REAL_AS_EXPORTED);
+    expect(rows).toEqual([]);
+    expect(info.titleSkipped).toBe(true);
+    expect(info.header).toHaveLength(157);
+    expect(info.columns).toEqual({ order: 'OrderId', tracking: 'shpack_trackingid', carrier: null });
+    expect(info.skipped).toEqual({ blank: 0, amazon: 1, duplicate: 0 });
+    expect(info.skippedRows).toEqual([{ line: 3, code: '111-0237367-7778662', tracking: '9400150106151447202527', reason: 'amazon' }]);
+  });
+
+  it('with a DD order, its repeat and a blank tracking cell added', () => {
+    const { rows, info } = parseTrackingFile(REAL);
+    expect(rows).toEqual([{ code: 'DD30331', tracking: '9400111899223817200001', carrier: undefined }]);
+    expect(info.skipped).toEqual({ blank: 1, amazon: 1, duplicate: 1 });
+    expect(info.skippedRows.map((r) => [r.line, r.code, r.reason])).toEqual([[3, '111-0237367-7778662', 'amazon'], [5, 'DD30331', 'duplicate'], [6, 'DD30332', 'blank']]);
+    expect(inferCarrier(rows[0]!.tracking)).toBe('USPS');
   });
 });

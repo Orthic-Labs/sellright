@@ -115,6 +115,8 @@ export interface TrackingParseInfo {
   columns: { order: string; tracking: string; carrier: string | null };
   /** Data rows left out: no order or no tracking number, Amazon order ids, and repeats of the same order + tracking. */
   skipped: { blank: number; amazon: number; duplicate: number };
+  /** Each left-out row (first 200): its line in the file, what it held and why it was left out. */
+  skippedRows: Array<{ line: number; code: string; tracking: string; reason: 'blank' | 'amazon' | 'duplicate' }>;
 }
 
 // The previous admin importer's column names (the Damned order-tools tracking import), first match
@@ -182,16 +184,25 @@ export function parseTrackingFile(text: string): { rows: TrackingRowInput[]; inf
       ? { order: idx.code >= 0 ? header[idx.code]! : '(not found)', tracking: idx.tracking >= 0 ? header[idx.tracking]! : '(not found)', carrier: idx.carrier >= 0 ? header[idx.carrier]! : null }
       : { order: 'column 1', tracking: 'column 2', carrier: 'column 3' },
     skipped: { blank: 0, amazon: 0, duplicate: 0 },
+    skippedRows: [],
   };
+  const skip = (line: number, code: string, tracking: string, reason: 'blank' | 'amazon' | 'duplicate') => {
+    info.skipped[reason]++;
+    if (info.skippedRows.length < 200) info.skippedRows.push({ line, code, tracking, reason });
+  };
+  const firstDataLine = (header ? 1 : 0) + (titleSkipped ? 1 : 0) + 1;
   const rows: TrackingRowInput[] = [];
   const seen = new Set<string>();
-  for (const rec of body) {
+  for (let n = 0; n < body.length; n++) {
+    const rec = body[n]!;
+    // Record number in the file (blank lines are not counted; a quoted multi-line cell counts once).
+    const line = firstDataLine + n;
     const code = idx.code >= 0 ? (rec[idx.code] ?? '').trim() : '';
     const tracking = idx.tracking >= 0 ? (rec[idx.tracking] ?? '').trim() : '';
-    if (!code || !tracking) { info.skipped.blank++; continue; }
-    if (AMAZON_ORDER.test(code)) { info.skipped.amazon++; continue; }
+    if (!code || !tracking) { skip(line, code, tracking, 'blank'); continue; }
+    if (AMAZON_ORDER.test(code)) { skip(line, code, tracking, 'amazon'); continue; }
     const key = `${code.toUpperCase()}:${tracking}`;
-    if (seen.has(key)) { info.skipped.duplicate++; continue; }
+    if (seen.has(key)) { skip(line, code, tracking, 'duplicate'); continue; }
     seen.add(key);
     const carrier = idx.carrier >= 0 ? (rec[idx.carrier] ?? '').trim() : '';
     rows.push({ code, tracking, carrier: carrier || undefined });

@@ -335,6 +335,7 @@ const ParseInfoSchema = z.object({
   titleSkipped: z.boolean(), header: z.array(z.string()).nullable(),
   columns: z.object({ order: z.string(), tracking: z.string(), carrier: z.string().nullable() }),
   skipped: z.object({ blank: z.number().int(), amazon: z.number().int(), duplicate: z.number().int() }),
+  skippedRows: z.array(z.object({ line: z.number().int(), code: z.string(), tracking: z.string(), reason: z.enum(['blank', 'amazon', 'duplicate']) })),
 });
 
 const PlannedRowSchema = z.object({
@@ -353,7 +354,9 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { rows, info } = parsedBody(c.req.valid('json'));
-    if (!rows.length) throw new HttpError(400, info ? `no tracking rows found (order column: ${info.columns.order}, tracking column: ${info.columns.tracking}; skipped ${info.skipped.blank} without order or tracking, ${info.skipped.amazon} Amazon, ${info.skipped.duplicate} repeated)` : 'no rows found');
+    // A file whose rows were all left out (e.g. only Amazon orders) previews as 0 ready with the reasons; only a file
+    // with nothing in it at all, or pasted rows that are empty, is an error.
+    if (!rows.length && !(info && (info.skippedRows.length || info.header))) throw new HttpError(400, 'no rows found');
     if (rows.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
     const planned = await withStore(st.storeId, (tx) => planTrackingRows(tx, rows, false));
     return c.json({ rows: planned.map(publicRow), summary: summarize(planned), parse: info } as never, 200);

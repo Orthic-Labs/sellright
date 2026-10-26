@@ -21969,13 +21969,45 @@
                             "amazon",
                             "duplicate"
                           ]
+                        },
+                        "skippedRows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "line": {
+                                "type": "integer"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "tracking": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "blank",
+                                  "amazon",
+                                  "duplicate"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "line",
+                              "code",
+                              "tracking",
+                              "reason"
+                            ]
+                          }
                         }
                       },
                       "required": [
                         "titleSkipped",
                         "header",
                         "columns",
-                        "skipped"
+                        "skipped",
+                        "skippedRows"
                       ]
                     }
                   },

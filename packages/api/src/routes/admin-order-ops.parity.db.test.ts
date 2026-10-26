@@ -5,6 +5,7 @@
  * *_test database ONLY (wipes data).
  */
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
+import { readFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -314,13 +315,32 @@ describe('fulfilment parity with the previous admin (#376)', () => {
     const b = (await res.json()) as { rows: Array<{ code: string; status: string; carrier: string | null }>; parse: unknown };
     expect(b.rows.map((r) => [r.code, r.status, r.carrier])).toEqual([['DD30401', 'ready', 'USPS'], ['DD30402', 'ready', 'UPS']]);
     expect(b.parse).toEqual({ titleSkipped: true, header: ['Owner', 'OrderId', 'Order Date', 'shpack_trackingid'],
-      columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null }, skipped: { blank: 1, amazon: 1, duplicate: 1 } });
+      columns: { order: 'OrderId', tracking: 'shpack_trackingid', carrier: null }, skipped: { blank: 1, amazon: 1, duplicate: 1 },
+      skippedRows: [
+        { line: 4, code: 'DD30401', tracking: '9400111899223817200001', reason: 'duplicate' },
+        { line: 5, code: '111-6519371-0093803', tracking: '1Z999AA10123456784', reason: 'amazon' },
+        { line: 7, code: 'DD30403', tracking: '', reason: 'blank' },
+      ] });
   });
 
-  it('a file with no usable rows says which columns it read', async () => {
-    const res = await post('/v1/admin/import-tracking/preview', { csv: 'Some title\nOwner,OrderId,Note\nX,DD1,y' });
-    expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain('tracking column: (not found)');
+  it('a file whose rows were all left out previews as 0 ready with the reason per row (the real Avid sample: one Amazon order)', async () => {
+    const real = readFileSync(new URL('../orders/__fixtures__/avid-shipment-datasheet.csv', import.meta.url), 'utf8');
+    const res = await post('/v1/admin/import-tracking/preview', { csv: real.split('\r\n').slice(0, 3).join('\r\n') });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as { rows: unknown[]; summary: { importable: number }; parse: { titleSkipped: boolean; columns: unknown; skippedRows: unknown[] } };
+    expect(b.rows).toEqual([]);
+    expect(b.summary.importable).toBe(0);
+    expect(b.parse.titleSkipped).toBe(true);
+    expect(b.parse.columns).toEqual({ order: 'OrderId', tracking: 'shpack_trackingid', carrier: null });
+    expect(b.parse.skippedRows).toEqual([{ line: 3, code: '111-0237367-7778662', tracking: '9400150106151447202527', reason: 'amazon' }]);
+  });
+
+  it('the real Avid file with a DD order added: that order is ready (USPS)', async () => {
+    await seedOrder({ code: 'DD30331', lines: [A] });
+    const real = readFileSync(new URL('../orders/__fixtures__/avid-shipment-datasheet.csv', import.meta.url), 'utf8');
+    const b = (await (await post('/v1/admin/import-tracking/preview', { csv: real })).json()) as { rows: Array<{ code: string; status: string; carrier: string | null }>; parse: { skipped: unknown } };
+    expect(b.rows.map((r) => [r.code, r.status, r.carrier])).toEqual([['DD30331', 'ready', 'USPS']]);
+    expect(b.parse.skipped).toEqual({ blank: 1, amazon: 1, duplicate: 1 });
   });
 
   it('the open-orders feed filters by customer name as well as order number', async () => {

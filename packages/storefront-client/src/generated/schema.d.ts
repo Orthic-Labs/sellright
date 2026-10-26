@@ -4378,6 +4378,13 @@ export interface paths {
                                     blank: number;
                                     duplicate: number;
                                 };
+                                skippedRows: {
+                                    code: string;
+                                    line: number;
+                                    /** @enum {string} */
+                                    reason: "blank" | "amazon" | "duplicate";
+                                    tracking: string;
+                                }[];
                                 titleSkipped: boolean;
                             } | null;
                             rows: {

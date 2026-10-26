@@ -8,7 +8,7 @@ import { dateTime } from '../lib/format';
 import { PageHeader, Spinner, InlineAlert, Badge } from '../components/ui';
 import TrackingPreviewTable from '../components/TrackingPreviewTable';
 import { TRACKING_TEMPLATE, saveTextFile, toCsv } from '../lib/carrier';
-import { STATUS_LABEL, isImportable, type ImportResponse, type PreviewResponse, type PreviewRow, type RecentImport, parseSummary } from '../lib/tracking';
+import { STATUS_LABEL, isImportable, type ImportResponse, type PreviewResponse, type PreviewRow, type RecentImport, SKIP_REASON, parseSummary } from '../lib/tracking';
 
 const MAX_FILE_BYTES = 2_000_000;
 
@@ -98,6 +98,15 @@ export default function ImportTracking() {
           {preview && (
             <>
               {preview.parse && <p className="text-xs text-gray-600" aria-live="polite">{parseSummary(preview.parse)}</p>}
+              {preview.parse && preview.parse.skippedRows.length > 0 && (
+                <details className="text-xs text-gray-600" open={preview.rows.length === 0}>
+                  <summary className="cursor-pointer">{preview.parse.skippedRows.length} row{preview.parse.skippedRows.length === 1 ? '' : 's'} left out</summary>
+                  <ul className="mt-1 stack-y-0.5">{preview.parse.skippedRows.map((r) => (
+                    <li key={r.line}>Line {r.line} · <span className="font-mono">{r.code || '—'}</span>{r.tracking ? <> · <span className="font-mono">{r.tracking}</span></> : null} · {SKIP_REASON[r.reason]}</li>
+                  ))}</ul>
+                </details>
+              )}
+              {preview.rows.length === 0 && <InlineAlert tone="attention">Nothing to ship from this file: every row was left out (see above).</InlineAlert>}
               <div className="flex flex-wrap items-center gap-2" aria-live="polite">
                 <Badge value="ready" tone="positive" label={`${importable.length} ready`} />
                 {Object.entries(byStatus).filter(([s]) => !isImportable(s as PreviewRow['status'])).map(([s, n]) => <Badge key={s} value={s} tone={STATUS_LABEL[s as PreviewRow['status']].tone} label={`${n} ${STATUS_LABEL[s as PreviewRow['status']].label.toLowerCase()}`} />)}
