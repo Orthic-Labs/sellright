@@ -10,9 +10,11 @@ interface Promo {
   id: string; code: string | null; type: string; value: number; enabled: boolean;
   usedCount: number; usageLimit: number | null; perCustomerUsageLimit: number | null;
   startsAt?: string | null; endsAt?: string | null;
+  freeShipping?: boolean;
 }
 interface PromoDetail extends Promo {
   conditions: unknown;
+  priority?: number; exclusionGroup?: string | null; affiliateEmail?: string | null;
   usage: { orderCode: string; email: string | null; at: string }[];
 }
 interface ConditionArg { name: string; value: string }
@@ -22,6 +24,17 @@ interface ProductRow { id: string; name: string }
 interface Page<T> { items: T[]; total: number }
 
 export type ScopeKind = '' | 'collections' | 'products' | 'tags';
+
+/** Verification categories a `verified_customer` condition can require — the list from the Vendure
+ *  verified-customer.condition.ts (sheerid-plugin); the API matches them against the customer's active verifications. */
+export const VERIFIED_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'military', label: 'Military' }, { value: 'first_responder', label: 'First Responder' }, { value: 'teacher', label: 'Teacher' },
+  { value: 'student', label: 'Student' }, { value: 'medical', label: 'Medical' }, { value: 'senior', label: 'Senior' },
+];
+const SCOPE_CODES: Record<Exclude<ScopeKind, ''>, string> = {
+  collections: 'at_least_n_in_collections', products: 'at_least_n_products', tags: 'at_least_n_with_tags',
+};
+const LEGACY_FACET_CODE = 'at_least_n_with_facets';
 
 /** Reads the repo's existing condition shape (money/coupon.ts evaluateCoupon)
  *  back into simple form fields — no new condition vocabulary invented here,
@@ -48,14 +61,27 @@ export interface FormState {
   products: { id: string; name: string }[];
   tags: string[];
   /** Set when a saved discount still carries the retired
-   *  `at_least_n_with_facets` condition — shown as a warning in the form and
-   *  dropped on save (buildConditions only ever emits native codes). */
+   *  `at_least_n_with_facets` condition. Kept on save like any other condition
+   *  the form does not render (it fails closed at checkout) unless the merchant
+   *  ticks `dropLegacyFacet`. */
   legacyFacetCondition: boolean;
+  dropLegacyFacet?: boolean;
+  /** `verified_customer`: only customers with one of these active verifications qualify. */
+  verifiedRequired?: boolean;
+  verifiedCategories?: string[];
+  /** Conditions the form has no field for. Carried through every save untouched — dropping one would silently widen
+   *  who the discount applies to (#384). */
+  extraConditions?: unknown[];
+  freeShipping?: boolean;
+  priority?: string;
+  exclusionGroup?: string;
+  /** Binds the coupon to an affiliate (Vendure: an email as the promotion name). */
+  affiliateEmail?: string;
   enabled: boolean;
 }
 
 function emptyForm(): FormState {
-  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', scope: '', scopeMinimum: '1', collectionIds: [], products: [], tags: [], legacyFacetCondition: false, enabled: true };
+  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', scope: '', scopeMinimum: '1', collectionIds: [], products: [], tags: [], legacyFacetCondition: false, dropLegacyFacet: false, verifiedRequired: false, verifiedCategories: [], extraConditions: [], freeShipping: false, priority: '', exclusionGroup: '', affiliateEmail: '', enabled: true };
 }
 
 /** ISO datetime <-> the value a `<input type="datetime-local">` wants (no
@@ -83,11 +109,21 @@ const parseIds = (raw: string | undefined): string[] => {
  *  with the id as a placeholder name; the component resolves real names via
  *  `GET /products/{id}` afterwards (no new endpoints). */
 export function hydrateForm(p: PromoDetail): FormState {
+  const all = Array.isArray(p.conditions) ? (p.conditions as Condition[]) : [];
   const minCond = readCondition(p.conditions, 'minimum_order_amount');
   const colCond = readCondition(p.conditions, 'at_least_n_in_collections');
   const prodCond = readCondition(p.conditions, 'at_least_n_products');
   const tagCond = readCondition(p.conditions, 'at_least_n_with_tags');
-  const legacyCond = readCondition(p.conditions, 'at_least_n_with_facets');
+  const verifiedCond = readCondition(p.conditions, 'verified_customer');
+  const scope: ScopeKind = colCond.collectionIds ? 'collections' : prodCond.productIds ? 'products' : tagCond.tags ? 'tags' : '';
+  // Everything the form does not render is carried through: the first condition of each rendered code, and only it, is
+  // owned by a field; any further copy, any non-chosen scope condition and any unknown code goes to extraConditions.
+  const owned = new Set<unknown>();
+  const own = (code: string) => { const c = all.find((x) => x?.code === code && !owned.has(x)); if (c) owned.add(c); };
+  own('minimum_order_amount');
+  own('verified_customer');
+  if (scope) own(SCOPE_CODES[scope]);
+  const extraConditions = all.filter((x) => !owned.has(x));
   const f = emptyForm();
   return {
     ...f,
@@ -96,12 +132,20 @@ export function hydrateForm(p: PromoDetail): FormState {
     usageLimit: p.usageLimit != null ? String(p.usageLimit) : '', perCustomerUsageLimit: p.perCustomerUsageLimit != null ? String(p.perCustomerUsageLimit) : '',
     startsAt: toLocalInput(p.startsAt), endsAt: toLocalInput(p.endsAt),
     minOrderAmount: minCond.amount ? (Number(minCond.amount) / 100).toFixed(2) : '',
-    scope: colCond.collectionIds ? 'collections' : prodCond.productIds ? 'products' : tagCond.tags ? 'tags' : '',
+    scope,
     scopeMinimum: colCond.minimum ?? prodCond.minimum ?? tagCond.minimum ?? '1',
     collectionIds: parseIds(colCond.collectionIds),
     products: parseIds(prodCond.productIds).map((id) => ({ id, name: id })),
     tags: parseIds(tagCond.tags),
-    legacyFacetCondition: Object.keys(legacyCond).length > 0,
+    legacyFacetCondition: all.some((x) => x?.code === LEGACY_FACET_CODE),
+    dropLegacyFacet: false,
+    verifiedRequired: all.some((x) => x?.code === 'verified_customer'),
+    verifiedCategories: parseIds(verifiedCond.categories),
+    extraConditions,
+    freeShipping: p.freeShipping ?? false,
+    priority: p.priority ? String(p.priority) : '',
+    exclusionGroup: p.exclusionGroup ?? '',
+    affiliateEmail: p.affiliateEmail ?? '',
     enabled: p.enabled,
   };
 }
@@ -129,7 +173,23 @@ export function buildConditions(f: FormState): unknown[] | null {
       { name: 'minimum', value: minimum },
     ] });
   }
+  // verified_customer: the same shape money/coupon.ts reads (`categories` = JSON string array).
+  if (f.verifiedRequired && (f.verifiedCategories ?? []).length > 0) {
+    conds.push({ code: 'verified_customer', args: [{ name: 'categories', value: JSON.stringify(f.verifiedCategories) }] });
+  }
+  // Conditions the form cannot render pass through untouched (#384). Only the retired facet code can be dropped, and
+  // only when the merchant asks for it.
+  for (const c of f.extraConditions ?? []) {
+    if (f.dropLegacyFacet && (c as Condition | null)?.code === LEGACY_FACET_CODE) continue;
+    conds.push(c as Condition);
+  }
   return conds.length ? conds : null;
+}
+
+/** A required verification with no category selected must not save: buildConditions would emit no verified_customer
+ *  condition, turning a Military/Student/Teacher coupon into a public one. */
+export function verifiedError(f: FormState): string | null {
+  return f.verifiedRequired && (f.verifiedCategories ?? []).length === 0 ? 'Select at least one verification category — or untick Require verified customer.' : null;
 }
 
 /** A chosen scope with nothing selected must not save — buildConditions would
@@ -145,14 +205,26 @@ export function scopeError(f: FormState): string | null {
   return empty ? 'Select at least one collection, product or tag — or choose Whole order.' : null;
 }
 
+/** Blank = unlimited (null); 0 is a real limit meaning blocked (Vendure: usageLimit/perCustomerUsageLimit 0 = cannot be used). */
+export function parseLimit(raw: string): number | null {
+  const v = raw.trim();
+  if (v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 export function buildPayload(f: FormState) {
   const isPct = f.type === 'percentage';
   return {
     code: f.code || null,
     type: f.type,
     value: f.type === 'free_shipping' ? 0 : isPct ? Math.round(parseFloat(f.value || '0')) : Math.round(parseFloat(f.value || '0') * 100),
-    usageLimit: f.usageLimit ? Number(f.usageLimit) : null,
-    perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null,
+    usageLimit: parseLimit(f.usageLimit),
+    perCustomerUsageLimit: parseLimit(f.perCustomerUsageLimit),
+    freeShipping: f.freeShipping ?? false,
+    priority: Math.trunc(Number(f.priority)) || 0,
+    exclusionGroup: f.exclusionGroup?.trim() || null,
+    affiliateEmail: f.affiliateEmail?.trim() || null,
     startsAt: fromLocalInput(f.startsAt),
     endsAt: fromLocalInput(f.endsAt),
     conditions: buildConditions(f),
@@ -263,6 +335,7 @@ export default function Discounts() {
     if (form && Number(form.scopeMinimum) < 1) setForm({ ...form, scopeMinimum: '1' });
   };
 
+  const keptCodes = (form?.extraConditions ?? []).map((c) => (c as Condition | null)?.code ?? '?').filter((c) => c !== LEGACY_FACET_CODE);
   const saving = create.isPending || update.isPending;
   const isEdit = !!form?.id;
 
@@ -278,7 +351,13 @@ export default function Discounts() {
             <form className="stack-y-3" onSubmit={(e) => { e.preventDefault(); isEdit ? update.mutate() : create.mutate(); }}>
               {form.legacyFacetCondition && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  This discount uses a retired facet condition that no longer applies at checkout — choose a scope and save to replace it.
+                  This discount uses a retired facet condition that is not supported at checkout, so the code will not apply. It is kept when you save — choose a scope and tick below to replace it.
+                  <label className="mt-1 flex items-center gap-2"><input type="checkbox" className="h-4 w-4 accent-brand" checked={!!form.dropLegacyFacet} onChange={(e) => setForm({ ...form, dropLegacyFacet: e.target.checked })} /> Remove the retired condition on save</label>
+                </div>
+              )}
+              {keptCodes.length > 0 && (
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                  Also carries conditions this form does not edit ({keptCodes.join(', ')}). They are kept when you save.
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -299,8 +378,8 @@ export default function Discounts() {
                 <Field label="Ends at" hint="Optional"><input className="input" type="datetime-local" value={form.endsAt} onChange={(e) => setForm({ ...form, endsAt: e.target.value })} /></Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Total usage limit" hint="Blank = unlimited"><input className="input" type="number" min={0} value={form.usageLimit} onChange={(e) => setForm({ ...form, usageLimit: e.target.value })} placeholder="∞" /></Field>
-                <Field label="Per-customer limit" hint="Blank = unlimited"><input className="input" type="number" min={0} value={form.perCustomerUsageLimit} onChange={(e) => setForm({ ...form, perCustomerUsageLimit: e.target.value })} placeholder="∞" /></Field>
+                <Field label="Total usage limit" hint="Blank = unlimited, 0 = blocked"><input className="input" type="number" min={0} value={form.usageLimit} onChange={(e) => setForm({ ...form, usageLimit: e.target.value })} placeholder="∞" /></Field>
+                <Field label="Per-customer limit" hint="Blank = unlimited, 0 = blocked"><input className="input" type="number" min={0} value={form.perCustomerUsageLimit} onChange={(e) => setForm({ ...form, perCustomerUsageLimit: e.target.value })} placeholder="∞" /></Field>
               </div>
               <Field label={`Minimum order amount (${cur})`} hint="Blank = no minimum">
                 <input className="input" inputMode="decimal" value={form.minOrderAmount} onChange={(e) => setForm({ ...form, minOrderAmount: e.target.value })} placeholder="0.00" />
@@ -388,11 +467,38 @@ export default function Discounts() {
                   <input className="input w-24" type="number" min={1} value={form.scopeMinimum} onChange={(e) => setForm({ ...form, scopeMinimum: e.target.value })} onBlur={clampScopeMinimum} />
                 </Field>
               )}
+              <div className="stack-y-2">
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={!!form.verifiedRequired} onChange={(e) => setForm({ ...form, verifiedRequired: e.target.checked })} /> Require verified customer (SheerID)</label>
+                {form.verifiedRequired && (
+                  <Field label="Verification categories" hint="Customers with any selected, active verification qualify.">
+                    <div className="flex flex-wrap gap-3">
+                      {[...VERIFIED_CATEGORIES.map((c) => c.value), ...(form.verifiedCategories ?? []).filter((v) => !VERIFIED_CATEGORIES.some((c) => c.value === v))].map((v) => (
+                        <label key={v} className="flex items-center gap-1 text-sm">
+                          <input type="checkbox" className="h-4 w-4 accent-brand" checked={(form.verifiedCategories ?? []).includes(v)}
+                            onChange={(e) => setForm({ ...form, verifiedCategories: e.target.checked ? [...(form.verifiedCategories ?? []), v] : (form.verifiedCategories ?? []).filter((x) => x !== v) })} />
+                          {VERIFIED_CATEGORIES.find((c) => c.value === v)?.label ?? v}
+                        </label>
+                      ))}
+                    </div>
+                    {verifiedError(form) && <p className="mt-1 text-sm text-danger">{verifiedError(form)}</p>}
+                  </Field>
+                )}
+              </div>
+              {form.type !== 'free_shipping' && (
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={!!form.freeShipping} onChange={(e) => setForm({ ...form, freeShipping: e.target.checked })} /> Also give free shipping</label>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Priority" hint="Higher wins ties between discounts"><input className="input" type="number" step={1} value={form.priority ?? ''} onChange={(e) => setForm({ ...form, priority: e.target.value })} placeholder="0" /></Field>
+                <Field label="Exclusion group" hint="Optional"><input className="input" value={form.exclusionGroup ?? ''} onChange={(e) => setForm({ ...form, exclusionGroup: e.target.value })} /></Field>
+              </div>
+              <Field label="Affiliate email" hint="Optional. Binds this coupon to an affiliate and sends their welcome email.">
+                <input className="input" type="email" value={form.affiliateEmail ?? ''} onChange={(e) => setForm({ ...form, affiliateEmail: e.target.value })} placeholder="affiliate@example.com" />
+              </Field>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
               {(create.error || update.error) && <ErrorNote message={((create.error || update.error) as Error).message} />}
               <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
                 <button type="button" className="btn-ghost" onClick={closeForm}>Cancel</button>
-                <button type="submit" className="btn-primary" disabled={saving || !!scopeError(form) || (!isEdit && !form.code.trim() && form.type !== 'percentage' && form.type !== 'fixed' && form.type !== 'free_shipping')}>
+                <button type="submit" className="btn-primary" disabled={saving || !!scopeError(form) || !!verifiedError(form) || (!isEdit && !form.code.trim() && form.type !== 'percentage' && form.type !== 'fixed' && form.type !== 'free_shipping')}>
                   {saving ? <Spinner className="text-white" /> : isEdit ? 'Save changes' : 'Create'}
                 </button>
               </div>
@@ -411,7 +517,7 @@ export default function Discounts() {
                   <td className="td font-mono font-medium">{p.code ?? <span className="text-gray-400 font-sans font-normal">automatic</span>}</td>
                   <td className="td">{fmtValue(p)}</td>
                   <td className="td text-xs text-gray-500">{fmtWindow(p) ?? '—'}</td>
-                  <td className="td text-gray-500">{p.usedCount}{p.usageLimit ? ` / ${p.usageLimit}` : ''}{p.perCustomerUsageLimit ? ` · ${p.perCustomerUsageLimit}/cust` : ''}</td>
+                  <td className="td text-gray-500">{p.usedCount}{p.usageLimit != null ? ` / ${p.usageLimit}` : ''}{p.perCustomerUsageLimit != null ? ` · ${p.perCustomerUsageLimit}/cust` : ''}</td>
                   <td className="td"><button onClick={() => toggle.mutate(p)}><Badge value={p.enabled ? 'active' : 'draft'} /></button></td>
                   <td className="td text-right whitespace-nowrap">
                     <button className="text-gray-400 hover:text-ink mr-2" aria-label={`Edit discount ${p.code ?? p.id}`} onClick={() => { setHydratedFor(null); setForm({ ...emptyForm(), id: p.id }); }}><Pencil size={15} /></button>

@@ -67,7 +67,9 @@ export async function priceCart(
   tx: Tx,
   st: StoreCtx,
   items: Array<{ sku: string; quantity: number }>,
-  opts: { couponCode?: string; couponCodes?: string[]; pricingIntent?: 'preview' | 'checkout'; shipping?: number; shippingMethodCode?: string; redeemPoints?: number; token?: string | null; shipCountry?: string | null } = {},
+  opts: { couponCode?: string; couponCodes?: string[]; pricingIntent?: 'preview' | 'checkout'; shipping?: number; shippingMethodCode?: string; redeemPoints?: number; token?: string | null; shipCountry?: string | null;
+    /** #383/#384: the guest's email, so a per-customer coupon limit is enforced at the quote (by email), not only at payment. */
+    customerEmail?: string | null } = {},
 ): Promise<PricedCart> {
   const skus = [...new Set(items.map((i) => i.sku))];
   // Live stock join — never cached, never read from a search index. A row
@@ -134,7 +136,7 @@ export async function priceCart(
     : undefined;
   const calculator = selectedMethod?.calculator as ShippingCalculator | undefined;
   const stackInput = {
-    storeId: st.id, customerId: customer?.id, couponCodes, selectedCreditOnly: opts.pricingIntent === 'checkout', phase: 'AddingItems' as const,
+    storeId: st.id, customerId: customer?.id, customerEmail: customer?.email ?? opts.customerEmail ?? undefined, couponCodes, selectedCreditOnly: opts.pricingIntent === 'checkout', phase: 'AddingItems' as const,
     currency: st.currency, pricesIncludeTax: st.taxInclusive,
     lines: priced.filter(p => p.available).map((p, index) => ({ key: `${index}:${p.sku}`, quantity: p.quantity, placedQuantity: p.quantity,
       unitListPrice: p.unitPrice, priceIncludesTax: st.taxInclusive, taxRateBps: taxRate })),
@@ -433,7 +435,7 @@ async function variantIdsBySku(tx: Tx, skus: string[]): Promise<Map<string, stri
 export async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string | string[], token?: string | null, shipCountry?: string | null, quoteOptions: { pricingIntent?: 'preview' | 'checkout'; shippingMethodCode?: string; redeemPoints?: number; conflictCode?: CartBoundReason } = {}): Promise<z.infer<typeof CartOut>> {
   const items = await boundedCartItems(tx, cartRow, quoteOptions.conflictCode);
   const codes = Array.isArray(couponCode) ? couponCode : couponCode !== undefined ? [couponCode] : cartRow.couponCodes;
-  const priced = await priceCart(tx, st, items, { couponCodes: codes, token, shipCountry, ...quoteOptions });
+  const priced = await priceCart(tx, st, items, { couponCodes: codes, token, shipCountry, customerEmail: cartRow.email, ...quoteOptions });
   // Terminal carts are historical facts; their credit bearer codes stay private.
   const caller = token ? await resolveCustomer(tx, token, false, { renew: false }) : null;
   if (['converted', 'merged'].includes(cartRow.status) || (cartRow.customerId && caller?.id !== cartRow.customerId)) {

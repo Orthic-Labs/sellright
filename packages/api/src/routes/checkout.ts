@@ -495,7 +495,7 @@ checkout.openapi(
           }
         }
       }
-      const checkoutQuote = await priceCart(tx, st, items, { couponCodes: body.couponCodes ?? (body.couponCode !== undefined ? (body.couponCode ? [body.couponCode] : []) : cartRow?.couponCodes ?? []),
+      const checkoutQuote = await priceCart(tx, st, items, { customerEmail: normalizeEmail(body.email ?? '') || null, couponCodes: body.couponCodes ?? (body.couponCode !== undefined ? (body.couponCode ? [body.couponCode] : []) : cartRow?.couponCodes ?? []),
         token, shipCountry: (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country,
         shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' });
       if (checkoutQuote.grandTotal <= 0 && checkoutQuote.coupons.some(coupon => coupon.kind === 'account_credit' && coupon.appliedAmount > 0)) throw new CreditPaymentUnavailableError(checkoutQuote);
@@ -580,6 +580,8 @@ checkout.openapi(
 
       const stackBasis = {
         storeId: st.id, customerId: customerId ?? undefined, couponCodes, mode: 'payment' as const,
+        // #383: a guest has no customer row; the per-customer coupon limit counts them by email (Vendure parity).
+        customerEmail: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') || undefined,
         phase: 'AddingItems' as const, currency: st.currency, pricesIncludeTax: st.taxInclusive,
         lines: priced.map((p, index) => ({ key: `${index}:${p.v.sku}`, quantity: p.qty, placedQuantity: p.qty,
           unitListPrice: p.unitPrice, priceIncludesTax: st.taxInclusive, taxRateBps: taxRate })),

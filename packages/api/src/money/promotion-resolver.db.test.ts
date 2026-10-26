@@ -1,6 +1,6 @@
 import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
@@ -121,5 +121,60 @@ describe('promotion resolver transaction eligibility', () => {
     await withStore(STORE, tx => tx.insert(s.promotion).values({ storeId: STORE, code: null, type: 'fixed', value: 100,
       discountScope: 'order', priority: 0, stackOrder: null }));
     await expect(resolve()).rejects.toThrow(/stack order is unresolved/);
+  });
+
+  // #383 — the previous platform coupon-validation.service.ts checkUsageLimits parity.
+  describe('usage limits (#383)', () => {
+    const seed = async (patch: Record<string, unknown>) => withStore(STORE, async tx => {
+      const [promo] = await tx.insert(s.promotion).values({ storeId: STORE, code: 'ONCE', type: 'fixed', value: 100, discountScope: 'order',
+        priority: 0, stackOrder: 5, ...patch }).returning({ id: s.promotion.id });
+      return promo!.id;
+    });
+    const usedBy = (promotionId: string, code: string, email: string | null, state: 'Paid' | 'Cancelled', customerId: string | null = null) =>
+      withStore(STORE, async tx => {
+        const [o] = await tx.insert(s.order).values({ storeId: STORE, code, currency: 'USD', state, customerId,
+          metadata: email ? { contact: { email } } : null }).returning({ id: s.order.id });
+        await tx.insert(s.promotionUsage).values({ storeId: STORE, promotionId, customerId, orderId: o!.id });
+        await tx.update(s.promotion).set({ usedCount: sqlInc }).where(eq(s.promotion.id, promotionId));
+      });
+    const sqlInc = sql`${s.promotion.usedCount} + 1`;
+
+    it('refuses a guest reusing a 1-per-customer code with the same email (case-insensitive), not another email', async () => {
+      const id = await seed({ perCustomerUsageLimit: 1 });
+      await usedBy(id, 'G-1', 'guest@example.test', 'Paid');
+      const same = await resolve({ couponCodes: ['ONCE'], customerEmail: 'Guest@Example.test' });
+      expect(same.coupons[0]).toMatchObject({ applied: false, reason: 'Customer coupon usage limit reached' });
+      const other = await resolve({ couponCodes: ['ONCE'], customerEmail: 'other@example.test' });
+      expect(other.coupons[0]).toMatchObject({ applied: true });
+    });
+
+    it('counts a guest by email across a linked customer row too', async () => {
+      const id = await seed({ perCustomerUsageLimit: 1 });
+      const customerId = await withStore(STORE, async tx => (await tx.insert(s.customer).values({ storeId: STORE, email: 'linked@example.test' }).returning({ id: s.customer.id }))[0]!.id);
+      await usedBy(id, 'L-1', null, 'Paid', customerId);
+      const result = await resolve({ couponCodes: ['ONCE'], customerEmail: 'linked@example.test' });
+      expect(result.coupons[0]).toMatchObject({ applied: false });
+    });
+
+    it('a cancelled order frees both the per-customer and the total use', async () => {
+      const id = await seed({ perCustomerUsageLimit: 1, usageLimit: 1 });
+      await usedBy(id, 'C-1', 'guest@example.test', 'Cancelled');
+      const result = await resolve({ couponCodes: ['ONCE'], customerEmail: 'guest@example.test' });
+      expect(result.coupons[0]).toMatchObject({ applied: true });
+    });
+
+    it('a live order still blocks the total limit', async () => {
+      const id = await seed({ usageLimit: 1 });
+      await usedBy(id, 'P-1', null, 'Paid');
+      const result = await resolve({ couponCodes: ['ONCE'] });
+      expect(result.coupons[0]).toMatchObject({ applied: false, reason: 'Coupon usage limit reached' });
+    });
+
+    it('a limit of 0 means blocked, for the total and the per-customer limit, even with no customer', async () => {
+      await seed({ code: 'ZERO-TOTAL', usageLimit: 0 });
+      await seed({ code: 'ZERO-CUST', perCustomerUsageLimit: 0 });
+      const result = await resolve({ couponCodes: ['ZERO-TOTAL', 'ZERO-CUST'] });
+      expect(result.coupons.every(status => !status.applied && !!status.reason)).toBe(true);
+    });
   });
 });

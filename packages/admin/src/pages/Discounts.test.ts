@@ -5,7 +5,7 @@
 // Round-tripping buildConditions() -> readCondition() -> hydrateForm() is the
 // contract that makes the edit form pre-fill correctly from a saved discount.
 import { describe, expect, it } from 'vitest';
-import { buildConditions, buildPayload, hydrateForm, readCondition, scopeError, toLocalInput, fromLocalInput, type FormState } from './Discounts.js';
+import { buildConditions, buildPayload, hydrateForm, parseLimit, readCondition, scopeError, verifiedError, toLocalInput, fromLocalInput, type FormState } from './Discounts.js';
 
 function baseForm(overrides: Partial<FormState> = {}): FormState {
   return {
@@ -13,6 +13,7 @@ function baseForm(overrides: Partial<FormState> = {}): FormState {
     usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '',
     minOrderAmount: '', scope: '', scopeMinimum: '1',
     collectionIds: [], products: [], tags: [], legacyFacetCondition: false,
+    verifiedRequired: false, verifiedCategories: [], extraConditions: [], freeShipping: false, priority: '', exclusionGroup: '', affiliateEmail: '',
     enabled: true,
     ...overrides,
   };
@@ -97,7 +98,7 @@ describe('buildConditions', () => {
     expect(buildConditions(baseForm({ minOrderAmount: '   ' }))).toBeNull();
   });
 
-  it('never emits the retired at_least_n_with_facets code', () => {
+  it('never emits the retired at_least_n_with_facets code on its own', () => {
     for (const scope of ['', 'collections', 'products', 'tags'] as const) {
       const conds = (buildConditions(baseForm({ scope, collectionIds: ['c'], products: [{ id: 'p', name: 'p' }], tags: ['t'] })) ?? []) as Array<{ code: string }>;
       expect(conds.every((c) => c.code !== 'at_least_n_with_facets')).toBe(true);
@@ -158,13 +159,13 @@ describe('hydrateForm — readCondition -> form round-trips', () => {
     expect(f.legacyFacetCondition).toBe(false);
   });
 
-  it('flags a saved at_least_n_with_facets condition as retired…', () => {
-    const f = hydrateForm(detail([{ code: 'at_least_n_with_facets', args: [{ name: 'facets', value: '["fa1"]' }, { name: 'minimum', value: '2' }] }]));
+  it('flags a saved at_least_n_with_facets condition as retired and keeps it unless the merchant removes it', () => {
+    const facet = { code: 'at_least_n_with_facets', args: [{ name: 'facets', value: '["fa1"]' }, { name: 'minimum', value: '2' }] };
+    const f = hydrateForm(detail([facet]));
     expect(f.legacyFacetCondition).toBe(true);
     expect(f.scope).toBe('');
-    // …and saving drops the legacy condition entirely
-    const conds = buildConditions(f) ?? [];
-    expect((conds as Array<{ code: string }>).every((c) => c.code !== 'at_least_n_with_facets')).toBe(true);
+    expect(buildConditions(f)).toEqual([facet]);
+    expect(buildConditions({ ...f, dropLegacyFacet: true })).toBeNull();
   });
 });
 
@@ -228,5 +229,83 @@ describe('toLocalInput / fromLocalInput', () => {
     expect(toLocalInput(null)).toBe('');
     expect(toLocalInput(undefined)).toBe('');
     expect(fromLocalInput('')).toBeNull();
+  });
+});
+
+describe('#384 — conditions the form does not render survive an edit round trip', () => {
+  const verified = { code: 'verified_customer', args: [{ name: 'categories', value: '["military","student"]' }] };
+  const unknown = { code: 'some_future_condition', args: [{ name: 'x', value: '1' }] };
+
+  it('keeps verified_customer through hydrate -> build, byte for byte', () => {
+    const conds = [{ code: 'minimum_order_amount', args: [{ name: 'amount', value: '1000' }] }, verified];
+    const f = hydrateForm(detail(conds));
+    expect(f.verifiedRequired).toBe(true);
+    expect(f.verifiedCategories).toEqual(['military', 'student']);
+    expect(buildPayload(f).conditions).toEqual(conds);
+  });
+
+  it('keeps unknown conditions, a second scope condition and a duplicate minimum', () => {
+    const tags = { code: 'at_least_n_with_tags', args: [{ name: 'tags', value: '["t"]' }, { name: 'minimum', value: '1' }] };
+    const cols = { code: 'at_least_n_in_collections', args: [{ name: 'collectionIds', value: '["c"]' }, { name: 'minimum', value: '1' }] };
+    const min2 = { code: 'minimum_order_amount', args: [{ name: 'amount', value: '500' }] };
+    const f = hydrateForm(detail([cols, tags, min2, { ...min2 }, unknown]));
+    const out = buildConditions(f) as Array<{ code: string }>;
+    expect(out.map((c) => c.code).sort()).toEqual(['at_least_n_in_collections', 'at_least_n_with_tags', 'minimum_order_amount', 'minimum_order_amount', 'some_future_condition']);
+  });
+
+  it('toggling nothing but saving an untouched discount reproduces its conditions', () => {
+    const conds = [verified, unknown];
+    expect(buildPayload(hydrateForm(detail(conds))).conditions).toEqual(conds);
+  });
+
+  it('adds verified_customer from the UI and emits categories as a JSON string array', () => {
+    const conds = buildConditions(baseForm({ verifiedRequired: true, verifiedCategories: ['teacher'] })) as Array<{ code: string; args: { name: string; value: string }[] }>;
+    expect(conds).toEqual([{ code: 'verified_customer', args: [{ name: 'categories', value: '["teacher"]' }] }]);
+  });
+
+  it('refuses to save a required verification with no category (would make the coupon public)', () => {
+    expect(verifiedError(baseForm({ verifiedRequired: true, verifiedCategories: [] }))).toMatch(/at least one verification category/);
+    expect(verifiedError(baseForm({ verifiedRequired: true, verifiedCategories: ['senior'] }))).toBeNull();
+    expect(verifiedError(baseForm())).toBeNull();
+  });
+
+  it('unticking Require verified customer removes the condition', () => {
+    const f = hydrateForm(detail([verified]));
+    expect(buildConditions({ ...f, verifiedRequired: false })).toBeNull();
+  });
+});
+
+describe('#384 — priority, free shipping and affiliate email', () => {
+  it('hydrates and sends them', () => {
+    const f = hydrateForm(detail(null, { freeShipping: true, priority: 7, exclusionGroup: 'g', affiliateEmail: 'a@example.test' }));
+    expect(f).toMatchObject({ freeShipping: true, priority: '7', exclusionGroup: 'g', affiliateEmail: 'a@example.test' });
+    expect(buildPayload(f)).toMatchObject({ freeShipping: true, priority: 7, exclusionGroup: 'g', affiliateEmail: 'a@example.test' });
+  });
+
+  it('blank affiliate email and exclusion group clear to null; blank priority is 0', () => {
+    expect(buildPayload(baseForm())).toMatchObject({ freeShipping: false, priority: 0, exclusionGroup: null, affiliateEmail: null });
+  });
+});
+
+describe('#383 — usage limit of 0 means blocked, never unlimited', () => {
+  it('parseLimit keeps 0 and maps only blank to null', () => {
+    expect(parseLimit('0')).toBe(0);
+    expect(parseLimit('')).toBeNull();
+    expect(parseLimit('  ')).toBeNull();
+    expect(parseLimit('3')).toBe(3);
+    expect(parseLimit('-1')).toBeNull();
+    expect(parseLimit('1.5')).toBeNull();
+  });
+
+  it('buildPayload sends 0 for both limits', () => {
+    const p = buildPayload(baseForm({ usageLimit: '0', perCustomerUsageLimit: '0' }));
+    expect(p.usageLimit).toBe(0);
+    expect(p.perCustomerUsageLimit).toBe(0);
+  });
+
+  it('hydrates a stored 0 back as "0"', () => {
+    const f = hydrateForm(detail(null, { usageLimit: 0, perCustomerUsageLimit: 0 }));
+    expect(f.usageLimit).toBe('0');
+    expect(f.perCustomerUsageLimit).toBe('0');
   });
 });

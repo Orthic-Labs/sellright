@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ne } from 'drizzle-orm';
+import { and, asc, count, eq, ne, or, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { currentDiscount, previewAvailable } from '../account-credit/service.js';
@@ -10,6 +10,8 @@ import {
 
 export interface ResolvePromotionStackInput extends Omit<StackInput, 'promotions'> {
   storeId: string; orderId?: string; customerId?: string; now?: Date;
+  /** Normalised contact email: identifies a guest (no customer row) for the per-customer limit, as the previous platform counted by email. */
+  customerEmail?: string;
   /** Prospective payment quote: only first matched credit may fund a hold. */
   selectedCreditOnly?: boolean;
   mode?: 'quote' | 'payment';
@@ -87,13 +89,40 @@ export async function resolvePromotionStack(tx: Tx, input: ResolvePromotionStack
       )).limit(1);
       ownUsage = !!prior;
     }
-    if (promotion.usageLimit != null && nonnegativeInteger(promotion.usageLimit, 'promotion usage limit') <= Math.max(0, promotion.usedCount - (ownUsage ? 1 : 0))) reason = 'Coupon usage limit reached';
-    if (promotion.perCustomerUsageLimit != null && input.customerId) {
-      const [used] = await tx.select({ n: count() }).from(s.promotionUsage).where(and(
-        eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id),
-        eq(s.promotionUsage.customerId, input.customerId), ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
-      ));
-      if (nonnegativeInteger(promotion.perCustomerUsageLimit, 'customer usage limit') <= (used?.n ?? 0)) reason = 'Customer coupon usage limit reached';
+    // the previous platform (coupon-validation.service.ts checkUsageLimits): a limit of 0 means blocked, not unlimited; usage on a
+    // Cancelled order does not count. promotion_usage rows of Cancelled orders are discounted from used_count here (under
+    // the same promotion FOR UPDATE as the usage insert), so every cancel path frees its use without a counter write.
+    if (promotion.usageLimit != null) {
+      const limit = nonnegativeInteger(promotion.usageLimit, 'promotion usage limit');
+      let released = 0;
+      if (promotion.usedCount > 0) {
+        const [cancelled] = await tx.select({ n: count() }).from(s.promotionUsage)
+          .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId)).where(and(
+            eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id), eq(s.order.state, 'Cancelled'),
+            ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
+          ));
+        released = cancelled?.n ?? 0;
+      }
+      if (limit <= Math.max(0, promotion.usedCount - released - (ownUsage ? 1 : 0))) reason = 'Coupon usage limit reached';
+    }
+    if (promotion.perCustomerUsageLimit != null) {
+      const perCustomer = nonnegativeInteger(promotion.perCustomerUsageLimit, 'customer usage limit');
+      if (perCustomer === 0) reason = 'Customer coupon usage limit reached';
+      else {
+        // Registered customer: count by customerId. Guest: count by email (order contact or linked customer), not skipped.
+        const email = input.customerEmail?.trim().toLowerCase();
+        const who = input.customerId ? eq(s.promotionUsage.customerId, input.customerId)
+          : email ? or(eq(sql`lower(${s.customer.email})`, email), eq(sql`lower(${s.order.metadata}->'contact'->>'email')`, email)) : undefined;
+        if (who) {
+          const [used] = await tx.select({ n: count() }).from(s.promotionUsage)
+            .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
+            .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId)).where(and(
+              eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id), who, ne(s.order.state, 'Cancelled'),
+              ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
+            ));
+          if (perCustomer <= (used?.n ?? 0)) reason = 'Customer coupon usage limit reached';
+        }
+      }
     }
     const account = creditByPromotion.get(promotion.id);
     let credit: ResolvedPromotion['credit'];

@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
-import { withStore } from '../db/client.js';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { withRequestDeadline } from '../security/request-deadline.js';
@@ -41,6 +41,17 @@ const promoBodyBase = z.object({
   // (welcome mail) and rotates the access token on recipient change.
   affiliateEmail: z.string().email().nullable().optional(),
 });
+// #383: usage on a Cancelled order does not count (the previous platform coupon-validation.service.ts). promotion.used_count is a
+// monotonic counter, so the shown/enforced figure is used_count less the ledger rows of Cancelled orders
+// (money/promotion-resolver.ts applies the same subtraction to the limit check).
+async function cancelledUsage(tx: Tx, promotionIds: string[]): Promise<Map<string, number>> {
+  if (!promotionIds.length) return new Map();
+  const rows = await tx.select({ id: s.promotionUsage.promotionId, n: sql<number>`count(*)::int` }).from(s.promotionUsage)
+    .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
+    .where(and(inArray(s.promotionUsage.promotionId, promotionIds), eq(s.order.state, 'Cancelled')))
+    .groupBy(s.promotionUsage.promotionId);
+  return new Map(rows.map((r) => [r.id, r.n]));
+}
 // Percentage promotions must stay within 0–100; anything higher (or negative)
 // can drive a negative order total downstream (money/totals.ts).
 function checkPromoValueBound(type: string | undefined, value: number | undefined, ctx: z.RefinementCtx): void {
@@ -65,10 +76,12 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
     async (c) => guard(c, async () => {
       const { admin } = await requireAdmin(c);
       const st = requireStore(admin, c);
-      const items = await withStore(st.storeId, async (tx) =>
-        tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, freeShipping: s.promotion.freeShipping, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
-          .from(s.promotion).orderBy(desc(s.promotion.enabled), s.promotion.code),
-      );
+      const items = await withStore(st.storeId, async (tx) => {
+        const rows = await tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, freeShipping: s.promotion.freeShipping, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
+          .from(s.promotion).orderBy(desc(s.promotion.enabled), s.promotion.code);
+        const cancelled = await cancelledUsage(tx, rows.map((r) => r.id));
+        return rows.map((r) => ({ ...r, usedCount: Math.max(0, r.usedCount - (cancelled.get(r.id) ?? 0)) }));
+      });
       return c.json({ items: items.map((p) => ({ ...p, startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null })) }, 200);
     }),
   );
@@ -125,9 +138,12 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
           .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
           .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId))
           .where(eq(s.promotionUsage.promotionId, id)).orderBy(desc(s.promotionUsage.createdAt)).limit(50);
+        const cancelled = (await cancelledUsage(tx, [id])).get(id) ?? 0;
         return {
           id: p.id, code: p.code, type: p.type, value: p.value, freeShipping: p.freeShipping, conditions: p.conditions, enabled: p.enabled,
-          usedCount: p.usedCount, usageLimit: p.usageLimit, perCustomerUsageLimit: p.perCustomerUsageLimit,
+          usedCount: Math.max(0, p.usedCount - cancelled), usageLimit: p.usageLimit, perCustomerUsageLimit: p.perCustomerUsageLimit,
+          // #384: the editor round-trips every field the PATCH accepts, so none is silently reset on save.
+          priority: p.priority, exclusionGroup: p.exclusionGroup, affiliateEmail: p.affiliateEmail,
           startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null,
           usage: usage.map((u) => ({ ...u, at: u.at.toISOString() })),
         };
