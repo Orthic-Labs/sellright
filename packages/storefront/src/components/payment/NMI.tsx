@@ -4,7 +4,6 @@ import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { GatewayAttempt } from '~/sellright/types/checkout';
 import { SellRightError } from '~/sellright/client';
 import { nextConfirm } from './confirm-trigger';
-import type { PayableOrder } from '~/components/checkout/payable-order';
 
 /**
  * Generic card-gateway payment (NMI via Collect.js). Same imperative,
@@ -16,12 +15,8 @@ import type { PayableOrder } from '~/components/checkout/payable-order';
  * submits would make every PAY after a decline return the same decline and the shopper could never pay with
  * another card. A second trigger while a submit is still in flight (double click) is the SAME attempt and is
  * dropped, so one click's key is never used by two requests.
- *
- * #372: the fields mount before the order exists. With `ensureOrder$`, PAY tokenizes first (an invalid card never
- * creates an order), then asks the page for the order (created on the first PAY), then charges it.
  */
 export interface NMIProps {
-	/** The order to charge; '' before it exists (then `ensureOrder$` supplies it at PAY). */
 	code: string;
 	tokenizationKey: string;
 	mode: 'test' | 'live';
@@ -36,8 +31,6 @@ export interface NMIProps {
 	onInitError$?: QRL<(message: string, mountGen?: number) => void>;
 	onProcessingChange$?: QRL<(processing: boolean, mountGen?: number) => void>;
 	onSuccess$: QRL<(result: GatewayAttempt) => void>;
-	/** #372: the order to charge, created on the first PAY; null = stop without charging. */
-	ensureOrder$?: QRL<() => Promise<PayableOrder | null>>;
 }
 
 export const NMI = component$<NMIProps>((props) => {
@@ -97,25 +90,14 @@ export const NMI = component$<NMIProps>((props) => {
 			return;
 		}
 		submitting.value = true;
-		let processing = false;
+		await props.onProcessingChange$?.(true, mountGen.value);
 		try {
-			// The card is tokenized (and validated) before any order exists; a bad card stops here with its own message.
 			const token = await getToken();
 			if (disposed.value) return; // the component is gone: no charge on behalf of a removed view
-			let code = props.code;
-			let receiptToken = props.receiptToken;
-			if (props.ensureOrder$) {
-				const order = await props.ensureOrder$();
-				if (!order || disposed.value) return;
-				code = order.code;
-				receiptToken = order.receiptToken || undefined;
-			}
-			processing = true;
-			await props.onProcessingChange$?.(true, mountGen.value);
-			const result = await startGatewayPayment(code, 'nmi', {
+			const result = await startGatewayPayment(props.code, 'nmi', {
 				token,
 				idempotencyKey: crypto.randomUUID(), // a new card submit is a new attempt
-				receiptToken,
+				receiptToken: props.receiptToken,
 			});
 			if (result.status === 'settled') {
 				// The charge happened: the success must always be reported, even if the view is gone.
@@ -129,7 +111,7 @@ export const NMI = component$<NMIProps>((props) => {
 			await props.onError$(message, mountGen.value);
 		} finally {
 			submitting.value = false;
-			if (processing && !disposed.value) await props.onProcessingChange$?.(false, mountGen.value);
+			if (!disposed.value) await props.onProcessingChange$?.(false, mountGen.value);
 		}
 	});
 

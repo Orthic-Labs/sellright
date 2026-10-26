@@ -11,7 +11,6 @@ import { ExpressCheckout } from './ExpressCheckout';
 import type { ExpressCheckoutOptions, ExpressOrderForm, ExpressOrderResult } from './express-checkout';
 import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
-import type { PayableOrder } from './payable-order';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod, ResumeView } from '~/hooks/useCheckout';
 import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
@@ -67,10 +66,6 @@ interface CheckoutPageViewProps {
   state: { loading: boolean; error: string | null };
   stripeConfirmTrigger: Signal<number>;
   stripePublishableKey: Signal<string>;
-  /** #372: the order PAY charges (created on the first PAY). */
-  ensureOrder$: QRL<() => Promise<PayableOrder | null>>;
-  chargeTotalCents: ReadonlySignal<number>;
-  currency: string;
 }
 
 export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
@@ -143,8 +138,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
             </CheckoutPaymentPanel>
           </div>
         </div>
-        {/* Once the details are valid the payment panel's own PAY is the action (#372). */}
-        {props.srState.phase !== 'paying' && !(props.checkoutValidation.isCustomerValid && props.checkoutValidation.isShippingAddressValid && !props.srState.code && props.chargeTotalCents.value > 0) && <CheckoutMobileCta {...props} />}
+        {props.srState.phase !== 'paying' && <CheckoutMobileCta {...props} />}
       </div>
     )}
   </div>

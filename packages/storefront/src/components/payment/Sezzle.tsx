@@ -2,7 +2,6 @@ import { $, component$, useSignal, type QRL } from '@qwik.dev/core';
 import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import { SellRightError } from '~/sellright/client';
 import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
-import type { PayableOrder } from '~/components/checkout/payable-order';
 
 /**
  * Generic installment-payment redirect (Sezzle). Starting the attempt mints
@@ -16,7 +15,6 @@ import type { PayableOrder } from '~/components/checkout/payable-order';
  * start forever); `isStarting` makes a double click the same single attempt.
  */
 export interface SezzleProps {
-	/** The order to pay; '' before it exists (then `ensureOrder$` supplies it on click). */
 	code: string;
 	receiptToken?: string;
 	label?: string;
@@ -25,8 +23,6 @@ export interface SezzleProps {
 	mountGen?: number;
 	onError$: QRL<(message: string, mountGen?: number) => void>;
 	onProcessingChange$?: QRL<(processing: boolean, mountGen?: number) => void>;
-	/** #372: the order to pay, created on the first click; null = stop. */
-	ensureOrder$?: QRL<() => Promise<PayableOrder | null>>;
 }
 
 export const Sezzle = component$<SezzleProps>((props) => {
@@ -37,22 +33,11 @@ export const Sezzle = component$<SezzleProps>((props) => {
 	const start$ = $(async () => {
 		if (isStarting.value || props.disabled) return;
 		isStarting.value = true;
-		let code = props.code;
-		let receiptToken = props.receiptToken;
-		if (props.ensureOrder$) {
-			const order = await props.ensureOrder$();
-			if (!order) {
-				isStarting.value = false;
-				return;
-			}
-			code = order.code;
-			receiptToken = order.receiptToken || undefined;
-		}
 		await props.onProcessingChange$?.(true, mountGen.value);
 		try {
-			const result = await startGatewayPayment(code, INSTALLMENT_PROVIDER, {
+			const result = await startGatewayPayment(props.code, INSTALLMENT_PROVIDER, {
 				idempotencyKey: crypto.randomUUID(),
-				receiptToken,
+				receiptToken: props.receiptToken,
 			});
 			if (result.checkoutUrl) {
 				window.location.href = result.checkoutUrl;
