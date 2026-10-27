@@ -89,6 +89,21 @@ export function availableForGroup(
   return out;
 }
 
+/** #398: the price an option would quote if picked now: the variant with this value in `groupIndex` and the shopper's current
+ *  choice in every other group that has one (the cheapest such variant while some groups are still open). With no variant for
+ *  that combination, the cheapest variant carrying the value. The previous store (and this PDP until #398) used the first variant
+ *  carrying the value whatever else was selected (damned/store/src/routes/products/[...slug]/index.tsx:1099-1101), so a pill could
+ *  quote another combination's price. Null when the value matches no variant. */
+export function optionPriceFor(
+  variants: CatalogVariant[], groups: { groupName: string; values: string[] }[], groupIndex: number, value: string, selected: (string | null | undefined)[],
+): number | null {
+  const has = (v: CatalogVariant, groupName: string, name: string) => !!v.options?.some(o => o.group?.name === groupName && o.name === name);
+  const withValue = variants.filter(v => has(v, groups[groupIndex].groupName, value));
+  if (!withValue.length) return null;
+  const combo = withValue.filter(v => groups.every((g, i) => i === groupIndex || !selected[i] || has(v, g.groupName, selected[i]!)));
+  return Math.min(...(combo.length ? combo : withValue).map(effectiveVariantPrice));
+}
+
 /** Price delta for a value in group 0 vs cheapest overall (effective prices). */
 export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName: string; values: string[] }[], value: string): string | null {
   if (groups.length < 2) return null;

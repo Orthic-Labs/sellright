@@ -3,7 +3,7 @@ import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
+import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionPriceFor, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
@@ -312,12 +312,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                     <div class="sr-pill-grid">
                       {group.values.map((val: string) => {
                         const isAvail = available.has(val);
-                        const matchingVariant = product.variants.find((v: CatalogVariant) =>
-                          v.options?.some((o: { name?: string }) => o.name === val)
-                        );
-                        const pillPrice = pricesVary && matchingVariant
-                          ? `$${(effectiveVariantPrice(matchingVariant) / 100).toFixed(0)}`
-                          : null;
+                        const optionPrice = pricesVary ? optionPriceFor(product.variants, groups.value, groupIdx, val, selectedValues.value) : null;
+                        const pillPrice = optionPrice !== null ? `$${(optionPrice / 100).toFixed(0)}` : null;
                         return (
                           <button key={val}
                             class={`sr-pill${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}

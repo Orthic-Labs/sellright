@@ -11,6 +11,7 @@ import {
 	isStockHintPending,
 	isVariantPurchasable,
 	liveUnitPrice,
+	optionPriceFor,
 	priceDeltaLabel,
 } from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
@@ -279,6 +280,43 @@ describe('priceDeltaLabel — effective price, not raw price', () => {
 		// L (1000) vs the overall min (S's effective 500) — delta should reflect
 		// the sale price, not S's raw $1000 price (which would give +$0).
 		expect(priceDeltaLabel([s, l], groups, 'L')).toBe('+$5');
+	});
+});
+
+describe('optionPriceFor — #398 an option quotes the variant it would select', () => {
+	const opt = (group: string, name: string) => ({ id: name, code: name, name, group: { id: group, code: group, name: group } });
+	const groups = [
+		{ groupName: 'Material', values: ['Stonewash Titanium', 'Ultem'] },
+		{ groupName: 'Plates', values: ['Normal', 'Trick'] },
+	];
+	// Ronin V2 as published on Damned (2026-10-27): the material sets the price.
+	const ronin = [
+		variant({ sku: 'ronv2swtinor', price: 11500, options: [opt('Material', 'Stonewash Titanium'), opt('Plates', 'Normal')] }),
+		variant({ sku: 'ronv2swtitr', price: 11500, options: [opt('Material', 'Stonewash Titanium'), opt('Plates', 'Trick')] }),
+		variant({ sku: 'ronv2ulnor', price: 10000, options: [opt('Material', 'Ultem'), opt('Plates', 'Normal')] }),
+		variant({ sku: 'ronv2ultri', price: 10000, options: [opt('Material', 'Ultem'), opt('Plates', 'Trick')] }),
+	];
+	it('Ultem selected: Normal and Trick quote the Ultem price ($100), not the first Titanium variant ($115)', () => {
+		expect(optionPriceFor(ronin, groups, 1, 'Normal', ['Ultem', null])).toBe(10000);
+		expect(optionPriceFor(ronin, groups, 1, 'Trick', ['Ultem', null])).toBe(10000);
+		expect(optionPriceFor(ronin, groups, 1, 'Trick', ['Stonewash Titanium', 'Normal'])).toBe(11500);
+	});
+	it('prices that differ per combination: each option quotes its own combination; open groups take the cheapest', () => {
+		const grid = [
+			variant({ sku: 'a1', price: 10000, options: [opt('Material', 'Ultem'), opt('Plates', 'Normal')] }),
+			variant({ sku: 'a2', price: 11500, options: [opt('Material', 'Ultem'), opt('Plates', 'Trick')] }),
+			variant({ sku: 'b1', price: 12000, options: [opt('Material', 'Stonewash Titanium'), opt('Plates', 'Normal')] }),
+			variant({ sku: 'b2', price: 13500, options: [opt('Material', 'Stonewash Titanium'), opt('Plates', 'Trick')], salePrice: 12500 }),
+		];
+		expect(optionPriceFor(grid, groups, 1, 'Trick', ['Ultem', null])).toBe(11500);
+		expect(optionPriceFor(grid, groups, 1, 'Trick', ['Stonewash Titanium', null])).toBe(12500); // effective (sale) price
+		expect(optionPriceFor(grid, groups, 0, 'Stonewash Titanium', [null, 'Normal'])).toBe(12000);
+		expect(optionPriceFor(grid, groups, 1, 'Normal', [null, null])).toBe(10000);
+	});
+	it('no variant for the combination falls back to the cheapest with the value; unknown value is null', () => {
+		const sparse = [ronin[0], ronin[3]];
+		expect(optionPriceFor(sparse, groups, 1, 'Normal', ['Ultem', null])).toBe(11500);
+		expect(optionPriceFor(ronin, groups, 1, 'Sideways', ['Ultem', null])).toBeNull();
 	});
 });
 
