@@ -111,7 +111,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
             props.isOrderProcessing.value = false;
           }))}
         />
-        <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
+        <div class="checkout-container max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
           <div class="checkout-columns lg:flex lg:gap-x-8 xl:gap-x-12">
             <CheckoutOrderSummary
               formattedTotal={props.formattedTotal}

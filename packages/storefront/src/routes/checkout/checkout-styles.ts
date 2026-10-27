@@ -39,7 +39,11 @@ export const CHECKOUT_STYLES = `
   .checkout-right{background:transparent}
 }
 @media (max-width:767px){
-  .checkout-right-inner{padding-bottom:90px!important}
+  /* #404: payment-to-footer gap ~24px (14px section margin + 10px); the sticky bar's clearance sits after the footer instead. */
+  .checkout-right-inner{padding-bottom:10px!important}
+  .checkout-right{margin-bottom:0!important}
+  .checkout-container{padding-bottom:0!important}
+  body:has(.sticky-cta-bar){padding-bottom:calc(72px + env(safe-area-inset-bottom))}
   .checkout-cta-inline{display:none}
   .checkout-below-cta{display:none}
   .sticky-cta-bar{
