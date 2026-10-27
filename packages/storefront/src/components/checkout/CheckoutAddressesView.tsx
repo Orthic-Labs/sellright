@@ -106,7 +106,12 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
                 placeholder={phonePlaceholder.value}
                 aria-label="Phone number"
-                onInput$={(_, el) => handlePhoneChange$(el.value)}
+                onInput$={async (_, el) => {
+                  await handlePhoneChange$(el.value);
+                  // The stored number drops letters; keep the field showing exactly what is stored.
+                  const kept = sanitizePhoneNumber(appState.shippingAddress?.phoneNumber);
+                  if (el.value !== kept) el.value = kept;
+                }}
                 onBlur$={handlePhoneBlur$}
                 aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
                 aria-describedby={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}

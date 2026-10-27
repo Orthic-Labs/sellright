@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useComputed$, useTask$, type Signal } from '@qwik.dev/core';
 
-import { useCart, applyCoupon, removeCoupon, type CartContextState } from '~/contexts/CartContext';
+import { useCart, applyCoupon, removeCoupon, COUPON_MAX_LENGTH, type CartContextState } from '~/contexts/CartContext';
 import { formatPrice } from '~/utils';
 import { TrashIcon, Alert } from '~/platform/gateway';
 import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
@@ -131,6 +131,7 @@ export default component$<{
 								<input
 									type="text"
 									placeholder="Enter promo code"
+									maxLength={COUPON_MAX_LENGTH}
 									value={couponCodeSignal.value}
 									onInput$={handleInput$}
 									onKeyDown$={async (event) => {
@@ -179,7 +180,7 @@ export default component$<{
 				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
 					<dt>Shipping</dt>
 					<dd class="font-medium text-[rgba(253,250,246,0.6)]">
-						{shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
+						{shippingKnown.value ? (shipping.value === 0 ? 'Free' : formatPrice(shipping.value || 0, currencyCode)) : 'Calculated at next step'}
 					</dd>
 				</div>
 				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
@@ -202,7 +203,7 @@ export default component$<{
       <div class="flex items-center justify-between">
         <dt>Shipping fee</dt>
         <dd class="font-medium text-gray-900">
-          {shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
+          {shippingKnown.value ? (shipping.value === 0 ? 'Free' : formatPrice(shipping.value || 0, currencyCode)) : 'Calculated at next step'}
         </dd>
       </div>
 
@@ -231,6 +232,7 @@ export default component$<{
                   <input
                     type="text"
                     placeholder="Enter coupon"
+                    maxLength={COUPON_MAX_LENGTH}
                     value={couponCodeSignal.value}
                     onInput$={handleInput$}
                     onKeyDown$={async (event) => {

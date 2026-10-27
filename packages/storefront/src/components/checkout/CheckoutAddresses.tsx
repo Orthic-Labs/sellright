@@ -10,6 +10,9 @@ import { CheckoutAddressesView } from './CheckoutAddressesView';
 interface CheckoutAddressesProps {
   onAddressesSubmitted$?: QRL<() => void>;
 }
+/** #401: shown when a typed phone number has letters or symbols (checkout accepted "abc" silently). */
+export const PHONE_CHARACTERS_MESSAGE = 'Use digits only (spaces, +, - and brackets are fine).';
+
 export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddressesSubmitted$ }) => {
   const appState = useContext(APP_STATE);
   const validationActions = useCheckoutValidationActions();
@@ -25,6 +28,8 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
   const lastNameValidationError = useSignal<string>('');
   const lastNameTouched = useSignal<boolean>(false);
   const phoneValidationError = useSignal<string>('');
+  /** #401: the last phone input had letters/symbols (dropped); its message wins over the section re-validation. */
+  const phoneCharsRejected = useSignal(false);
   const phoneTouched = useSignal<boolean>(false);
   const addressSubmissionComplete = useSignal<boolean>(false);
   const addressSubmissionInProgress = useSignal<boolean>(false);
@@ -49,7 +54,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     emailValidationError.value = customerSection.errors.email || '';
     firstNameValidationError.value = customerSection.errors.firstName || '';
     lastNameValidationError.value = customerSection.errors.lastName || '';
-    phoneValidationError.value = customerSection.errors.phone || '';
+    phoneValidationError.value = phoneCharsRejected.value ? PHONE_CHARACTERS_MESSAGE : (customerSection.errors.phone || '');
     isFormValidSignal.value = overallValid;
     validationActions.updateCustomerValidation(
       customerSection.isValid,
@@ -281,6 +286,13 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
   const handlePhoneChange$ = $((value: string) => {
     const filteredValue = filterPhoneInput(sanitizePhoneNumber(value));
     appState.shippingAddress = { ...appState.shippingAddress, phoneNumber: filteredValue };
+    // #401: letters or symbols were typed: say so at once (they are dropped; the field shows what is kept).
+    phoneCharsRejected.value = filteredValue !== sanitizePhoneNumber(value);
+    if (phoneCharsRejected.value) {
+      phoneTouched.value = true;
+      phoneValidationError.value = PHONE_CHARACTERS_MESSAGE;
+      return;
+    }
     if (phoneTouched.value) {
       const countryCode = appState.shippingAddress.countryCode || 'US';
       const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
@@ -294,6 +306,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
   });
   const handlePhoneBlur$ = $(() => {
     phoneTouched.value = true;
+    if (phoneCharsRejected.value) { phoneValidationError.value = PHONE_CHARACTERS_MESSAGE; return; }
     const phoneNumber = appState.shippingAddress?.phoneNumber || '';
     const countryCode = appState.shippingAddress.countryCode || 'US';
     const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';

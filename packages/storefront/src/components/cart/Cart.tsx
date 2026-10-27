@@ -1,4 +1,4 @@
-import { component$, useContext, useSignal, useStore, useComputed$, $, useTask$ } from '@qwik.dev/core';
+import { component$, noSerialize, useContext, useSignal, useStore, useComputed$, $, useTask$, useVisibleTask$, type NoSerialize } from '@qwik.dev/core';
 import { useLocation, useNavigate } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { isCheckoutPage } from '~/utils/route-helpers';
@@ -32,17 +32,47 @@ export default component$(() => {
 	const countryCodeSignal = useSignal(appState.shippingAddress.countryCode);
 	const panelRef = useSignal<Element>();
 
-	// Auto-focus panel when cart opens so Escape key is captured. The drawer renders after this task, possibly much later (an
-	// async shipping or cart lookup can hold the render): poll each frame while the drawer stays open, no frame budget; a close
-	// or unmount cancels the poll.
-	useTask$(({ track, cleanup }) => {
+	// #401 dialog focus: on open, remember what opened the drawer (the header cart button, ADD TO CART) and move focus into the
+	// panel; on close, return focus there. The drawer renders after this task, possibly much later (an async shipping or cart
+	// lookup can hold the render): poll each frame while the drawer stays open, no frame budget; a close or unmount cancels it.
+	const opener = useSignal<NoSerialize<Element> | null>(null);
+	// A visible task (document-ready): it must run in the browser on every open, including the first one an ADD TO CART
+	// triggers before this component was ever resumed (a useTask$ there never ran, so focus stayed on the PDP).
+	useVisibleTask$(({ track, cleanup }) => {
 		const open = track(() => appState.showCart);
 		if (!open || typeof document === 'undefined') return;
+		const active = document.activeElement;
+		opener.value = active && active !== document.body ? noSerialize(active) : null;
 		let cancelled = false;
 		let frame = 0;
+		// #401: while open the drawer is modal for the keyboard wherever focus is: Escape closes it (it only worked with focus
+		// already inside), and Tab / Shift+Tab wrap inside the panel instead of walking the page behind it. A native listener:
+		// the wrap must preventDefault synchronously, which a Qwik handler (async) cannot.
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') { appState.showCart = false; return; }
+			if (e.key !== 'Tab') return;
+			const panel = panelRef.value as HTMLElement | undefined;
+			if (!panel) return;
+			const focusables = [...panel.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+				.filter((el) => el.offsetParent !== null);
+			if (!focusables.length) { e.preventDefault(); panel.focus(); return; }
+			const first = focusables[0]!, last = focusables[focusables.length - 1]!;
+			const active = document.activeElement;
+			if (!panel.contains(active)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+			if (e.shiftKey && (active === first || active === panel)) { e.preventDefault(); last.focus(); }
+			else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+		};
+		document.addEventListener('keydown', onKey);
 		cleanup(() => {
 			cancelled = true;
 			cancelAnimationFrame(frame);
+			document.removeEventListener('keydown', onKey);
+			// Closing (not a re-run while open): give focus back to the control that opened the drawer, if it is still there.
+			if (!appState.showCart) {
+				const back = opener.value as HTMLElement | null;
+				opener.value = null;
+				if (back?.isConnected) requestAnimationFrame(() => back.focus());
+			}
 		});
 		const focusPanel = () => {
 			if (cancelled) return;
@@ -51,7 +81,7 @@ export default component$(() => {
 			else frame = requestAnimationFrame(focusPanel);
 		};
 		frame = requestAnimationFrame(focusPanel);
-	});
+	}, { strategy: 'document-ready' });
 
 	const dropdownState = useStore({
 		pendingCountryCode: '',
@@ -263,7 +293,6 @@ export default component$(() => {
 						aria-label="Shopping cart"
 						class="relative ml-auto h-full w-[85vw] sm:w-[35vw] sm:max-w-[620px] flex flex-col bg-[var(--color-parchment)] shadow-[-6px_0_32px_rgba(0,0,0,0.14)]"
 						tabIndex={-1}
-						onKeyDown$={(e) => { if (e.key === 'Escape') appState.showCart = false; }}
 					>
 
 						{/* L8: Trust strip — one truncated line on narrow screens, or (routes.json cart.trustStrip "wrap") each item wraps inside its
@@ -272,7 +301,7 @@ export default component$(() => {
 							{/* A visible close control (the backdrop and Escape also close the drawer). */}
 							<button
 								type="button"
-								class="sr-cart-close absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-[#6b6b68] hover:text-[var(--color-ink)] cursor-pointer"
+								class="sr-cart-close absolute right-0 top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center text-[#6b6b68] hover:text-[var(--color-ink)] cursor-pointer"
 								aria-label="Close"
 								onClick$={() => (appState.showCart = false)}
 							>
@@ -281,7 +310,7 @@ export default component$(() => {
 							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
 								<div key={i} style="display: contents">
 									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
-									<span class={`text-[10px] tracking-[0.06em] text-[#9A9288] ${CART_TRUST_STRIP_WRAP ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}`}>{text}</span>
+									<span class={`text-[10px] tracking-[0.06em] text-[#6B6459] ${CART_TRUST_STRIP_WRAP ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}`}>{text}</span>
 								</div>
 							))}
 						</div>
@@ -318,7 +347,7 @@ export default component$(() => {
 							)}
 
 							{!cartState.hasLoadedOnce ? (
-								<div class="flex items-center justify-center min-h-[280px] text-[12px] text-[#9A9288]" role="status">
+								<div class="flex items-center justify-center min-h-[280px] text-[12px] text-[#6B6459]" role="status">
 									{cartState.lastError ?? 'Loading your cart…'}
 								</div>
 							) : totalQuantity.value > 0 ? (
@@ -329,7 +358,7 @@ export default component$(() => {
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
 									</svg>
 									<p class="font-heading text-[12px] tracking-[0.14em] uppercase text-[#1A1A1A] mb-1.5">{BRAND_COPY.cart?.emptyTitle ?? 'Your cart is empty'}</p>
-									<p class="text-[12px] text-[#9A9288] mb-6 leading-relaxed">{BRAND_COPY.cart?.emptyBody ?? "Browse our collection to find something you'll love."}</p>
+									<p class="text-[12px] text-[#6B6459] mb-6 leading-relaxed">{BRAND_COPY.cart?.emptyBody ?? "Browse our collection to find something you'll love."}</p>
 									<button
 										class="px-8 py-2.5 bg-[#1A1A1A] text-white text-[11px] tracking-[0.18em] uppercase hover:bg-[#8a6d4a] transition-colors duration-300 cursor-pointer"
 										onClick$={async () => {
@@ -386,7 +415,7 @@ export default component$(() => {
 								)}
 								<button
 									onClick$={() => (appState.showCart = false)}
-									class="w-full text-center text-[11px] tracking-[0.08em] text-[#9A9288] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
+									class="w-full text-center text-[11px] tracking-[0.08em] text-[#6B6459] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
 								>
 									Continue Shopping
 								</button>
@@ -424,7 +453,7 @@ export default component$(() => {
 
 								<div class="space-y-1 mb-2">
 									<div class="flex justify-between items-baseline">
-										<span class="text-[11px] tracking-[0.05em] text-[#9A9288] uppercase">Subtotal</span>
+										<span class="text-[11px] tracking-[0.05em] text-[#6B6459] uppercase">Subtotal</span>
 										<span class="text-[13px] font-medium text-[#1A1A1A] tabular-nums">
 											{formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
 										</span>
@@ -432,7 +461,7 @@ export default component$(() => {
 
 									{/* Shipping calculation result */}
 									<div class="flex justify-between items-baseline">
-										<span class="text-[11px] tracking-[0.05em] text-[#9A9288] uppercase">Shipping</span>
+										<span class="text-[11px] tracking-[0.05em] text-[#6B6459] uppercase">Shipping</span>
 										{shippingState.selectedMethod ? (
 											<span class="text-[13px] font-medium tabular-nums">
 												{shippingState.selectedMethod.priceWithTax === 0
@@ -517,7 +546,7 @@ export default component$(() => {
 
 								<button
 									onClick$={() => (appState.showCart = false)}
-									class="w-full text-center text-[11px] tracking-[0.08em] text-[#9A9288] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
+									class="w-full text-center text-[11px] tracking-[0.08em] text-[#6B6459] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
 								>
 									Continue Shopping
 								</button>

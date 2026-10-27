@@ -2,7 +2,7 @@ import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useS
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
 import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
-import { useCart, addToCartWithOutcome } from '~/contexts/CartContext';
+import { useCart, addToCartWithOutcome, ADD_FAILED_MESSAGE } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
@@ -303,7 +303,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         const outcome = await addToCartWithOutcome(cart, selectedVar.sku, 1, enrichment);
         // A rejected or unapplied add is not "added": show the cart's own error, keep the drawer shut, announce nothing.
         if (outcome.kind !== 'applied') {
-          addItemToOrderErrorSignal.value = (outcome.kind === 'error' && outcome.message) || cart.lastError || 'Failed to add item to cart';
+          addItemToOrderErrorSignal.value = (outcome.kind === 'error' && outcome.message) || cart.lastError || ADD_FAILED_MESSAGE;
           return;
         }
         appState.showCart = true;
@@ -317,7 +317,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         setTimeout(() => announcement.remove(), 3000);
       } catch (error) {
         console.error('Error adding item to local cart:', error);
-        addItemToOrderErrorSignal.value = 'Failed to add item to cart';
+        addItemToOrderErrorSignal.value = ADD_FAILED_MESSAGE;
       } finally {
         isAddingToCart.value = false;
       }

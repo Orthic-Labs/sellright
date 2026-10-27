@@ -120,6 +120,8 @@ export default component$(() => {
 		}
 	});
 
+	const optionSeparators = (label: string) => label.split(/\s+-\s+/).join(' / ');
+
 	// Helper: strip product name prefix from variant name
 	const variantLabel = (variantName: string, productName: string) => {
 		const stripped = variantName.replace(productName, '').trim();
@@ -146,7 +148,9 @@ export default component$(() => {
 					// fail-closed-safe "uncapped" case — bounded to a sane dropdown size, never treated as literally infinite.
 					const maxQty = remaining === null ? Math.max(line.quantity, 99) : Math.max(remaining, line.quantity);
 					const quantityOpts = projectQuantityOptions(maxQty, expandedDropdowns.value.has(line.sku));
-					const vLabel = line.options ?? (line.productName ? line.name : variantLabel(line.name, productName));
+					// #401: one separator everywhere. The add path's options read "Small / Storm grey"; the server's variant name
+					// ("Small - Storm grey") after a sync or reload is shown the same way (hyphens inside a word stay).
+					const vLabel = line.options ?? optionSeparators(line.productName ? line.name : variantLabel(line.name, productName));
 
 					return (
 						<li key={line.sku} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">
@@ -232,7 +236,7 @@ export default component$(() => {
 									<button
 										data-sku={line.sku}
 										aria-label="Remove item"
-										class={`p-1.5 -mr-1 transition-colors duration-150 cursor-pointer bg-transparent border-0 ${isCheckoutView ? 'text-[rgba(253,250,246,0.35)] hover:text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.28)] hover:text-[rgba(26,26,26,0.65)]'}`}
+										class={`min-w-[44px] min-h-[44px] flex items-center justify-center -mr-3 -mb-2 transition-colors duration-150 cursor-pointer bg-transparent border-0 ${isCheckoutView ? 'text-[rgba(253,250,246,0.35)] hover:text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.28)] hover:text-[rgba(26,26,26,0.65)]'}`}
 										onClick$={handleRemoveItem$}
 									>
 										<TrashIcon />

@@ -1,5 +1,4 @@
 import { $, component$, useOnWindow, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import { titleCase } from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
 export const ProductMobileBar = component$((props: Record<string, any>) => {
@@ -35,7 +34,7 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
   return (
     <div class={`sr-mobile-bar${yielding.value ? ' is-yielding' : ''}`} aria-hidden={yielding.value ? 'true' : undefined} inert={yielding.value || undefined}>
       <div class="sr-mobile-bar-meta">
-        <div class="sr-mobile-bar-name">{titleCase(product.name)}</div>
+        <div class="sr-mobile-bar-name">{product.name}</div>
         <div class="sr-mobile-bar-price">
           {(() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;

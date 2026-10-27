@@ -51,6 +51,12 @@ const LEGACY_PENDING_COOKIE = 'sr_legacy_cart';
 /** The single origin-wide lock every cart operation of a cooperating tab runs under. */
 const CART_LOCK = 'sr-cart';
 /** Reason returned by `applyCoupon` when a newer cart request replaced it mid-flight. */
+/** The API's reason for a code that matches no promotion (api/src/money/promotion-resolver.ts). */
+const UNKNOWN_COUPON_REASON = 'Coupon unavailable';
+/** #401: what the shopper reads for such a code. */
+export const INVALID_COUPON_MESSAGE = "That code isn't valid.";
+/** #401: longest coupon code the inputs accept (codes are short ASCII; 30 emoji were accepted before). */
+export const COUPON_MAX_LENGTH = 64;
 export const COUPON_SUPERSEDED = 'The cart changed while checking that code. Please try again.';
 const MISSING_CART_MESSAGE = 'Your cart expired — please re-add your items';
 const UNSUPPORTED_MESSAGE = 'Please update your browser to use the cart.';
@@ -783,7 +789,19 @@ export class CartService {
         this.persistIntent();
         return { valid: true };
       }
-      return { valid: false, reason: coupon?.reason ?? 'Invalid or expired code' };
+      // #401: a code that matches no promotion is not kept on the cart (it sat in the summary as "Not applied"): take it
+      // back out of the membership in the same locked operation and reject it plainly. Codes that exist but do not apply yet
+      // (minimum not met, verification needed) stay listed with their reason, as before.
+      if (!coupon || coupon.reason === UNKNOWN_COUPON_REASON) {
+        const prior = couponMembership(data.couponCodes ?? codes).filter(member => member.toLowerCase() !== code.toLowerCase());
+        try {
+          await this.withRevisionRetryInLock((token, revision) => sellright().PATCH('/v1/shop/cart/{token}/lines', {
+            params: { path: { token } }, body: { lines: [], couponCodes: prior, expectedRevision: revision, ...this.quoteContext, shipCountry: this.quoteCountry() },
+          }));
+        } catch { /* the rejection below still stands; the next read shows the server's membership */ }
+        return { valid: false, reason: INVALID_COUPON_MESSAGE };
+      }
+      return { valid: false, reason: coupon.reason ?? 'Invalid or expired code' };
     });
   }
 

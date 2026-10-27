@@ -40,10 +40,10 @@ export default component$(() => {
 	return (
 		<div class="flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-white">
 			<div class="sm:mx-auto sm:w-full sm:max-w-md">
-				<h2 class="mt-6 text-center text-lg sm:text-xl font-semibold text-gray-900 whitespace-nowrap">Forgot password</h2>
+				<h2 class="font-heading mt-6 text-center text-lg sm:text-xl font-semibold text-[var(--color-ink)] whitespace-nowrap">Forgot password</h2>
 			</div>
 			<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-				<div class="bg-[#F9F7F4] py-8 px-4 shadow-sm sm:rounded-lg sm:px-10">
+				<div class="bg-[var(--color-parchment)] py-8 px-4 shadow-sm sm:rounded-lg sm:px-10">
 					{success.value && (
 						<div class="mt-6 mb-6 bg-yellow-50 border border-yellow-400 text-yellow-800 rounded-sm p-4 text-center text-sm">
 							<p>Password reset email sent to {email.value}</p>
@@ -51,7 +51,7 @@ export default component$(() => {
 					)}
 					<div class="mt-8 space-y-6">
 						<div>
-							<label class="block text-sm font-medium text-gray-700">Email</label>
+							<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Email</label>
 							<div class="mt-1">
 								<input
 									type="email"
@@ -65,7 +65,7 @@ export default component$(() => {
 											reset();
 										}
 									}}
-									class="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-[var(--color-accent)] focus:border-[var(--color-accent)] sm:text-sm"
+									class="appearance-none block w-full px-3 py-2 border border-[var(--color-card-border)] rounded-md shadow-xs placeholder-[var(--color-ink-muted)] focus:outline-hidden focus:ring-[var(--color-accent)] focus:border-[var(--color-accent)] sm:text-sm"
 								/>
 							</div>
 						</div>
@@ -84,7 +84,7 @@ export default component$(() => {
 						)}
 						<div>
 							<button
-								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer"
+								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer"
 								onClick$={reset}
 							>
 								Reset password

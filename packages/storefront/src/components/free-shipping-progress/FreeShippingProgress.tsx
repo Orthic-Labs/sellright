@@ -17,7 +17,7 @@ export const FreeShippingProgress = component$<SlotProps<'cart.free-shipping-pro
 		<div class="bg-[var(--color-parchment)] border border-[var(--color-card-border)] rounded-md p-3 mb-4" data-testid="free-shipping-progress">
 			<div class="flex items-center justify-between mb-2">
 				<span class="text-sm text-[var(--color-ink)]">Free Shipping</span>
-				<span class="text-xs text-[#9A9288]">{formatPrice(freeShipping.remaining, currencyCode)} away</span>
+				<span class="text-xs text-[#6B6459]">{formatPrice(freeShipping.remaining, currencyCode)} away</span>
 			</div>
 
 			{/* Progress Bar */}

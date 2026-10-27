@@ -41,14 +41,14 @@ const TOKEN_FAILED_HINT = "Verification couldn't load. Refresh the page or try a
 type View = 'signin' | 'signup' | 'success' | 'reset-sent' | 'magic-sent' | 'verify-needed';
 
 const PRIMARY =
-	'w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready';
+	'w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready';
 const INPUT =
-	'mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white';
+	'mt-1 appearance-none block w-full px-3 py-2.5 border border-[var(--color-card-border)] rounded-md shadow-xs placeholder-[var(--color-ink-muted)] focus:outline-hidden focus:ring-2 focus:ring-[var(--color-accent)] focus:border-[var(--color-ink-soft)] sm:text-sm bg-white';
 
 const PROVIDER_BUTTON =
-	'w-full flex justify-center py-3 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-800 bg-white hover:bg-gray-50 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors cursor-pointer disabled:opacity-60';
+	'w-full flex justify-center py-3 px-4 border border-[var(--color-card-border)] rounded-md shadow-sm text-sm font-medium text-[var(--color-ink)] bg-white hover:bg-[var(--color-parchment)] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60';
 const APPLE_BUTTON =
-	'w-full flex justify-center py-3 px-4 border border-black rounded-md shadow-sm text-sm font-medium text-white bg-black hover:bg-gray-900 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-gray-700 transition-colors cursor-pointer disabled:opacity-60';
+	'w-full flex justify-center py-3 px-4 border border-black rounded-md shadow-sm text-sm font-medium text-white bg-black hover:bg-[var(--color-ink)] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60';
 
 export default component$(() => {
 	const navigate = useNavigate();
@@ -316,14 +316,14 @@ export default component$(() => {
 	const primaryHint = hint(view.value === 'signup' ? signupReady : signinReady);
 
 	return (
-		<div class="min-h-screen bg-gray-50 flex items-start justify-center py-16 px-4 sm:px-6 lg:px-8">
+		<div class="min-h-screen bg-[var(--color-parchment)] flex items-start justify-center py-16 px-4 sm:px-6 lg:px-8">
 			<div class="w-full max-w-md">
-				<div class="bg-[#F9F7F4] rounded-2xl p-8 shadow-sm">
+				<div class="bg-[var(--color-parchment)] rounded-2xl p-8 shadow-sm">
 					{view.value === 'signin' && (
 						<div>
 							<div class="text-center mb-8">
-								<h1 class="text-2xl font-bold text-gray-900">Sign in</h1>
-								<p class="mt-2 text-sm text-gray-600">Welcome back</p>
+								<h1 class="font-heading text-2xl font-bold text-[var(--color-ink)]">Sign in</h1>
+								<p class="mt-2 text-sm text-[var(--color-ink-soft)]">Welcome back</p>
 							</div>
 							{passwordResetDone.value && (
 								<p class="mb-5 rounded-md bg-green-50 p-3 text-sm text-green-800" role="status" data-testid="password-reset-success">
@@ -332,7 +332,7 @@ export default component$(() => {
 							)}
 							<div class="space-y-5">
 								<div>
-									<label class="block text-sm font-medium text-gray-700">Email address</label>
+									<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Email address</label>
 									<input
 										type="email"
 										autoComplete="email"
@@ -344,7 +344,7 @@ export default component$(() => {
 									/>
 								</div>
 								<div>
-									<label class="block text-sm font-medium text-gray-700">Password</label>
+									<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Password</label>
 									<input
 										type="password"
 										autoComplete="current-password"
@@ -356,12 +356,12 @@ export default component$(() => {
 										class={INPUT}
 									/>
 								</div>
-								<label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+								<label class="flex items-center gap-2 text-sm text-[var(--color-ink-soft)] cursor-pointer">
 									<input
 										type="checkbox"
 										checked
 										onChange$={(_, el) => (rememberMe.value = el.checked)}
-										class="h-4 w-4 text-[var(--color-accent)] focus:ring-[var(--color-accent)] border-gray-300 rounded-sm"
+										class="h-4 w-4 text-[var(--color-accent)] focus:ring-[var(--color-accent)] border-[var(--color-card-border)] rounded-sm"
 									/>
 									Remember me
 								</label>
@@ -372,29 +372,29 @@ export default component$(() => {
 					{view.value === 'signup' && (
 						<div>
 							<div class="text-center mb-8">
-								<h1 class="text-2xl font-bold text-gray-900">Create your account</h1>
+								<h1 class="font-heading text-2xl font-bold text-[var(--color-ink)]">Create your account</h1>
 							</div>
 							<div class="space-y-5">
 								<div class="grid grid-cols-2 gap-4">
 									<div>
-										<label class="block text-sm font-medium text-gray-700">First name</label>
+										<label class="block text-sm font-medium text-[var(--color-ink-soft)]">First name</label>
 										<input type="text" autoComplete="given-name" autoFocus value={firstName.value} onInput$={(_, el) => (firstName.value = el.value)} class={INPUT} />
 									</div>
 									<div>
-										<label class="block text-sm font-medium text-gray-700">Last name</label>
+										<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Last name</label>
 										<input type="text" autoComplete="family-name" value={lastName.value} onInput$={(_, el) => (lastName.value = el.value)} class={INPUT} />
 									</div>
 								</div>
 								<div>
-									<label class="block text-sm font-medium text-gray-700">Email address</label>
+									<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Email address</label>
 									<input type="email" autoComplete="email" value={email.value} onInput$={(_, el) => (email.value = el.value)} class={INPUT} placeholder="you@example.com" />
 								</div>
 								<div>
-									<label class="block text-sm font-medium text-gray-700">Password</label>
+									<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Password</label>
 									<input type="password" autoComplete="new-password" value={password.value} onInput$={(_, el) => (password.value = el.value)} class={INPUT} />
 								</div>
 								<div>
-									<label class="block text-sm font-medium text-gray-700">Confirm password</label>
+									<label class="block text-sm font-medium text-[var(--color-ink-soft)]">Confirm password</label>
 									<input
 										type="password"
 										autoComplete="new-password"
@@ -429,17 +429,17 @@ export default component$(() => {
 							>
 								{loading.value ? 'Signing in...' : 'Sign in'}
 							</button>
-							{primaryHint && <p class="text-xs text-gray-500 text-center">{primaryHint}</p>}
+							{primaryHint && <p class="text-xs text-[var(--color-ink-soft)] text-center">{primaryHint}</p>}
 							{googleClientId.value && (
 								<>
 									<div class="flex items-center gap-3">
-										<div class="h-px flex-1 bg-gray-200"></div>
-										<span class="text-xs text-gray-500">or</span>
-										<div class="h-px flex-1 bg-gray-200"></div>
+										<div class="h-px flex-1 bg-[var(--color-card-border)]"></div>
+										<span class="text-xs text-[var(--color-ink-soft)]">or</span>
+										<div class="h-px flex-1 bg-[var(--color-card-border)]"></div>
 									</div>
 									<div id="google-signin-button" data-testid="google-signin-button" class="flex justify-center min-h-[44px]"></div>
 									{googleUnavailable.value && (
-										<p class="text-xs text-gray-600 text-center" role="status" data-testid="google-signin-unavailable">
+										<p class="text-xs text-[var(--color-ink-soft)] text-center" role="status" data-testid="google-signin-unavailable">
 											Google sign-in is unavailable right now.{' '}
 											<button type="button" class="underline cursor-pointer" onClick$={() => googleAttempt.value++}>
 												Try again
@@ -452,9 +452,9 @@ export default component$(() => {
 								<>
 									{!googleClientId.value && (
 										<div class="flex items-center gap-3">
-											<div class="h-px flex-1 bg-gray-200"></div>
-											<span class="text-xs text-gray-500">or</span>
-											<div class="h-px flex-1 bg-gray-200"></div>
+											<div class="h-px flex-1 bg-[var(--color-card-border)]"></div>
+											<span class="text-xs text-[var(--color-ink-soft)]">or</span>
+											<div class="h-px flex-1 bg-[var(--color-card-border)]"></div>
 										</div>
 									)}
 									{passkeySupported.value && (
@@ -468,7 +468,7 @@ export default component$(() => {
 												Sign in with Apple
 											</button>
 											{appleUnavailable.value && (
-												<p class="text-xs text-gray-600 text-center" role="status" data-testid="apple-signin-unavailable">
+												<p class="text-xs text-[var(--color-ink-soft)] text-center" role="status" data-testid="apple-signin-unavailable">
 													Apple sign-in is unavailable right now. Please try again.
 												</p>
 											)}
@@ -476,7 +476,7 @@ export default component$(() => {
 									)}
 								</>
 							)}
-							<div class="text-center text-sm text-gray-600 space-y-2 pt-2">
+							<div class="text-center text-sm text-[var(--color-ink-soft)] space-y-2 pt-2">
 								<p>
 									<button
 										key={`password-reset-${loading.value}`}
@@ -484,11 +484,13 @@ export default component$(() => {
 										onClick$={handleForgotPassword}
 										disabled={loading.value}
 										aria-disabled={(emailReady && tokenOk) ? 'false' : 'true'}
-										class="link-ready text-gray-600 hover:text-gray-800 underline cursor-pointer"
+										class="link-ready text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer"
 									>
 										Forgot your password? Reset it
 									</button>
 								</p>
+								{/* #401: the links wait for the security check; say so instead of a silent aria-disabled. */}
+								{TURNSTILE_SITE_KEY && emailReady && !tokenOk && <p class="text-xs" role="status">{TOKEN_MISSING_HINT}</p>}
 								{magicLinkEnabled.value && (
 									<p>
 										<button
@@ -498,7 +500,7 @@ export default component$(() => {
 											disabled={loading.value}
 											aria-disabled={(emailReady && tokenOk) ? 'false' : 'true'}
 											data-testid="magic-link-request"
-											class="link-ready text-gray-600 hover:text-gray-800 underline cursor-pointer"
+											class="link-ready text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer"
 										>
 											Email me a sign-in link
 										</button>
@@ -525,8 +527,8 @@ export default component$(() => {
 							>
 								{loading.value ? 'Creating account...' : 'Create account'}
 							</button>
-							{primaryHint && <p class="text-xs text-gray-500 text-center">{primaryHint}</p>}
-							<p class="text-center text-sm text-gray-600">
+							{primaryHint && <p class="text-xs text-[var(--color-ink-soft)] text-center">{primaryHint}</p>}
+							<p class="text-center text-sm text-[var(--color-ink-soft)]">
 								Already have an account?{' '}
 								<button type="button" onClick$={() => goToView('signin')} class="text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer">
 									Sign in
@@ -543,8 +545,8 @@ export default component$(() => {
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
 								</svg>
 							</div>
-							<h2 class="text-lg font-medium text-[var(--color-ink)] mb-2">Check your email</h2>
-							<p class="text-sm text-gray-600 mb-6">
+							<h2 class="font-heading text-lg font-medium text-[var(--color-ink)] mb-2">Check your email</h2>
+							<p class="text-sm text-[var(--color-ink-soft)] mb-6">
 								We sent a verification link to <span class="font-medium">{email.value}</span>. Click the link to activate your account.
 							</p>
 							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer">
@@ -556,8 +558,8 @@ export default component$(() => {
 					{/* ── Unverified account tried to sign in ── */}
 					{view.value === 'verify-needed' && (
 						<div class="text-center py-4">
-							<h2 class="text-lg font-medium text-gray-900 mb-2">Verify your email</h2>
-							<p class="text-sm text-gray-600 mb-6">
+							<h2 class="font-heading text-lg font-medium text-[var(--color-ink)] mb-2">Verify your email</h2>
+							<p class="text-sm text-[var(--color-ink-soft)] mb-6">
 								Your password is correct, but <span class="font-medium">{email.value}</span> hasn't been verified yet.
 								Check your inbox for the verification link{resendSent.value ? ' — we just sent another one.' : '.'}
 							</p>
@@ -569,8 +571,8 @@ export default component$(() => {
 							>
 								{resendLoading.value ? 'Sending...' : resendSent.value ? 'Verification email sent' : 'Resend verification email'}
 							</button>
-							{!resendSent.value && hint(emailReady) && <p class="text-xs text-gray-500 mb-3">{hint(emailReady)}</p>}
-							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
+							{!resendSent.value && hint(emailReady) && <p class="text-xs text-[var(--color-ink-soft)] mb-3">{hint(emailReady)}</p>}
+							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>
@@ -579,11 +581,11 @@ export default component$(() => {
 					{/* ── Sign-in link sent ── */}
 					{view.value === 'magic-sent' && (
 						<div class="text-center py-4" data-testid="magic-link-sent">
-							<h2 class="text-lg font-medium text-gray-900 mb-2">Check your email</h2>
-							<p class="text-sm text-gray-600 mb-6">
+							<h2 class="font-heading text-lg font-medium text-[var(--color-ink)] mb-2">Check your email</h2>
+							<p class="text-sm text-[var(--color-ink-soft)] mb-6">
 								If an account exists for <span class="font-medium">{email.value}</span>, we've sent a link that signs you in. It works once and expires soon.
 							</p>
-							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
+							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>
@@ -592,11 +594,11 @@ export default component$(() => {
 					{/* ── Password reset sent ── */}
 					{view.value === 'reset-sent' && (
 						<div class="text-center py-4">
-							<h2 class="text-lg font-medium text-gray-900 mb-2">Check your email</h2>
-							<p class="text-sm text-gray-600 mb-6">
+							<h2 class="font-heading text-lg font-medium text-[var(--color-ink)] mb-2">Check your email</h2>
+							<p class="text-sm text-[var(--color-ink-soft)] mb-6">
 								If an account exists for <span class="font-medium">{email.value}</span>, we've sent instructions to reset your password.
 							</p>
-							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
+							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>

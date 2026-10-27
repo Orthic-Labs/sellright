@@ -3,7 +3,7 @@ import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionPriceFor, priceDeltaLabel, swatchColor, titleCase } from './product-options';
+import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionPriceFor, priceDeltaLabel, swatchColor } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
@@ -155,7 +155,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         </div>{/* end sr-left-col */}
         <div class="sr-info-col">
           {isPreOrder.value && <div class="sr-kicker">New Release</div>}
-          <h1 class="sr-title">{titleCase(product.name)}</h1>
+          <h1 class="sr-title">{product.name}</h1>
           {rating && reviewsMeetThreshold(rating.count) && (
             <a
               href="#reviews"
@@ -462,7 +462,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                 <div class="sr-related-img">
                   {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
                 </div>
-                <div class="sr-related-name">{titleCase(rp.name)}</div>
+                <div class="sr-related-name">{rp.name}</div>
                 <div class="sr-related-price">{rp.priceCents > 0 ? formatPrice(rp.priceCents, product.currency || undefined) : ''}</div>
               </a>
             ))}

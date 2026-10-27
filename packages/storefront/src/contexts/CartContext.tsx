@@ -9,6 +9,7 @@ import {
   Slot,
 } from '@qwik.dev/core';
 import { CartService, CartError, CART_COUNT_KEY } from '~/services/CartService';
+export { COUPON_MAX_LENGTH, INVALID_COUPON_MESSAGE } from '~/services/CartService';
 import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
 import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
@@ -134,7 +135,14 @@ function applyResult(cartState: CartContextState, res: { cart: Cart; dropped: st
 function reportError(cartState: CartContextState, error: unknown, fallback: string): void {
   // A classified failure already changed the mirror (converted snapshot installed / missing cart retired).
   commitMirror(cartState);
-  cartState.lastError = error instanceof CartError ? error.message : error instanceof Error ? error.message : fallback;
+  cartState.lastError = cartErrorMessage(error, fallback);
+}
+
+/** #401: what the shopper reads when a cart call fails. The cart's own classified errors are written for shoppers; anything
+ *  else (a 5xx, a network failure, a client exception) shows the plain fallback, never a transport message such as
+ *  "Request failed with status 500". */
+export function cartErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof CartError && error.message ? error.message : fallback;
 }
 
 export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
@@ -187,7 +195,7 @@ export const addToCart = $(async (cartState: CartContextState, sku: string, quan
     const res = await CartService.addLine(sku, quantity, enrichment);
     applyResult(cartState, res);
   } catch (error) {
-    reportError(cartState, error, 'Failed to add item to cart');
+    reportError(cartState, error, ADD_FAILED_MESSAGE);
   } finally {
     cartState.isLoading = false;
   }
@@ -201,6 +209,9 @@ export type AddOutcome =
 
 /** `addToCart` with an outcome: the same state handling (mirror, notice, lastError, isLoading), plus what the add's own response
  *  says. A thrown cart error, a response for a cart this tab no longer points at, and a missing line never read as success. */
+/** #401: the add-to-cart failure every PDP shows (announced via role=alert). */
+export const ADD_FAILED_MESSAGE = "Couldn't add to cart. Please try again.";
+
 export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddOutcome> => {
   await loadCartIfNeeded(cartState);
   cartState.isLoading = true;
@@ -221,7 +232,7 @@ export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: s
         : null,
     };
   } catch (error) {
-    reportError(cartState, error, 'Failed to add item to cart');
+    reportError(cartState, error, ADD_FAILED_MESSAGE);
     return { kind: 'error', message: cartState.lastError };
   } finally {
     cartState.isLoading = false;

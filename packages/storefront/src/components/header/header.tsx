@@ -114,10 +114,9 @@ export default component$(() => {
 
 						{/* Cart icon */}
 						{!(isOnCheckoutPage || isOnConfirmationPage) && (
-							<div
+							<button
+								type="button"
 								class="header-icon-btn cursor-pointer"
-								role="button"
-								tabIndex={0}
 								onClick$={toggleCart}
 								aria-label={`${totalQuantity.value} items in cart`}
 								title="View cart"
@@ -138,7 +137,7 @@ export default component$(() => {
 								{totalQuantity.value > 0 && (
 									<span class="header-badge">{totalQuantity.value}</span>
 								)}
-							</div>
+							</button>
 						)}
 
 						{/* Account icon — desktop only */}
