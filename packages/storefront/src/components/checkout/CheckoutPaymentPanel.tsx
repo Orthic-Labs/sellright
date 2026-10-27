@@ -45,16 +45,8 @@ interface CheckoutPaymentPanelProps {
 	currency: string;
 }
 
-/** The available-method list, derived from what `GET /v1/shop/config`
- *  actually reports for this store — never hardcoded, never assumed. */
-export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
-	if (!config) return [];
-	const methods: PaymentMethod[] = [];
-	if (config.stripeConfigured) methods.push('stripe');
-	if (config.gateways?.nmi) methods.push('nmi');
-	if (config.gateways?.sezzle) methods.push(INSTALLMENT_PROVIDER);
-	return methods;
-}
+import { availableMethods } from './locked-payment';
+export { availableMethods };
 
 // Shopper-facing: the NMI card form reads as "Card", not the processor's name (Stripe shows its own method tabs).
 export const METHOD_LABEL: Readonly<Record<keyof typeof PROVIDER_LABELS, string>> = { ...PROVIDER_LABELS, nmi: 'Card' };

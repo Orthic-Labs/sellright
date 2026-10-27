@@ -1,8 +1,9 @@
-import { component$ } from '@qwik.dev/core';
+import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
+import { getShopConfig } from '~/providers/shop/checkout/checkout';
 import { CardBrandIcon } from '~/components/payment/CardBrandIcons';
 import { INSTALLMENT_PROVIDER, providerLabel } from '~/platform/payments/labels';
 import type { PaymentMethod } from '~/hooks/useCheckout';
-import { LOCKED_PAYMENT_HEADING, LOCKED_PAYMENT_LINE, PAYMENT_UNLOCKED_ANNOUNCEMENT, lockedPaymentMarks } from './locked-payment';
+import { LOCKED_PAYMENT_HEADING, LOCKED_PAYMENT_LINE, PAYMENT_UNLOCKED_ANNOUNCEMENT, availableMethods, lockedPaymentMarks } from './locked-payment';
 
 const PILL = 'inline-flex items-center h-[22px] px-2 rounded border border-[var(--color-card-border)] bg-white text-[11px] font-medium text-[var(--color-ink)]';
 
@@ -10,7 +11,14 @@ const PILL = 'inline-flex items-center h-[22px] px-2 rounded border border-[var(
  *  "Complete your shipping address" line, which read as an empty page on phones). Not focusable or clickable; role=status.
  *  The marks come from the store's configured payment providers. */
 export const LockedPaymentBox = component$<{ methods: readonly PaymentMethod[] }>(({ methods }) => {
-	const marks = lockedPaymentMarks(methods);
+	// Checkout reads the shop config only when payment mounts; the box reads it on its own (read-only, nothing applied to
+	// checkout state) so the marks show while the payment is still locked.
+	const configured = useSignal<readonly PaymentMethod[] | null>(null);
+	useVisibleTask$(async () => {
+		if (methods.length) return;
+		try { configured.value = availableMethods(await getShopConfig()); } catch { configured.value = []; }
+	}, { strategy: 'document-ready' });
+	const marks = lockedPaymentMarks(methods.length ? methods : configured.value ?? []);
 	return (
 		<div role="status" data-testid="payment-locked" class="rounded-md border border-[var(--color-card-border)] bg-[var(--color-parchment)] px-5 py-4 select-none">
 			<div class="flex items-center gap-2 mb-1.5">

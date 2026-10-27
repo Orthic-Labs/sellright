@@ -1,5 +1,6 @@
 // #404: the locked payment box shown before the checkout details are valid (pure decisions; LockedPaymentBox.tsx renders them).
 import type { PaymentMethod } from '~/hooks/useCheckout';
+import type { ShopConfig } from '~/sellright/types/checkout';
 import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 
 /** A payment mark the locked box shows: what the store's configured providers accept, never a hard-coded brand list. */
@@ -19,3 +20,14 @@ export function lockedPaymentMarks(methods: readonly PaymentMethod[]): PaymentMa
 export const LOCKED_PAYMENT_HEADING = 'Payment';
 export const LOCKED_PAYMENT_LINE = 'Enter your email and shipping address to unlock payment.';
 export const PAYMENT_UNLOCKED_ANNOUNCEMENT = 'Payment options unlocked.';
+
+/** The available-method list, derived from what `GET /v1/shop/config`
+ *  actually reports for this store — never hardcoded, never assumed. */
+export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
+	if (!config) return [];
+	const methods: PaymentMethod[] = [];
+	if (config.stripeConfigured) methods.push('stripe');
+	if (config.gateways?.nmi) methods.push('nmi');
+	if (config.gateways?.sezzle) methods.push(INSTALLMENT_PROVIDER);
+	return methods;
+}
