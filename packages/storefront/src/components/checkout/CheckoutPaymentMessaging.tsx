@@ -14,9 +14,10 @@ export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOp
 	const ready = useSignal(false);
 	const elementRef = useSignal<unknown>(null);
 
-	// Mount once per gateway account (publishable key).
+	// Mount once per gateway account (publishable key) and shopper country (#400: never left to the IP's country).
 	useVisibleTask$(async ({ track, cleanup }) => {
 		const key = track(() => props.options?.publishableKey ?? '');
+		track(() => props.options?.countryCode);
 		const host = track(() => hostRef.value);
 		const first = props.options;
 		if (!key || !host || !first) return;
@@ -31,7 +32,7 @@ export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOp
 		try {
 			const stripe = await loadStripe(key);
 			if (disposed || !stripe) return;
-			element = stripe.elements().create('paymentMethodMessaging', { amount: first.amount, currency: first.currency });
+			element = stripe.elements().create('paymentMethodMessaging', { amount: first.amount, currency: first.currency, countryCode: first.countryCode });
 			element.on('ready', () => { if (!disposed) ready.value = true; });
 			element.mount(host);
 			elementRef.value = element as unknown;

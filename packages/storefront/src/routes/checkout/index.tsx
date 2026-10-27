@@ -226,6 +226,7 @@ const CheckoutContent = component$(() => {
     publishableKey: stripePublishableKey.value,
     amountCents: chargeTotalCents.value,
     currency: cartCurrency.value,
+    countryCode: appState.shippingAddress.countryCode,
   }));
 
   // Express checkout (Apple Pay / Google Pay) at the top of checkout: only while no order exists for this view, the store's

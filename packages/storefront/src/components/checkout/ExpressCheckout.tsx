@@ -58,6 +58,9 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 	// The methods the gateway offers on this device (expressMethods), exposed as data-express-methods while visible.
 	const methods = useSignal<string[]>([]);
 	const quoted = useSignal(false);
+	// #400: the wallet iframe has painted (non-zero height). Stripe reports `ready` before its iframe has grown, and showing
+	// the label then left it above an empty gap until the buttons appeared.
+	const painted = useSignal(false);
 	const elementsRef = useSignal<unknown>(null);
 	// The quote for the page's destination (what the button opens with) and the one the open sheet shows.
 	const baseQuote = useSignal<WalletQuote | null>(null);
@@ -110,8 +113,13 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		if (!options || !host || !key) return;
 		let disposed = false;
 		let element: StripeExpressCheckoutElement | null = null;
+		const sized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { painted.value = host.offsetHeight > 0; });
+		sized?.observe(host);
+		if (!sized) painted.value = true;
 		cleanup(() => {
 			disposed = true;
+			sized?.disconnect();
+			painted.value = false;
 			try { element?.destroy(); } catch { /* already destroyed */ }
 			elementsRef.value = null;
 			walletAvailable.value = false;
@@ -209,7 +217,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		}
 	});
 
-	const visible = !!props.cartToken && walletAvailable.value && quoted.value;
+	const visible = !!props.cartToken && walletAvailable.value && quoted.value && painted.value;
 	return (
 		// Kept mounted (not display:none) while hidden so the gateway can still report wallet availability. While visible,
 		// data-express-methods names the offered methods (e.g. "link" alone), so a brand can lay a lone button out beside

@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
 import { paymentElementOptions } from './payment-element-options';
-import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement as StripePaymentElementHandle } from '@stripe/stripe-js';
+import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement as StripePaymentElementHandle, type StripePaymentElementOptions } from '@stripe/stripe-js';
 import type { PayableOrder } from './payable-order';
 
 /**
@@ -39,6 +39,8 @@ export interface StripePaymentElementProps {
 	/** The Payment Element could not be LOADED/mounted (SDK, network) — distinct from a declined payment; falls back to `onError$`. */
 	onInitError$?: QRL<(message: string, mountGen?: number) => void>;
 	onProcessingChange$?: QRL<(processing: boolean, mountGen?: number) => void>;
+	/** #400: billing country/ZIP defaults (see billingDefaultValues); applied at mount and whenever they change. */
+	billingDefaults?: StripePaymentElementOptions['defaultValues'];
 }
 
 export const StripePaymentElement = component$<StripePaymentElementProps>((props) => {
@@ -51,6 +53,7 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 	// by keeping them in module-task closures via signals holding `any`).
 	const stripeRef = useSignal<unknown>(null);
 	const elementsRef = useSignal<unknown>(null);
+	const paymentElementRef = useSignal<unknown>(null);
 
 	// Set when the component is removed (e.g. the shopper switched payment method while Stripe was still loading).
 	// Every async callback below checks it: a late failure from a dead component must not report into the shared
@@ -62,6 +65,7 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 		let paymentElement: StripePaymentElementHandle | null = null;
 		cleanup(() => {
 			disposed.value = true;
+			paymentElementRef.value = null;
 			try { paymentElement?.destroy(); } catch { /* already destroyed */ }
 		});
 		const reportInitError = async (message: string) => {
@@ -78,8 +82,9 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 			const elements: StripeElements = props.clientSecret
 				? stripe.elements({ clientSecret: props.clientSecret })
 				: stripe.elements({ mode: 'payment', amount: Math.max(1, Math.round(props.amount ?? 0)), currency: (props.currency || 'usd').toLowerCase() });
-			const element = elements.create('payment', paymentElementOptions());
+			const element = elements.create('payment', paymentElementOptions(props.billingDefaults));
 			paymentElement = element;
+			paymentElementRef.value = element as unknown;
 			// Loading failures after mount arrive asynchronously as `loaderror`; readiness is Stripe's `ready`, not the mount call.
 			element.on('loaderror', (event) => {
 				if (disposed.value) return;
@@ -94,6 +99,14 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 		} catch (e) {
 			await reportInitError(e instanceof Error ? e.message : 'Stripe init failed.');
 		}
+	});
+
+	// #400: billing defaults follow the checkout address (the shopper changing the shipping country after the form mounted).
+	useVisibleTask$(({ track }) => {
+		const key = track(() => JSON.stringify(props.billingDefaults ?? null));
+		const element = track(() => paymentElementRef.value) as StripePaymentElementHandle | null;
+		if (!element || disposed.value || key === 'null') return;
+		element.update({ defaultValues: props.billingDefaults });
 	});
 
 	// Deferred mode: the element's amount follows the total shown (shipping, coupons, the order's own total once it exists).

@@ -1,7 +1,8 @@
 // Brand views, plan §2.3 `checkout.loyalty-redemption`: the checkout route owns the redemption signal and the loyalty fetch; the
 // slot (and the base LoyaltyRedeem, which gets the same props) receives a detached projection and can only ask `onRedeemToggle$`.
 // The pure functions below are the whole decision logic and are unit-tested; `useLoyaltyOffer` wires them to Qwik state.
-import { $, useComputed$, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { $, useComputed$, useContext, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { previewRedemption, srAccountLoyalty, type SrLoyaltyProgram } from '~/utils/sellright';
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
 import type { ActionResult } from '~/platform/views';
@@ -55,6 +56,9 @@ export function decideToggle(account: LoyaltyAccount | null, on: boolean, discou
 	return { result: { ok: true }, points: offer.points };
 }
 
+/** A customer id from the layout's auth state that names a signed-in shopper (the guest placeholder or none is not one). */
+export const isSignedIn = (customerId: string | null | undefined): boolean => !!customerId && customerId !== CUSTOMER_NOT_DEFINED_ID;
+
 export interface LoyaltyOffer {
 	/** Null until the account is read, for a guest, or when the program is off. */
 	view: ReadonlySignal<LoyaltyViewData | null>;
@@ -68,9 +72,14 @@ export interface LoyaltyOffer {
 export function useLoyaltyOffer(redeemPoints: Signal<number>, discountableCents: Signal<number>, currencyCode: Signal<string>) {
 	const account = useSignal<LoyaltyAccount | null>(null);
 	const ctl = useStore<ActionCtl>({ disposed: false, admitted: [] });
+	const appState = useContext(APP_STATE);
 
-	useVisibleTask$(async ({ cleanup }) => {
+	useVisibleTask$(async ({ cleanup, track }) => {
 		cleanup(() => { ctl.disposed = true; });
+		// #400: a guest has no points: never ask (the API answered 401 on every guest checkout). Signing in on the page
+		// (login modal) re-reads.
+		const customerId = track(() => appState.customer?.id);
+		if (!isSignedIn(customerId)) { account.value = null; return; }
 		try {
 			const data = await srAccountLoyalty();
 			account.value = data.program.enabled ? { available: data.available, program: data.program } : null;

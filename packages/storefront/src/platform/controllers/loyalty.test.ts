@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
-import { buildLoyaltyView, decideToggle, offerFor, reconcileRedemption, type LoyaltyAccount } from './loyalty';
+import { buildLoyaltyView, decideToggle, isSignedIn, offerFor, reconcileRedemption, type LoyaltyAccount } from './loyalty';
+import { CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 
 const program = { enabled: true, earnRatePerDollar: 100, pointsPerDollarOff: 100, minRedeemPoints: 500, maxRedeemPercentOfSubtotal: 50 } as never;
 const account = (available: number): LoyaltyAccount => ({ available, program });
@@ -83,5 +84,14 @@ describe('reconcileRedemption (discountableCents changes)', () => {
 	it('0 stays 0; with no account loaded the held value is left to the server to validate', () => {
 		expect(reconcileRedemption(account(5000), 0, 2000)).toBe(0);
 		expect(reconcileRedemption(null, 700, 2000)).toBe(700);
+	});
+});
+
+describe('#400 guest checkout never reads the loyalty account', () => {
+	it('only a real customer id is signed in', () => {
+		expect(isSignedIn(CUSTOMER_NOT_DEFINED_ID)).toBe(false);
+		expect(isSignedIn('')).toBe(false);
+		expect(isSignedIn(undefined)).toBe(false);
+		expect(isSignedIn('c-123')).toBe(true);
 	});
 });

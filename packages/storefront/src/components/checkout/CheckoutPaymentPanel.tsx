@@ -1,4 +1,6 @@
-import { $, component$, Slot, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, useComputed$, useContext, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { APP_STATE } from '~/constants';
+import { billingDefaultValues } from './payment-element-options';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -57,6 +59,9 @@ export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 export const METHOD_LABEL: Readonly<Record<keyof typeof PROVIDER_LABELS, string>> = { ...PROVIDER_LABELS, nmi: 'Card' };
 
 export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
+	// #400: the Payment Element's billing country/ZIP follow the checkout address (never the visitor's geo country).
+	const appState = useContext(APP_STATE);
+	const billingDefaults = useComputed$(() => billingDefaultValues(appState.billingAddress, appState.shippingAddress));
 	const methods = availableMethods(props.shopConfig.value);
 	// NMI hosted fields: PLACE ORDER stays disabled until Collect.js reports them usable (a press before that did nothing).
 	const cardFieldsReady = useSignal(false);
@@ -216,6 +221,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													confirmTrigger={props.stripeConfirmTrigger}
 													onError$={props.onPaymentError$}
 													onProcessingChange$={props.onPaymentProcessingChange$}
+													billingDefaults={billingDefaults.value}
 												/>
 												<button
 													type="button"

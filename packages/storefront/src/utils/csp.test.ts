@@ -237,3 +237,13 @@ describe('buildCsp — Sign in with Apple sources join only when supplied, per d
 		expect(cspFor('b.example')).toBe(buildCsp({ nonce: 'n' }));
 	});
 });
+
+describe('buildCsp — #400 Damned checkout violations', () => {
+	it('allows the Apple Pay font origin', () => {
+		expect(directive(buildCsp({ nonce: 'n' }), 'font-src')).toBe("font-src 'self' https://applepay.cdn-apple.com");
+	});
+	it('allows data: in connect-src only with Turnstile configured', () => {
+		expect(directive(buildCsp({ nonce: 'n', turnstileSiteKey: 'site-key' }), 'connect-src').split(' ')).toContain('data:');
+		expect(directive(buildCsp({ nonce: 'n' }), 'connect-src').split(' ')).not.toContain('data:');
+	});
+});

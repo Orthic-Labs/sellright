@@ -73,7 +73,8 @@ export const EXPRESS_WALLET_METHODS = { applePay: 'auto', googlePay: 'auto', lin
 
 /** Express Checkout Element create options. The wallet always collects email, phone and a shipping address (checkout prices
  *  tax and shipping by destination, as the form does); every button type is the "Buy" call to action. `walletsOnly` keeps
- *  just Apple Pay / Google Pay in a single one-button row (no Link or Klarna, no overflow menu). `singleRow` (PDP buy-now,
+ *  just Apple Pay / Google Pay, one per row, never in an overflow menu (#400: Stripe accepts overflow 'never' only with
+ *  maxRows 0 and threw an IntegrationError on phones with maxRows 1; a device shows the one wallet it has). `singleRow` (PDP buy-now,
  *  #347) keeps every method side by side in ONE row (extra methods go to Stripe's overflow menu), so no button becomes a
  *  full-width bar under ADD TO CART. */
 export function expressElementOptions(o: { buttonHeight?: number | null; walletsOnly?: boolean; singleRow?: boolean } = {}) {
@@ -84,7 +85,7 @@ export function expressElementOptions(o: { buttonHeight?: number | null; wallets
 		shippingAddressRequired: true,
 		paymentMethods: o.walletsOnly ? EXPRESS_WALLET_METHODS : EXPRESS_PAYMENT_METHODS,
 		buttonType: { applePay: 'buy', googlePay: 'buy' },
-		...(o.walletsOnly ? { layout: { maxColumns: 1, maxRows: 1, overflow: 'never' as const } } : o.singleRow ? { layout: { maxColumns: 0, maxRows: 1 } } : {}),
+		...(o.walletsOnly ? { layout: { maxColumns: 1, maxRows: 0, overflow: 'never' as const } } : o.singleRow ? { layout: { maxColumns: 0, maxRows: 1 } } : {}),
 		...(buttonHeight ? { buttonHeight } : {}),
 	} as const;
 }

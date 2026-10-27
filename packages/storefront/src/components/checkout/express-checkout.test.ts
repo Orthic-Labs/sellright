@@ -158,7 +158,7 @@ describe('expressElementOptions', () => {
 	it('walletsOnly offers just Apple Pay / Google Pay as one button with no overflow', () => {
 		const o = expressElementOptions({ walletsOnly: true, buttonHeight: 48 });
 		expect(o.paymentMethods).toEqual({ applePay: 'auto', googlePay: 'auto', link: 'never', klarna: 'never', paypal: 'never', amazonPay: 'never' });
-		expect(o).toMatchObject({ layout: { maxColumns: 1, maxRows: 1, overflow: 'never' }, buttonHeight: 48, shippingAddressRequired: true });
+		expect(o).toMatchObject({ layout: { maxColumns: 1, maxRows: 0, overflow: 'never' }, buttonHeight: 48, shippingAddressRequired: true });
 	});
 	it('singleRow keeps every method in one row (PDP buy-now, #347); walletsOnly wins over it', () => {
 		const o = expressElementOptions({ singleRow: true, buttonHeight: 53 });
@@ -166,7 +166,12 @@ describe('expressElementOptions', () => {
 		// Stripe refuses overflow 'never' together with maxRows > 0, so overflow stays at its default.
 		expect(o).toMatchObject({ layout: { maxColumns: 0, maxRows: 1 }, buttonHeight: 53 });
 		expect((o as { layout?: object }).layout).not.toHaveProperty('overflow');
-		expect(expressElementOptions({ singleRow: true, walletsOnly: true })).toMatchObject({ layout: { maxColumns: 1, maxRows: 1, overflow: 'never' } });
+		expect(expressElementOptions({ singleRow: true, walletsOnly: true })).toMatchObject({ layout: { maxColumns: 1, maxRows: 0, overflow: 'never' } });
+		// #400: Stripe rejects overflow 'never' unless maxRows is 0 (IntegrationError on phones before).
+		for (const opts of [{ walletsOnly: true }, { singleRow: true }, { singleRow: true, walletsOnly: true }, {}]) {
+			const layout = (expressElementOptions(opts) as { layout?: { maxRows?: number; overflow?: string } }).layout;
+			if (layout?.overflow === 'never') expect(layout.maxRows).toBe(0);
+		}
 	});
 });
 

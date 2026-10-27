@@ -68,8 +68,10 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
 		withSources(`style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com`, google?.style),
 		`img-src 'self' data: https:`,
-		`font-src 'self'`,
-		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(apple?.connect ?? []), ...(analytics?.connect ?? [])]),
+		// #400/#377: Apple Pay's button stylesheet (Collect.js / Stripe wallets) loads its font from applepay.cdn-apple.com.
+		`font-src 'self' https://applepay.cdn-apple.com`,
+		// #400: the Turnstile widget script fetches a data: URL from the page when it runs (blocked on Damned checkout).
+		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}${turnstile ? ' data:' : ''}`, [...(google?.connect ?? []), ...(apple?.connect ?? []), ...(analytics?.connect ?? [])]),
 		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${youtube}${sheerId}`, [...(google?.frame ?? []), ...(apple?.frame ?? [])]),
 		`object-src 'none'`,
 		`base-uri 'self'`,
