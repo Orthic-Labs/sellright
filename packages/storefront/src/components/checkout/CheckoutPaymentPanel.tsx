@@ -2,6 +2,7 @@ import { $, component$, Slot, useComputed$, useContext, useSignal, type QRL, typ
 import { APP_STATE } from '~/constants';
 import { billingDefaultValues } from './payment-element-options';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
+import { PaymentLock } from './LockedPaymentBox';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
@@ -300,11 +301,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 						</div>
 					</div>
 				</div>
-				{!(props.checkoutValidation.isCustomerValid && props.checkoutValidation.isShippingAddressValid) && (
-					<div class="payment-placeholder">
-						Complete your shipping address to see payment options
-					</div>
-				)}
+				{/* #404: a locked payment box (not the faint one-line placeholder) until the details are valid; then the panel above
+				    reveals with its existing transition and the status line announces the unlock. */}
+				<PaymentLock unlocked={detailsValid} methods={methods} />
 			</div>
 			{props.state.error && (
 				<div style={{
