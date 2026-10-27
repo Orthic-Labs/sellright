@@ -5,7 +5,6 @@ import {
   useContextProvider,
   useStore,
   useOnDocument,
-  useOnWindow,
   $,
   Slot,
 } from '@qwik.dev/core';
@@ -59,6 +58,7 @@ export const CartProvider = component$(() => {
     $(() => {
       // Follow the service mirror for the life of the provider: classified failures change it and then throw.
       bindCartMirror(cartState);
+      bindCrossTabSync(cartState);
       if (cartState.hasLoadedOnce) return;
       cartState.cart = CartService.getCart();
       // Paint the last known count at once; the bootstrap read below replaces it.
@@ -73,26 +73,30 @@ export const CartProvider = component$(() => {
     }),
   );
 
-  // Cross-tab sync: another tab's cart change rewrites CART_COUNT_KEY (`storage` fires only in the OTHER tabs; `null` key =
-  // storage cleared). Re-read the live cart; the mirror binding above commits it. Before the first read lands the boot read
-  // is already the latest, and a read that writes the same value does not wake the sender again.
-  useOnWindow(
-    'storage',
-    $((event: Event) => {
-      const key = (event as StorageEvent).key;
-      if (key !== null && key !== CART_COUNT_KEY) return;
-      if (!cartState.hasLoadedOnce) return;
-      CartService.syncFromOtherTab().catch((e) => {
-        console.error('CartContext: cross-tab cart refresh failed:', e);
-        reportError(cartState, e, 'Failed to refresh cart');
-      });
-    }),
-  );
-
   useContextProvider(CartContextId, cartState);
 
   return <Slot />;
 });
+
+/** #399: one `storage` listener per page. Cross-tab sync: another tab's cart change rewrites CART_COUNT_KEY (`storage` fires
+ *  only in the OTHER tabs; `null` key = storage cleared); re-read the live cart and the mirror binding commits it, so the badge
+ *  and the drawer follow adds, quantity changes and removals (the old store's LocalCartService storage sync). Registered from
+ *  the provider's qinit handler, not `useOnWindow`: the provider renders only <Slot/>, so a `useOnWindow` binding had no element
+ *  to live on and never fired. Before the first read lands the boot read is already the latest; a read that writes the same
+ *  count does not wake the sender again. */
+let crossTabBound = false;
+function bindCrossTabSync(cartState: CartContextState): void {
+  if (crossTabBound || typeof window === 'undefined') return;
+  crossTabBound = true;
+  window.addEventListener('storage', (event) => {
+    if (event.key !== null && event.key !== CART_COUNT_KEY) return;
+    if (!cartState.hasLoadedOnce) return;
+    CartService.syncFromOtherTab().catch((e) => {
+      console.error('CartContext: cross-tab cart refresh failed:', e);
+      reportError(cartState, e, 'Failed to refresh cart');
+    });
+  });
+}
 
 /** #394: the header badge count. Before the first server read lands it is the persisted count from this browser's
  *  last session (so the badge does not flash 0); after that it is the live lines. Brand headers (layer slots) use the
