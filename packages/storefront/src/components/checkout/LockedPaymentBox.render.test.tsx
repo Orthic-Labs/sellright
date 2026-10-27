@@ -16,6 +16,10 @@ describe('#404 locked payment box', () => {
 		expect(box?.textContent).toContain('Link');
 		expect(box?.querySelector('img')).toBeFalsy();
 		expect(box?.querySelector('a, button, input, select, textarea, [tabindex]')).toBeFalsy();
+		// Adrian: centered — the heading row (lock + Payment) as a unit, the line, the marks row; the box stays full width.
+		expect(box?.className).toContain('text-center');
+		expect(box?.querySelector('h2')?.parentElement?.className).toContain('justify-center');
+		expect(box?.querySelector('ul')?.className).toContain('justify-center');
 		expect(doc.querySelector('[data-testid="payment-unlock-status"]')?.textContent).toBe('');
 	});
 	it('locked (NMI + Sezzle): cards and the Sezzle mark, no wallets', async () => {

@@ -20,8 +20,8 @@ export const LockedPaymentBox = component$<{ methods: readonly PaymentMethod[] }
 	}, { strategy: 'document-ready' });
 	const marks = lockedPaymentMarks(methods.length ? methods : configured.value ?? []);
 	return (
-		<div role="status" data-testid="payment-locked" class="rounded-md border border-[var(--color-card-border)] bg-[var(--color-parchment)] px-5 py-4 select-none">
-			<div class="flex items-center gap-2 mb-1.5">
+		<div role="status" data-testid="payment-locked" class="rounded-md border border-[var(--color-card-border)] bg-[var(--color-parchment)] px-5 py-4 select-none text-center">
+			<div class="flex items-center justify-center gap-2 mb-1.5">
 				<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="text-[var(--color-ink)]">
 					<rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
 				</svg>
@@ -29,7 +29,7 @@ export const LockedPaymentBox = component$<{ methods: readonly PaymentMethod[] }
 			</div>
 			<p class="m-0 text-[13px] leading-relaxed text-[var(--color-ink-soft)]">{LOCKED_PAYMENT_LINE}</p>
 			{marks.length > 0 && (
-				<ul class="flex flex-wrap items-center gap-1.5 mt-3 p-0 list-none" aria-label="Accepted payment methods">
+				<ul class="flex flex-wrap items-center justify-center gap-1.5 mt-3 p-0 list-none" aria-label="Accepted payment methods">
 					{marks.map((mark) => (
 						<li key={mark} class="flex items-center gap-1.5">
 							{mark === 'cards' && (['visa', 'mastercard', 'amex'] as const).map((b) => <CardBrandIcon key={b} brand={b} />)}
