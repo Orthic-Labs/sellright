@@ -538,7 +538,7 @@ admin.openapi(
         // summary (edit / edit_address / record_payment / edit_refund) — everything
         // else ignores it. Reusing audit_log keeps notes in the SAME timeline
         // as every other order event instead of a second, disconnected feed.
-        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund'].includes(e.action) ? e.data : undefined })),
+        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund', 'refund', 'fulfill', 'tracking_import'].includes(e.action) ? e.data : undefined })),
       };
     });
     if (!out) throw new HttpError(404, 'order not found');

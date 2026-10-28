@@ -139,3 +139,43 @@ export function planRefund(o: OrderView, qty: Record<string, number>, restock: R
   }
   return { lines, items, restockUnits, releasedUnits };
 }
+
+/** A timeline row as the detail API returns it (`data` only for the actions the API exposes). */
+export interface OrderEvent { action: string; fromState: string | null; toState: string | null; actor?: string | null; data?: Record<string, unknown> | null }
+
+const STATE_COPY: Record<string, string> = {
+  Draft: 'draft', PendingPayment: 'awaiting payment', Paid: 'paid', PartiallyShipped: 'partly shipped', Shipped: 'shipped',
+  Delivered: 'delivered', PartiallyRefunded: 'partly refunded', Refunded: 'fully refunded', Cancelled: 'cancelled',
+};
+/** Plain copy for an order state; unknown states are split into words, never shown raw. */
+export const stateCopy = (s: string): string => STATE_COPY[s] ?? s.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/** #406: one plain sentence per timeline event, as in the mockup ("Refunded $20.00 · order now partly refunded"). */
+export function eventCopy(e: OrderEvent, money: (cents: number) => string): string {
+  const d = e.data ?? {};
+  const now = e.toState && e.toState !== e.fromState ? ` · order now ${stateCopy(e.toState)}` : '';
+  switch (e.action) {
+    case 'draft_create': return `Order created by staff${now}`;
+    case 'fulfill': return d.partial === true || e.toState !== 'Shipped' ? `Items shipped${now}` : 'Order shipped';
+    case 'tracking_import': return `Tracking added from an import${str(d.carrier) ? ` · ${str(d.carrier)}` : ''}${now}`;
+    case 'auto_delivered': return 'Marked delivered automatically';
+    case 'refund': { const a = num(d.amount); return `${a === null ? 'Refund issued' : `Refunded ${money(a)}`}${now}`; }
+    case 'edit_refund': return `Refund for an order edit${now}`;
+    case 'record_payment': { const a = num(d.amount); return `${a === null ? 'Payment recorded' : `Payment of ${money(a)} recorded`}${now}`; }
+    case 'cancel': return e.fromState === 'PendingPayment' && e.actor?.startsWith('system:') ? 'Order cancelled · payment wasn’t completed in time' : 'Order cancelled';
+    case 'soft_delete': return 'Order moved to trash';
+    case 'restore': return 'Order restored from trash';
+    case 'purge': return 'Order deleted permanently';
+    case 'dispute_opened': return `Chargeback opened${now}`;
+    case 'nmi_chargeback_note': return 'Chargeback update from the card processor';
+    case 'stripe_reconcile': return `Payment status synced with Stripe${now}`;
+    case 'state_correction': return `Status corrected${now}`;
+    case 'reservation_override_release': return 'Stock hold released by staff';
+    default: {
+      const words = e.action.replace(/_/g, ' ');
+      return `${words.charAt(0).toUpperCase()}${words.slice(1)}${now}`;
+    }
+  }
+}

@@ -169,7 +169,7 @@ export interface OrderDetail {
     lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
   }[];
   locations: { id: string; name: string; code: string; isDefault: boolean }[];
-  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } }[];
+  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } & Record<string, unknown> }[];
 }
 type RefundLineBasis = Pick<OrderDetail['lines'][number], 'quantity' | 'refundQuantity' | 'refundAvailableQuantity' | 'refundCashAmounts' | 'refundUnitPrice' | 'refundedQty'>;
 
