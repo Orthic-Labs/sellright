@@ -40,7 +40,7 @@ test.describe('discounts', () => {
 		const u = uniq('dc');
 		const CODE = `E2E${u}`.toUpperCase();
 		await page.goto('/discounts');
-		await page.getByRole('button', { name: 'New discount' }).click();
+		await page.getByRole('button', { name: 'New discount' }).first().click() // header button; an empty store also shows one in the empty state;
 		await expect(page).toHaveURL(/\/discounts\/new$/);
 		await page.getByLabel('Code', { exact: true }).fill(CODE);
 		await radio(page, 'Discount type', 'Percentage').click();
