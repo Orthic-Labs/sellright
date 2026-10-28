@@ -2,14 +2,19 @@
 // fields autofill (real <form>, name + autocomplete), change-only autofill unlocks payment, and phone/state/postcode
 // are required only where they apply. CHECKOUT_SHOTS=<dir> also saves the error-state screenshots for review.
 import type { Page } from '@playwright/test';
-import { addToCart, goToCheckout, placeOrderButton } from './support/flows';
+import { addToCart, goToCheckout } from './support/flows';
 import { expect, skipExternal, test } from './fixtures';
 
 const SHOTS = process.env.CHECKOUT_SHOTS;
 
+// Gateway-neutral: NMI shows PLACE ORDER once unlocked, Stripe mounts its Payment Element, both drop this notice.
+const LOCKED = /enter your email and shipping address to unlock payment/i;
+const expectUnlocked = (page: Page, timeout = 3_000) => expect(page.getByText(LOCKED)).toHaveCount(0, { timeout });
+
 async function toCheckout(page: Page): Promise<void> {
 	await addToCart(page, 'e2e-mug');
 	await goToCheckout(page);
+	await expect(page.getByText(LOCKED)).toBeVisible();
 	await page.waitForTimeout(600); // the form hydrates a beat after first paint (see fillShipping)
 }
 
@@ -71,14 +76,21 @@ test.describe('#407 checkout validation', () => {
 			await type(page, '#city', 'Austin');
 			await type(page, '#province', 'TX');
 			await type(page, '#postalCode', '78701');
-			await expect(placeOrderButton(page)).toBeEnabled({ timeout: 3_000 });
+			await expectUnlocked(page);
 		}).toPass({ timeout: 30_000 });
 		await expect(page.locator('[id$="-error"][role="alert"]')).toHaveCount(0);
+		// Which gateway this run covered (NMI by default, Stripe with E2E_STRIPE=1): the unlocked payment section.
+		if (SHOTS) {
+			await page.waitForTimeout(1_500);
+			await page.locator('#payment-method-section').screenshot({ path: `${SHOTS}/payment-unlocked.png` }).catch(() => undefined);
+		}
 	});
 
 	test('a GB address needs no county or phone; HK needs no postcode', async ({ apiProxyPage: page }) => {
 		await toCheckout(page);
+		await expect(page.locator('#checkout-phone')).toHaveAttribute('placeholder', 'Phone number (optional)');
 		await chooseCountry(page, 'GB');
+		await expect(page.locator('#checkout-phone')).toHaveAttribute('placeholder', 'Phone number (optional)');
 		await expect(page.locator('#province')).toHaveAttribute('placeholder', /optional/i);
 		await expect(page.locator('#postalCode')).toHaveAttribute('inputmode', 'text');
 		await expect(async () => {
@@ -88,14 +100,14 @@ test.describe('#407 checkout validation', () => {
 			await type(page, '#streetLine1', 'Flat 3, 10 Downing St');
 			await type(page, '#city', 'London');
 			await type(page, '#postalCode', 'SW1A 2AA');
-			await expect(placeOrderButton(page)).toBeEnabled({ timeout: 3_000 });
+			await expectUnlocked(page);
 		}).toPass({ timeout: 30_000 });
 
 		await chooseCountry(page, 'HK');
 		await expect(page.locator('#postalCode')).toHaveAttribute('placeholder', /optional/i);
 		await type(page, '#postalCode', '');
 		await type(page, '#city', 'Central');
-		await expect(placeOrderButton(page)).toBeEnabled({ timeout: 5_000 });
+		await expectUnlocked(page, 5_000);
 	});
 
 	test('change-only autofill (no input event, no blur) unlocks payment', async ({ apiProxyPage: page }) => {
@@ -105,7 +117,7 @@ test.describe('#407 checkout validation', () => {
 				'#checkout-email': 'autofill@example.org', '#checkout-first-name': 'Søren', '#checkout-last-name': 'Kierkegaard',
 				'#streetLine1': '742 Evergreen Terrace', '#city': 'Springfield', '#province': 'OR', '#postalCode': '97477',
 			});
-			await expect(placeOrderButton(page)).toBeEnabled({ timeout: 3_000 });
+			await expectUnlocked(page);
 		}).toPass({ timeout: 30_000 });
 		await expect(page.locator('[id$="-error"][role="alert"]')).toHaveCount(0);
 	});
@@ -148,7 +160,7 @@ test.describe('#407 checkout validation', () => {
 				await expect(page.locator('#city-error')).toHaveText('City is required');
 			}).toPass({ timeout: 30_000 });
 			// Payment stays locked.
-			await expect(page.getByText(/enter your email and shipping address to unlock payment/i)).toBeVisible();
+			await expect(page.getByText(LOCKED)).toBeVisible();
 			if (SHOTS) {
 				// The form itself: a full-page capture stitches the sticky header and mobile PLACE ORDER bar over the fields.
 				await page.addStyleTag({ content: 'header, [class*="sticky"], [class*="fixed"] { visibility: hidden !important; }' });
