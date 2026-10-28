@@ -49,6 +49,9 @@ interface SearchResult {
 const RECENT_KEY = 'sr_palette_recent';
 const RECENT_MAX = 6;
 
+/** Window event that opens the palette (the top-bar search button, #406). */
+export const OPEN_PALETTE_EVENT = 'sellright:open-palette';
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -234,8 +237,15 @@ export function CommandPalette() {
         return;
       }
     };
+    const onOpen = () => {
+      if (open) return;
+      restoreFocusRef.current = (document.activeElement as HTMLElement) ?? null;
+      setOpen(true);
+      recordEvent('palette-opened');
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    window.addEventListener(OPEN_PALETTE_EVENT, onOpen);
+    return () => { document.removeEventListener('keydown', onKey); window.removeEventListener(OPEN_PALETTE_EVENT, onOpen); };
   }, [open, active, flat, runSelectable, close, recordEvent]);
 
   // Focus the input when we open; track no-result searches for the metric.

@@ -87,7 +87,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const tone = input.tone ?? 'info';
     const id = nextId();
     const toast: Toast = { id, tone, title: input.title, message: input.message, action: input.action };
-    setToasts((cur) => [...cur, toast]);
+    // #406: at most three on screen; the oldest gives way.
+    setToasts((cur) => [...cur, toast].slice(-3));
     const evt: ToastEvent = { type: 'toast-pushed', at: Date.now(), detail: `${tone}:${input.title}` };
     setEvents((cur) => [...cur.slice(-19), evt]);
     eventsRef.current = [...eventsRef.current.slice(-19), evt];

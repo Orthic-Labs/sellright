@@ -138,7 +138,9 @@ export interface LoginResp {
 }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
-export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null; }
+export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null;
+  /** #406: units still to ship, of those on pre-order, and units shipped. Removed (refunded before shipping) units are in none. */
+  openQty?: number; openPreOrderQty?: number; shippedQty?: number; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;

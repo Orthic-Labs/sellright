@@ -8,6 +8,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { retryRead } from './lib/query-retry';
 import './index.css';
+import './redesign/redesign.css';
 import { AuthProvider, useAuth } from './auth';
 import { Loading } from './components/ui';
 import { ToastProvider } from './components/Toast';

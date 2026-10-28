@@ -1,28 +1,29 @@
-import { Suspense, useEffect, useState, type ComponentType, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
-  LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe, FileUp, ListChecks, Download,
+  LogOut, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText, FileUp, ListChecks, Download,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, CreditCard, Star, BellRing, Globe, MoreHorizontal, Check,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
 import { api } from '../api';
 import { initials } from '../lib/format';
-import { useDebouncedValue } from '../lib/debounce';
 import { ThemeMenu } from '../theme';
 import { AppErrorBoundary } from './ErrorBoundary';
 import { Loading } from './ui';
+import { confirmLeave, useLeaveGuardRoot } from '../redesign/leave-guard';
+import { OPEN_PALETTE_EVENT } from './CommandPalette';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
-interface NavItem { to: string; label: string; icon: IconType; end?: boolean }
+interface NavItem { to: string; label: string; icon: IconType; end?: boolean; count?: 'tofulfil' }
 interface NavGroup { id: string; label: string; items: NavItem[]; defaultOpen?: boolean }
 
 // Grouped IA — the navigation should teach the product model in one scan.
 const GROUPS: NavGroup[] = [
   { id: 'run', label: 'Run store', defaultOpen: true, items: [
     { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
-    { to: '/orders', label: 'Orders', icon: ShoppingBag },
+    { to: '/orders', label: 'Orders', icon: ShoppingBag, count: 'tofulfil' },
     { to: '/subscriptions', label: 'Subscriptions', icon: CreditCard },
     { to: '/returns', label: 'Returns', icon: RotateCcw },
     { to: '/customers', label: 'Customers', icon: Users },
@@ -136,60 +137,40 @@ function SectionedOutlet({ children }: { children?: ReactNode }) {
   );
 }
 
-function GlobalSearch() {
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState(false);
-  const nav = useNavigate();
-  // One request per pause in typing, and a superseded one is aborted (#362).
-  const settled = useDebouncedValue(q);
-  const { data } = useQuery({
-    queryKey: ['global-search', settled],
-    queryFn: ({ signal }) => api.get<{ orders: any[]; products: any[]; customers: any[] }>(`/search?q=${encodeURIComponent(settled)}`, { signal }),
-    enabled: settled.trim().length > 1,
-  });
-  const go = (path: string) => { setQ(''); setOpen(false); nav(path); };
-  const has = data && (data.orders.length || data.products.length || data.customers.length);
-  return (
-    <div className="relative w-72 max-w-[42vw]">
-      <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
-      <input className="input pl-9 py-1.5" placeholder="Search orders, products, customers" aria-label="Search orders, products, and customers" value={q}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
-      {open && q.trim().length > 1 && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1.5 w-80 right-0 card p-1 max-h-96 overflow-auto text-sm animate-fade-in" role="listbox">
-            {!has && <div className="px-3 py-2 text-gray-400">No matches</div>}
-            {data?.orders.map((o) => <button key={o.code} className="menu-item" onClick={() => go(`/orders/${encodeURIComponent(o.code)}`)}><ShoppingBag size={14} className="text-gray-400" /><span className="font-mono">{o.code}</span> <span className="text-gray-400 truncate">{o.email ?? ''}</span></button>)}
-            {data?.products.map((p) => <button key={p.id} className="menu-item" onClick={() => go(`/products/${p.id}`)}><Package size={14} className="text-gray-400" /><span className="truncate">{p.name}</span></button>)}
-            {data?.customers.map((c) => <button key={c.id} className="menu-item" onClick={() => go(`/customers/${c.id}`)}><Users size={14} className="text-gray-400" /><span className="truncate">{c.email}</span></button>)}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
+// Store switcher (#406): sits at the top of the sidebar. Switching is guarded like any other navigation
+// when an editor has unsaved changes, and reloads so every query and toast belongs to the new store.
 function StoreSwitcher() {
   const { store, stores, setStore } = useAuth();
   const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); } };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
   if (!store) return null;
+  const pick = async (slug: string) => {
+    setOpen(false);
+    if (slug === store.slug || !(await confirmLeave())) return;
+    setStore(slug);
+    location.reload();
+  };
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
-        className="flex items-center gap-2 rounded-lg border border-gray-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-gray-50">
-        <Store size={15} className="text-brand" aria-hidden="true" />
-        <span className="max-w-[140px] truncate">{store.name}</span>
-        <ChevronDown size={14} className="text-gray-400" aria-hidden="true" />
+      <button ref={btn} className="store" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Switch store">
+        <span className="logo">{initials(store.name)}</span>
+        <div className="min-w-0"><b className="truncate">{store.name}</b><small className="capitalize">{store.role}</small></div>
+        {stores.length > 1 && <ChevronDown size={14} className="chev" aria-hidden="true" />}
       </button>
-      {open && (
+      {open && stores.length > 1 && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-20 mt-1.5 w-60 card p-1 animate-fade-in" role="menu">
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="menu" style={{ left: 10, top: 62, width: 204 }} role="menu">
             {stores.map((s) => (
-              <button key={s.slug} role="menuitem" onClick={() => { setStore(s.slug); setOpen(false); location.reload(); }}
-                className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-gray-50 ${s.slug === store.slug ? 'font-semibold' : ''}`}>
+              <button key={s.slug} role="menuitemradio" aria-checked={s.slug === store.slug} onClick={() => void pick(s.slug)}>
                 <span className="truncate">{s.name}</span>
-                <span className="text-[11px] uppercase text-gray-400">{s.role}</span>
+                {s.slug === store.slug && <Check size={14} className="ml-auto" aria-hidden="true" />}
               </button>
             ))}
           </div>
@@ -203,77 +184,76 @@ function AccountMenu() {
   const { me, logout } = useAuth();
   const [open, setOpen] = useState(false);
   return (
-    <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu"
-        className="grid h-8 w-8 place-items-center rounded-full bg-brand-light text-brand text-xs font-semibold hover:ring-2 hover:ring-brand/20">
-        {me ? initials(me.email) : '··'}
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-20 mt-1.5 w-56 card p-1 animate-fade-in" role="menu">
-            <div className="px-3 py-2 text-xs text-gray-500 border-b border-gray-100 mb-1 truncate">{me?.email}</div>
-            <button role="menuitem" className="menu-item-danger" onClick={() => void logout()}><LogOut size={15} /> Sign out</button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Store-first identity block — generated initials mark + store name + product label.
-function StoreMark({ name }: { name: string }) {
-  return (
-    <div className="flex items-center gap-2.5 min-w-0">
-      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand text-brand-on text-xs font-bold">
-        {initials(name)}
-      </div>
-      <div className="min-w-0 leading-tight">
-        <div className="truncate text-sm font-semibold">{name}</div>
-        <div className="text-[11px] text-shell-muted">SellRight admin</div>
+    <div className="me">
+      <span className="av">{me ? initials(me.email) : '··'}</span>
+      <span className="truncate">{me?.email}</span>
+      <span className="sp" />
+      <div className="relative">
+        <button className="iconbtn" style={{ color: 'inherit', width: 24, height: 24 }} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
+          <MoreHorizontal size={14} />
+        </button>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="menu" style={{ left: 14, bottom: 46 }} role="menu">
+              <button role="menuitem" className="dng" onClick={() => void logout()}><LogOut size={14} /> Sign out</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+const NAV_KEY = (id: string) => `sr_nav_${id}`;
+
+function NavItems() {
   const loc = useLocation();
-  // Group open/closed persists per group; a group containing the active route is always shown open.
+  const { store } = useAuth();
+  // Group open/closed is remembered per browser profile (per user); the group holding the current page always opens.
   const [openIds, setOpenIds] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const g of GROUPS) {
-      const saved = localStorage.getItem(`sr_nav_${g.id}`);
+      let saved: string | null = null;
+      try { saved = localStorage.getItem(NAV_KEY(g.id)); } catch { /* storage blocked: fall back to defaults */ }
       init[g.id] = saved != null ? saved === '1' : !!g.defaultOpen;
     }
     return init;
   });
-  const toggle = (id: string) => setOpenIds((m) => { const v = !m[id]; localStorage.setItem(`sr_nav_${id}`, v ? '1' : '0'); return { ...m, [id]: v }; });
+  const toggle = (id: string, now: boolean) => setOpenIds((m) => {
+    try { localStorage.setItem(NAV_KEY(id), now ? '0' : '1'); } catch { /* not persisted */ }
+    return { ...m, [id]: !now };
+  });
+  const { data: counts } = useQuery({
+    queryKey: ['orders', 'tab-counts', store?.slug],
+    queryFn: () => api.get<Record<string, number>>('/orders/tab-counts?excludeDemo=1'),
+    enabled: !!store,
+    refetchInterval: 60_000,
+  });
+  const navRef = useRef<HTMLElement>(null);
+  // Keep the current page visible in a long sidebar.
+  useEffect(() => { navRef.current?.querySelector('[aria-current=page]')?.scrollIntoView({ block: 'nearest' }); }, [loc.pathname]);
 
   return (
-    <nav className="flex-1 overflow-y-auto p-3 stack-y-1" aria-label="Primary">
+    <nav ref={navRef} className="navscroll" aria-label="Primary">
       {GROUPS.map((g) => {
-        const hasActive = groupContainsPath(g, loc.pathname);
-        const open = openIds[g.id] || hasActive;
+        const open = openIds[g.id] || groupContainsPath(g, loc.pathname);
         return (
           <div key={g.id}>
-            <button onClick={() => toggle(g.id)} aria-expanded={open}
-              className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-shell-muted hover:text-shell-text">
-              {g.label}
-              <ChevronDown size={13} className={`transition-transform ${open ? '' : '-rotate-90'}`} aria-hidden="true" />
+            <button className="grp" aria-expanded={open} onClick={() => toggle(g.id, open)}>
+              {g.label}<ChevronDown size={12} aria-hidden="true" />
             </button>
-            {open && (
-              <div className="mt-0.5 stack-y-0.5">
-                {g.items.map(({ to, label, icon: Icon, end }) => (
-                  <NavLink key={to} to={to} end={end} onClick={onNavigate}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                        isActive ? 'bg-shell-active font-semibold text-shell-active-text' : 'text-shell-muted hover:bg-shell-surface hover:text-shell-text'
-                      }`}>
-                    <Icon size={17} /> {label}
+            <div className="gi">
+              {g.items.map(({ to, label, icon: Icon, end, count }) => {
+                const n = count ? counts?.[count] : undefined;
+                return (
+                  <NavLink key={to} to={to} end={end ?? to === '/orders'} className="nav">
+                    <Icon size={15} aria-hidden="true" />{label}
+                    {n != null && n > 0 && <span className="ct hot" aria-label={`${n} to fulfil`}>{n}</span>}
                   </NavLink>
-                ))}
-              </div>
-            )}
+                );
+              })}
+            </div>
           </div>
         );
       })}
@@ -282,77 +262,43 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export default function Layout() {
-  const { store, logout } = useAuth();
   const loc = useLocation();
-  const [drawer, setDrawer] = useState(false);
-  const storeName = store?.name ?? 'Store';
-
-  // Close the mobile drawer on route change and on Escape.
-  useEffect(() => { setDrawer(false); }, [loc.pathname]);
-  useEffect(() => {
-    if (!drawer) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawer(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [drawer]);
-
+  const navigate = useNavigate();
+  useLeaveGuardRoot(navigate);
   return (
-    <div className="flex h-full">
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-shell-border bg-shell text-shell-text">
-        <div className="flex items-center px-4 h-14 border-b border-shell-border">
-          <StoreMark name={storeName} />
-        </div>
-        <NavItems />
-        <div className="p-3 border-t border-shell-border">
-          <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-shell-muted hover:bg-shell-surface hover:text-shell-text">
-            <LogOut size={16} /> Sign out
-          </button>
-        </div>
-      </aside>
-
-      {/* Mobile drawer */}
-      {drawer && (
-        <div className="md:hidden fixed inset-0 z-40 flex">
-          <div className="absolute inset-0 bg-black/30 animate-fade-in" onClick={() => setDrawer(false)} aria-hidden="true" />
-          <aside className="relative flex w-72 max-w-[80vw] flex-col bg-shell text-shell-text shadow-xl animate-drawer-in" role="dialog" aria-modal="true" aria-label="Navigation">
-            <div className="flex items-center justify-between px-4 h-14 border-b border-shell-border">
-              <StoreMark name={storeName} />
-              <button onClick={() => setDrawer(false)} aria-label="Close navigation" className="grid h-8 w-8 place-items-center rounded-lg text-shell-muted hover:bg-shell-surface hover:text-shell-text"><X size={18} /></button>
-            </div>
-            <NavItems onNavigate={() => setDrawer(false)} />
-            <div className="p-3 border-t border-shell-border">
-              <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-shell-muted hover:bg-shell-surface hover:text-shell-text">
-                <LogOut size={16} /> Sign out
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* Main column */}
-      <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur-sm">
-          {/* Mobile: menu + store name */}
-          <button className="md:hidden grid h-9 w-9 place-items-center rounded-lg text-gray-600 hover:bg-gray-100" aria-label="Open navigation" onClick={() => setDrawer(true)}>
-            <Menu size={20} />
-          </button>
-          <span className="md:hidden truncate text-sm font-semibold">{storeName}</span>
-
-          {/* Desktop search */}
-          <div className="hidden md:block"><GlobalSearch /></div>
-
-          <div className="flex-1" />
-          <ThemeMenu />
+    <div className="app">
+      <div className="rd contents">
+        <aside className="side" aria-label="Main navigation">
           <StoreSwitcher />
+          <NavItems />
           <AccountMenu />
-        </header>
-        <main key={loc.pathname} className="flex-1 overflow-auto">
-          <div className="mx-auto max-w-7xl px-4 md:px-6 py-6 md:py-7">
-            <SectionedOutlet />
-          </div>
-        </main>
+        </aside>
       </div>
+      <section className="main">
+        <div className="rd contents">
+          <header className="top">
+            <button className="search" onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))} aria-label="Search and commands (Ctrl K)">
+              <Search size={14} aria-hidden="true" />Search orders, products, customers<span className="kbd">Ctrl K</span>
+            </button>
+            <span className="sp" />
+            <ThemeMenu />
+          </header>
+        </div>
+        <main key={loc.pathname} className="flex-1 overflow-auto min-h-0 flex flex-col">
+          <SectionedOutlet>
+            <LegacyFrame />
+          </SectionedOutlet>
+        </main>
+      </section>
     </div>
   );
+}
+
+// Pages not yet rebuilt (#406) keep their old padded frame; rebuilt pages mark themselves with
+// data-full-bleed routes and fill the main pane edge to edge.
+const FULL_BLEED = [/^\/orders\/?$/, /^\/orders\/(?!new$|import-tracking$|tracking-grid$)[^/]+$/, /^\/products\/(?!new$)[^/]+$/, /^\/settings\/payments$/, /^\/discounts(\/.*)?$/];
+function LegacyFrame() {
+  const loc = useLocation();
+  if (FULL_BLEED.some((r) => r.test(loc.pathname))) return <Outlet />;
+  return <div className="mx-auto w-full max-w-7xl px-6 py-7"><Outlet /></div>;
 }
