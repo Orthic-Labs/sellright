@@ -100,7 +100,7 @@ adminProducts.openapi(
         ? await tx.select({ variantId: s.variantOption.variantId, optionId: s.variantOption.optionId }).from(s.variantOption).where(inArray(s.variantOption.variantId, vIds))
         : [];
       return {
-        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId, updatedAt: p.updatedAt.toISOString(),
+        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId, updatedAt: p.updatedAt.toISOString(), seoTitle: p.seoTitle, seoDescription: p.seoDescription,
         images: gallery.map((g) => ({ assetId: g.assetId, path: g.path, url: `/assets/${g.path}`, position: g.position })),
         variants: variants.map((v) => ({ ...v, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
       };

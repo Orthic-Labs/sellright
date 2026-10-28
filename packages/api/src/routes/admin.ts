@@ -39,6 +39,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
+import { variantShippingLabel } from '../lib/shipping-label.js';
 import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
@@ -435,6 +436,10 @@ admin.openapi(
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      // #406: per-line pre-order flag + ship label from the variant (current), for the order page's Pre-order card.
+      const lineVariantIds = [...new Set(lines.map((l) => l.variantId).filter((v): v is string => !!v))];
+      const preOrderByVariant = new Map((lineVariantIds.length ? await tx.select({ id: s.productVariant.id, isPreOrder: s.productVariant.isPreOrder, metafields: s.productVariant.metafields })
+        .from(s.productVariant).where(inArray(s.productVariant.id, lineVariantIds)) : []).map((v) => [v.id, v]));
       const payments = await tx.select().from(s.payment).where(eq(s.payment.orderId, o.id)).orderBy(desc(s.payment.createdAt));
       const postedCredit = await tx.select({ id: s.accountCreditTransaction.id }).from(s.accountCreditTransaction).where(and(
         eq(s.accountCreditTransaction.orderId, o.id), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED')));
@@ -507,7 +512,8 @@ admin.openapi(
         lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
           refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
           refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
-          id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty })),
+          id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty,
+          isPreOrder: (l.variantId && preOrderByVariant.get(l.variantId)?.isPreOrder) === true, shipDateLabel: l.variantId ? variantShippingLabel(preOrderByVariant.get(l.variantId)?.metafields) : null })),
         // `state` here is the individual PAYMENT record's wire state (Settled
         // -> captured — BREAKING, pre-1.0), distinct from the order-level
         // `paymentStatus` above. See orders/status.ts.
@@ -697,6 +703,7 @@ admin.openapi(
       | { kind: 'notfound' }
       | { kind: 'badstate'; state: string }
       | { kind: 'badlines' }
+      | { kind: 'preorder' }
       | { kind: 'badlocation' };
     const res: Res = await withStore(st.storeId, async (tx): Promise<Res> => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
@@ -718,6 +725,13 @@ admin.openapi(
         if (!row || row.orderId !== o.id) return { kind: 'badlines' };
         const remaining = row.quantity - row.fulfilledQty - row.cancelledQty;
         if (line.quantity > remaining) return { kind: 'badlines' };
+      }
+      // #406: a line whose variant is still on pre-order cannot ship yet (the UI disables it; this is the commit-time rule).
+      const fulfilVariantIds = body.lines.map((l) => byId.get(l.orderLineId)!.variantId).filter((v): v is string => !!v);
+      if (fulfilVariantIds.length) {
+        const pre = await tx.select({ id: s.productVariant.id }).from(s.productVariant)
+          .where(and(inArray(s.productVariant.id, fulfilVariantIds), eq(s.productVariant.isPreOrder, true))).limit(1);
+        if (pre.length) return { kind: 'preorder' };
       }
       const [f] = await tx.insert(s.fulfillment).values({
         storeId: st.storeId, orderId: o.id, state: 'Shipped',
@@ -767,6 +781,7 @@ admin.openapi(
     if (res.kind === 'badstate') throw new HttpError(409, `order not fulfillable in state ${res.state}`);
     if (res.kind === 'badlocation') throw new HttpError(409, 'location not found or disabled');
     if (res.kind === 'badlines') throw new HttpError(409, 'duplicate, foreign, or over-quantity line in fulfillment request');
+    if (res.kind === 'preorder') throw new HttpError(409, 'pre-order items cannot be fulfilled until the pre-order ends');
     return c.json({ code, fulfillmentId: res.fulfillmentId, state: 'Shipped' }, 200);
   }),
 );
