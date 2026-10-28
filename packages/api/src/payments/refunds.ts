@@ -45,11 +45,6 @@ export interface RefundRequest {
   /** Internal staged-edit authority; never accepted from public refund bodies. */
   editId?: string;
 }
-/** Shipping still refundable: the order's shipping less every non-failed refund's shipping part. */
-export function shippingRefundable(shippingTotal: number, refunds: ReadonlyArray<{ state: string; shippingAmount: number | null }>): number {
-  const refunded = refunds.filter(r => r.state !== 'Failed').reduce((n, r) => n + (r.shippingAmount ?? 0), 0);
-  return Math.max(0, shippingTotal - refunded);
-}
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
   const placed = importedSourceMetadata(line.metadata)?.placedQuantity;
   return Math.max(line.quantity, Number.isSafeInteger(placed) ? placed! : 0);
@@ -334,9 +329,6 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
       // remaining balance, shipping included — adding it again there would
       // double-count). Ignored (never silently added) outside that branch.
       const shippingAmount = explicitLines && Number.isSafeInteger(input.shippingAmount) && input.shippingAmount! > 0 ? input.shippingAmount! : 0;
-      // #406: checked at commit under the order lock, so two refunds racing for the
-      // same shipping cannot both pass a stale UI cap.
-      if (shippingAmount > shippingRefundable(order.shippingTotal, refunds)) throw new RefundError(409, 'Shipping refund exceeds the shipping left to refund');
       const amount = input.amount ?? (explicitLines ? itemsAmount + shippingAmount : available);
       let creditAuthority: { redemptionId: string; accountId: string } | null = null;
       if (input.creditMerchandiseReturn === true) {

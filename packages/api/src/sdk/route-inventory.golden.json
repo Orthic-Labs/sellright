@@ -1,5 +1,5 @@
 {
-  "count": 393,
+  "count": 394,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -77,6 +77,7 @@
     "GET /v1/admin/orders/{code}/edit/variants",
     "GET /v1/admin/orders/{code}/invoice",
     "GET /v1/admin/orders/{code}/packing-slip",
+    "GET /v1/admin/orders/tab-counts",
     "GET /v1/admin/passkeys",
     "GET /v1/admin/payment-archives",
     "GET /v1/admin/payment-reconciliation",

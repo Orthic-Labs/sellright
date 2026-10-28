@@ -39,11 +39,16 @@ export const shippedPart = (l: OrderLine, q: number): number =>
 export const restockable = (o: OrderView, l: OrderLine, q: number): number => Math.min(shippedPart(l, q), rsLeft(o, l));
 
 /** Shipping the customer paid that has not been refunded yet. */
-export const shippingLeft = (o: OrderView): number =>
-  Math.max(0, o.shippingTotal - liveRefunds(o).reduce((n, r) => n + (r.shippingAmount ?? 0), 0));
 
 export const refundedTotal = (o: OrderView): number => o.refunds.filter((r) => r.state === 'Settled' || r.state === 'Pending').reduce((n, r) => n + r.amount, 0);
 export const paidTotal = (o: OrderView): number => o.payments.filter((p) => p.state === 'Settled' || p.state === 'captured').reduce((n, p) => n + p.amount, 0);
+
+/** Shipping still refundable. Orders imported without native totals (grand total 0, shipping 0, money on the
+ *  payment) have no shipping figure to cap against, so the payment's remaining balance is the limit, as on the server. */
+export const shippingLeft = (o: OrderView): number =>
+  o.grandTotal <= 0 && paidTotal(o) > 0
+    ? Math.max(0, paidTotal(o) - refundedTotal(o))
+    : Math.max(0, o.shippingTotal - liveRefunds(o).reduce((n, r) => n + (r.shippingAmount ?? 0), 0));
 
 /** Parse "8.00" into cents; null when it is not a plain amount of 0 or more. */
 export function parseMoney(raw: string): number | null {

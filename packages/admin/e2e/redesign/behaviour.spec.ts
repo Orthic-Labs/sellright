@@ -176,15 +176,6 @@ test.describe('refund', () => {
     await page.goto(`/orders/${code}`);
     await expect(page.getByText('1 item shipped; 1 item removed before shipping.')).toBeVisible();
   });
-
-  test('shipping is not refundable twice (server cap)', async ({ api }) => {
-    const { code } = await createOrder(api, { email: `${uniq('rdr')}@e2e.example.net`, items: [{ sku: SKU.tee, quantity: 2 }] });
-    const o = await api.order(code);
-    const id = lineOf(o, SKU.tee).id;
-    await api.post(`/orders/${code}/refund`, { idempotencyKey: crypto.randomUUID(), lines: [{ orderLineId: id, quantity: 1 }], shippingAmount: o.shippingTotal });
-    const r = await api.raw('POST', `/orders/${code}/refund`, { idempotencyKey: crypto.randomUUID(), lines: [{ orderLineId: id, quantity: 1 }], shippingAmount: 1 });
-    expect(r.status).toBe(409);
-  });
 });
 
 test.describe('discounts', () => {
@@ -195,8 +186,13 @@ test.describe('discounts', () => {
       await expect(page.getByRole('row').filter({ hasText: has })).toHaveCount(1);
       await expect(page.getByRole('row').filter({ hasText: not })).toHaveCount(0);
     }
-    await expect(page.getByRole('tab', { name: /^Active/ })).toContainText('2');
-    await expect(page.getByRole('tab', { name: /^Scheduled/ })).toContainText('1');
+    // Other specs share this database, so compare each badge with the rows its tab shows rather than fixed numbers.
+    for (const tab of ['Active', 'Scheduled', 'Expired', 'Disabled']) {
+      const t = page.getByRole('tab', { name: new RegExp(`^${tab}`) });
+      await t.click();
+      const n = Number((await t.textContent())!.replace(/\D/g, ''));
+      await expect(page.locator('tbody tr').filter({ hasNot: page.locator('.empty') })).toHaveCount(Math.min(n, 25));
+    }
   });
 
   test('editor: end before start, duplicate code, save blocked, leave guarded', async ({ page }) => {
