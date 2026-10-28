@@ -37,6 +37,7 @@ import { CartTooLargeError, boundedCartItems, cartTooLargeFields } from '../cart
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
+import { addressErrors, firstAddressError } from '../checkout/address-check.js';
 import { ReservationConflict } from '../payments/reservation.js';
 import type { CheckoutFingerprintBasis, CheckoutRefusal, CheckoutReplayOrigin, PolicyCustomer, PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
 
@@ -48,7 +49,8 @@ import type { CheckoutFingerprintBasis, CheckoutRefusal, CheckoutReplayOrigin, P
  */
 function normalizeAddress(a: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!a) return null;
-  const g = (k: string) => (a[k] != null ? String(a[k]) : null);
+  // Trimmed, and blank means absent (#407): "  José " is stored as "José", and "" as null.
+  const g = (k: string) => (a[k] != null && String(a[k]).trim() ? String(a[k]).trim() : null);
   return {
     fullName: g('fullName') ?? ([g('firstName'), g('lastName')].filter(Boolean).join(' ') || null),
     line1: g('line1') ?? g('streetLine1'),
@@ -308,7 +310,7 @@ checkout.openapi(
         description: 'Order created',
         content: { 'application/json': { schema: CheckoutOut } },
       },
-      400: { description: 'Malformed checkout request body or Idempotency-Key header', content: { 'application/json': { schema: apiErrorSchema() } } },
+      400: { description: 'Malformed checkout request body or Idempotency-Key header, or an invalid address (INVALID_ADDRESS, with one message per field in `fields`)', content: { 'application/json': { schema: apiErrorSchema().extend({ fields: z.record(z.string(), z.string()).optional() }) } } },
       409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional(), quote: EstimateOut.optional(), quoteHash: z.string().optional() }) } } },
       422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -336,6 +338,12 @@ checkout.openapi(
 
     const extensions = parseCheckoutExtensions(body.extensions);
     if (!extensions.ok) return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request', { param: 'extensions' });
+    // #407: the storefront's address rules, enforced here too; one message per bad field.
+    const badAddress = addressErrors({ shippingAddress: normalizeAddress(body.shippingAddress), billingAddress: normalizeAddress(body.billingAddress) });
+    if (badAddress) {
+      const first = firstAddressError(badAddress);
+      return errJson(c, 400, 'INVALID_ADDRESS', first.message, { param: first.param, extra: { fields: badAddress } });
+    }
     const basis = fingerprintBasis(body);
     const fingerprint = checkoutFingerprint(basis, extensions.value);
     // The request's discount/tender intent as sent, for policies (applied or not).

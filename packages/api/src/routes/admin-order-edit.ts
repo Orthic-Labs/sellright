@@ -15,6 +15,7 @@ import { HttpError, J, errBody, money, requireAdmin, requireHuman, requirePermis
 import {
   AddressInput, EditOp, OrderEditError, PreviewAcceptanceHash, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
+import { addressErrors, firstAddressError } from '../checkout/address-check.js';
 import { commitOrderEdit, loadEditContext, retryOrderEditRefund, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
 
 export const adminOrderEdit = new OpenAPIHono();
@@ -140,6 +141,12 @@ adminOrderEdit.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
+    // #407: the same address rules as checkout, so an edit can't store an address checkout would refuse.
+    const badAddress = addressErrors({ [`${body.kind}Address`]: body.address });
+    if (badAddress) {
+      const first = firstAddressError(badAddress);
+      throw new HttpError(400, first.message, 'INVALID_ADDRESS', first.param, { fields: badAddress });
+    }
     return c.json(await translate(() => saveOrderAddress({
       storeId: st.storeId, code, actor: admin.email, kind: body.kind, address: normalizeAddress(body.address),
       saveToAddressBook: body.saveToAddressBook, reason: body.reason,

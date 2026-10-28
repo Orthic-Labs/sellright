@@ -949,7 +949,7 @@ describe('checkout policy wire parity (X-57 ruling)', () => {
 
     it('the policy receives the complete normalized request; hashing it with the extensions reproduces the engine fingerprint', async () => {
       registerPaymentPolicy(legacyPolicy());
-      const reqBody = { ...base, shippingAddress: { streetLine1: '1 Main', city: 'X', countryCode: 'US' }, extensions: EXT_BODY };
+      const reqBody = { ...base, shippingAddress: { streetLine1: '1 Main', city: 'X', countryCode: 'HK' }, extensions: EXT_BODY };
       const first = await (await post(reqBody, { 'idempotency-key': 'idem-d9-basis' })).json() as { code: string };
       const stored = await storedFingerprint(first.code);
       await setStoredFingerprint(first.code, LEGACY_A);
@@ -959,7 +959,7 @@ describe('checkout policy wire parity (X-57 ruling)', () => {
       expect(Object.keys(request)).toEqual(['v', 'cartToken', 'items', 'couponCode', 'giftCardCode', 'shippingMethodCode', 'email', 'shippingAddress', 'billingAddress', 'legalAcceptance']);
       expect(request).toEqual({
         v: 1, cartToken: null, items: [{ sku: SKU, quantity: 1 }], couponCode: null, giftCardCode: null, shippingMethodCode: null, email: 'buyer@example.com',
-        shippingAddress: { fullName: null, line1: '1 Main', line2: null, city: 'X', province: null, postalCode: null, country: 'US', phone: null },
+        shippingAddress: { fullName: null, line1: '1 Main', line2: null, city: 'X', province: null, postalCode: null, country: 'HK', phone: null },
         billingAddress: null, legalAcceptance: null,
       });
       expect(calls[0]!.extensions).toEqual({ sourceId: 'LIC-1' });

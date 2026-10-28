@@ -181,7 +181,7 @@ describe('order edit HTTP contract', () => {
     const ok = await call(owner, 'PUT', `/v1/admin/orders/${CODE}/address`, { kind: 'shipping', address: addr, reason: 'moved' });
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({ changed: true, savedToAddressBook: false, address: { country: 'US', line1: '9 B St' } });
-    const cc = await call(owner, 'PUT', `/v1/admin/orders/${CODE}/address`, { kind: 'shipping', address: { ...addr, country: 'CA' } });
+    const cc = await call(owner, 'PUT', `/v1/admin/orders/${CODE}/address`, { kind: 'shipping', address: { ...addr, country: 'CA', province: 'ON', postalCode: 'M5H 2N2' } });
     expect(cc.status).toBe(409);
     expect(((await cc.json()) as { error: { code: string }; requiresPreview: boolean }).error.code).toBe('COUNTRY_CHANGE_REQUIRES_EDIT');
     expect((await call(owner, 'PUT', `/v1/admin/orders/${CODE}/address`, { kind: 'shipping', address: { ...addr, country: 'USA' } })).status).toBe(400);

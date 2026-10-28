@@ -218,6 +218,40 @@ describe('POST /v1/shop/checkout — server pricing', () => {
   });
 });
 
+describe('POST /v1/shop/checkout — address rules (#407)', () => {
+  const post = (body: Record<string, unknown>) => app.request('/v1/shop/checkout', {
+    method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], ...body }),
+  });
+
+  it('accepts accented names, # and / in streets, and a GB address with no county or phone', async () => {
+    const res = await post({
+      shippingAddress: { firstName: 'José', lastName: 'Müller', streetLine1: '123 Main St #4', city: 'Montréal', province: 'Québec', postalCode: 'H2X 1Y4', countryCode: 'CA' },
+      billingAddress: { fullName: "Zoë O'Neil", line1: '12 1/2 Oak Ave', city: 'London', postalCode: 'SW1A 1AA', country: 'GB' },
+    });
+    expect(res.status).toBe(200);
+    const order = await orderByCode((await res.json() as { code: string }).code);
+    expect(order!.shippingAddress).toMatchObject({ fullName: 'José Müller', line1: '123 Main St #4', city: 'Montréal' });
+  });
+
+  it('rejects a bad address with one message per field and creates no order', async () => {
+    const res = await post({
+      shippingAddress: { fullName: 'R2D2', line1: '', city: 'Austin', province: 'Narnia', postalCode: '7870', country: 'US', phone: 'call me' },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string; param: string }; fields: Record<string, string> };
+    expect(body.error).toMatchObject({ code: 'INVALID_ADDRESS', param: 'shippingAddress.fullName' });
+    expect(body.fields).toEqual({
+      'shippingAddress.fullName': 'Name can use letters, spaces, hyphens, apostrophes and periods',
+      'shippingAddress.line1': 'Street address is required',
+      'shippingAddress.province': 'Please enter a valid US state (e.g. "CA" or "California")',
+      'shippingAddress.postalCode': 'Please enter a valid ZIP code (e.g. 10001 or 10001-1234)',
+      'shippingAddress.phone': 'Use digits only (spaces, +, - and brackets are fine)',
+    });
+    const count = await withStore(STORE, async (tx) => Number(((await tx.execute(sql`SELECT count(*)::int AS n FROM "order"`)).rows[0] as { n: number }).n));
+    expect(count).toBe(0);
+  });
+});
+
 describe('POST /v1/shop/checkout — stock reservation', () => {
   it('oversell returns 409 with the blocked SKU and reserves nothing', async () => {
     await makePhysical(1);
@@ -440,7 +474,7 @@ describe('MONEY-5: cart estimate tax matches checkout tax for the same destinati
       headers: hdr(),
       body: JSON.stringify({
         items: [{ sku: SKU, quantity: 1 }],
-        shippingAddress: { line1: '1 Test St', city: 'Toronto', country: 'CA', postalCode: 'M5H2N2' },
+        shippingAddress: { line1: '1 Test St', city: 'Toronto', province: 'ON', country: 'CA', postalCode: 'M5H2N2' },
         email: 'tax-parity@example.com',
       }),
     });
