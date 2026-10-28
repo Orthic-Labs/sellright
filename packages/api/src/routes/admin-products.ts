@@ -81,6 +81,7 @@ adminProducts.openapi(
           licenseSeats: s.productVariant.licenseSeats,
           licenseDurationDays: s.productVariant.licenseDurationDays,
           updatesDurationDays: s.productVariant.updatesDurationDays,
+          updatedAt: s.productVariant.updatedAt,
           onHand: s.stock.onHand,
           allocated: s.stock.allocated,
         })
@@ -102,7 +103,7 @@ adminProducts.openapi(
       return {
         id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId, updatedAt: p.updatedAt.toISOString(), seoTitle: p.seoTitle, seoDescription: p.seoDescription,
         images: gallery.map((g) => ({ assetId: g.assetId, path: g.path, url: `/assets/${g.path}`, position: g.position })),
-        variants: variants.map((v) => ({ ...v, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
+        variants: variants.map((v) => ({ ...v, updatedAt: v.updatedAt.toISOString(), onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
       };
     });
     if (!out) throw new HttpError(404, 'product not found');
@@ -162,42 +163,50 @@ adminProducts.openapi(
       licenseSeats: z.number().int().min(1).max(100).optional(),
       licenseDurationDays: z.number().int().positive().max(36500).nullable().optional(),
       updatesDurationDays: z.number().int().positive().max(36500).nullable().optional(),
+      expectedUpdatedAt: z.string().datetime().optional(),
     })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), updatedAt: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     requireWrite(st);
     const { id } = c.req.valid('param');
-    const { shipDateLabel, ...patch } = c.req.valid('json');
-    const ok = await withStore(st.storeId, async (tx) => {
-      const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
-      if (!v) return false;
-      await tx.update(s.productVariant).set({ ...patch, ...(shipDateLabel === undefined ? {} : { metafields: sql`coalesce(${patch.metafields === undefined ? s.productVariant.metafields : sql`${JSON.stringify(patch.metafields ?? {})}::jsonb`}, '{}'::jsonb) || ${JSON.stringify({ shipDateLabel })}::jsonb` }), shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt: new Date() }).where(eq(s.productVariant.id, id));
+    const { shipDateLabel, expectedUpdatedAt, ...patch } = c.req.valid('json');
+    // #406: like the product PATCH, a newer variant row than the editor loaded is a 409 (Use theirs / Keep mine).
+    const res = await withStore(st.storeId, async (tx) => {
+      const [v] = await tx.select({ id: s.productVariant.id, updatedAt: s.productVariant.updatedAt }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1).for('update');
+      if (!v) return { kind: 'notfound' as const };
+      if (expectedUpdatedAt && v.updatedAt.getTime() > new Date(expectedUpdatedAt).getTime()) return { kind: 'conflict' as const };
+      const updatedAt = new Date();
+      await tx.update(s.productVariant).set({ ...patch, ...(shipDateLabel === undefined ? {} : { metafields: sql`coalesce(${patch.metafields === undefined ? s.productVariant.metafields : sql`${JSON.stringify(patch.metafields ?? {})}::jsonb`}, '{}'::jsonb) || ${JSON.stringify({ shipDateLabel })}::jsonb` }), shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt }).where(eq(s.productVariant.id, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: { ...patch, ...(shipDateLabel === undefined ? {} : { shipDateLabel }) } });
       await emitVariantProductChanged(tx, st.storeId, id);
-      return true;
+      return { kind: 'ok' as const, updatedAt };
     });
-    if (!ok) throw new HttpError(404, 'variant not found');
-    return c.json({ id }, 200);
+    if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
+    if (res.kind === 'conflict') throw new HttpError(409, 'Variant changed since you opened it');
+    return c.json({ id, updatedAt: res.updatedAt.toISOString() }, 200);
   }),
 );
 
 adminProducts.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/variants/{id}/stock', summary: 'Set variant on-hand stock',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ onHand: z.number().int().min(0) })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ onHand: z.number().int().min(0), expectedOnHand: z.number().int().min(0).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Stock changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     requireWrite(st);
     const { id } = c.req.valid('param');
-    const { onHand } = c.req.valid('json');
+    const { onHand, expectedOnHand } = c.req.valid('json');
+    // #406: onHand is absolute, so a fulfilment or another admin's change since the editor loaded would be silently
+    // overwritten. With expectedOnHand the write only lands if on-hand is still what the editor showed.
     const ok = await withStore(st.storeId, async (tx) => {
-      const [cur] = await tx.select().from(s.stock).where(eq(s.stock.variantId, id)).limit(1);
+      const [cur] = await tx.select().from(s.stock).where(eq(s.stock.variantId, id)).limit(1).for('update');
+      if (expectedOnHand !== undefined && (cur?.onHand ?? 0) !== expectedOnHand) return 'conflict' as const;
       if (cur) {
         const delta = onHand - cur.onHand;
         await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
@@ -212,6 +221,7 @@ adminProducts.openapi(
       await emitVariantProductChanged(tx, st.storeId, id);
       return true;
     });
+    if (ok === 'conflict') throw new HttpError(409, 'Stock changed since you opened it');
     if (!ok) throw new HttpError(404, 'variant not found');
     // Zero-cache stock rule: regenerate the manifest immediately, after this
     // commit — never inside the transaction above (a later throw would roll

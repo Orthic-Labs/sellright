@@ -64,6 +64,10 @@ function ProductDetailEditor({ id }: { id: string }) {
   // updatedAt as the person opened (or last saved) it. Background refetches must not move it, or a conflict would be masked.
   const loadedAt = useRef<string | null>(null);
   useEffect(() => { if (p && loadedAt.current === null) loadedAt.current = stamp(p); }, [p]);
+  // The same for each variant: its updatedAt and on-hand as first seen, sent with its PATCHes so a newer row is a 409.
+  const loadedVariants = useRef(new Map<string, { updatedAt?: string; onHand: number }>());
+  useEffect(() => { p?.variants.forEach((v) => { if (!loadedVariants.current.has(v.id)) loadedVariants.current.set(v.id, { updatedAt: v.updatedAt, onHand: v.onHand }); }); }, [p]);
+  const rebase = (fresh: ProductDetail) => { loadedAt.current = stamp(fresh); loadedVariants.current = new Map(fresh.variants.map((v) => [v.id, { updatedAt: v.updatedAt, onHand: v.onHand }])); };
 
   const active = useRef(true);
   const transportStore = useRef(auth.store).current;
@@ -129,10 +133,20 @@ function ProductDetailEditor({ id }: { id: string }) {
       }
       for (const vp of plan.variants) {
         guardIdentity();
+        const base = loadedVariants.current.get(vp.id);
         try {
-          if (Object.keys(vp.patch).length) await api.patch(`/variants/${vp.id}`, vp.patch);
-          if (vp.onHand !== undefined) await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand });
-        } catch (e) { throw new Error(`${vp.sku}: ${(e as Error).message}`); }
+          if (Object.keys(vp.patch).length) {
+            const r = await api.patch<{ id: string; updatedAt?: string }>(`/variants/${vp.id}`, { ...vp.patch, expectedUpdatedAt: base?.updatedAt });
+            if (base && r?.updatedAt) base.updatedAt = r.updatedAt;
+          }
+          if (vp.onHand !== undefined) {
+            await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand, expectedOnHand: base?.onHand });
+            if (base) base.onHand = vp.onHand;
+          }
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409) { if (isCurrent()) setConflict(true); return; }
+          throw new Error(`${vp.sku}: ${(e as Error).message}`);
+        }
         commit(vp.keys, snap);
       }
       guardIdentity();
@@ -162,7 +176,7 @@ function ProductDetailEditor({ id }: { id: string }) {
     setConflictBusy(true);
     try {
       const fresh = await api.get<ProductDetail>(`/products/${id}`);
-      qc.setQueryData(key, fresh); loadedAt.current = stamp(fresh);
+      qc.setQueryData(key, fresh); rebase(fresh);
       setEdits({}); setConflict(false);
     } catch (e) { toast.error("Couldn't load the latest copy", (e as Error).message); }
     finally { setConflictBusy(false); }
@@ -171,7 +185,7 @@ function ProductDetailEditor({ id }: { id: string }) {
     setConflictBusy(true);
     try {
       const fresh = await api.get<ProductDetail>(`/products/${id}`);
-      qc.setQueryData(key, fresh); loadedAt.current = stamp(fresh);
+      qc.setQueryData(key, fresh); rebase(fresh);
       setConflict(false);
     } catch (e) { toast.error("Couldn't load the latest copy", (e as Error).message); setConflictBusy(false); return; }
     setConflictBusy(false);
@@ -228,7 +242,7 @@ function ProductDetailEditor({ id }: { id: string }) {
       {(conflict || failed) && (
         <div style={{ padding: '12px 24px 0' }}>
           {conflict
-            ? <ConflictBanner busy={conflictBusy} onTheirs={() => void takeTheirs()} onMine={() => void keepMine()}>Someone else saved this product after you opened it.</ConflictBanner>
+            ? <ConflictBanner busy={conflictBusy} onTheirs={() => void takeTheirs()} onMine={() => void keepMine()}>This product changed after you opened it: someone saved it, or its stock moved.</ConflictBanner>
             : <SaveFailed count={failed!.count} detail={failed!.detail} busy={saving} onRetry={() => void save()} />}
         </div>
       )}
