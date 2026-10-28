@@ -10,7 +10,7 @@ import { useForcePurgeDialog, isPaidPurgeState } from '../components/ForcePurgeD
 import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
 import { PAYMENT_OPTIONS, customerLabel, paymentDef } from '../lib/order-status';
-import { EmptyState, FilteredEmpty, LoadError, LoadingRows } from '../redesign/states';
+import { EmptyState, FilteredEmpty, LoadError, LoadingRows, sentence } from '../redesign/states';
 import { FulfilDialog } from '../redesign/FulfilDialog';
 import OrderInspector from '../redesign/OrderInspector';
 import { FilterChip, PillView, Popover } from '../redesign/orders-ui';
@@ -390,7 +390,7 @@ export default function Orders() {
           )}
 
           {dateInvalid && <div className="note w" role="alert"><span>The start date is after the end date, so no orders can match.</span></div>}
-          {error && <div style={{ padding: '8px 24px' }}><LoadError what="orders" detail={`${(error as Error).message} Your filters are kept.`} onRetry={() => refetch()} /></div>}
+          {error && <div style={{ padding: '8px 24px' }}><LoadError what="orders" detail={`${sentence((error as Error).message)} Your filters are kept.`} onRetry={() => refetch()} /></div>}
           {bulkResult && bulkResult.results.some((r) => !r.ok) && (
             <div className="banner w" role="alert" style={{ margin: '8px 24px' }}>
               <div>

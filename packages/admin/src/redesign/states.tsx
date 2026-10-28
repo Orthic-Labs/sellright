@@ -40,11 +40,14 @@ export function LoadingRows({ label, rows = 6, cols = [70, 90, 0, 50] }: { label
 }
 
 /** Load failed; whatever the person had set up (filters, edits) is kept. */
+/** Server messages often lack a final full stop. */
+export const sentence = (s: string): string => s.trim().replace(/([^.!?])$/, '$1.');
+
 export function LoadError({ what, detail, onRetry }: { what: string; detail?: string; onRetry: () => void }) {
   return (
     <div className="banner" role="alert">
       <AlertTriangle size={16} aria-hidden="true" />
-      <div><b>Couldn't load {what}.</b> {detail ?? 'Check your connection and try again.'}</div>
+      <div><b>Couldn't load {what}.</b> {detail ? sentence(detail) : 'Check your connection and try again.'}</div>
       <span className="sp" />
       <button className="btn sm" onClick={onRetry}>Retry</button>
     </div>
