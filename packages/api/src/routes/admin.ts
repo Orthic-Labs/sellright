@@ -40,7 +40,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, removedQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -382,7 +382,7 @@ admin.openapi(
           // #374: a guest order (no linked customer) shows its own checkout contact.
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
-          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(),
+          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(), removedQty: removedQtySql(),
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))

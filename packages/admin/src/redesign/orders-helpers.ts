@@ -33,6 +33,15 @@ export function fulfilmentPill(o: Pick<OrderRow, 'state' | 'status' | 'openQty' 
   return { tone: 'ok', label: 'Fulfilled' };
 }
 
+/** #406: the Items cell. Units removed before shipping are counted as removed, so a fully removed order never reads "0 items". */
+export function itemsCopy(o: Pick<OrderRow, 'openQty' | 'shippedQty' | 'removedQty'>): string {
+  if (o.openQty == null) return '—';
+  const n = o.openQty + (o.shippedQty ?? 0), removed = o.removedQty ?? 0;
+  const items = `${n} item${n === 1 ? '' : 's'}`;
+  if (!removed) return items;
+  return n ? `${items} · ${removed} removed` : `${removed} removed`;
+}
+
 const TONE: Record<string, PillTone> = { positive: 'ok', attention: 'warn', critical: 'bad', info: 'info', neutral: 'neu' };
 export function paymentPill(status?: string | null): Pill {
   const d = paymentDef(status);

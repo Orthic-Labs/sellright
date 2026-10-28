@@ -30,6 +30,11 @@ export function shippedQtySql(): SQL<number> {
   return sql<number>`(select coalesce(sum(ol.fulfilled_qty), 0)::int from order_line ol where ol.order_id = ${orderId})`;
 }
 
+/** Units removed before shipping (refunded or cancelled off the order). */
+export function removedQtySql(): SQL<number> {
+  return sql<number>`(select coalesce(sum(ol.cancelled_qty), 0)::int from order_line ol where ol.order_id = ${orderId})`;
+}
+
 const PAID = sql`${orderState} in ('Paid', 'PartiallyRefunded')`;
 
 export function orderTabSql(tab: OrderTab): SQL {

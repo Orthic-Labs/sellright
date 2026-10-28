@@ -34,6 +34,8 @@ test.describe('orders list', () => {
     await page.goto('/orders?tab=all');
     await page.getByPlaceholder('Code, email, name or phone').fill('rd-removed');
     await expect(page.locator(`tr[data-id="${seeded.removed}"]`)).toContainText('Nothing to ship');
+    await expect(page.locator(`tr[data-id="${seeded.removed}"] td[data-col="items"]`)).not.toHaveText('0 items');
+    await expect(page.locator(`tr[data-id="${seeded.removed}"] td[data-col="items"]`)).toHaveText(/removed$/);
     await page.getByRole('tab', { name: /^Shipped/ }).click();
     await expect(page.locator(`tr[data-id="${seeded.removed}"]`)).toHaveCount(0);
   });
