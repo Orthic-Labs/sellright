@@ -160,8 +160,9 @@ function StoreSwitcher() {
   };
   return (
     <div className="relative">
-      <button ref={btn} className="store" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Switch store">
-        <span className="logo">{initials(store.name)}</span>
+      <button ref={btn} className="store" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="sr-only">Switch store: </span>
+        <span className="logo" aria-hidden="true">{initials(store.name)}</span>
         <div className="min-w-0"><b className="truncate">{store.name}</b><small className="capitalize">{store.role}</small></div>
         {stores.length > 1 && <ChevronDown size={14} className="chev" aria-hidden="true" />}
       </button>
@@ -283,7 +284,7 @@ export default function Layout() {
       <section className="main">
         <div className="rd contents">
           <header className="top">
-            <button className="search" onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))} aria-label="Search and commands (Ctrl K)">
+            <button className="search" onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))} aria-keyshortcuts="Control+K Meta+K">
               <Search size={14} aria-hidden="true" />Search orders, products, customers<span className="kbd">Ctrl K</span>
             </button>
             <span className="sp" />

@@ -67,7 +67,7 @@ export function AddressCard({ code, kind, address, canEdit, hasCustomer, onSaved
       {!editing ? (
         <div className="flex items-start justify-between gap-3">
           <div>
-            {lines.length ? lines.map((l, i) => <div key={i} className="text-sm text-gray-600">{l}</div>) : <span className="text-sm text-gray-400">None</span>}
+            {lines.length ? lines.map((l, i) => <div key={i} className="text-sm text-gray-600">{l}</div>) : <span className="text-sm text-muted">None</span>}
           </div>
           {canEdit && <button className="btn-ghost btn-sm shrink-0" onClick={start} aria-label={`Edit ${title.toLowerCase()}`}><Pencil size={13} /> Edit</button>}
         </div>

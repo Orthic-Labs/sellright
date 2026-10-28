@@ -30,14 +30,14 @@ function VariantPicker({ code, currency, onPick, placeholder }: { code: string; 
   return (
     <div className="stack-y-2">
       <div className="relative">
-        <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+        <Search size={14} className="absolute left-2.5 top-2.5 text-muted" />
         <input className="input pl-8" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
       </div>
       {dq && (
         <div className="rounded-lg border border-gray-100 rule-y rule-gray-100 max-h-48 overflow-y-auto">
-          {isFetching && !data ? <div className="p-2 text-xs text-gray-400">Searching…</div> : (data?.items.length ?? 0) === 0 ? <div className="p-2 text-xs text-gray-400">No matching variants</div> : data!.items.map((v) => (
+          {isFetching && !data ? <div className="p-2 text-xs text-muted">Searching…</div> : (data?.items.length ?? 0) === 0 ? <div className="p-2 text-xs text-muted">No matching variants</div> : data!.items.map((v) => (
             <button type="button" key={v.sku} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex justify-between gap-3" onClick={() => { onPick(v); setQ(''); }}>
-              <span className="min-w-0 truncate">{v.productName} — {v.name} <span className="text-xs text-gray-400">{v.sku}</span></span>
+              <span className="min-w-0 truncate">{v.productName} — {v.name} <span className="text-xs text-muted">{v.sku}</span></span>
               <span className="shrink-0 tnum text-gray-500">{v.available != null ? `${v.available} avail · ` : ''}{money(v.unitPrice, currency)}</span>
             </button>
           ))}
@@ -172,8 +172,8 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
               return (
                 <tr key={l.id} className="border-t border-gray-100 align-top">
                   <td className="td">
-                    <div className={`font-medium ${removed || (q === 0) ? 'line-through text-gray-400' : ''}`}>{swap ? `${l.name} → ${swap.name}` : l.name}</div>
-                    <div className="text-xs text-gray-400">{l.sku} · {money(l.unitPrice, currency)}
+                    <div className={`font-medium ${removed || (q === 0) ? 'line-through text-muted' : ''}`}>{swap ? `${l.name} → ${swap.name}` : l.name}</div>
+                    <div className="text-xs text-muted">{l.sku} · {money(l.unitPrice, currency)}
                       {l.fulfilledQty > 0 && <span className="text-success"> · {l.fulfilledQty} shipped (locked)</span>}
                       {l.refundedQty > 0 && <span className="text-danger"> · {l.refundedQty} refunded (locked)</span>}
                     </div>
@@ -188,10 +188,10 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                         onChange={(e) => { const n = Math.max(l.minQuantity, Math.floor(Number(e.target.value) || 0)); set({ qty: { ...st.qty, [l.id]: n } }); }} />
                       <button type="button" className="btn-ghost btn-sm" aria-label={`Increase quantity of ${l.sku}`} onClick={() => set({ qty: { ...st.qty, [l.id]: q + 1 } })}><Plus size={12} /></button>
                     </div>
-                    {l.minQuantity > 0 && <div className="text-[11px] text-gray-400 mt-0.5">min {l.minQuantity}</div>}
+                    {l.minQuantity > 0 && <div className="text-[11px] text-muted mt-0.5">min {l.minQuantity}</div>}
                   </td>
                   <td className="td text-right whitespace-nowrap tnum">
-                    {d && d.afterTotal !== d.beforeTotal ? <><span className="text-gray-400 line-through mr-1">{money(d.beforeTotal, currency)}</span>{money(d.afterTotal, currency)}</> : money(l.lineTotal, currency)}
+                    {d && d.afterTotal !== d.beforeTotal ? <><span className="text-muted line-through mr-1">{money(d.beforeTotal, currency)}</span>{money(d.afterTotal, currency)}</> : money(l.lineTotal, currency)}
                   </td>
                   <td className="td text-right whitespace-nowrap">
                     <button type="button" className="btn-ghost btn-sm" aria-label={`Swap variant of ${l.sku}`} disabled={l.quantity - l.minQuantity <= 0} onClick={() => setSwapFor(swapFor === l.id ? null : l.id)}><Repeat size={12} /></button>
@@ -204,7 +204,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
               const d = pv?.lines.find((x) => x.lineId == null && x.sku === a.sku);
               return (
                 <tr key={`add-${i}`} className="border-t border-gray-100 bg-gray-50/60">
-                  <td className="td"><div className="font-medium">{a.name}</div><div className="text-xs text-gray-400">{a.sku} · new item</div></td>
+                  <td className="td"><div className="font-medium">{a.name}</div><div className="text-xs text-muted">{a.sku} · new item</div></td>
                   <td className="td text-center">
                     <input type="number" min={1} className="input w-16 text-center tnum py-1" aria-label={`Quantity of added ${a.sku}`} value={a.quantity}
                       onChange={(e) => set({ adds: st.adds.map((x, j) => (j === i ? { ...x, quantity: Math.max(1, Math.floor(Number(e.target.value) || 1)) } : x)) })} />
@@ -260,7 +260,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
             {ctx.adjustments.map((a) => {
               const gone = st.adjRemove.includes(a.id);
               return (
-                <li key={a.id} className={`flex items-center justify-between text-sm ${gone ? 'line-through text-gray-400' : 'text-gray-600'}`}>
+                <li key={a.id} className={`flex items-center justify-between text-sm ${gone ? 'line-through text-muted' : 'text-gray-600'}`}>
                   <span>{a.label}</span>
                   <span className="flex items-center gap-2 tnum">{signed(a.amount, currency)}
                     <button type="button" className="btn-ghost btn-sm" aria-label={`${gone ? 'Restore' : 'Remove'} adjustment ${a.label}`} onClick={() => set({ adjRemove: gone ? st.adjRemove.filter((x) => x !== a.id) : [...st.adjRemove, a.id] })}>{gone ? 'Undo' : <X size={12} />}</button>
@@ -270,7 +270,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
             })}
             {st.adjAdd.map((a, i) => (
               <li key={`n${i}`} className="flex items-center justify-between text-sm text-gray-600">
-                <span>{a.label} <span className="text-xs text-gray-400">(new)</span></span>
+                <span>{a.label} <span className="text-xs text-muted">(new)</span></span>
                 <span className="flex items-center gap-2 tnum">{signed(a.amountCents, currency)}
                   <button type="button" className="btn-ghost btn-sm" aria-label={`Remove new adjustment ${a.label}`} onClick={() => set({ adjAdd: st.adjAdd.filter((_, j) => j !== i) })}><X size={12} /></button></span>
               </li>
@@ -282,7 +282,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
             <button type="button" className="btn-ghost shrink-0" disabled={!adjLabel.trim() || !parseCents(adjAmount)}
               onClick={() => { set({ adjAdd: [...st.adjAdd, { label: adjLabel.trim(), amountCents: parseCents(adjAmount)! }] }); setAdjLabel(''); setAdjAmount(''); }}>Add</button>
           </div>
-          <p className="mt-1 text-xs text-gray-400">A positive amount charges the customer, a negative one credits them. Adjustments are not taxed.</p>
+          <p className="mt-1 text-xs text-muted">A positive amount charges the customer, a negative one credits them. Adjustments are not taxed.</p>
         </div>
         {(st.address.shipping || st.address.billing) && (
           <div className="rounded-lg border border-gray-100 p-3 text-sm">
@@ -310,11 +310,11 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                     <span className="tnum">{signed(l.afterTotal - l.beforeTotal, currency)}</span>
                   </li>
                 ))}
-                {pv.stock.filter((x) => x.delta !== 0).map((x) => <li key={x.sku} className="text-xs text-gray-400">Stock {x.sku}: {x.delta > 0 ? `reserve ${x.delta}` : `release ${-x.delta}`}</li>)}
+                {pv.stock.filter((x) => x.delta !== 0).map((x) => <li key={x.sku} className="text-xs text-muted">Stock {x.sku}: {x.delta > 0 ? `reserve ${x.delta}` : `release ${-x.delta}`}</li>)}
               </ul>
               <div className="stack-y-1 text-sm border-t border-gray-100 pt-2">
                 {([['Subtotal', 'subtotal'], ['Discount', 'discountTotal'], ['Shipping', 'shippingTotal'], ['Tax', 'taxTotal'], ['Adjustments', 'adjustmentTotal']] as const).map(([label, k]) => (
-                  (pv.before[k] !== 0 || pv.after[k] !== 0) && <div key={k} className="flex justify-between text-gray-600"><span>{label}</span><span className="tnum">{pv.before[k] !== pv.after[k] && <span className="text-gray-400 line-through mr-2">{money(pv.before[k], currency)}</span>}{money(pv.after[k], currency)}</span></div>
+                  (pv.before[k] !== 0 || pv.after[k] !== 0) && <div key={k} className="flex justify-between text-gray-600"><span>{label}</span><span className="tnum">{pv.before[k] !== pv.after[k] && <span className="text-muted line-through mr-2">{money(pv.before[k], currency)}</span>}{money(pv.after[k], currency)}</span></div>
                 ))}
                 <div className="flex justify-between font-semibold pt-1 border-t border-gray-100"><span>New total</span><span className="tnum">{money(pv.after.grandTotal, currency)}</span></div>
                 <div className="flex justify-between text-gray-600"><span>Paid so far (net of refunds)</span><span className="tnum">{money(pv.balance.netPaid, currency)}</span></div>

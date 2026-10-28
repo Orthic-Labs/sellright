@@ -101,7 +101,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
           <td className="num"><span className="avc"><b>{av}</b>{v.allocated > 0 && <small>{v.allocated} held</small>}</span></td>
           <td>
             <div className={hasEdit(edits, `${v.id}.active`) ? 'chg' : undefined}>
-              <button type="button" className={`stt${active ? ' on' : ''}`} aria-pressed={active} aria-label={`For sale, ${full}`} onClick={() => set(v, 'active', !active)}>{active ? 'Active' : 'Inactive'}</button>
+              <button type="button" role="switch" className={`stt${active ? ' on' : ''}`} aria-checked={active} onClick={() => set(v, 'active', !active)}><span className="sr-only">For sale, {full}: </span>{active ? 'Active' : 'Inactive'}</button>
             </div>
           </td>
           <td>

@@ -226,9 +226,10 @@ export function DiscountEditor() {
         <div className="stack">
           <section className="card"><div className="ch"><h2>Code</h2></div><div className="cb-body">
             <div className="fld">
-              <label htmlFor="d-code">Customers type this at checkout. Leave empty for an automatic discount.</label>
+              <label htmlFor="d-code">Code</label>
               <input id="d-code" className={`inp mono${bad(E.code)}`} value={form.code} style={{ textTransform: 'uppercase' }} autoComplete="off"
-                onChange={(e) => set({ code: e.target.value.toUpperCase() })} aria-invalid={!!E.code} aria-describedby="d-code-e" />
+                onChange={(e) => set({ code: e.target.value.toUpperCase() })} aria-invalid={!!E.code} aria-describedby="d-code-h d-code-e" />
+              <span className="hint" id="d-code-h">Customers type this at checkout. Leave empty for an automatic discount.</span>
               <Err id="d-code-e" msg={E.code} />
               {isEdit && used > 0 && <span className="hint">Used {plural(used, 'time')}. Renaming keeps that history; the old code stops working.</span>}
             </div>
