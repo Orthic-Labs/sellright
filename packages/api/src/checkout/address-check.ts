@@ -3,8 +3,9 @@ import { addressFieldErrors, type AddressInput } from './address-rules.js';
 export type AddressFieldErrors = Record<string, string>;
 
 /**
- * Server half of #407: the same rules the storefront applies, on canonical addresses
- * ({ fullName, line1, line2, city, province, postalCode, country, phone }).
+ * Server half of #407: the storefront's rules in lenient mode (any printable name, any non-empty state), on
+ * canonical addresses ({ fullName, line1, line2, city, province, postalCode, country, phone }). The server is looser
+ * than the browser on purpose: a wallet address arrives after the shopper approved payment, and refusing it loses the sale.
  * Keys are prefixed with the address kind ("shippingAddress.postalCode") so a client can
  * put each message under the right field. Returns null when every given address is valid;
  * an absent address is not checked (digital orders).
@@ -17,7 +18,7 @@ export function addressErrors(addresses: Partial<Record<'shippingAddress' | 'bil
     // shipping quote): check just the fields it carries. Anything with a street or city is a full address.
     const given = (v: unknown) => v != null && String(v).trim() !== '';
     const full = given(address.line1) || given(address.city);
-    for (const [field, message] of Object.entries(addressFieldErrors(address))) {
+    for (const [field, message] of Object.entries(addressFieldErrors(address, { lenient: true }))) {
       if (full || given(address[field as keyof AddressInput])) out[`${kind}.${field}`] = message;
     }
   }

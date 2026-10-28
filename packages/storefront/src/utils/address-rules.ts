@@ -25,6 +25,15 @@ const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v)).trim();
 
+/** Server-side name check: any printable text. Wallet names ("AT&T", "Flat 2B Ltd") must never fail an approved payment. */
+export const validatePrintableName = (value: unknown, label = 'Name'): RuleResult => {
+  const v = text(value);
+  if (!v) return fail(`${label} is required`);
+  if (v.length > LIMITS.name) return fail(`${label} is too long`);
+  if (CONTROL.test(v)) return fail(`${label} contains characters that can't be printed on a label`);
+  return ok;
+};
+
 export const validatePersonName = (value: unknown, label = 'Name'): RuleResult => {
   const v = text(value);
   if (!v) return fail(`${label} is required`);
@@ -137,14 +146,15 @@ const REGION_INDEX: Record<string, Set<string>> = Object.fromEntries(
 
 export const regionRequired = (country: string): boolean => REGION_REQUIRED_COUNTRIES.has(country.toUpperCase());
 
-export const validateRegion = (value: unknown, country: string, label = 'State/Province'): RuleResult => {
+/** `lenient` (the server) keeps required-ness, length and control characters but skips the US/CA/AU list match. */
+export const validateRegion = (value: unknown, country: string, label = 'State/Province', lenient = false): RuleResult => {
   const c = country.toUpperCase();
   const v = text(value);
   if (!v) return regionRequired(c) ? fail(`${label} is required`) : ok;
   if (v.length > LIMITS.region) return fail(`${label} is too long`);
   if (CONTROL.test(v)) return fail(`${label} contains characters that can't be printed on a label`);
   const list = REGION_LISTS[c];
-  if (list && !REGION_INDEX[c]!.has(fold(v))) return fail(`Please enter a valid ${list.name} (e.g. ${list.example})`);
+  if (list && !lenient && !REGION_INDEX[c]!.has(fold(v))) return fail(`Please enter a valid ${list.name} (e.g. ${list.example})`);
   return ok;
 };
 
@@ -167,18 +177,25 @@ export type AddressInput = {
   province?: unknown; postalCode?: unknown; country?: unknown; phone?: unknown;
 };
 
-/** Field-level errors for a whole address; an empty object means valid. */
-export const addressFieldErrors = (a: AddressInput, opts: { requireName?: boolean } = {}): Record<string, string> => {
+/**
+ * Field-level errors for a whole address; an empty object means valid.
+ *
+ * `lenient` is the server's mode: it must be looser than the browser, because an express-wallet address (Apple Pay,
+ * Google Pay, Link) reaches the server only after the shopper approved the payment sheet. Lenient keeps required
+ * fields, control characters, length limits, the country code and the postcode rules, but accepts any printable name
+ * and any non-empty state/province.
+ */
+export const addressFieldErrors = (a: AddressInput, opts: { requireName?: boolean; lenient?: boolean } = {}): Record<string, string> => {
   const errors: Record<string, string> = {};
   const put = (field: string, r: RuleResult) => { if (!r.isValid) errors[field] = r.message; };
   const country = text(a.country).toUpperCase();
   if (!/^[A-Z]{2}$/.test(country)) errors.country = 'Country is required';
-  if (opts.requireName || text(a.fullName)) put('fullName', validatePersonName(a.fullName, 'Name'));
+  if (opts.requireName || text(a.fullName)) put('fullName', (opts.lenient ? validatePrintableName : validatePersonName)(a.fullName, 'Name'));
   put('line1', validateAddressLine(a.line1, 'Street address'));
   put('line2', validateAddressLine(a.line2, 'Apartment, suite, etc.', false));
   put('city', validateCity(a.city));
   if (!errors.country) {
-    put('province', validateRegion(a.province, country));
+    put('province', validateRegion(a.province, country, 'State/Province', opts.lenient));
     put('postalCode', validatePostcode(a.postalCode, country));
   }
   put('phone', validatePhoneLoose(a.phone));

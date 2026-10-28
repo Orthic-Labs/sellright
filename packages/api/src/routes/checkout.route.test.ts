@@ -233,17 +233,27 @@ describe('POST /v1/shop/checkout — address rules (#407)', () => {
     expect(order!.shippingAddress).toMatchObject({ fullName: 'José Müller', line1: '123 Main St #4', city: 'Montréal' });
   });
 
+  it('is looser than the browser for wallet addresses: "&" and a digit in the name, "Calif." as the state', async () => {
+    // Express wallets (Apple Pay / Google Pay / Link) send the address after the shopper approved payment.
+    const res = await post({
+      email: 'wallet@example.org',
+      shippingAddress: { fullName: 'AT&T Flat 2B Ltd', line1: '1 Infinite Loop', city: 'Cupertino', province: 'Calif.', postalCode: '95014', country: 'US', phone: '+1 408 996 1010' },
+      billingAddress: { fullName: 'John Smith 3rd', line1: '1 Main St', city: 'Austin', province: 'Tex', postalCode: '78701', country: 'US' },
+    });
+    expect(res.status).toBe(200);
+    const order = await orderByCode((await res.json() as { code: string }).code);
+    expect(order!.shippingAddress).toMatchObject({ fullName: 'AT&T Flat 2B Ltd', province: 'Calif.' });
+  });
+
   it('rejects a bad address with one message per field and creates no order', async () => {
     const res = await post({
-      shippingAddress: { fullName: 'R2D2', line1: '', city: 'Austin', province: 'Narnia', postalCode: '7870', country: 'US', phone: 'call me' },
+      shippingAddress: { fullName: 'Ada Lovelace', line1: '', city: 'Austin', province: 'TX', postalCode: '7870', country: 'US', phone: 'call me' },
     });
     expect(res.status).toBe(400);
     const body = await res.json() as { error: { code: string; message: string; param: string }; fields: Record<string, string> };
-    expect(body.error).toMatchObject({ code: 'INVALID_ADDRESS', param: 'shippingAddress.fullName' });
+    expect(body.error).toMatchObject({ code: 'INVALID_ADDRESS', param: 'shippingAddress.line1' });
     expect(body.fields).toEqual({
-      'shippingAddress.fullName': 'Name can use letters, spaces, hyphens, apostrophes and periods',
       'shippingAddress.line1': 'Street address is required',
-      'shippingAddress.province': 'Please enter a valid US state (e.g. "CA" or "California")',
       'shippingAddress.postalCode': 'Please enter a valid ZIP code (e.g. 10001 or 10001-1234)',
       'shippingAddress.phone': 'Use digits only (spaces, +, - and brackets are fine)',
     });

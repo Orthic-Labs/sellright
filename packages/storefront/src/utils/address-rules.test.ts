@@ -112,3 +112,21 @@ describe('whole addresses (#407)', () => {
     expect(addressFieldErrors({ line1: '1 Main St', city: 'X' }).country).toBe('Country is required');
   });
 });
+
+describe('lenient (server) mode (#407)', () => {
+  const wallet = { fullName: 'AT&T Flat 2B Ltd', line1: '1 Infinite Loop', city: 'Cupertino', province: 'Calif.', postalCode: '95014', country: 'US' };
+  it('accepts any printable name and any non-empty state', () => {
+    expect(addressFieldErrors(wallet, { lenient: true })).toEqual({});
+    expect(addressFieldErrors({ ...wallet, fullName: 'John Smith 3rd' }, { lenient: true })).toEqual({});
+  });
+  it('the browser stays strict on the same address', () => {
+    expect(Object.keys(addressFieldErrors(wallet))).toEqual(['fullName', 'province']);
+  });
+  it('still requires the state and checks control characters and postcode formats', () => {
+    expect(addressFieldErrors({ ...wallet, province: '', postalCode: '1234', fullName: 'A\u0007B' }, { lenient: true })).toEqual({
+      fullName: "Name contains characters that can't be printed on a label",
+      province: 'State/Province is required',
+      postalCode: 'Please enter a valid ZIP code (e.g. 10001 or 10001-1234)',
+    });
+  });
+});

@@ -26,11 +26,25 @@ describe('addressErrors (#407)', () => {
       billingAddress: { line1: '1 Main St', city: '', country: 'GB', postalCode: 'SW1A 1AA' },
     });
     expect(errors).toEqual({
-      'shippingAddress.fullName': 'Name can use letters, spaces, hyphens, apostrophes and periods',
       'shippingAddress.postalCode': 'Please enter a valid ZIP code (e.g. 10001 or 10001-1234)',
       'billingAddress.city': 'City is required',
     });
     expect(firstAddressError({ 'billingAddress.city': 'City is required' })).toEqual({ param: 'billingAddress.city', message: 'Billing address: City is required' });
+  });
+
+  it('is looser than the browser: wallet names with & or digits and an abbreviated state pass', () => {
+    expect(addressErrors({
+      shippingAddress: { fullName: 'AT&T Flat 2B Ltd', line1: '1 Infinite Loop', city: 'Cupertino', province: 'Calif.', postalCode: '95014', country: 'US' },
+      billingAddress: { fullName: 'John Smith 3rd', line1: '1 Main St', city: 'Toronto', province: 'Ont', postalCode: 'M5H 2N2', country: 'CA' },
+    })).toBeNull();
+  });
+
+  it('still refuses what no carrier can use: missing fields, control characters, bad formats', () => {
+    expect(addressErrors({ shippingAddress: { fullName: 'A\u0000B', line1: '1 Main St', city: 'Austin', province: '', postalCode: '7870', country: 'US' } })).toEqual({
+      'shippingAddress.fullName': "Name contains characters that can't be printed on a label",
+      'shippingAddress.province': 'State/Province is required',
+      'shippingAddress.postalCode': 'Please enter a valid ZIP code (e.g. 10001 or 10001-1234)',
+    });
   });
 
   it('checks a location-only address (no street, no city) on the fields it carries', () => {
