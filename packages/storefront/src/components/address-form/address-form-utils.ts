@@ -1,7 +1,7 @@
 import { ShippingAddress } from '~/types';
 import {
  validateAddress,
- validateName,
+ validateCity,
  validatePostalCode,
  validateStateProvince,
 } from '~/utils/validation';
@@ -68,7 +68,7 @@ export const validateAddressField = (
    break;
   }
   case 'city': {
-   const result = validateName(value, 'City');
+   const result = validateCity(value);
    errors.city = result.isValid ? '' : result.message;
    break;
   }
@@ -90,7 +90,7 @@ export const validateAddressField = (
 export const isShippingAddressFieldsValid = (address: ShippingAddress): boolean => {
  const countryCode = address.countryCode || 'US';
  return validateAddress(address.streetLine1 || '', 'Street address').isValid
-  && validateName(address.city || '', 'City').isValid
+  && validateCity(address.city || '').isValid
   && validateStateProvince(address.province || '', countryCode, 'State/Province').isValid
   && validatePostalCode(address.postalCode || '', countryCode).isValid;
 };

@@ -67,11 +67,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       validationActions.updateBillingAddressValidation(billingSection.isValid, billingSection.errors, true);
     }
   });
-  const phonePlaceholder = useComputed$(() => {
-    const countryCode = appState.shippingAddress.countryCode || 'US';
-    const isOptional = countryCode === 'US' || countryCode === 'PR';
-    return `Phone number${isOptional ? ' (optional)' : ''}` as string;
-  });
+  const phonePlaceholder = useComputed$(() => 'Phone number (optional)');
   useTask$(({ track }) => {
     track(() => addressSubmissionComplete.value);
     track(() => addressSubmissionInProgress.value);
@@ -149,8 +145,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     if (appState.shippingAddress?.phoneNumber && !phoneTouched.value) {
       phoneTouched.value = true;
       const countryCode = appState.shippingAddress.countryCode || 'US';
-      const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
-      const result = validatePhone(appState.shippingAddress.phoneNumber, countryCode, isPhoneOptional);
+      const result = validatePhone(appState.shippingAddress.phoneNumber, countryCode);
       phoneValidationError.value = result.isValid ? '' : (result.message || 'Invalid phone');
     }
   });
@@ -166,8 +161,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       if (appState.shippingAddress?.phoneNumber && !phoneTouched.value) {
         phoneTouched.value = true;
         const countryCode = appState.shippingAddress.countryCode || 'US';
-        const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
-        const phoneResult = validatePhone(appState.shippingAddress.phoneNumber, countryCode, isPhoneOptional);
+        const phoneResult = validatePhone(appState.shippingAddress.phoneNumber, countryCode);
         if (!phoneResult.isValid) {
           phoneValidationError.value = phoneResult.message || 'Invalid phone number';
         }
@@ -192,14 +186,13 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
   useTask$(({ track }) => {
     track(() => appState.shippingAddress.countryCode);
     const countryCode = appState.shippingAddress.countryCode || 'US';
-    const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
     const customerPhoneNumber = (appState.shippingAddress?.phoneNumber || '') as string;
-    console.log(`📍 [CheckoutAddresses] Country changed to: ${countryCode}, Phone optional: ${isPhoneOptional}`);
+    console.log(`📍 [CheckoutAddresses] Country changed to: ${countryCode}`);
     if (customerPhoneNumber) {
       if (!phoneTouched.value) {
         phoneTouched.value = true;
       }
-      const phoneResult = validatePhone(customerPhoneNumber, countryCode, isPhoneOptional);
+      const phoneResult = validatePhone(customerPhoneNumber, countryCode);
       phoneValidationError.value = phoneResult.isValid ? '' : (phoneResult.message || 'Invalid phone number');
       console.log(`📞 [CheckoutAddresses] Phone re-validated for ${countryCode}: ${phoneResult.isValid ? 'valid' : (phoneResult.message || 'Invalid phone number')}`);
     }
@@ -295,8 +288,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     }
     if (phoneTouched.value) {
       const countryCode = appState.shippingAddress.countryCode || 'US';
-      const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
-      const phoneResult = validatePhone(filteredValue, countryCode, isPhoneOptional);
+      const phoneResult = validatePhone(filteredValue, countryCode);
       if (phoneResult.isValid) {
         phoneValidationError.value = '';
       } else {
@@ -309,8 +301,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     if (phoneCharsRejected.value) { phoneValidationError.value = PHONE_CHARACTERS_MESSAGE; return; }
     const phoneNumber = appState.shippingAddress?.phoneNumber || '';
     const countryCode = appState.shippingAddress.countryCode || 'US';
-    const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
-    const phoneResult = validatePhone(phoneNumber, countryCode, isPhoneOptional);
+    const phoneResult = validatePhone(phoneNumber, countryCode);
     if (phoneResult.isValid) {
       phoneValidationError.value = '';
     } else {

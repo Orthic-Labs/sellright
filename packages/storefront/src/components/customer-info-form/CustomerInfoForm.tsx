@@ -27,8 +27,7 @@ export const validateCustomerInfo = $((customer?: any, shippingCountryCode?: str
   const lastNameResult = validateName(customer.lastName || '');
   
   // Validate phone - required for international orders, optional for US/PR
-  const isUSorPR = shippingCountryCode === 'US' || shippingCountryCode === 'PR';
-  const phoneResult = validatePhone(customer.phoneNumber || '', shippingCountryCode || 'US', isUSorPR);
+  const phoneResult = validatePhone(customer.phoneNumber || '', shippingCountryCode || 'US');
   
   // Overall form validity
   return emailResult.isValid && 
@@ -70,8 +69,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
     lastNameValidationError.value = lastNameResult.isValid ? '' : lastNameResult.message || 'Last name is required';
     
     // Validate phone - required for international orders, optional for US/PR
-    const isUSorPR = appState.shippingAddress.countryCode === 'US' || appState.shippingAddress.countryCode === 'PR';
-    const phoneResult = validatePhone(appState.customer.phoneNumber || '', appState.shippingAddress.countryCode || 'US', isUSorPR);
+    const phoneResult = validatePhone(appState.customer.phoneNumber || '', appState.shippingAddress.countryCode || 'US');
     phoneValidationError.value = phoneResult.isValid ? '' : phoneResult.message || 'Invalid phone number';
     
     // Update overall form validity
@@ -106,8 +104,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
       phoneTouched.value = true;
       // Immediately validate the phone number with the current country
       const countryCode = appState.shippingAddress.countryCode || 'US';
-      const isPhoneOptional = countryCode === 'US' || countryCode === 'PR';
-      const phoneResult = validatePhone(appState.customer.phoneNumber, countryCode, isPhoneOptional);
+      const phoneResult = validatePhone(appState.customer.phoneNumber, countryCode);
       if (!phoneResult.isValid) {
         phoneValidationError.value = phoneResult.message || 'Invalid phone number';
       }
@@ -205,7 +202,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               type="tel"
               id="customer-info-phone"
               value={sanitizePhoneNumber(appState.customer?.phoneNumber)}
-              placeholder={`Phone number${(appState.shippingAddress.countryCode === 'US' || appState.shippingAddress.countryCode === 'PR') ? ' (optional)' : ' *'}`}
+              placeholder="Phone number (optional)"
               onInput$={(_, el) => handlePhoneChange$(el.value)}
               onBlur$={handlePhoneBlur$}
               aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}

@@ -1,4 +1,4 @@
-import { validateAddress, validateEmail, validateName, validatePhone, validatePostalCode, validateStateProvince } from './validation';
+import { validateAddress, validateCity, validateEmail, validateName, validatePhone, validatePostalCode, validateStateProvince } from './validation';
 
 export type CustomerSectionErrors = {
   email?: string;
@@ -39,11 +39,10 @@ type AddressInput = {
 
 export function validateCustomerSection(customer: CustomerInput, countryCode = 'US') {
   const normalizedCountry = countryCode.toUpperCase();
-  const isPhoneOptional = normalizedCountry === 'US' || normalizedCountry === 'PR';
   const firstName = validateName(customer.firstName || '', 'First name');
   const lastName = validateName(customer.lastName || '', 'Last name');
   const email = validateEmail(customer.emailAddress || '');
-  const phone = validatePhone(customer.phoneNumber || '', normalizedCountry, isPhoneOptional);
+  const phone = validatePhone(customer.phoneNumber || '', normalizedCountry);
   const errors: CustomerSectionErrors = {
     firstName: firstName.isValid ? undefined : (firstName.message || 'Invalid first name'),
     lastName: lastName.isValid ? undefined : (lastName.message || 'Invalid last name'),
@@ -59,7 +58,7 @@ export function validateCustomerSection(customer: CustomerInput, countryCode = '
 export function validateShippingSection(address: AddressInput) {
   const countryCode = (address.countryCode || 'US').toUpperCase();
   const street = validateAddress(address.streetLine1 || '', 'Street address');
-  const city = validateName(address.city || '', 'City');
+  const city = validateCity(address.city || '');
   const province = validateStateProvince(address.province || '', countryCode, 'State/Province');
   const postal = validatePostalCode(address.postalCode || '', countryCode);
   const errors: AddressSectionErrors = {
@@ -80,7 +79,7 @@ export function validateBillingSection(address: AddressInput) {
   const firstName = validateName(address.firstName || '', 'First name');
   const lastName = validateName(address.lastName || '', 'Last name');
   const street = validateAddress(address.streetLine1 || '', 'Street address');
-  const city = validateName(address.city || '', 'City');
+  const city = validateCity(address.city || '');
   const province = validateStateProvince(address.province || '', countryCode, 'State/Province');
   const postal = validatePostalCode(address.postalCode || '', countryCode);
   const errors: BillingSectionErrors = {

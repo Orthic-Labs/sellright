@@ -1,5 +1,6 @@
 import {
  validateAddress,
+ validateCity,
  validateName,
  validatePostalCode,
  validateStateProvince,
@@ -42,7 +43,7 @@ export function validateBillingField(
    result = validateAddress(safeValue, 'Street address');
    break;
   case 'city':
-   result = validateName(safeValue, 'City');
+   result = validateCity(safeValue);
    break;
   case 'province':
    result = validateStateProvince(safeValue, countryCode, 'State/Province');

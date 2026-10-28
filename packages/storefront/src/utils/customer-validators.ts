@@ -1,7 +1,7 @@
 import { ActiveCustomer, ShippingAddress } from '~/types';
 import {
   validatePostalCode,
-  validateName,
+  validateCity,
   validateEmail,
   validateAddress,
   validateStateProvince,
@@ -11,7 +11,7 @@ export const isShippingAddressValid = (orderAddress: ShippingAddress): boolean =
   if (!orderAddress) return false;
 
   const streetResult = validateAddress(orderAddress.streetLine1 || '', 'Street address');
-  const cityResult = validateName(orderAddress.city || '', 'City');
+  const cityResult = validateCity(orderAddress.city || '');
   const provinceResult = validateStateProvince(
     orderAddress.province || '',
     orderAddress.countryCode || 'US',
@@ -32,7 +32,7 @@ export const isBillingAddressValid = (billingAddress: ShippingAddress): boolean 
   if (!billingAddress) return false;
 
   const streetResult = validateAddress(billingAddress.streetLine1 || '', 'Street address');
-  const cityResult = validateName(billingAddress.city || '', 'City');
+  const cityResult = validateCity(billingAddress.city || '');
   const provinceResult = validateStateProvince(
     billingAddress.province || '',
     billingAddress.countryCode || 'US',
