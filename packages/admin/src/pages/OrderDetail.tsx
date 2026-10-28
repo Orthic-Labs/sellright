@@ -90,7 +90,8 @@ export default function OrderDetailPage() {
   const removed = o.lines.filter((l) => l.cancelledQty > 0);
   const shipNow = canShip(o);
   const nothingLeft = !cancelled && o.state !== 'PendingPayment' && unf.length === 0 && pre.length === 0;
-  const email = o.customer?.email;
+  // Same order as the server (orders/recipient.ts): the checkout contact wins, the account email is the fallback.
+  const email = o.contact?.email || o.customer?.email;
   const paid = paidTotal(o), refunded = refundedTotal(o);
   const sub = o.lines.reduce((s, l) => s + l.lineTotal, 0);
   const locName = (id: string | null) => o.locations.find((l) => l.id === id)?.name;
@@ -272,9 +273,10 @@ export default function OrderDetailPage() {
                 <Link to={`/customers/${o.customer.id}`} style={{ fontWeight: 500 }} className="lnk">
                   {[o.customer.firstName, o.customer.lastName].filter(Boolean).join(' ') || o.customer.email}
                 </Link>
-              ) : <span className="muted">Guest checkout</span>}
-              {o.customer?.email && <div style={{ marginTop: 8 }}>{o.customer.email}</div>}
-              {o.customer?.phone && <div className="muted">{o.customer.phone}</div>}
+              ) : o.contact?.name ? <span style={{ fontWeight: 500 }}>{o.contact.name}</span> : <span className="muted">Guest checkout</span>}
+              {/* #374: a guest order shows the contact captured at checkout. */}
+              {(o.customer?.email ?? o.contact?.email) && <div style={{ marginTop: 8 }}>{o.customer?.email ?? o.contact?.email}</div>}
+              {(o.customer?.phone ?? o.contact?.phone) && <div className="muted">{o.customer?.phone ?? o.contact?.phone}</div>}
             </div>
           </Card>
           <AddressCard code={o.code} kind="shipping" address={o.shippingAddress} canEdit={canEditAddress} hasCustomer={!!o.customer} onSaved={() => void invalidate()}

@@ -1,19 +1,18 @@
 /**
- * #406 discounts model. Holds the condition builders the original page exported (pages/Discounts.tsx re-exports them
- * for Discounts.test.ts), plus the one status function, list filtering/paging, validation and overlap detection.
+ * #406 discounts model. The condition builders below are pages/Discounts.tsx's (#383/#384) moved here unchanged and
+ * re-exported from that page for Discounts.test.ts; then the one status function, list filtering/paging, validation
+ * and overlap detection.
  */
 
 export interface Promo {
   id: string; code: string | null; type: string; value: number; enabled: boolean;
-  freeShipping?: boolean;
   usedCount: number; usageLimit: number | null; perCustomerUsageLimit: number | null;
   startsAt?: string | null; endsAt?: string | null;
+  freeShipping?: boolean;
 }
 export interface PromoDetail extends Promo {
   conditions: unknown;
-  /** Present only once the API returns them on the detail route. */
-  priority?: number | null;
-  exclusionGroup?: string | null;
+  priority?: number; exclusionGroup?: string | null; affiliateEmail?: string | null;
   usage: { orderCode: string; email: string | null; at: string }[];
 }
 export interface ConditionArg { name: string; value: string }
@@ -21,8 +20,19 @@ export interface Condition { code: string; args?: ConditionArg[] }
 
 export type ScopeKind = '' | 'collections' | 'products' | 'tags';
 
+/** Verification categories a `verified_customer` condition can require — the list from the Vendure
+ *  verified-customer.condition.ts (sheerid-plugin); the API matches them against the customer's active verifications. */
+export const VERIFIED_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'military', label: 'Military' }, { value: 'first_responder', label: 'First Responder' }, { value: 'teacher', label: 'Teacher' },
+  { value: 'student', label: 'Student' }, { value: 'medical', label: 'Medical' }, { value: 'senior', label: 'Senior' },
+];
+const SCOPE_CODES: Record<Exclude<ScopeKind, ''>, string> = {
+  collections: 'at_least_n_in_collections', products: 'at_least_n_products', tags: 'at_least_n_with_tags',
+};
+export const LEGACY_FACET_CODE = 'at_least_n_with_facets';
+
 /** Reads the repo's existing condition shape (money/coupon.ts evaluateCoupon)
- *  back into simple form fields: no new condition vocabulary invented here,
+ *  back into simple form fields — no new condition vocabulary invented here,
  *  only surfaced: `minimum_order_amount` and the native item-scope conditions
  *  `at_least_n_in_collections` / `at_least_n_products` / `at_least_n_with_tags`,
  *  which match on a product's real collection membership, id, or `tags`. */
@@ -46,17 +56,27 @@ export interface FormState {
   products: { id: string; name: string }[];
   tags: string[];
   /** Set when a saved discount still carries the retired
-   *  `at_least_n_with_facets` condition: shown as a warning in the form and
-   *  dropped on save (buildConditions only ever emits native codes). */
+   *  `at_least_n_with_facets` condition. Kept on save like any other condition
+   *  the form does not render (it fails closed at checkout) unless the merchant
+   *  ticks `dropLegacyFacet`. */
   legacyFacetCondition: boolean;
-  enabled: boolean;
-  /** undefined = not loaded from the API; the payload then leaves the stored value alone. */
+  dropLegacyFacet?: boolean;
+  /** `verified_customer`: only customers with one of these active verifications qualify. */
+  verifiedRequired?: boolean;
+  verifiedCategories?: string[];
+  /** Conditions the form has no field for. Carried through every save untouched — dropping one would silently widen
+   *  who the discount applies to (#384). */
+  extraConditions?: unknown[];
+  freeShipping?: boolean;
   priority?: string;
   exclusionGroup?: string;
+  /** Binds the coupon to an affiliate (Vendure: an email as the promotion name). */
+  affiliateEmail?: string;
+  enabled: boolean;
 }
 
 export function emptyForm(): FormState {
-  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', scope: '', scopeMinimum: '1', collectionIds: [], products: [], tags: [], legacyFacetCondition: false, enabled: true, priority: '0', exclusionGroup: '' };
+  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', scope: '', scopeMinimum: '1', collectionIds: [], products: [], tags: [], legacyFacetCondition: false, dropLegacyFacet: false, verifiedRequired: false, verifiedCategories: [], extraConditions: [], freeShipping: false, priority: '', exclusionGroup: '', affiliateEmail: '', enabled: true };
 }
 
 /** ISO datetime <-> the value a `<input type="datetime-local">` wants (no
@@ -79,16 +99,26 @@ const parseIds = (raw: string | undefined): string[] => {
   } catch { return []; }
 };
 
-/** Maps a saved discount's `conditions` array back into form state: the
+/** Maps a saved discount's `conditions` array back into form state — the
  *  inverse of buildConditions(). Product scope ids come back as `{id, name}`
  *  with the id as a placeholder name; the component resolves real names via
  *  `GET /products/{id}` afterwards (no new endpoints). */
 export function hydrateForm(p: PromoDetail): FormState {
+  const all = Array.isArray(p.conditions) ? (p.conditions as Condition[]) : [];
   const minCond = readCondition(p.conditions, 'minimum_order_amount');
   const colCond = readCondition(p.conditions, 'at_least_n_in_collections');
   const prodCond = readCondition(p.conditions, 'at_least_n_products');
   const tagCond = readCondition(p.conditions, 'at_least_n_with_tags');
-  const legacyCond = readCondition(p.conditions, 'at_least_n_with_facets');
+  const verifiedCond = readCondition(p.conditions, 'verified_customer');
+  const scope: ScopeKind = colCond.collectionIds ? 'collections' : prodCond.productIds ? 'products' : tagCond.tags ? 'tags' : '';
+  // Everything the form does not render is carried through: the first condition of each rendered code, and only it, is
+  // owned by a field; any further copy, any non-chosen scope condition and any unknown code goes to extraConditions.
+  const owned = new Set<unknown>();
+  const own = (code: string) => { const c = all.find((x) => x?.code === code && !owned.has(x)); if (c) owned.add(c); };
+  own('minimum_order_amount');
+  own('verified_customer');
+  if (scope) own(SCOPE_CODES[scope]);
+  const extraConditions = all.filter((x) => !owned.has(x));
   const f = emptyForm();
   return {
     ...f,
@@ -97,15 +127,21 @@ export function hydrateForm(p: PromoDetail): FormState {
     usageLimit: p.usageLimit != null ? String(p.usageLimit) : '', perCustomerUsageLimit: p.perCustomerUsageLimit != null ? String(p.perCustomerUsageLimit) : '',
     startsAt: toLocalInput(p.startsAt), endsAt: toLocalInput(p.endsAt),
     minOrderAmount: minCond.amount ? (Number(minCond.amount) / 100).toFixed(2) : '',
-    scope: colCond.collectionIds ? 'collections' : prodCond.productIds ? 'products' : tagCond.tags ? 'tags' : '',
+    scope,
     scopeMinimum: colCond.minimum ?? prodCond.minimum ?? tagCond.minimum ?? '1',
     collectionIds: parseIds(colCond.collectionIds),
     products: parseIds(prodCond.productIds).map((id) => ({ id, name: id })),
     tags: parseIds(tagCond.tags),
-    legacyFacetCondition: Object.keys(legacyCond).length > 0,
+    legacyFacetCondition: all.some((x) => x?.code === LEGACY_FACET_CODE),
+    dropLegacyFacet: false,
+    verifiedRequired: all.some((x) => x?.code === 'verified_customer'),
+    verifiedCategories: parseIds(verifiedCond.categories),
+    extraConditions,
+    freeShipping: p.freeShipping ?? false,
+    priority: p.priority ? String(p.priority) : '',
+    exclusionGroup: p.exclusionGroup ?? '',
+    affiliateEmail: p.affiliateEmail ?? '',
     enabled: p.enabled,
-    priority: typeof p.priority === 'number' ? String(p.priority) : undefined,
-    exclusionGroup: p.exclusionGroup !== undefined ? (p.exclusionGroup ?? '') : undefined,
   };
 }
 
@@ -113,7 +149,7 @@ export function buildConditions(f: FormState): unknown[] | null {
   const conds: Condition[] = [];
   const minAmount = f.minOrderAmount.trim() ? Math.round(parseFloat(f.minOrderAmount) * 100) : 0;
   if (minAmount > 0) conds.push({ code: 'minimum_order_amount', args: [{ name: 'amount', value: String(minAmount) }] });
-  // At most one item-scope condition per discount, emitted exactly in the
+  // At most one item-scope condition per discount — emitted exactly in the
   // shape money/coupon.ts evaluates (JSON string-array arg + `minimum`).
   const minimum = String(Math.max(1, Number(f.scopeMinimum) || 1));
   if (f.scope === 'collections' && f.collectionIds.length > 0) {
@@ -132,10 +168,26 @@ export function buildConditions(f: FormState): unknown[] | null {
       { name: 'minimum', value: minimum },
     ] });
   }
+  // verified_customer: the same shape money/coupon.ts reads (`categories` = JSON string array).
+  if (f.verifiedRequired && (f.verifiedCategories ?? []).length > 0) {
+    conds.push({ code: 'verified_customer', args: [{ name: 'categories', value: JSON.stringify(f.verifiedCategories) }] });
+  }
+  // Conditions the form cannot render pass through untouched (#384). Only the retired facet code can be dropped, and
+  // only when the merchant asks for it.
+  for (const c of f.extraConditions ?? []) {
+    if (f.dropLegacyFacet && (c as Condition | null)?.code === LEGACY_FACET_CODE) continue;
+    conds.push(c as Condition);
+  }
   return conds.length ? conds : null;
 }
 
-/** A chosen scope with nothing selected must not save: buildConditions would
+/** A required verification with no category selected must not save: buildConditions would emit no verified_customer
+ *  condition, turning a Military/Student/Teacher coupon into a public one. */
+export function verifiedError(f: FormState): string | null {
+  return f.verifiedRequired && (f.verifiedCategories ?? []).length === 0 ? 'Select at least one verification category — or untick Require verified customer.' : null;
+}
+
+/** A chosen scope with nothing selected must not save — buildConditions would
  *  silently emit no scope condition, turning the discount into a whole-order
  *  (store-wide) one. Blocks submit until the merchant picks an item or drops
  *  back to Whole order. */
@@ -148,25 +200,32 @@ export function scopeError(f: FormState): string | null {
   return empty ? 'Select at least one collection, product or tag — or choose Whole order.' : null;
 }
 
+/** Blank = unlimited (null); 0 is a real limit meaning blocked (Vendure: usageLimit/perCustomerUsageLimit 0 = cannot be used). */
+export function parseLimit(raw: string): number | null {
+  const v = raw.trim();
+  if (v === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 export function buildPayload(f: FormState) {
   const isPct = f.type === 'percentage';
   return {
     code: f.code || null,
     type: f.type,
     value: f.type === 'free_shipping' ? 0 : isPct ? Math.round(parseFloat(f.value || '0')) : Math.round(parseFloat(f.value || '0') * 100),
-    usageLimit: f.usageLimit ? Number(f.usageLimit) : null,
-    perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null,
+    usageLimit: parseLimit(f.usageLimit),
+    perCustomerUsageLimit: parseLimit(f.perCustomerUsageLimit),
+    freeShipping: f.freeShipping ?? false,
+    priority: Math.trunc(Number(f.priority)) || 0,
+    exclusionGroup: f.exclusionGroup?.trim() || null,
+    affiliateEmail: f.affiliateEmail?.trim() || null,
     startsAt: fromLocalInput(f.startsAt),
     endsAt: fromLocalInput(f.endsAt),
     conditions: buildConditions(f),
     enabled: f.enabled,
-    // Only sent when the form holds a real value, so a save never resets what the API didn't tell us.
-    ...(f.priority !== undefined && f.priority.trim() !== '' ? { priority: Number(f.priority) } : {}),
-    ...(f.exclusionGroup !== undefined ? { exclusionGroup: f.exclusionGroup.trim() || null } : {}),
   };
 }
-
-// ── status: the ONE function behind tabs, counts, pills and the editor status line ──────────────────────────────
 
 export type DiscountStatus = 'active' | 'scheduled' | 'expired' | 'disabled';
 
@@ -211,7 +270,7 @@ export function typeLabel(t: string): string { return t === 'percentage' ? 'Perc
 
 // ── validation ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type FieldKey = 'code' | 'value' | 'scope' | 'minOrder' | 'scopeMin' | 'limit' | 'perCust' | 'priority' | 'starts' | 'ends';
+export type FieldKey = 'code' | 'value' | 'scope' | 'minOrder' | 'scopeMin' | 'limit' | 'perCust' | 'priority' | 'starts' | 'ends' | 'verified' | 'affiliate';
 export type Errors = Partial<Record<FieldKey, string>>;
 
 const isInt = (v: string, min: number) => /^\d+$/.test(v.trim()) && Number(v) >= min;
@@ -233,11 +292,15 @@ export function validateForm(f: FormState, used: number, otherCodes: (string | n
   if (se) E.scope = `Pick at least one ${f.scope === 'collections' ? 'collection' : f.scope === 'products' ? 'product' : 'tag'}, or choose Everything.`;
   if (f.minOrderAmount.trim() && (!isMoney(f.minOrderAmount) || !(Number(f.minOrderAmount) > 0))) E.minOrder = 'Enter an amount above 0, or leave empty.';
   if (f.scope !== '' && !isInt(f.scopeMinimum, 1)) E.scopeMin = 'Whole number, 1 or more.';
+  // Blank = unlimited, 0 = blocked (parseLimit, #384); any other limit can't be below what was already used.
   if (f.usageLimit.trim()) {
-    if (!isInt(f.usageLimit, 1)) E.limit = 'Whole number, or leave empty for unlimited.';
-    else if (Number(f.usageLimit) < used) E.limit = `Already used ${plural(used, 'time')}. The limit can't be lower.`;
+    if (!isInt(f.usageLimit, 0)) E.limit = 'Whole number, 0 to block, or leave empty for unlimited.';
+    else if (Number(f.usageLimit) > 0 && Number(f.usageLimit) < used) E.limit = `Already used ${plural(used, 'time')}. The limit can't be lower (0 blocks the code).`;
   }
-  if (f.perCustomerUsageLimit.trim() && !isInt(f.perCustomerUsageLimit, 1)) E.perCust = 'Whole number, or leave empty for unlimited.';
+  if (f.perCustomerUsageLimit.trim() && !isInt(f.perCustomerUsageLimit, 0)) E.perCust = 'Whole number, 0 to block, or leave empty for unlimited.';
+  const ve = verifiedError(f);
+  if (ve) E.verified = ve;
+  if (f.affiliateEmail?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.affiliateEmail.trim())) E.affiliate = 'Enter a full email address, or leave empty.';
   if (f.priority !== undefined && f.priority.trim() && !isInt(f.priority, 0)) E.priority = 'Whole number, 0 or more.';
   const s = f.startsAt ? Date.parse(fromLocalInput(f.startsAt) ?? '') : null;
   const e = f.endsAt ? Date.parse(fromLocalInput(f.endsAt) ?? '') : null;

@@ -128,7 +128,7 @@ test.describe('staff', () => {
 
 		const ro = await signInAs(browser, email);
 		await gotoStable(ro.page, '/orders?tab=all');
-		await ro.page.getByPlaceholder('Order, name or email').fill(code);
+		await ro.page.getByPlaceholder('Code, email, name or phone').fill(code);
 		await expect(row(ro.page, code)).toHaveCount(1); // can read
 
 		await gotoStable(ro.page, `/orders/${code}`);

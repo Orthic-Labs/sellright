@@ -7,10 +7,9 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { useForcePurgeDialog, isPaidPurgeState } from '../components/ForcePurgeDialog';
-import OrderExportDialog from '../components/OrderExportDialog';
 import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
-import { EMPTY_FILTERS, PAYMENT_OPTIONS, customerLabel, paymentDef } from '../lib/order-status';
+import { PAYMENT_OPTIONS, customerLabel, paymentDef } from '../lib/order-status';
 import { EmptyState, FilteredEmpty, LoadError, LoadingRows } from '../redesign/states';
 import { FulfilDialog } from '../redesign/FulfilDialog';
 import OrderInspector from '../redesign/OrderInspector';
@@ -51,7 +50,6 @@ export default function Orders() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<Cols>(() => loadCols());
   const [qInput, setQInput] = useState(q);
-  const [exportOpen, setExportOpen] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const [fulfilCode, setFulfilCode] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
@@ -255,7 +253,6 @@ export default function Orders() {
     if (checked.size === 1) setFulfilCode([...checked][0]!); else bulkFulfill.mutate();
   }
 
-  const exportFilters = { ...EMPTY_FILTERS, q, paymentStatus, from, to, status: tab === 'cancelled' ? 'cancelled' : archived ? 'archived' : '' };
   const total = data?.total ?? 0;
   const first = total ? (page - 1) * PAGE_SIZE + 1 : 0;
   const last = Math.min(page * PAGE_SIZE, total);
@@ -269,7 +266,6 @@ export default function Orders() {
     <div className="rd" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }} onKeyDown={onRootKey}>
       {confirmDialog}
       {forcePurgeDialog}
-      <OrderExportDialog open={exportOpen} onClose={() => setExportOpen(false)} filters={exportFilters} />
       <AutoDeliverDialog open={deliverOpen} onClose={() => setDeliverOpen(false)} />
       {fulfilCode && (
         <FulfilDialog code={fulfilCode} open onClose={() => setFulfilCode(null)}
@@ -294,7 +290,7 @@ export default function Orders() {
                 </>
               )}
             </Popover>
-            <button className="btn" onClick={() => setExportOpen(true)}><Download size={14} aria-hidden="true" />Export</button>
+            <Link className="btn" to="/fulfilment/export"><Download size={14} aria-hidden="true" />Export</Link>
             <Link to="/orders/new" className="btn pri"><Plus size={14} aria-hidden="true" />New order</Link>
           </div>
 
@@ -339,7 +335,7 @@ export default function Orders() {
           ) : (
             <div className="fbar">
               <label className="fsearch"><Search size={13} aria-hidden="true" />
-                <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Order, name or email" aria-label="Filter orders" />
+                <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Code, email, name or phone" aria-label="Filter orders" />
               </label>
               <FilterChip label="Payment" valueLabel={paymentStatus ? paymentDef(paymentStatus).label : null} onClear={() => patch({ paymentStatus: null })}>
                 {(close) => PAYMENT_OPTIONS.map((o) => (

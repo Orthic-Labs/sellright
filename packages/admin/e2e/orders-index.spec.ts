@@ -7,7 +7,7 @@ import { createOrder, createPendingOrder, uniq, SKU } from './support/api';
  * Supersedes (see report): admin-orders.bulk.test.ts, admin-order-ops bulk/soft-delete db paths.
  */
 type Pg = import('@playwright/test').Page;
-const searchBox = (page: Pg) => page.getByPlaceholder('Order, name or email');
+const searchBox = (page: Pg) => page.getByPlaceholder('Code, email, name or phone');
 const tab = (page: Pg, name: string) => page.getByRole('tab', { name: new RegExp(`^${name}( \\d|$)`) });
 const pick = async (page: Pg, chip: RegExp, option: string) => {
 	await page.getByRole('button', { name: chip }).first().click();

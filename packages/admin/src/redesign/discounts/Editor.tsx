@@ -11,7 +11,7 @@ import { confirmLeave, useLeaveGuard } from '../leave-guard';
 import { LoadError, LoadingRows } from '../states';
 import { ConfirmDlg } from '../payments/Dlg';
 import {
-  buildPayload, discountStatus, emptyForm, formScope, fromLocalInput, hydrateForm, overlapCandidates, plural, scopeOf, scopesMeet, validateForm,
+  buildPayload, discountStatus, emptyForm, LEGACY_FACET_CODE, VERIFIED_CATEGORIES, type Condition, formScope, fromLocalInput, hydrateForm, overlapCandidates, plural, scopeOf, scopesMeet, validateForm,
   windowOf, windowsMeet, type Errors, type FieldKey, type FormState, type Promo, type PromoDetail, type ScopeKind,
 } from './model';
 
@@ -20,9 +20,9 @@ interface ProductRow { id: string; name: string }
 interface Page<T> { items: T[]; total: number }
 
 const FIELD_ID: Record<FieldKey, string> = {
-  code: 'd-code', value: 'd-val', scope: 'd-scope', minOrder: 'd-min', scopeMin: 'd-smin', limit: 'd-lim', perCust: 'd-per', priority: 'd-pri', starts: 'd-st', ends: 'd-en',
+  code: 'd-code', value: 'd-val', scope: 'd-scope', minOrder: 'd-min', scopeMin: 'd-smin', limit: 'd-lim', perCust: 'd-per', priority: 'd-pri', starts: 'd-st', ends: 'd-en', verified: 'd-ver-e', affiliate: 'd-aff',
 };
-const ORDER: FieldKey[] = ['code', 'value', 'scope', 'minOrder', 'scopeMin', 'limit', 'perCust', 'priority', 'starts', 'ends'];
+const ORDER: FieldKey[] = ['code', 'value', 'scope', 'verified', 'affiliate', 'minOrder', 'scopeMin', 'limit', 'perCust', 'priority', 'starts', 'ends'];
 
 function Err({ id, msg }: { id: string; msg?: string }) { return <span className="err" id={id} role="alert">{msg ?? ''}</span>; }
 const bad = (m?: string) => (m ? ' bad' : '');
@@ -160,6 +160,7 @@ export function DiscountEditor() {
   const E: Errors = validateForm(form, used, otherCodes);
   if (codeTaken && form.code.trim().toLowerCase() === codeTaken) E.code = 'A discount with that code already exists';
   const errCount = Object.keys(E).length;
+  const keptCodes = (form.extraConditions ?? []).map((c) => (c as Condition | null)?.code ?? '?').filter((c) => c !== LEGACY_FACET_CODE);
   const isEdit = !!form.id;
   const status = discountStatus({ enabled: form.enabled, startsAt: fromLocalInput(form.startsAt), endsAt: fromLocalInput(form.endsAt) });
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ''; } })();
@@ -219,7 +220,13 @@ export function DiscountEditor() {
       </div>
       {serverErr && <div style={{ padding: '12px 24px 0' }}><div className="banner" role="alert"><AlertTriangle size={16} aria-hidden="true" /><div><b>Couldn't save.</b> {serverErr} Your edits are still here.</div></div></div>}
       {form.legacyFacetCondition && (
-        <div style={{ padding: '12px 24px 0' }}><div className="banner w" role="status"><AlertTriangle size={16} aria-hidden="true" /><div>This discount uses a retired facet condition that no longer applies at checkout. Choose a scope and save to replace it.</div></div></div>
+        <div style={{ padding: '12px 24px 0' }}><div className="banner w" role="status"><AlertTriangle size={16} aria-hidden="true" /><div>
+          This discount uses a retired facet condition that is not supported at checkout, so the code will not apply. It is kept when you save.
+          <label className="chk" style={{ marginTop: 6 }}><input type="checkbox" className="cb" checked={!!form.dropLegacyFacet} onChange={(e) => set({ dropLegacyFacet: e.target.checked })} />Remove the retired condition on save</label>
+        </div></div></div>
+      )}
+      {keptCodes.length > 0 && (
+        <div style={{ padding: '12px 24px 0' }}><div className="note" role="status"><Info size={16} aria-hidden="true" /><div>Also carries conditions this form does not edit ({keptCodes.join(', ')}). They are kept when you save.</div></div></div>
       )}
 
       <div className="grid2" style={{ paddingTop: 16 }}>
@@ -253,6 +260,7 @@ export function DiscountEditor() {
                     <Err id="d-val-e" msg={E.value} />
                   </div>
                   {form.type === 'percentage' && <span className="muted" style={{ height: 30, display: 'flex', alignItems: 'center' }}>% off</span>}
+                  <label className="chk" style={{ height: 30 }}><input type="checkbox" className="cb" checked={!!form.freeShipping} onChange={(e) => set({ freeShipping: e.target.checked })} />Also free shipping</label>
                 </>
               )}
             </div>
@@ -316,6 +324,26 @@ export function DiscountEditor() {
             )}
           </div></section>
 
+          <section className="card"><div className="ch"><h2>Who can use it</h2></div><div className="cb-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <label className="chk"><input type="checkbox" className="cb" checked={!!form.verifiedRequired} onChange={(e) => set({ verifiedRequired: e.target.checked })} />Require a verified customer</label>
+            {form.verifiedRequired && (
+              <fieldset style={{ border: 0, display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }} aria-describedby="d-ver-e">
+                <legend className="hint" style={{ marginBottom: 6 }}>Only customers with one of these active verifications qualify.</legend>
+                {VERIFIED_CATEGORIES.map((c) => (
+                  <label key={c.value} className="chk"><input type="checkbox" className="cb" checked={(form.verifiedCategories ?? []).includes(c.value)}
+                    onChange={(e) => set({ verifiedCategories: e.target.checked ? [...(form.verifiedCategories ?? []), c.value] : (form.verifiedCategories ?? []).filter((v) => v !== c.value) })} />{c.label}</label>
+                ))}
+              </fieldset>
+            )}
+            <Err id="d-ver-e" msg={E.verified} />
+            <div className="fld">
+              <label htmlFor="d-aff">Affiliate email</label>
+              <input id="d-aff" className={`inp${bad(E.affiliate)}`} value={form.affiliateEmail ?? ''} placeholder="None" autoComplete="off" onChange={(e) => set({ affiliateEmail: e.target.value })} aria-invalid={!!E.affiliate} aria-describedby="d-aff-h d-aff-e" />
+              <span className="hint" id="d-aff-h">Credits sales made with this code to an affiliate.</span>
+              <Err id="d-aff-e" msg={E.affiliate} />
+            </div>
+          </div></section>
+
           <section className="card"><div className="ch"><h2>Requirements and limits</h2></div>
             <div className="cb-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' }}>
               <div className="fld">
@@ -325,12 +353,14 @@ export function DiscountEditor() {
               </div>
               <div className="fld">
                 <label htmlFor="d-lim">Total uses</label>
-                <input id="d-lim" className={`inp${bad(E.limit)}`} value={form.usageLimit} placeholder="Unlimited" inputMode="numeric" onChange={(e) => set({ usageLimit: e.target.value })} aria-invalid={!!E.limit} aria-describedby="d-lim-e" />
+                <input id="d-lim" className={`inp${bad(E.limit)}`} value={form.usageLimit} placeholder="Unlimited" inputMode="numeric" onChange={(e) => set({ usageLimit: e.target.value })} aria-invalid={!!E.limit} aria-describedby="d-lim-h d-lim-e" />
+                <span className="hint" id="d-lim-h">Empty = unlimited, 0 = blocked.</span>
                 <Err id="d-lim-e" msg={E.limit} />
               </div>
               <div className="fld">
                 <label htmlFor="d-per">Uses per customer</label>
-                <input id="d-per" className={`inp${bad(E.perCust)}`} value={form.perCustomerUsageLimit} placeholder="Unlimited" inputMode="numeric" onChange={(e) => set({ perCustomerUsageLimit: e.target.value })} aria-invalid={!!E.perCust} aria-describedby="d-per-e" />
+                <input id="d-per" className={`inp${bad(E.perCust)}`} value={form.perCustomerUsageLimit} placeholder="Unlimited" inputMode="numeric" onChange={(e) => set({ perCustomerUsageLimit: e.target.value })} aria-invalid={!!E.perCust} aria-describedby="d-per-h d-per-e" />
+                <span className="hint" id="d-per-h">Empty = unlimited, 0 = blocked.</span>
                 <Err id="d-per-e" msg={E.perCust} />
               </div>
             </div>
@@ -377,7 +407,7 @@ export function DiscountEditor() {
             <ul style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
               <li>{val} {scopeText}</li>
               <li>{form.minOrderAmount.trim() ? `Minimum order ${form.minOrderAmount}` : 'No minimum'}</li>
-              <li>{form.usageLimit.trim() ? `${form.usageLimit} uses in total` : 'Unlimited uses'}</li>
+              <li>{!form.usageLimit.trim() ? 'Unlimited uses' : Number(form.usageLimit) === 0 ? 'Blocked: no uses allowed' : `${form.usageLimit} uses in total`}</li>
               <li>{form.perCustomerUsageLimit.trim() ? `${plural(Number(form.perCustomerUsageLimit) || 0, 'use')} per customer` : 'No per-customer limit'}</li>
               <li>{form.startsAt ? `From ${dateTime(fromLocalInput(form.startsAt))}` : 'Starts right away'}{form.endsAt ? ` to ${dateTime(fromLocalInput(form.endsAt))}` : ', no end date'}</li>
             </ul>

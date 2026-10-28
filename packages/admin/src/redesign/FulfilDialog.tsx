@@ -76,7 +76,8 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
   const setPick = (l: OrderLine, p: Partial<Pick>) => setPicks((m) => ({ ...m, [l.id]: { ...pick(l), ...p } }));
 
   const loc = locationId || locations.find((l) => l.isDefault)?.id || locations[0]?.id || '';
-  const email = o.customer?.email;
+  // Same order as the server (orders/recipient.ts): the checkout contact wins, the account email is the fallback.
+  const email = o.contact?.email || o.customer?.email;
   const trkErr = trackErr(tracking);
   const rows = shippable.map((l) => {
     const p = pick(l), max = openQty(l);

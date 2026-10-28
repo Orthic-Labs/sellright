@@ -18,7 +18,7 @@ import {
   type Promo, type SortKey, type TabId,
 } from '../redesign/discounts/model';
 
-export { buildConditions, buildPayload, fromLocalInput, hydrateForm, readCondition, scopeError, toLocalInput } from '../redesign/discounts/model';
+export { buildConditions, buildPayload, fromLocalInput, hydrateForm, parseLimit, readCondition, scopeError, toLocalInput, verifiedError, VERIFIED_CATEGORIES } from '../redesign/discounts/model';
 export type { FormState, ScopeKind } from '../redesign/discounts/model';
 export { DiscountEditor };
 

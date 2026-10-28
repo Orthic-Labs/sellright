@@ -32,7 +32,7 @@ test.describe('orders list', () => {
 
   test('an order refunded before shipping says Nothing to ship and is not in Shipped', async ({ page }) => {
     await page.goto('/orders?tab=all');
-    await page.getByPlaceholder('Order, name or email').fill('rd-removed');
+    await page.getByPlaceholder('Code, email, name or phone').fill('rd-removed');
     await expect(page.locator(`tr[data-id="${seeded.removed}"]`)).toContainText('Nothing to ship');
     await page.getByRole('tab', { name: /^Shipped/ }).click();
     await expect(page.locator(`tr[data-id="${seeded.removed}"]`)).toHaveCount(0);
@@ -87,7 +87,7 @@ test.describe('orders list', () => {
   test('typing a search and then picking a filter keeps both (no stale URL write)', async ({ page }) => {
     await page.goto('/orders?tab=all');
     await page.locator('tr[data-id]').first().waitFor();
-    await page.getByPlaceholder('Order, name or email').fill('rd-');
+    await page.getByPlaceholder('Code, email, name or phone').fill('rd-');
     await page.getByRole('button', { name: /^Payment/ }).click();
     await page.getByRole('menuitemradio').filter({ hasText: /^Paid/ }).first().click();
     await page.waitForTimeout(600);

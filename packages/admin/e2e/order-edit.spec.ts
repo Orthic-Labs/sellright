@@ -78,7 +78,7 @@ test.describe('edit a paid order', () => {
 
 		// the orders list / Balance due view surfaces it
 		await page.goto('/orders?tab=all');
-		await page.getByPlaceholder('Order, name or email').fill(email);
+		await page.getByPlaceholder('Code, email, name or phone').fill(email);
 		await expect(page).toHaveURL(/[?&]q=/);
 		await page.getByRole('button', { name: /^Payment$/ }).click();
 		await page.getByRole('menuitemradio', { name: 'Balance due', exact: true }).click();
