@@ -224,7 +224,9 @@ export function refundCashForRemainingLines(lines: readonly RefundLineBasis[]): 
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
 export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; onHand: number; allocated: number; available: number; optionIds?: string[]; }
 export interface ProductImage { assetId: string; path: string; url: string; position: number; }
-export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; featuredAssetId: string | null; images: ProductImage[]; variants: VariantRow[]; }
+export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; featuredAssetId: string | null; images: ProductImage[]; variants: VariantRow[];
+  /** #406: sent back as expectedUpdatedAt on save; a newer row is a 409 conflict. */
+  updatedAt?: string; }
 export interface CustomerRow { id: string; email: string; firstName: string | null; lastName: string | null; createdAt: string; orders: number; spent: number; }
 export interface CustomerDetail {
   id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null; emailVerified: boolean; createdAt: string;

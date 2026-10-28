@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText, FileUp, ListChecks, Download,
@@ -68,6 +68,8 @@ const GROUPS: NavGroup[] = [
     { to: '/webhooks', label: 'Webhooks', icon: Webhook },
   ]},
 ];
+
+const ALL_ITEMS = GROUPS.flatMap((g) => g.items);
 
 const groupContainsPath = (g: NavGroup, path: string) =>
   g.items.some((i) => (i.end ? path === i.to : path === i.to || path.startsWith(i.to + '/')));
@@ -230,6 +232,10 @@ function NavItems() {
     enabled: !!store,
     refetchInterval: 60_000,
   });
+  // One highlighted entry: the longest item path that the current path sits under (/settings/payments is
+  // Payments, not Settings too; /orders/1002 is Orders, /orders/import-tracking is CSV upload).
+  const activeTo = ALL_ITEMS.filter((i) => (i.end ? loc.pathname === i.to : loc.pathname === i.to || loc.pathname.startsWith(i.to + '/')))
+    .sort((a, b) => b.to.length - a.to.length)[0]?.to;
   const navRef = useRef<HTMLElement>(null);
   // Keep the current page visible in a long sidebar.
   useEffect(() => { navRef.current?.querySelector('[aria-current=page]')?.scrollIntoView({ block: 'nearest' }); }, [loc.pathname]);
@@ -244,13 +250,13 @@ function NavItems() {
               {g.label}<ChevronDown size={12} aria-hidden="true" />
             </button>
             <div className="gi">
-              {g.items.map(({ to, label, icon: Icon, end, count }) => {
+              {g.items.map(({ to, label, icon: Icon, count }) => {
                 const n = count ? counts?.[count] : undefined;
                 return (
-                  <NavLink key={to} to={to} end={end ?? to === '/orders'} className="nav">
+                  <Link key={to} to={to} className="nav" aria-current={activeTo === to ? 'page' : undefined}>
                     <Icon size={15} aria-hidden="true" />{label}
                     {n != null && n > 0 && <span className="ct hot" aria-label={`${n} to fulfil`}>{n}</span>}
-                  </NavLink>
+                  </Link>
                 );
               })}
             </div>

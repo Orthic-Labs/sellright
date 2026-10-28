@@ -53,6 +53,7 @@ const AbandonedCarts = lazy(() => import('./pages/AbandonedCarts'));
 const Affiliates = lazy(() => import('./pages/Affiliates'));
 const AffiliateDetail = lazy(() => import('./pages/AffiliateDetail'));
 const Discounts = lazy(() => import('./pages/Discounts'));
+const DiscountEditor = lazy(() => import('./pages/Discounts').then((m) => ({ default: m.DiscountEditor })));
 const Marketing = lazy(() => import('./pages/Marketing'));
 const Blog = lazy(() => import('./pages/Blog'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -159,6 +160,8 @@ function App() {
         <Route path="/customers" element={<Customers />} />
         <Route path="/customers/:id" element={<CustomerDetail />} />
         <Route path="/discounts" element={<Discounts />} />
+        <Route path="/discounts/new" element={<DiscountEditor />} />
+        <Route path="/discounts/:id" element={<DiscountEditor />} />
         <Route path="/marketing" element={<Marketing />} />
         <Route path="/blog" element={<Blog />} />
         <Route path="/reports" element={<Reports />} />

@@ -1,129 +1,154 @@
+/**
+ * #406 Payments settings, rebuilt to the signed-off design: one card per provider with its real status
+ * (store config), confirmations that spell out what customers see at checkout, keys tested before they are saved.
+ */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
+import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
-import { ErrorState, Field, FormSection, InlineAlert, Loading, PageHeader, Spinner } from '../components/ui';
+import { LoadError, LoadingRows } from '../redesign/states';
+import { ConfirmDlg } from '../redesign/payments/Dlg';
+import { KeyDialog } from '../redesign/payments/KeyDialog';
+import { ProviderCard, type DomainRow, type TestState } from '../redesign/payments/ProviderCard';
+import {
+  PROVIDERS, modeInUse, providerEnabled, wireMode,
+  type CredStatus, type FieldDef, type KeyMode, type Provider, type ProviderDef, type StoreSettings, type VerifyResult,
+} from '../redesign/payments/model';
 
-type FieldStatus = { envManaged: boolean; configured: boolean; last4: string | null };
-type StatusResponse = Record<string, Record<string, FieldStatus>>;
-
-const PROVIDERS: Array<{ id: 'stripe' | 'nmi' | 'sezzle'; label: string; modes: [string, string]; fields: Array<{ key: string; label: string }> }> = [
-  { id: 'stripe', label: 'Stripe', modes: ['test', 'live'], fields: [
-    { key: 'publishableKey', label: 'Publishable key' },
-    { key: 'secretKey', label: 'Secret (or restricted) key' },
-    { key: 'webhookSecret', label: 'Webhook signing secret (manual fallback)' },
-  ] },
-  { id: 'nmi', label: 'NMI', modes: ['test', 'live'], fields: [
-    { key: 'securityKey', label: 'Security key' },
-    { key: 'tokenizationKey', label: 'Tokenization key' },
-    { key: 'privateKey', label: 'Chargeback webhook signing secret (optional)' },
-  ] },
-  { id: 'sezzle', label: 'Sezzle', modes: ['sandbox', 'production'], fields: [
-    { key: 'publicKey', label: 'Public key' },
-    { key: 'privateKey', label: 'Private key' },
-  ] },
-];
+type Confirm = { kind: 'toggle'; def: ProviderDef; on: boolean } | { kind: 'mode'; def: ProviderDef; to: KeyMode };
 
 export default function PaymentsSettingsPage() {
   const qc = useQueryClient();
   const toast = useToast();
-  const key = ['payments-settings'];
-  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<StatusResponse>('/payments/settings') });
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const { store } = useAuth();
+  const canManage = store?.role === 'owner' || store?.role === 'manager';
+  const credKey = ['payments-settings', store?.slug];
+  const setKey = ['payments-store-settings', store?.slug];
+  const creds = useQuery({ queryKey: credKey, queryFn: () => api.get<CredStatus>('/payments/settings') });
+  const settings = useQuery({ queryKey: setKey, queryFn: () => api.get<StoreSettings>('/settings/store') });
+  const refresh = () => { void qc.invalidateQueries({ queryKey: credKey }); void qc.invalidateQueries({ queryKey: setKey }); };
 
-  const save = useMutation({
-    mutationFn: ({ provider, mode, field, value }: { provider: string; mode: string; field: string; value: string }) =>
-      api.put(`/payments/settings/${provider}/${mode}`, { fields: { [field]: value } }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: key }); toast.success('Saved'); },
-    onError: (e) => toast.error('Save failed', (e as Error).message),
+  // Which key set each card displays. Display only: the mode in use never changes from here.
+  const [shown, setShown] = useState<Partial<Record<Provider, KeyMode>>>({});
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [keyDlg, setKeyDlg] = useState<{ def: ProviderDef; field: FieldDef } | null>(null);
+  const [tests, setTests] = useState<Partial<Record<Provider, TestState>>>({});
+  const [testing, setTesting] = useState<Provider | null>(null);
+  const [domains, setDomains] = useState<DomainRow[] | undefined>();
+
+  const toggle = useMutation({
+    mutationFn: ({ def, on }: { def: ProviderDef; on: boolean }) => api.patch('/settings/payments', { [def.id]: on }),
+    onSuccess: (_r, v) => {
+      refresh(); setConfirm(null);
+      toast.success(v.on ? `${v.def.name} is active at checkout` : `${v.def.name} deactivated`, v.on ? 'Customers can pay with it now.' : "Customers can't pay with it at checkout.");
+    },
+    onError: (e) => { setConfirm(null); toast.error('Not changed', (e as Error).message); },
   });
 
-  const verify = useMutation({
-    mutationFn: ({ provider, mode }: { provider: string; mode: string }) =>
-      api.post<{ ok: boolean; error?: string }>(`/payments/settings/${provider}/${mode}/verify`, {}),
-    onSuccess: (r) => (r.ok ? toast.success('Connection OK') : toast.error('Connection failed', r.error ?? '')),
-    onError: (e) => toast.error('Test failed', (e as Error).message),
+  const switchMode = useMutation({
+    mutationFn: ({ def, to }: { def: ProviderDef; to: KeyMode }) =>
+      def.id === 'stripe' ? api.patch('/settings/payments/stripe-mode', { mode: to }) : api.patch('/settings/payments', { [def.id]: { mode: to } }),
+    onSuccess: (_r, v) => { refresh(); setConfirm(null); setShown((s) => ({ ...s, [v.def.id]: v.to })); toast.success(`${v.def.name} now uses ${v.def.modeLabel[v.to].toLowerCase()} keys`); },
+    onError: (e) => { setConfirm(null); toast.error('Not changed', (e as Error).message); },
   });
 
-  const createWebhook = useMutation({
-    mutationFn: (mode: 'test' | 'live') => api.post<{ endpointId: string; created: boolean; recreated: boolean }>(`/payments/settings/stripe/${mode}/webhook`, {}),
-    onSuccess: (r) => { qc.invalidateQueries({ queryKey: key }); toast.success(r.created ? 'Webhook created' : r.recreated ? 'Webhook recreated' : 'Webhook already up to date'); },
+  const webhook = useMutation({
+    mutationFn: (mode: KeyMode) => api.post<{ endpointId: string; created: boolean; recreated: boolean }>(`/payments/settings/stripe/${mode}/webhook`, {}),
+    onSuccess: (r) => { refresh(); toast.success(r.created ? 'Webhook created' : r.recreated ? 'Webhook recreated' : 'Webhook already up to date'); },
     onError: (e) => toast.error('Webhook setup failed', (e as Error).message),
   });
 
-  // Apple Pay / Google Pay (express checkout): register this store's storefront domains with Stripe. Idempotent.
-  type DomainResult = { domain: string; outcome: 'created' | 'updated' | 'unchanged' | 'failed'; applePay: string; googlePay: string; error?: string };
   const registerDomains = useMutation({
-    mutationFn: (mode: 'test' | 'live') => api.post<{ mode: string; domains: DomainResult[] }>(`/payments/settings/stripe/${mode}/payment-method-domains`, {}),
+    mutationFn: (mode: KeyMode) => api.post<{ mode: string; domains: DomainRow[] }>(`/payments/settings/stripe/${mode}/payment-method-domains`, {}),
     onSuccess: (r) => {
-      const failed = r.domains.filter((d) => d.outcome === 'failed');
-      const summary = r.domains.map((d) => `${d.domain}: ${d.outcome === 'failed' ? `failed (${d.error ?? 'error'})` : `Apple Pay ${d.applePay}, Google Pay ${d.googlePay}`}`).join('; ');
-      if (failed.length) toast.error('Some wallet domains failed', summary);
-      else toast.success('Wallet domains registered', summary);
+      setDomains(r.domains);
+      const failed = r.domains.filter((d) => d.outcome === 'failed').length;
+      if (failed) toast.error(`${failed} wallet domain${failed === 1 ? '' : 's'} failed`, 'Details are on the Stripe card.');
+      else toast.success('Wallet domains registered');
     },
     onError: (e) => toast.error('Wallet domain registration failed', (e as Error).message),
   });
 
-  if (isLoading) return <Loading />;
-  if (error) return <ErrorState title="Couldn't load payment settings" message={(error as Error).message} onRetry={() => qc.invalidateQueries({ queryKey: key })} />;
-  if (!data) return null;
+  const runTest = async (def: ProviderDef, mode: KeyMode) => {
+    setTesting(def.id);
+    try {
+      const r = await api.post<VerifyResult>(`/payments/settings/${def.id}/${wireMode(def.id, mode)}/verify`, {});
+      setTests((t) => ({ ...t, [def.id]: { ok: r.ok, message: r.ok ? 'Connection OK · tested just now' : `Connection failed${r.error ? `: ${r.error}` : ''}` } }));
+      refresh();
+    } catch (e) {
+      setTests((t) => ({ ...t, [def.id]: { ok: false, message: `Test didn't run: ${(e as Error).message}` } }));
+    } finally {
+      setTesting(null);
+    }
+  };
 
-  const draftKey = (p: string, m: string, f: string) => `${p}:${m}:${f}`;
+  if (creds.isLoading || settings.isLoading) {
+    return <div className="rd" style={{ flex: 1 }}><div className="ph"><h1>Payments</h1></div><LoadingRows label="Loading payment settings" rows={4} cols={[120, 0, 90]} /></div>;
+  }
+  if (creds.error || settings.error || !creds.data || !settings.data) {
+    const e = (creds.error ?? settings.error) as Error | null;
+    return (
+      <div className="rd" style={{ flex: 1 }}>
+        <div className="ph"><h1>Payments</h1></div>
+        <div style={{ padding: '0 24px' }}><LoadError what="payment settings" detail={e?.message} onRetry={refresh} /></div>
+      </div>
+    );
+  }
+  const S = settings.data;
+  const C = creds.data;
+  const modeOf = (p: ProviderDef): KeyMode => shown[p.id] ?? modeInUse(p.id, S);
 
   return (
-    <>
-      <PageHeader title="Payments" subtitle="Test and live credentials are separate — switching mode never copies one into the other. A field set by server configuration (environment variable) is read-only here." />
-      {PROVIDERS.map((p) => (
-        <FormSection key={p.id} title={p.label}>
-          {p.modes.map((mode) => (
-            <div key={mode} className="mb-4 border-t first:border-t-0 pt-4 first:pt-0">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium capitalize">{mode}</h3>
-                <div className="flex gap-2">
-                  {p.id === 'stripe' && (mode === 'test' || mode === 'live') && (
-                    <button type="button" className="btn-secondary text-xs" onClick={() => createWebhook.mutate(mode as 'test' | 'live')} disabled={createWebhook.isPending}>
-                      {createWebhook.isPending ? <Spinner /> : 'Create/refresh webhook'}
-                    </button>
-                  )}
-                  {p.id === 'stripe' && (mode === 'test' || mode === 'live') && (
-                    <button type="button" className="btn-secondary text-xs" title="Register this store's storefront domains with Stripe so Apple Pay and Google Pay can show at checkout" onClick={() => registerDomains.mutate(mode as 'test' | 'live')} disabled={registerDomains.isPending}>
-                      {registerDomains.isPending ? <Spinner /> : 'Register Apple Pay / Google Pay domains'}
-                    </button>
-                  )}
-                  <button type="button" className="btn-secondary text-xs" onClick={() => verify.mutate({ provider: p.id, mode })} disabled={verify.isPending}>
-                    {verify.isPending ? <Spinner /> : 'Test connection'}
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {p.fields.map((f) => {
-                  const status = data[p.id]?.[`${mode}:${f.key}`];
-                  const dk = draftKey(p.id, mode, f.key);
-                  return (
-                    <Field key={f.key} label={f.label} hint={status?.envManaged ? 'Managed by server configuration' : status?.configured ? `Configured (…${status.last4})` : 'Not configured'}>
-                      <div className="flex gap-2">
-                        <input
-                          className="input" type="password" placeholder={status?.envManaged ? 'Set via environment' : status?.configured ? '••••••••' : 'Not set'}
-                          disabled={status?.envManaged} value={drafts[dk] ?? ''}
-                          onChange={(e) => setDrafts({ ...drafts, [dk]: e.target.value })}
-                        />
-                        <button
-                          type="button" className="btn-secondary text-xs shrink-0"
-                          disabled={status?.envManaged || !drafts[dk] || save.isPending}
-                          onClick={() => { save.mutate({ provider: p.id, mode, field: f.key, value: drafts[dk]! }); setDrafts({ ...drafts, [dk]: '' }); }}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </Field>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </FormSection>
-      ))}
-      <InlineAlert tone="info">Every "Test connection" call is read-only — it never charges, refunds, or moves money.</InlineAlert>
-    </>
+    <div className="rd" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div className="ph">
+        <h1>Payments</h1>
+        <span className="meta">Test and live keys are kept apart. Switching never copies one into the other.</span>
+      </div>
+      <div className="stack" style={{ padding: '4px 24px 32px', maxWidth: 880 }}>
+        {!canManage && <div className="note" role="status"><span>Only owners and managers can change payment settings.</span></div>}
+        {PROVIDERS.map((def) => (
+          <ProviderCard key={def.id} def={def} creds={C} settings={S} canManage={canManage}
+            showing={modeOf(def)} onShow={(m) => setShown((s) => ({ ...s, [def.id]: m }))}
+            test={tests[def.id]} testing={testing === def.id} onTest={() => void runTest(def, modeOf(def))}
+            onToggle={() => setConfirm({ kind: 'toggle', def, on: !providerEnabled(S.payments?.[def.id]) })}
+            onSwitchMode={() => setConfirm({ kind: 'mode', def, to: modeInUse(def.id, S) === 'live' ? 'test' : 'live' })}
+            onKey={(field) => setKeyDlg({ def, field })}
+            onWebhook={() => webhook.mutate(modeOf(def))} webhookBusy={webhook.isPending}
+            onDomains={() => registerDomains.mutate(modeOf(def))} domainsBusy={registerDomains.isPending} domains={def.id === 'stripe' ? domains : undefined} />
+        ))}
+      </div>
+
+      {confirm?.kind === 'toggle' && (
+        <ConfirmDlg open title={confirm.on ? `Activate ${confirm.def.name}?` : `Deactivate ${confirm.def.name}?`}
+          confirmLabel={confirm.on ? `Activate ${confirm.def.name}` : `Deactivate ${confirm.def.name}`} danger={!confirm.on} busy={toggle.isPending}
+          onClose={() => setConfirm(null)} onConfirm={() => toggle.mutate({ def: confirm.def, on: confirm.on })}>
+          {confirm.on ? (
+            <>
+              <p>Customers will be able to pay with {confirm.def.name} at checkout right away.</p>
+              <p className="muted">Checkout uses your {confirm.def.modeLabel[modeInUse(confirm.def.id, S)].toLowerCase()} keys{modeInUse(confirm.def.id, S) === 'live' ? ', so these are real payments' : ''}.</p>
+            </>
+          ) : (
+            <>
+              <p>Customers won't be able to pay with {confirm.def.name} at checkout from now on.</p>
+              <p className="muted">Your saved keys stay in place. Orders already paid with {confirm.def.name} aren't changed.</p>
+            </>
+          )}
+        </ConfirmDlg>
+      )}
+      {confirm?.kind === 'mode' && (
+        <ConfirmDlg open title={`Switch ${confirm.def.name} to ${confirm.def.modeLabel[confirm.to].toLowerCase()} keys?`}
+          confirmLabel={`Switch to ${confirm.def.modeLabel[confirm.to].toLowerCase()}`} busy={switchMode.isPending}
+          onClose={() => setConfirm(null)} onConfirm={() => switchMode.mutate({ def: confirm.def, to: confirm.to })}>
+          <p>Checkout will use your {confirm.def.modeLabel[confirm.to].toLowerCase()} {confirm.def.name} keys from now on.{confirm.to === 'live' ? ' Customers\' payments will be real.' : ''}</p>
+          {!providerEnabled(S.payments?.[confirm.def.id]) && <p className="muted">{confirm.def.name} isn't active at checkout, so customers won't notice until you activate it.</p>}
+        </ConfirmDlg>
+      )}
+      {keyDlg && (
+        <KeyDialog def={keyDlg.def} mode={modeOf(keyDlg.def)} field={keyDlg.field}
+          replacing={!!C[keyDlg.def.id]?.[`${wireMode(keyDlg.def.id, modeOf(keyDlg.def))}:${keyDlg.field.key}`]?.configured}
+          invalidate={refresh} onClose={() => setKeyDlg(null)} />
+      )}
+    </div>
   );
 }
