@@ -100,7 +100,7 @@ adminProducts.openapi(
         ? await tx.select({ variantId: s.variantOption.variantId, optionId: s.variantOption.optionId }).from(s.variantOption).where(inArray(s.variantOption.variantId, vIds))
         : [];
       return {
-        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId,
+        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId, updatedAt: p.updatedAt.toISOString(),
         images: gallery.map((g) => ({ assetId: g.assetId, path: g.path, url: `/assets/${g.path}`, position: g.position })),
         variants: variants.map((v) => ({ ...v, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
       };
@@ -113,25 +113,29 @@ adminProducts.openapi(
 adminProducts.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/products/{id}', summary: 'Update product',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional(), vendor: z.string().nullable().optional(), productType: z.string().nullable().optional(), tags: z.array(z.string()).nullable().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional(), featuredAssetId: z.guid().nullable().optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional(), vendor: z.string().nullable().optional(), productType: z.string().nullable().optional(), tags: z.array(z.string()).nullable().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional(), featuredAssetId: z.guid().nullable().optional(), expectedUpdatedAt: z.string().datetime().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), updatedAt: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     requireWrite(st);
     const { id } = c.req.valid('param');
-    const patch = c.req.valid('json');
-    const ok = await withStore(st.storeId, async (tx) => {
-      const [p] = await tx.select({ id: s.product.id, status: s.product.status }).from(s.product).where(eq(s.product.id, id)).limit(1);
-      if (!p) return false;
-      await tx.update(s.product).set({ ...patch, updatedAt: new Date() }).where(eq(s.product.id, id));
+    const { expectedUpdatedAt, ...patch } = c.req.valid('json');
+    // #406: the editor sends the updatedAt it loaded; a newer row means someone else saved first (409, "Use theirs / Keep mine").
+    const res = await withStore(st.storeId, async (tx) => {
+      const [p] = await tx.select({ id: s.product.id, status: s.product.status, updatedAt: s.product.updatedAt }).from(s.product).where(eq(s.product.id, id)).limit(1).for('update');
+      if (!p) return { kind: 'notfound' as const };
+      if (expectedUpdatedAt && p.updatedAt.getTime() > new Date(expectedUpdatedAt).getTime()) return { kind: 'conflict' as const, updatedAt: p.updatedAt };
+      const updatedAt = new Date();
+      await tx.update(s.product).set({ ...patch, updatedAt }).where(eq(s.product.id, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'product', entityId: id, action: 'update', fromState: p.status, toState: patch.status ?? p.status, data: patch });
       await emitProductChanged(tx, st.storeId, id);
-      return true;
+      return { kind: 'ok' as const, updatedAt };
     });
-    if (!ok) throw new HttpError(404, 'product not found');
-    return c.json({ id }, 200);
+    if (res.kind === 'notfound') throw new HttpError(404, 'product not found');
+    if (res.kind === 'conflict') throw new HttpError(409, 'Product changed since you opened it');
+    return c.json({ id, updatedAt: res.updatedAt.toISOString() }, 200);
   }),
 );
 
