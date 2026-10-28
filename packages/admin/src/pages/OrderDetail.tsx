@@ -161,7 +161,7 @@ export default function OrderDetailPage() {
               <div className="cfoot">
                 <span className="muted"><Mail size={13} aria-hidden="true" /> Shipping email goes to {email ?? 'the customer'}</span>
                 <span className="sp" />
-                {canShipState(o) && !editing && <button type="button" className="btn pri" onClick={(e) => openDlg('fulfil', e.currentTarget)}><Truck aria-hidden="true" />Fulfil items</button>}
+                {canShipState(o) && !editing && <button type="button" className="btn" onClick={(e) => openDlg('fulfil', e.currentTarget)}><Truck aria-hidden="true" />Fulfil items</button>}
               </div>
             </Card>
           )}
