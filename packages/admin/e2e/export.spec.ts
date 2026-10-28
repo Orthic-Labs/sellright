@@ -43,9 +43,8 @@ test.describe('order export', () => {
 	});
 
 	async function openDialog(page: import('@playwright/test').Page) {
-		await page.goto('/orders');
-		await page.getByRole('button', { name: 'Actions' }).click();
-		await page.getByRole('menuitem', { name: 'Export orders…' }).click();
+		await page.goto('/orders?tab=all');
+		await page.getByRole('button', { name: 'Export', exact: true }).click();
 		const dialog = page.getByRole('dialog', { name: 'Export orders' });
 		await expect(dialog).toBeVisible();
 		await dialog.locator('#ex-q').fill(u);

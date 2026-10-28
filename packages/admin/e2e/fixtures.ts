@@ -36,3 +36,9 @@ export async function gotoStable(page: Page, url: string): Promise<void> {
 		}
 	}
 }
+
+/** Sign out via the account '…' menu at the bottom of the sidebar. */
+export async function signOut(page: Page): Promise<void> {
+	await page.getByRole('button', { name: 'Account menu' }).click();
+	await page.getByRole('menuitem', { name: 'Sign out' }).click();
+}

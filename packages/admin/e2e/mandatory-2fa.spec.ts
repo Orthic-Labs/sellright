@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { test, expect, field } from './fixtures';
+import { test, expect, field, signOut } from './fixtures';
 import { AdminApi, totpAt, totpStep, uniq } from './support/api';
 import { ADMIN_URL, OWNER_EMAIL, OWNER_PASSWORD } from './support/env.mjs';
 import { inviteTokenFor } from './support/mailbox';
@@ -77,7 +77,7 @@ test('a 2FA-required account enrols a passkey (recommended, first) and reaches t
 	expect(me).toMatchObject({ email, totpEnabled: false, passkeyEnabled: true, totpEnrollmentRequired: false });
 
 	// Reload stays signed out: only an explicit click starts the passkey ceremony, with no password or code.
-	await page.getByRole('button', { name: 'Sign out' }).click();
+	await signOut(page);
 	await expect(page).toHaveURL(/\/login$/);
 	const passkeyRequests: string[] = [];
 	page.on('request', request => {

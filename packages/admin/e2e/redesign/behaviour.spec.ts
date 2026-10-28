@@ -84,6 +84,18 @@ test.describe('orders list', () => {
     expect(['auto', 'scroll']).toContain(overflow.tabs);
   });
 
+  test('typing a search and then picking a filter keeps both (no stale URL write)', async ({ page }) => {
+    await page.goto('/orders?tab=all');
+    await page.locator('tr[data-id]').first().waitFor();
+    await page.getByPlaceholder('Order, name or email').fill('rd-');
+    await page.getByRole('button', { name: /^Payment/ }).click();
+    await page.getByRole('menuitemradio').filter({ hasText: /^Paid/ }).first().click();
+    await page.waitForTimeout(600);
+    const u = new URL(page.url());
+    expect(u.searchParams.get('q')).toBe('rd-');
+    expect(u.searchParams.get('paymentStatus')).toBe('paid');
+  });
+
   test('saved view names must be unique and not empty', async ({ page }) => {
     await page.goto('/orders');
     await page.getByRole('button', { name: 'Save view' }).click();

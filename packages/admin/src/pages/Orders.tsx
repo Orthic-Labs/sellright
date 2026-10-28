@@ -60,8 +60,10 @@ export default function Orders() {
 
   /** Patch URL params; filter/tab changes reset paging and selection. */
   function patch(p: Record<string, string | null>, keepView = false) {
-    setParams((cur) => {
-      const n = new URLSearchParams(cur);
+    // Start from the live URL, not the hook's render-time params: React Router's updater does not queue, so the
+    // debounced search would otherwise write a stale copy over a filter clicked in the meantime.
+    setParams(() => {
+      const n = new URLSearchParams(window.location.search);
       for (const [k, v] of Object.entries(p)) { if (v) n.set(k, v); else n.delete(k); }
       if (!keepView && !('view' in p)) n.delete('view');
       return n;

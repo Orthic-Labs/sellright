@@ -1,5 +1,20 @@
-import { test, expect, row, field } from './fixtures';
+import { test, expect, row, toast } from './fixtures';
 import { ApiFailure, shopCheckout, uniq, SKU } from './support/api';
+
+type Pg = import('@playwright/test').Page;
+/** The list opens on the Active tab; every row lookup goes via All + a code search so status never hides it. */
+async function listAll(page: Pg, code?: string) {
+	await page.goto('/discounts');
+	await page.getByRole('tab', { name: /^All/ }).click();
+	if (code) await page.getByLabel('Search discounts by code').fill(code);
+	else await page.locator('#d-sort').selectOption('code'); // automatic discounts (no code) sort first
+}
+const actions = (r: import('@playwright/test').Locator) => r.getByRole('button', { name: /^Actions for / });
+const radio = (page: Pg, group: string, name: string) => page.getByRole('radiogroup', { name: group }).getByRole('radio', { name });
+const save = async (page: Pg, label: 'Create discount' | 'Save changes') => {
+	await page.getByRole('button', { name: label }).click();
+	await expect(page).toHaveURL(/\/discounts$/);
+};
 
 /**
  * Plan 1.3 #14 — Discounts: create a code discount and an automatic one through the UI, edit an existing
@@ -26,18 +41,18 @@ test.describe('discounts', () => {
 		const CODE = `E2E${u}`.toUpperCase();
 		await page.goto('/discounts');
 		await page.getByRole('button', { name: 'New discount' }).click();
-		const modal = page.getByRole('dialog', { name: 'New discount' });
-		await field(modal, 'Code').fill(CODE);
-		await field(modal, 'Type').selectOption('percentage');
-		await field(modal, 'Percent').fill('10');
-		await field(modal, 'Total usage limit').fill('1');
-		await modal.getByRole('button', { name: 'Create' }).click();
-		await expect(modal).toBeHidden();
+		await expect(page).toHaveURL(/\/discounts\/new$/);
+		await page.getByLabel('Code', { exact: true }).fill(CODE);
+		await radio(page, 'Discount type', 'Percentage').click();
+		await page.getByLabel('Discount value').fill('10');
+		await page.getByLabel('Total uses').fill('1');
+		await save(page, 'Create discount');
 
+		await listAll(page, CODE);
 		const r = row(page, CODE);
 		await expect(r).toContainText('10%');
 		await expect(r).toContainText('0 / 1');
-		await expect(r).toContainText('active');
+		await expect(r).toContainText('Active');
 
 		// storefront checkout #1 consumes the single use: 10% of $25.00 merchandise, shipping untouched
 		const first = await shopCheckout({ email: `${u}-1@example.net`, couponCode: CODE });
@@ -51,17 +66,17 @@ test.describe('discounts', () => {
 		expect(second.discountTotal).toBe(0);
 		expect(second.grandTotal).toBe(3000);
 
-		await page.reload();
+		await listAll(page, CODE);
 		await expect(row(page, CODE)).toContainText('1 / 1');
 
 		// edit: raise the limit to 5 and the value to 15%
-		await page.getByRole('button', { name: `Edit discount ${CODE}` }).click();
-		const edit = page.getByRole('dialog', { name: new RegExp(`Edit discount — ${CODE}`) });
-		await expect(field(edit, 'Total usage limit')).toHaveValue('1');
-		await field(edit, 'Percent').fill('15');
-		await field(edit, 'Total usage limit').fill('5');
-		await edit.getByRole('button', { name: 'Save changes' }).click();
-		await expect(edit).toBeHidden();
+		await row(page, CODE).getByRole('button', { name: CODE, exact: true }).click();
+		await expect(page).toHaveURL(/\/discounts\/[^/]+$/);
+		await expect(page.getByLabel('Total uses')).toHaveValue('1');
+		await page.getByLabel('Discount value').fill('15');
+		await page.getByLabel('Total uses').fill('5');
+		await save(page, 'Save changes');
+		await listAll(page, CODE);
 		await expect(row(page, CODE)).toContainText('15%');
 		await expect(row(page, CODE)).toContainText('1 / 5');
 
@@ -70,14 +85,11 @@ test.describe('discounts', () => {
 		expect(third.discountTotal).toBe(Math.round(2500 * 0.15));
 
 		// disabling through the edit form keeps every other field and stops the code applying
-		// (reload first: see the stale-edit-form test below for why the cached detail cannot be reused)
-		await page.reload();
-		await page.getByRole('button', { name: `Edit discount ${CODE}` }).click();
-		const off = page.getByRole('dialog', { name: new RegExp(`Edit discount — ${CODE}`) });
-		await off.getByLabel('Enabled').uncheck();
-		await off.getByRole('button', { name: 'Save changes' }).click();
-		await expect(off).toBeHidden();
-		await expect(row(page, CODE)).toContainText('draft');
+		await row(page, CODE).getByRole('button', { name: CODE, exact: true }).click();
+		await radio(page, 'Discount status', 'Disabled').click();
+		await save(page, 'Save changes');
+		await listAll(page, CODE);
+		await expect(row(page, CODE)).toContainText('Disabled');
 		await expect(row(page, CODE)).toContainText('15%');
 		const fourth = await shopCheckout({ email: `${u}-4@example.net`, couponCode: CODE });
 		expect(fourth.couponApplied).toBe(false);
@@ -88,17 +100,16 @@ test.describe('discounts', () => {
 		// an amount no earlier attempt used keeps this discount's table row unique on a reused database
 		const AUTO_CENTS = 510 + (Date.now() % 1390);
 		const AUTO = (AUTO_CENTS / 100).toFixed(2);
-		await page.goto('/discounts');
-		await page.getByRole('button', { name: 'New discount' }).click();
-		const modal = page.getByRole('dialog', { name: 'New discount' });
-		await field(modal, 'Type').selectOption('fixed');
-		await field(modal, 'Amount (USD)').fill(AUTO);
-		await field(modal, 'Minimum order amount (USD)').fill('20.00');
-		await modal.getByRole('button', { name: 'Create' }).click();
-		await expect(modal).toBeHidden();
+		await page.goto('/discounts/new');
+		await radio(page, 'Discount type', 'Fixed amount').click();
+		await page.getByLabel('Discount value').fill(AUTO);
+		await page.getByLabel('Minimum order amount').fill('20.00');
+		await save(page, 'Create discount');
 
+		await listAll(page);
 		const auto = page.getByRole('row').filter({ hasText: 'automatic' }).filter({ hasText: `$${AUTO}` });
 		await expect(auto).toHaveCount(1);
+		await expect(auto).toContainText('Active');
 
 		// meets the $20 minimum -> a per-run amount off, no code needed
 		const hit = await shopCheckout({ email: `${u}-a1@example.net` });
@@ -108,19 +119,20 @@ test.describe('discounts', () => {
 		const miss = await shopCheckout({ email: `${u}-a2@example.net`, items: [{ sku: SKU.mug, quantity: 1 }] });
 		expect(miss.discountTotal).toBe(0);
 
-		await auto.getByRole('button', { name: /Edit discount/ }).click();
-		const edit = page.getByRole('dialog', { name: /Edit discount/ });
-		await expect(field(edit, 'Amount (USD)')).toHaveValue(AUTO);
-		await edit.getByLabel('Enabled').uncheck();
-		await edit.getByRole('button', { name: 'Save changes' }).click();
-		await expect(edit).toBeHidden();
+		await auto.getByRole('button', { name: 'automatic', exact: true }).click();
+		await expect(page.getByLabel('Discount value')).toHaveValue(AUTO);
+		await radio(page, 'Discount status', 'Disabled').click();
+		await save(page, 'Save changes');
+		await listAll(page);
 		const disabled = page.getByRole('row').filter({ hasText: 'automatic' }).filter({ hasText: `$${AUTO}` });
-		await expect(disabled).toContainText('draft');
+		await expect(disabled).toContainText('Disabled');
 		const off = await shopCheckout({ email: `${u}-a3@example.net` });
 		expect(off.discountTotal).toBe(0);
 
-		// a redeemed discount keeps its history: no delete action, disable only
-		await expect(disabled.getByRole('button', { name: /Delete discount/ })).toHaveCount(0);
+		// a redeemed discount keeps its history: no delete action, activate/deactivate only
+		await actions(disabled).click();
+		await expect(page.getByRole('menuitem', { name: 'Activate' })).toBeVisible();
+		await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(0);
 	});
 
 	test('an unused discount can be deleted; a redeemed one cannot', async ({ page, api }) => {
@@ -129,10 +141,16 @@ test.describe('discounts', () => {
 		await api.post('/discounts', { code: unused, type: 'fixed', value: 100 });
 		await api.post('/discounts', { code: used, type: 'fixed', value: 100 });
 		await shopCheckout({ email: `${uniq('dl')}@example.net`, couponCode: used }); // redeems it once
-		await page.goto('/discounts');
+		await listAll(page, 'E2E');
 		await expect(row(page, used)).toContainText('1');
-		await expect(row(page, used).getByRole('button', { name: /Delete discount/ })).toHaveCount(0);
-		await row(page, unused).getByRole('button', { name: `Delete discount ${unused}` }).click();
+		await actions(row(page, used)).click();
+		await expect(page.getByRole('menuitem', { name: 'Edit' })).toBeVisible();
+		await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(0);
+		await page.keyboard.press('Escape');
+		await actions(row(page, unused)).click();
+		await page.getByRole('menuitem', { name: /^Delete/ }).click();
+		await page.getByRole('dialog').getByRole('button', { name: 'Delete discount' }).click();
+		await expect(toast(page, 'Discount deleted')).toBeVisible();
 		await expect(row(page, unused)).toHaveCount(0);
 		expect((await api.raw('DELETE', `/discounts/${(await api.get<{ items: { id: string; code: string }[] }>('/discounts')).items.find((d) => d.code === used)!.id}`)).status).toBe(409);
 	});
@@ -146,33 +164,42 @@ test.describe('discounts', () => {
 	});
 });
 
-test.describe('discounts: status badge toggle', () => {
+test.describe('discounts: status toggle', () => {
 	// Regression: PATCH /v1/admin/discounts/{id} used to re-apply the create schema's defaults (Zod 4 keeps .default()
-	// through .partial()), so the status badge's bare { enabled } also zeroed the discount value.
-	test('toggling the status badge must not change the discount value', async ({ page, api }) => {
+	// through .partial()), so a bare { enabled } also zeroed the discount value. The list's Deactivate / Activate
+	// actions send exactly that bare patch.
+	test('deactivating and re-activating must not change the discount value', async ({ page, api }) => {
 		const code = `E2E${uniq('tg')}`.toUpperCase();
 		await api.post('/discounts', { code, type: 'percentage', value: 15 });
-		await page.goto('/discounts');
-		await row(page, code).getByRole('button', { name: /active/i }).click();
-		await expect(row(page, code)).toContainText('draft');
+		await listAll(page, code);
+		await actions(row(page, code)).click();
+		await page.getByRole('menuitem', { name: /^Deactivate/ }).click();
+		await page.getByRole('dialog').getByRole('button', { name: 'Deactivate', exact: true }).click();
+		await expect(row(page, code)).toContainText('Disabled');
+		await expect(row(page, code)).toContainText('15%', { timeout: 3_000 });
+		expect(await api.get<{ value: number; enabled: boolean }>(`/discounts/${(await api.get<{ items: { id: string; code: string }[] }>('/discounts')).items.find((d) => d.code === code)!.id}`)).toMatchObject({ value: 15, enabled: false });
+
+		await actions(row(page, code)).click();
+		await page.getByRole('menuitem', { name: 'Activate' }).click();
+		await expect(row(page, code)).toContainText('Active');
 		await expect(row(page, code)).toContainText('15%', { timeout: 3_000 });
 	});
 });
 
 test.describe('discounts: edit form freshness', () => {
-	// Regression: the edit modal reads GET /discounts/{id} through react-query (global staleTime 15s) and saving only
+	// Regression: the editor reads GET /discounts/{id} through react-query (global staleTime 15s) and saving only
 	// invalidated the *list* query, so re-opening Edit right after a save showed the pre-save values.
 	test('re-opening Edit right after a save shows the saved values', async ({ page, api }) => {
 		const code = `E2E${uniq('fr')}`.toUpperCase();
 		await api.post('/discounts', { code, type: 'percentage', value: 10 });
-		await page.goto('/discounts');
-		await page.getByRole('button', { name: `Edit discount ${code}` }).click();
-		let dlg = page.getByRole('dialog', { name: new RegExp(`Edit discount — ${code}`) });
-		await field(dlg, 'Percent').fill('20');
-		await dlg.getByRole('button', { name: 'Save changes' }).click();
+		await listAll(page, code);
+		await row(page, code).getByRole('button', { name: code, exact: true }).click();
+		await page.getByLabel('Discount value').fill('20');
+		await save(page, 'Save changes');
+		await page.getByLabel('Search discounts by code').fill(code);
+		await page.getByRole('tab', { name: /^All/ }).click();
 		await expect(row(page, code)).toContainText('20%');
-		await page.getByRole('button', { name: `Edit discount ${code}` }).click();
-		dlg = page.getByRole('dialog', { name: new RegExp(`Edit discount — ${code}`) });
-		await expect(field(dlg, 'Percent')).toHaveValue('20', { timeout: 3_000 });
+		await row(page, code).getByRole('button', { name: code, exact: true }).click();
+		await expect(page.getByLabel('Discount value')).toHaveValue('20', { timeout: 3_000 });
 	});
 });

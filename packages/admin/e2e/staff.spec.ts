@@ -71,19 +71,21 @@ test.describe('staff', () => {
 
 		// 2) day-to-day writes work (notes), cancel/refund need explicit grants
 		await gotoStable(sp, `/orders/${paid}`);
-		await sp.getByLabel('Add an internal note').fill('staff note');
-		await sp.getByRole('button', { name: 'Add note' }).click();
+		await sp.getByLabel('Staff note').fill('staff note');
+		await sp.getByRole('button', { name: 'Post', exact: true }).click();
 		await expect(toast(sp, 'Note added')).toBeVisible();
 
 		await gotoStable(sp, `/orders/${unpaid}`);
-		await sp.getByRole('button', { name: 'Cancel order' }).click();
-		await sp.getByRole('alertdialog').getByRole('button', { name: 'Cancel order' }).click();
+		await sp.getByRole('button', { name: 'More actions' }).click();
+		await sp.getByRole('menuitem', { name: /Cancel order/ }).click();
+		await sp.getByRole('dialog').getByRole('button', { name: 'Cancel order', exact: true }).click();
 		await expect(sp.getByText("role 'staff' lacks the 'cancel_orders' permission").first()).toBeVisible();
 		expect((await api.order(unpaid)).state).toBe('PendingPayment');
 
 		await gotoStable(sp, `/orders/${paid}`);
-		await sp.getByRole('button', { name: 'Issue refund' }).click();
-		await sp.getByRole('alertdialog').getByRole('button', { name: 'Issue refund' }).click();
+		await sp.getByRole('button', { name: 'Refund…' }).click();
+		await sp.getByRole('dialog').getByLabel(/^Quantity to refund/).first().fill('1');
+		await sp.getByRole('dialog').getByRole('button', { name: /^Refund \$/ }).click();
 		await expect(sp.getByText("role 'staff' lacks the 'refunds' permission").first()).toBeVisible();
 		expect((await api.order(paid)).state).toBe('Paid');
 
@@ -95,14 +97,16 @@ test.describe('staff', () => {
 		await expect(row(page, email).getByRole('button', { name: 'Permissions' })).toContainText('1');
 
 		await gotoStable(sp, `/orders/${unpaid}`);
-		await sp.getByRole('button', { name: 'Cancel order' }).click();
-		await sp.getByRole('alertdialog').getByRole('button', { name: 'Cancel order' }).click();
-		await expect(toast(sp, 'Order cancelled')).toBeVisible();
+		await sp.getByRole('button', { name: 'More actions' }).click();
+		await sp.getByRole('menuitem', { name: /Cancel order/ }).click();
+		await sp.getByRole('dialog').getByRole('button', { name: 'Cancel order', exact: true }).click();
+		await expect(toast(sp, `${unpaid} cancelled`)).toBeVisible();
 		expect((await api.order(unpaid)).state).toBe('Cancelled');
 		// …but refunds are still not granted
 		await gotoStable(sp, `/orders/${paid}`);
-		await sp.getByRole('button', { name: 'Issue refund' }).click();
-		await sp.getByRole('alertdialog').getByRole('button', { name: 'Issue refund' }).click();
+		await sp.getByRole('button', { name: 'Refund…' }).click();
+		await sp.getByRole('dialog').getByLabel(/^Quantity to refund/).first().fill('1');
+		await sp.getByRole('dialog').getByRole('button', { name: /^Refund \$/ }).click();
 		await expect(sp.getByText("role 'staff' lacks the 'refunds' permission").first()).toBeVisible();
 
 		// 4) revoke sessions force-logs the member out
@@ -123,13 +127,13 @@ test.describe('staff', () => {
 		const { code } = await createOrder(api, { email: `${uniq('rc')}@example.net` });
 
 		const ro = await signInAs(browser, email);
-		await gotoStable(ro.page, '/orders');
-		await ro.page.getByLabel('Search code or email').fill(code);
+		await gotoStable(ro.page, '/orders?tab=all');
+		await ro.page.getByPlaceholder('Order, name or email').fill(code);
 		await expect(row(ro.page, code)).toHaveCount(1); // can read
 
 		await gotoStable(ro.page, `/orders/${code}`);
-		await ro.page.getByLabel('Add an internal note').fill('should be refused');
-		await ro.page.getByRole('button', { name: 'Add note' }).click();
+		await ro.page.getByLabel('Staff note').fill('should be refused');
+		await ro.page.getByRole('button', { name: 'Post', exact: true }).click();
 		await expect(ro.page.getByText("role 'read_only' is read-only").first()).toBeVisible();
 		const detail = await api.order(code);
 		expect(detail.events.some((e: { action: string }) => e.action === 'note')).toBe(false);

@@ -39,7 +39,7 @@ test.describe('edit a paid order', () => {
 		await expect(page.getByText('Rush fee')).toBeVisible();
 
 		// preview: 2 x 25.00 + 12.00 + 5.00 shipping + 3.00 adjustment = 70.00; paid 30.00 -> $40.00 due
-		const review = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
+		const review = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
 		await expect(review).toContainText('New total');
 		await expect(review.getByText('New total').locator('xpath=following-sibling::*[1]')).toHaveText('$70.00');
 		await expect(review.getByText('Balance due from customer').locator('xpath=following-sibling::*[1]')).toHaveText('$40.00');
@@ -77,9 +77,12 @@ test.describe('edit a paid order', () => {
 		expect((await api.stock(SKU.mug)).allocated).toBe(mug0.allocated + 1);
 
 		// the orders list / Balance due view surfaces it
-		await page.goto('/orders');
-		await page.getByLabel('Search code or email').fill(email);
-		await page.getByRole('button', { name: 'Balance due', exact: true }).click();
+		await page.goto('/orders?tab=all');
+		await page.getByPlaceholder('Order, name or email').fill(email);
+		await expect(page).toHaveURL(/[?&]q=/);
+		await page.getByRole('button', { name: /^Payment$/ }).click();
+		await page.getByRole('menuitemradio', { name: 'Balance due', exact: true }).click();
+		await expect(page).toHaveURL(/paymentStatus=balance_due/);
 		await expect(page.getByRole('row').filter({ hasText: code })).toContainText('Balance due');
 	});
 
@@ -109,7 +112,7 @@ test.describe('edit a paid order', () => {
 		// the API refuses a direct save across countries; the UI continues inside the edit session
 		await expect(toast(page, 'Country changed')).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Edit order' })).toBeVisible();
-		const review = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
+		const review = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
 		await expect(review).toContainText('The shipping country changed, so tax and shipping eligibility were recalculated.');
 		await review.getByRole('button', { name: 'Commit changes' }).click();
 		await expect(toast(page, 'Order updated')).toBeVisible();
@@ -120,9 +123,10 @@ test.describe('edit a paid order', () => {
 		const { code } = await createOrder(api, { email: `${uniq('od')}@example.net`, items: [{ sku: SKU.mug, quantity: 2 }] });
 		const reserved = await api.stock(SKU.mug);
 		await page.goto(`/orders/${code}`);
-		await page.getByRole('button', { name: 'Edit order' }).click();
+		await page.getByRole('button', { name: 'More actions' }).click();
+		await page.getByRole('menuitem', { name: 'Edit order' }).click();
 		await page.getByLabel(`Decrease quantity of ${SKU.mug}`).click();
-		const review = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
+		const review = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
 		await expect(review.getByText('Owed back to customer').locator('xpath=following-sibling::*[1]')).toHaveText('$12.00');
 		await expect(review).toContainText(`Stock ${SKU.mug}: release 1`);
 		await review.getByLabel('Leave as credit on the order (no refund yet)').check();
@@ -138,9 +142,10 @@ test.describe('edit a paid order', () => {
 	test('a stale preview is rejected: the order changing under the editor never commits blindly', async ({ page, api }) => {
 		const { code } = await createOrder(api, { email: `${uniq('os')}@example.net` });
 		await page.goto(`/orders/${code}`);
-		await page.getByRole('button', { name: 'Edit order' }).click();
+		await page.getByRole('button', { name: 'More actions' }).click();
+		await page.getByRole('menuitem', { name: 'Edit order' }).click();
 		await page.getByLabel(`Increase quantity of ${SKU.tee}`).click();
-		const review = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
+		const review = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Review and settle' }) });
 		await expect(review.getByText('New total')).toBeVisible();
 		await review.getByLabel('Leave the balance due (decide later)').check();
 

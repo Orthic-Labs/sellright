@@ -5,6 +5,16 @@ import { createOrder, createPendingOrder, uniq, SKU, US_ADDRESS } from './suppor
  * Plan 1.3 #10 — Order detail: internal note, cancel (PendingPayment only), invoice + packing slip render.
  * Supersedes: admin.order-notes.test.ts, admin-orders.cancel.test.ts, invoice.test.ts (route/format paths).
  */
+async function openCancel(page: import('@playwright/test').Page) {
+	await page.getByRole('button', { name: 'More actions' }).click();
+	await page.getByRole('menuitem', { name: /Cancel order/ }).click();
+}
+
+async function openMore(page: import('@playwright/test').Page, item: string) {
+	await page.getByRole('button', { name: 'More actions' }).click();
+	await page.getByRole('menuitem', { name: item }).click();
+}
+
 test.describe('order detail', () => {
 	test('adds an internal note to the timeline', async ({ page, api }) => {
 		const { code } = await createOrder(api, { email: `${uniq('note')}@example.net` });
@@ -12,16 +22,16 @@ test.describe('order detail', () => {
 		await expect(page.getByRole('heading', { name: code })).toBeVisible();
 
 		const text = `Packed by e2e ${uniq('n')}`;
-		await page.getByLabel('Add an internal note').fill(text);
-		await page.getByRole('button', { name: 'Add note' }).click();
+		await page.getByLabel('Staff note').fill(text);
+		await page.getByRole('button', { name: 'Post', exact: true }).click();
 		await expect(toast(page, 'Note added')).toBeVisible();
-		await expect(page.locator('li', { hasText: `Note: ${text}` })).toBeVisible();
+		await expect(page.locator('.tl .ev', { hasText: `Note: ${text}` })).toBeVisible();
 
 		const detail = await api.order(code);
 		expect(detail.events.some((e: { action: string; data?: { note?: string } }) => e.action === 'note' && e.data?.note === text)).toBe(true);
 		// notes survive a reload (they are timeline rows, not component state)
 		await page.reload();
-		await expect(page.locator('li', { hasText: `Note: ${text}` })).toBeVisible();
+		await expect(page.locator('.tl .ev', { hasText: `Note: ${text}` })).toBeVisible();
 	});
 
 	test('cancels a PendingPayment order via the confirm dialog and releases its reservation', async ({ page, api }) => {
@@ -29,25 +39,36 @@ test.describe('order detail', () => {
 		const reserved = await api.stock(SKU.mug);
 
 		await page.goto(`/orders/${code}`);
-		await page.getByRole('button', { name: 'Cancel order' }).click();
-		const dialog = page.getByRole('alertdialog');
-		await expect(dialog).toContainText(`Cancel order ${code}?`);
-		await dialog.getByRole('button', { name: 'Cancel order' }).click();
-		await expect(toast(page, 'Order cancelled')).toBeVisible();
+		await openCancel(page);
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toContainText(`Cancel ${code}?`);
+		await expect(dialog).toContainText('nothing to refund');
+		await dialog.getByRole('button', { name: 'Cancel order', exact: true }).click();
+		await expect(toast(page, `${code} cancelled`)).toBeVisible();
 
 		expect((await api.order(code)).state).toBe('Cancelled');
 		// live read, no cache: the two reserved units are released
 		expect((await api.stock(SKU.mug)).allocated).toBe(reserved.allocated - 2);
 		// a cancelled order offers no cancel action any more
-		await expect(page.getByRole('button', { name: 'Cancel order' })).toHaveCount(0);
+		await page.getByRole('button', { name: 'More actions' }).click();
+		await expect(page.getByRole('menuitem', { name: 'Invoice' })).toBeVisible();
+		await expect(page.getByRole('menuitem', { name: /Cancel order/ })).toHaveCount(0);
 	});
 
 	test('refuses to cancel a paid order (refund is the only way) and leaves it untouched', async ({ page, api }) => {
 		const { code } = await createOrder(api, { email: `${uniq('cp')}@example.net` });
 		await page.goto(`/orders/${code}`);
-		await page.getByRole('button', { name: 'Cancel order' }).click();
-		await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel order' }).click();
-		await expect(page.getByText(/paid order — use Refund/).first()).toBeVisible();
+		// the UI never cancels a paid order by itself: its dialog says it refunds, and declining leaves the order untouched
+		await openCancel(page);
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toContainText('Cancelling a paid order refunds everything still refundable');
+		await dialog.getByRole('button', { name: 'Keep order' }).click();
+		await expect(dialog).toHaveCount(0);
+		expect((await api.order(code)).state).toBe('Paid');
+		// and the server still refuses a plain cancel of a paid order (refund is the only way)
+		const res = await api.raw('POST', `/orders/${code}/cancel`, {});
+		expect(res.ok).toBe(false);
+		expect(await res.text()).toMatch(/paid order — use Refund/);
 		expect((await api.order(code)).state).toBe('Paid');
 	});
 
@@ -92,13 +113,13 @@ test.describe('order detail', () => {
 		await page.goto(`/orders/${code}`);
 		await expect(page.getByRole('heading', { name: code })).toBeVisible();
 
-		const [invoice] = await Promise.all([page.waitForEvent('popup'), page.getByRole('button', { name: 'Invoice' }).click()]);
+		const [invoice] = await Promise.all([page.waitForEvent('popup'), openMore(page, 'Invoice')]);
 		await expect(invoice.locator('h1')).toHaveText('E2E Store');
 		await expect(invoice.locator('body')).toContainText(`INV-${code}`);
 		await expect(invoice.locator('body')).toContainText((grandTotal / 100).toFixed(2));
 		await invoice.close();
 
-		const [slip] = await Promise.all([page.waitForEvent('popup'), page.getByRole('button', { name: 'Packing slip' }).click()]);
+		const [slip] = await Promise.all([page.waitForEvent('popup'), openMore(page, 'Packing slip')]);
 		await expect(slip.locator('h1')).toHaveText('E2E Store');
 		await expect(slip.locator('body')).toContainText(`PS-${code}`);
 		await expect(slip.locator('body')).toContainText(SKU.tee);

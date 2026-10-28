@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { AdminApi, totpAt, totpStep, uniq } from './support/api';
-import { field, gotoStable } from './fixtures';
+import { field, gotoStable, signOut } from './fixtures';
 import { ADMIN_URL, OWNER_EMAIL, OWNER_PASSWORD } from './support/env.mjs';
 import { inviteTokenFor, resetLinkFor } from './support/mailbox';
 
@@ -44,17 +44,10 @@ test.describe('admin sign-in', () => {
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
 		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
-		// logout() clears the session state (the route guard soft-navigates to /login at once) and THEN does a full
-		// location.assign('/login'): wait for that document, or the goto below races it and is interrupted.
-		const loginDocument = page.waitForResponse((r) => r.request().resourceType() === 'document' && /\/login$/.test(new URL(r.url()).pathname));
-		await page.getByRole('button', { name: 'Sign out' }).click();
-		await loginDocument;
-		await page.waitForLoadState('load');
-		// Signed out, /orders must end on /login. The login page's own signed-out redirect can start a navigation to
-		// /login before /orders commits (CI, a708faf5); that interruption IS the redirect, so only it is tolerated.
-		await page.goto('/orders', { waitUntil: 'commit' }).catch((e: Error) => {
-			if (!/interrupted by another navigation to "[^"]*\/login"/.test(e.message)) throw e;
-		});
+		await signOut(page);
+		await page.waitForURL(/\/login$/, { waitUntil: 'load' });
+		// the SPA's own bounce to /login can abort this goto(); the URL assertion below is what proves the redirect
+		await page.goto('/orders', { waitUntil: 'commit' }).catch((e) => { if (!/interrupted by another navigation/.test(String(e))) throw e; });
 		await expect(page).toHaveURL(/\/login$/);
 	});
 
@@ -124,7 +117,7 @@ test.describe('admin sign-in', () => {
 		await field(dialog, '2FA code or recovery code').fill(totpAt(a.secret!, a.enabledAtStep + 2));
 		await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
 		await expect(page.getByRole('list', { name: 'Passkeys' }).getByText('E2E virtual key')).toBeVisible();
-		await page.getByRole('button', { name: 'Sign out' }).click();
+		await signOut(page);
 		await expect(page).toHaveURL(/\/login$/);
 
 		// back on /login no conditional (autofill) request runs in the background (unit-tested in Login.test.tsx); the button
