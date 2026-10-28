@@ -39,6 +39,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
+import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -343,6 +344,8 @@ admin.openapi(
       paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']).optional(),
       shippingMethod: z.string().max(120).optional(), // shipping_method_code; '__none__' = no recorded method
       fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']).optional(),
+      // #406 admin tabs (orders/tabs-sql.ts); counts per tab come from /v1/admin/orders/tab-counts.
+      tab: z.enum(ORDER_TABS).optional(),
       page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
     }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
@@ -350,7 +353,7 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, tab, from, to, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
@@ -366,6 +369,7 @@ admin.openapi(
       if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
+      if (tab) conds.push(orderTabSql(tab) as never);
       if (q) conds.push(orderSearchSql(q, 'customer') as never);
       const where = conds.length ? and(...conds) : undefined;
       const contactSql = orderContactSql('customer');
@@ -377,6 +381,7 @@ admin.openapi(
           // #374: a guest order (no linked customer) shows its own checkout contact.
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
+          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(),
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -392,6 +397,27 @@ admin.openapi(
       };
     });
     return c.json(out, 200);
+  }),
+);
+
+// #406: per-tab counts for the admin orders list, from the same predicates as ?tab=, so tab counts and rows agree.
+admin.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/orders/tab-counts', summary: 'Order counts per admin tab',
+    request: { query: z.object({ excludeDemo: z.enum(['1']).optional() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ ...Object.fromEntries(ORDER_TABS.map((t) => [t, z.number()])), all: z.number() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { excludeDemo } = c.req.valid('query');
+    const out = await withStore(st.storeId, async (tx) => {
+      const live = excludeDemo === '1' ? sql`${s.order.deletedAt} is null and ${s.order.isDemo} = false` : sql`${s.order.deletedAt} is null`;
+      const cols = Object.fromEntries(ORDER_TABS.map((t) => [t, sql<number>`(count(*) filter (where ${orderTabSql(t)}))::int`]));
+      const [row] = await tx.select({ ...cols, all: sql<number>`count(*)::int` }).from(s.order).where(live);
+      return row as Record<string, number>;
+    });
+    return c.json(out as never, 200);
   }),
 );
 
