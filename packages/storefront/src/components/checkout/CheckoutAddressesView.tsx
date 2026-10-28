@@ -3,7 +3,7 @@ import { CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import AddressForm from '~/components/address-form/AddressForm';
 import BillingAddressForm from '~/components/billing-address-form/BillingAddressForm';
 import { sanitizePhoneNumber } from '~/utils/validation';
-import { ValidationIcon } from './ValidationIcon';
+import { FieldError, ValidationIcon } from './ValidationIcon';
 
 type CheckoutAddressesViewProps = {
   appState: any;
@@ -39,8 +39,16 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
     handleFirstNameChange$, handleFirstNameBlur$, handleLastNameChange$, handleLastNameBlur$,
   } = props;
 
+  // A real <form> so browsers recognise the fields for autofill (#407). It never submits: Enter in a field must not
+  // reload the page, and Place Order (outside this form) is what sends the order.
   return (
-    <div class="space-y-4 CheckoutAddresses">
+    <form
+      class="space-y-4 CheckoutAddresses"
+      id="checkout-address-form"
+      aria-label="Shipping details"
+      noValidate
+      preventdefault:submit
+    >
       {/* Error Display */}
       {error.value && (
         <div class="p-4 bg-red-50 border border-red-200 rounded-md">
@@ -59,6 +67,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
           <div class="flex items-center text-sm">
             <span class="text-gray-600 mr-2">Have an account?</span>
             <button
+              type="button"
               onClick$={$(() => openLoginModal())}
               class="text-[#8a6d4a] hover:text-[#4F3B26] font-medium transition-colors underline cursor-pointer"
             >
@@ -73,114 +82,134 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
         <div class="space-y-4">
           {/* Email and Phone side-by-side */}
           <div class="grid grid-cols-1 min-[481px]:grid-cols-2 gap-4">
-            <div class="relative">
-              <label for="checkout-email" class="sr-only">Email address</label>
-              <input
-                id="checkout-email"
-                type="email"
-                value={appState.customer?.emailAddress}
-                placeholder="Email address"
-                aria-label="Email address"
-                onInput$={(_, el) => handleEmailChange$(el.value)}
-                onBlur$={handleEmailBlur$}
-                aria-invalid={!!(emailTouched.value && emailValidationError.value)}
-                aria-describedby={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
-                class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
-                  emailTouched.value && emailValidationError.value
-                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                    : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
-                }`}
-              />
-              <ValidationIcon
-                touched={emailTouched.value}
-                error={emailValidationError.value}
-                valid={emailTouched.value && !emailValidationError.value && !!(appState.customer?.emailAddress)}
-                errorId={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
-              />
+            <div>
+              <div class="relative">
+                <label for="checkout-email" class="sr-only">Email address</label>
+                <input
+                  id="checkout-email"
+                  name="email"
+                  autoComplete="email"
+                  type="email"
+                  value={appState.customer?.emailAddress}
+                  placeholder="Email address"
+                  aria-label="Email address"
+                  onInput$={(_, el) => handleEmailChange$(el.value)}
+                  onBlur$={handleEmailBlur$}
+                  onChange$={async (_, el) => { await handleEmailChange$(el.value); await handleEmailBlur$(); }}
+                  aria-invalid={!!(emailTouched.value && emailValidationError.value)}
+                  aria-describedby={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
+                  class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
+                    emailTouched.value && emailValidationError.value
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
+                  }`}
+                />
+                <ValidationIcon
+                  touched={emailTouched.value}
+                  error={emailValidationError.value}
+                  valid={emailTouched.value && !emailValidationError.value && !!(appState.customer?.emailAddress)}
+                />
+              </div>
+              <FieldError id="checkout-email-error" message={emailTouched.value ? emailValidationError.value : undefined} />
             </div>
-            <div class="relative">
-              <label for="checkout-phone" class="sr-only">Phone number</label>
-              <input
-                id="checkout-phone"
-                type="tel"
-                value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
-                placeholder={phonePlaceholder.value}
-                aria-label="Phone number"
-                onInput$={async (_, el) => {
-                  await handlePhoneChange$(el.value);
-                  // The stored number drops letters; keep the field showing exactly what is stored.
-                  const kept = sanitizePhoneNumber(appState.shippingAddress?.phoneNumber);
-                  if (el.value !== kept) el.value = kept;
-                }}
-                onBlur$={handlePhoneBlur$}
-                aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
-                aria-describedby={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
-                class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
-                  phoneTouched.value && phoneValidationError.value
-                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                    : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
-                }`}
-              />
-              <ValidationIcon
-                touched={phoneTouched.value}
-                error={phoneValidationError.value}
-                valid={phoneTouched.value && !phoneValidationError.value && !!(appState.shippingAddress?.phoneNumber)}
-                errorId={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
-              />
+            <div>
+              <div class="relative">
+                <label for="checkout-phone" class="sr-only">Phone number</label>
+                <input
+                  id="checkout-phone"
+                  name="tel"
+                  autoComplete="shipping tel"
+                  type="tel"
+                  value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
+                  placeholder={phonePlaceholder.value}
+                  aria-label="Phone number"
+                  onInput$={async (_, el) => {
+                    await handlePhoneChange$(el.value);
+                    // The stored number drops letters; keep the field showing exactly what is stored.
+                    const kept = sanitizePhoneNumber(appState.shippingAddress?.phoneNumber);
+                    if (el.value !== kept) el.value = kept;
+                  }}
+                  onBlur$={handlePhoneBlur$}
+                  onChange$={async (_, el) => { await handlePhoneChange$(el.value); await handlePhoneBlur$(); }}
+                  aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
+                  aria-describedby={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
+                  class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
+                    phoneTouched.value && phoneValidationError.value
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
+                  }`}
+                />
+                <ValidationIcon
+                  touched={phoneTouched.value}
+                  error={phoneValidationError.value}
+                  valid={phoneTouched.value && !phoneValidationError.value && !!(appState.shippingAddress?.phoneNumber)}
+                />
+              </div>
+              <FieldError id="checkout-phone-error" message={phoneTouched.value ? phoneValidationError.value : undefined} />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-4">
-            <div class="relative">
-              <label for="checkout-first-name" class="sr-only">First name</label>
-              <input
-                id="checkout-first-name"
-                type="text"
-                value={appState.customer?.firstName}
-                placeholder="First name"
-                aria-label="First name"
-                onInput$={(_, el) => handleFirstNameChange$(el.value)}
-                onBlur$={handleFirstNameBlur$}
-                aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
-                aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
-                class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
-                  firstNameTouched.value && firstNameValidationError.value
-                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                    : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
-                }`}
-              />
-              <ValidationIcon
-                touched={firstNameTouched.value}
-                error={firstNameValidationError.value}
-                valid={firstNameTouched.value && !firstNameValidationError.value && !!(appState.customer?.firstName)}
-                errorId={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
-              />
+            <div>
+              <div class="relative">
+                <label for="checkout-first-name" class="sr-only">First name</label>
+                <input
+                  id="checkout-first-name"
+                  name="given-name"
+                  autoComplete="shipping given-name"
+                  type="text"
+                  value={appState.customer?.firstName}
+                  placeholder="First name"
+                  aria-label="First name"
+                  onInput$={(_, el) => handleFirstNameChange$(el.value)}
+                  onBlur$={handleFirstNameBlur$}
+                  onChange$={async (_, el) => { await handleFirstNameChange$(el.value); await handleFirstNameBlur$(); }}
+                  aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
+                  aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
+                  class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
+                    firstNameTouched.value && firstNameValidationError.value
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
+                  }`}
+                />
+                <ValidationIcon
+                  touched={firstNameTouched.value}
+                  error={firstNameValidationError.value}
+                  valid={firstNameTouched.value && !firstNameValidationError.value && !!(appState.customer?.firstName)}
+                />
+              </div>
+              <FieldError id="checkout-firstName-error" message={firstNameTouched.value ? firstNameValidationError.value : undefined} />
             </div>
 
-            <div class="relative">
-              <label for="checkout-last-name" class="sr-only">Last name</label>
-              <input
-                id="checkout-last-name"
-                type="text"
-                value={appState.customer?.lastName}
-                placeholder="Last name"
-                aria-label="Last name"
-                onInput$={(_, el) => handleLastNameChange$(el.value)}
-                onBlur$={handleLastNameBlur$}
-                aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
-                aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
-                class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
-                  lastNameTouched.value && lastNameValidationError.value
-                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                    : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
-                }`}
-              />
-              <ValidationIcon
-                touched={lastNameTouched.value}
-                error={lastNameValidationError.value}
-                valid={lastNameTouched.value && !lastNameValidationError.value && !!(appState.customer?.lastName)}
-                errorId={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
-              />
+            <div>
+              <div class="relative">
+                <label for="checkout-last-name" class="sr-only">Last name</label>
+                <input
+                  id="checkout-last-name"
+                  name="family-name"
+                  autoComplete="shipping family-name"
+                  type="text"
+                  value={appState.customer?.lastName}
+                  placeholder="Last name"
+                  aria-label="Last name"
+                  onInput$={(_, el) => handleLastNameChange$(el.value)}
+                  onBlur$={handleLastNameBlur$}
+                  onChange$={async (_, el) => { await handleLastNameChange$(el.value); await handleLastNameBlur$(); }}
+                  aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
+                  aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
+                  class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
+                    lastNameTouched.value && lastNameValidationError.value
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]'
+                  }`}
+                />
+                <ValidationIcon
+                  touched={lastNameTouched.value}
+                  error={lastNameValidationError.value}
+                  valid={lastNameTouched.value && !lastNameValidationError.value && !!(appState.customer?.lastName)}
+                />
+              </div>
+              <FieldError id="checkout-lastName-error" message={lastNameTouched.value ? lastNameValidationError.value : undefined} />
             </div>
           </div>
         </div>
@@ -198,6 +227,8 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
       <section>
         <button
           type="button"
+          aria-expanded={useDifferentBilling.value}
+          aria-controls="checkout-billing-fields"
           onClick$={$(() => {
             const next = !useDifferentBilling.value;
             useDifferentBilling.value = next;
@@ -227,7 +258,8 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
             opacity: useDifferentBilling.value ? '1' : '0',
           }}
         >
-          <div class="overflow-hidden">
+          {/* inert while collapsed: hidden billing fields stay out of the tab order and autofill. */}
+          <div id="checkout-billing-fields" class="overflow-hidden" inert={!useDifferentBilling.value}>
             <div class="mt-4">
               <BillingAddressForm
                 billingAddress={appState.billingAddress || {
@@ -249,6 +281,6 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
       {/* LoginModal moved to parent checkout component for proper full-screen rendering */}
 
 
-    </div>
+    </form>
   );
 });

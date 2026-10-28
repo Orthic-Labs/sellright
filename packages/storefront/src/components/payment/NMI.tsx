@@ -1,6 +1,6 @@
 import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
 import { loadCollectJs, prepareCardTokenization, cardFieldHint, type CardBrand, type CardField, type TokenCard } from '~/services/NmiCollect';
-import { ValidationIcon } from '~/components/checkout/ValidationIcon';
+import { FieldError, ValidationIcon } from '~/components/checkout/ValidationIcon';
 import { CardBrandIcon } from './CardBrandIcons';
 import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { GatewayAttempt } from '~/sellright/types/checkout';
@@ -174,7 +174,12 @@ export const NMI = component$<NMIProps>((props) => {
 	};
 	const icon = (field: CardField) => {
 		const state = feedback.value[field];
-		return <ValidationIcon touched={!!state} error={state && !state.valid ? cardFieldHint(field, state.message) : ''} valid={!!state?.valid} errorId={`${idPrefix.value}-${field}-error`} />;
+		return <ValidationIcon touched={!!state} error={state && !state.valid ? cardFieldHint(field, state.message) : ''} valid={!!state?.valid} />;
+	};
+	// Visible text under the box (#407); the hosted field lives in Collect.js's iframe, so this is announced via role=alert.
+	const fieldError = (field: CardField) => {
+		const state = feedback.value[field];
+		return <FieldError id={`${idPrefix.value}-${field}-error`} message={state && !state.valid ? cardFieldHint(field, state.message) : undefined} />;
 	};
 	const hostStyle = 'height:100%;display:flex;align-items:center;';
 
@@ -191,6 +196,7 @@ export const NMI = component$<NMIProps>((props) => {
 					)}
 					{icon('ccnumber')}
 				</div>
+				{fieldError('ccnumber')}
 			</div>
 			<div style="display:flex;gap:12px;">
 				<div style="flex:1;">
@@ -199,6 +205,7 @@ export const NMI = component$<NMIProps>((props) => {
 						<div id={`${idPrefix.value}-exp`} class="nmi-field" style={hostStyle} />
 						{icon('ccexp')}
 					</div>
+					{fieldError('ccexp')}
 				</div>
 				<div style="flex:1;">
 					<span aria-hidden="true" class="nmi-label" style="display:block;font-size:12px;margin-bottom:4px;color:var(--color-ink-soft,#6b6359);">Security code</span>
@@ -206,6 +213,7 @@ export const NMI = component$<NMIProps>((props) => {
 						<div id={`${idPrefix.value}-cvv`} class="nmi-field" style={hostStyle} />
 						{icon('cvv')}
 					</div>
+					{fieldError('cvv')}
 				</div>
 			</div>
 			<div style="display:flex;align-items:center;justify-content:center;gap:6px;">

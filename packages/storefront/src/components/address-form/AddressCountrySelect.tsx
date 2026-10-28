@@ -15,7 +15,7 @@ export const AddressCountrySelect = component$<AddressCountrySelectProps>((props
   <select
    id={props.id}
    name={props.id}
-   autocomplete="country"
+   autocomplete="shipping country"
    class={props.class}
    value={props.value}
    onChange$={(_, el) => props.onChange$(el.value)}

@@ -1,7 +1,8 @@
 import { component$, useContext, $, useSignal, type QRL, useOnDocument } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import type { BillingAddress } from '~/types';
-import { ValidationIcon } from '~/components/checkout/ValidationIcon';
+import { postcodeLabel, postcodeRequired, regionRequired } from '~/utils/address-rules';
+import { FieldError, ValidationIcon } from '~/components/checkout/ValidationIcon';
 import {
   validateBillingField,
   validateBillingFormValues,
@@ -154,77 +155,91 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     return "block w-full px-[14px] py-[11px] text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)] transition-colors duration-200 bg-white appearance-none";
   };
 
+  const billingCountry = billingAddress?.countryCode || appState.billingAddress?.countryCode || appState.shippingAddress?.countryCode || 'US';
+
   return (
     <div class="grid grid-cols-2 gap-4">
       {/* First Name and Last Name (2 fields on 1 line) */}
-      <div class="relative">
-        <label for="billingFirstName" class="sr-only">First name</label>
-        <input
-          type="text"
-          name="firstName"
-          id="billingFirstName"
-          placeholder="First name"
-          value={billingAddress?.firstName ?? ''}
-          onInput$={(_, el) => handleInputChange$('firstName', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('firstName', el.value)}
-          class={getFieldClasses('firstName')}
-          required
-          aria-invalid={!!(touchedFields.value.has('firstName') && validationErrors.value.firstName)}
-          aria-describedby={(touchedFields.value.has('firstName') && validationErrors.value.firstName) ? 'billingFirstName-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('firstName')}
-          error={validationErrors.value.firstName || ''}
-          valid={touchedFields.value.has('firstName') && !validationErrors.value.firstName && !!(billingAddress?.firstName)}
-          errorId={(touchedFields.value.has('firstName') && validationErrors.value.firstName) ? 'billingFirstName-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingFirstName" class="sr-only">First name</label>
+          <input
+            type="text"
+            name="firstName"
+            id="billingFirstName"
+            autoComplete="billing given-name"
+            placeholder="First name"
+            value={billingAddress?.firstName ?? ''}
+            onInput$={(_, el) => handleInputChange$('firstName', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('firstName', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('firstName', el.value); await handleFieldBlur$('firstName', el.value); }}
+            class={getFieldClasses('firstName')}
+            required
+            aria-invalid={!!(touchedFields.value.has('firstName') && validationErrors.value.firstName)}
+            aria-describedby={(touchedFields.value.has('firstName') && validationErrors.value.firstName) ? 'billingFirstName-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('firstName')}
+            error={validationErrors.value.firstName || ''}
+            valid={touchedFields.value.has('firstName') && !validationErrors.value.firstName && !!(billingAddress?.firstName)}
+          />
+        </div>
+        <FieldError id="billingFirstName-error" message={touchedFields.value.has('firstName') ? validationErrors.value.firstName : undefined} />
       </div>
 
-      <div class="relative">
-        <label for="billingLastName" class="sr-only">Last name</label>
-        <input
-          type="text"
-          name="lastName"
-          id="billingLastName"
-          placeholder="Last name"
-          value={billingAddress?.lastName ?? ''}
-          onInput$={(_, el) => handleInputChange$('lastName', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('lastName', el.value)}
-          class={getFieldClasses('lastName')}
-          required
-          aria-invalid={!!(touchedFields.value.has('lastName') && validationErrors.value.lastName)}
-          aria-describedby={(touchedFields.value.has('lastName') && validationErrors.value.lastName) ? 'billingLastName-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('lastName')}
-          error={validationErrors.value.lastName || ''}
-          valid={touchedFields.value.has('lastName') && !validationErrors.value.lastName && !!(billingAddress?.lastName)}
-          errorId={(touchedFields.value.has('lastName') && validationErrors.value.lastName) ? 'billingLastName-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingLastName" class="sr-only">Last name</label>
+          <input
+            type="text"
+            name="lastName"
+            id="billingLastName"
+            autoComplete="billing family-name"
+            placeholder="Last name"
+            value={billingAddress?.lastName ?? ''}
+            onInput$={(_, el) => handleInputChange$('lastName', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('lastName', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('lastName', el.value); await handleFieldBlur$('lastName', el.value); }}
+            class={getFieldClasses('lastName')}
+            required
+            aria-invalid={!!(touchedFields.value.has('lastName') && validationErrors.value.lastName)}
+            aria-describedby={(touchedFields.value.has('lastName') && validationErrors.value.lastName) ? 'billingLastName-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('lastName')}
+            error={validationErrors.value.lastName || ''}
+            valid={touchedFields.value.has('lastName') && !validationErrors.value.lastName && !!(billingAddress?.lastName)}
+          />
+        </div>
+        <FieldError id="billingLastName-error" message={touchedFields.value.has('lastName') ? validationErrors.value.lastName : undefined} />
       </div>
 
       {/* Street Address and Address Line 2 (on same line) */}
-      <div class="relative">
-        <label for="billingStreetLine1" class="sr-only">Street address</label>
-        <input
-          type="text"
-          name="streetLine1"
-          id="billingStreetLine1"
-          placeholder="Street address"
-          value={billingAddress?.streetLine1 ?? ''}
-          onInput$={(_, el) => handleInputChange$('streetLine1', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('streetLine1', el.value)}
-          class={getFieldClasses('streetLine1')}
-          required
-          aria-invalid={!!(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1)}
-          aria-describedby={(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1) ? 'billingStreetLine1-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('streetLine1')}
-          error={validationErrors.value.streetLine1 || ''}
-          valid={touchedFields.value.has('streetLine1') && !validationErrors.value.streetLine1 && !!(billingAddress?.streetLine1)}
-          errorId={(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1) ? 'billingStreetLine1-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingStreetLine1" class="sr-only">Street address</label>
+          <input
+            type="text"
+            name="streetLine1"
+            id="billingStreetLine1"
+            autoComplete="billing address-line1"
+            placeholder="Street address"
+            value={billingAddress?.streetLine1 ?? ''}
+            onInput$={(_, el) => handleInputChange$('streetLine1', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('streetLine1', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('streetLine1', el.value); await handleFieldBlur$('streetLine1', el.value); }}
+            class={getFieldClasses('streetLine1')}
+            required
+            aria-invalid={!!(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1)}
+            aria-describedby={(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1) ? 'billingStreetLine1-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('streetLine1')}
+            error={validationErrors.value.streetLine1 || ''}
+            valid={touchedFields.value.has('streetLine1') && !validationErrors.value.streetLine1 && !!(billingAddress?.streetLine1)}
+          />
+        </div>
+        <FieldError id="billingStreetLine1-error" message={touchedFields.value.has('streetLine1') ? validationErrors.value.streetLine1 : undefined} />
       </div>
 
       <div>
@@ -233,6 +248,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           type="text"
           name="streetLine2"
           id="billingStreetLine2"
+          autoComplete="billing address-line2"
           placeholder="Apt, building, etc."
           value={billingAddress?.streetLine2 ?? ''}
           onInput$={(_, el) => handleInputChange$('streetLine2', el.value)}
@@ -241,76 +257,88 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       </div>
 
       {/* City */}
-      <div class="relative">
-        <label for="billingCity" class="sr-only">City</label>
-        <input
-          type="text"
-          name="city"
-          id="billingCity"
-          placeholder="City"
-          value={billingAddress?.city ?? ''}
-          onInput$={(_, el) => handleInputChange$('city', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('city', el.value)}
-          class={getFieldClasses('city')}
-          required
-          aria-invalid={!!(touchedFields.value.has('city') && validationErrors.value.city)}
-          aria-describedby={(touchedFields.value.has('city') && validationErrors.value.city) ? 'billingCity-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('city')}
-          error={validationErrors.value.city || ''}
-          valid={touchedFields.value.has('city') && !validationErrors.value.city && !!(billingAddress?.city)}
-          errorId={(touchedFields.value.has('city') && validationErrors.value.city) ? 'billingCity-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingCity" class="sr-only">City</label>
+          <input
+            type="text"
+            name="city"
+            id="billingCity"
+            autoComplete="billing address-level2"
+            placeholder="City"
+            value={billingAddress?.city ?? ''}
+            onInput$={(_, el) => handleInputChange$('city', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('city', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('city', el.value); await handleFieldBlur$('city', el.value); }}
+            class={getFieldClasses('city')}
+            required
+            aria-invalid={!!(touchedFields.value.has('city') && validationErrors.value.city)}
+            aria-describedby={(touchedFields.value.has('city') && validationErrors.value.city) ? 'billingCity-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('city')}
+            error={validationErrors.value.city || ''}
+            valid={touchedFields.value.has('city') && !validationErrors.value.city && !!(billingAddress?.city)}
+          />
+        </div>
+        <FieldError id="billingCity-error" message={touchedFields.value.has('city') ? validationErrors.value.city : undefined} />
       </div>
 
       {/* State/Province */}
-      <div class="relative">
-        <label for="billingProvince" class="sr-only">State / Province</label>
-        <input
-          type="text"
-          name="province"
-          id="billingProvince"
-          placeholder="State / Province"
-          value={billingAddress?.province ?? ''}
-          onInput$={(_, el) => handleInputChange$('province', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('province', el.value)}
-          class={getFieldClasses('province')}
-          required
-          aria-invalid={!!(touchedFields.value.has('province') && validationErrors.value.province)}
-          aria-describedby={(touchedFields.value.has('province') && validationErrors.value.province) ? 'billingProvince-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('province')}
-          error={validationErrors.value.province || ''}
-          valid={touchedFields.value.has('province') && !validationErrors.value.province && !!(billingAddress?.province)}
-          errorId={(touchedFields.value.has('province') && validationErrors.value.province) ? 'billingProvince-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingProvince" class="sr-only">State / Province</label>
+          <input
+            type="text"
+            name="province"
+            id="billingProvince"
+            autoComplete="billing address-level1"
+            placeholder={regionRequired(billingCountry) ? 'State / Province' : 'State / Province (optional)'}
+            value={billingAddress?.province ?? ''}
+            onInput$={(_, el) => handleInputChange$('province', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('province', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('province', el.value); await handleFieldBlur$('province', el.value); }}
+            class={getFieldClasses('province')}
+            required={regionRequired(billingCountry)}
+            aria-invalid={!!(touchedFields.value.has('province') && validationErrors.value.province)}
+            aria-describedby={(touchedFields.value.has('province') && validationErrors.value.province) ? 'billingProvince-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('province')}
+            error={validationErrors.value.province || ''}
+            valid={touchedFields.value.has('province') && !validationErrors.value.province && !!(billingAddress?.province)}
+          />
+        </div>
+        <FieldError id="billingProvince-error" message={touchedFields.value.has('province') ? validationErrors.value.province : undefined} />
       </div>
 
       {/* Postal Code */}
-      <div class="relative">
-        <label for="billingPostalCode" class="sr-only">Postal code</label>
-        <input
-          type="text"
-          inputMode="numeric"
-          name="postalCode"
-          id="billingPostalCode"
-          placeholder="Postal code"
-          value={billingAddress?.postalCode ?? ''}
-          onInput$={(_, el) => handleInputChange$('postalCode', el.value)}
-          onBlur$={(_, el) => handleFieldBlur$('postalCode', el.value)}
-          class={getFieldClasses('postalCode')}
-          required
-          aria-invalid={!!(touchedFields.value.has('postalCode') && validationErrors.value.postalCode)}
-          aria-describedby={(touchedFields.value.has('postalCode') && validationErrors.value.postalCode) ? 'billingPostalCode-error' : undefined}
-        />
-        <ValidationIcon
-          touched={touchedFields.value.has('postalCode')}
-          error={validationErrors.value.postalCode || ''}
-          valid={touchedFields.value.has('postalCode') && !validationErrors.value.postalCode && !!(billingAddress?.postalCode)}
-          errorId={(touchedFields.value.has('postalCode') && validationErrors.value.postalCode) ? 'billingPostalCode-error' : undefined}
-        />
+      <div>
+        <div class="relative">
+          <label for="billingPostalCode" class="sr-only">Postal code</label>
+          <input
+            type="text"
+            inputMode={billingCountry === 'US' ? 'numeric' : 'text'}
+            name="postalCode"
+            id="billingPostalCode"
+            autoComplete="billing postal-code"
+            placeholder={postcodeRequired(billingCountry) ? postcodeLabel(billingCountry) : `${postcodeLabel(billingCountry)} (optional)`}
+            value={billingAddress?.postalCode ?? ''}
+            onInput$={(_, el) => handleInputChange$('postalCode', el.value)}
+            onBlur$={(_, el) => handleFieldBlur$('postalCode', el.value)}
+            onChange$={async (_, el) => { await handleInputChange$('postalCode', el.value); await handleFieldBlur$('postalCode', el.value); }}
+            class={getFieldClasses('postalCode')}
+            required={postcodeRequired(billingCountry)}
+            aria-invalid={!!(touchedFields.value.has('postalCode') && validationErrors.value.postalCode)}
+            aria-describedby={(touchedFields.value.has('postalCode') && validationErrors.value.postalCode) ? 'billingPostalCode-error' : undefined}
+          />
+          <ValidationIcon
+            touched={touchedFields.value.has('postalCode')}
+            error={validationErrors.value.postalCode || ''}
+            valid={touchedFields.value.has('postalCode') && !validationErrors.value.postalCode && !!(billingAddress?.postalCode)}
+          />
+        </div>
+        <FieldError id="billingPostalCode-error" message={touchedFields.value.has('postalCode') ? validationErrors.value.postalCode : undefined} />
       </div>
 
       {/* Country */}
@@ -319,6 +347,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
         <select
           id="billingCountryCode"
           name="countryCode"
+          autocomplete="billing country"
           value={billingAddress?.countryCode || appState.billingAddress?.countryCode || appState.shippingAddress?.countryCode || 'US'}
           onChange$={(_, el) => {
             // console.log(`📍 [BillingAddressForm] Billing country dropdown changed to: ${el.value}`);

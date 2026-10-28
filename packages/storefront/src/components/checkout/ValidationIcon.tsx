@@ -1,29 +1,23 @@
-import { component$, useSignal } from '@qwik.dev/core';
+import { component$ } from '@qwik.dev/core';
 
 interface ValidationIconProps {
   touched: boolean;
   error: string;
   valid: boolean;
-  errorId?: string;
 }
 
 /**
- * Inline validation icon — positioned inside input field by parent (relative wrapper).
+ * Inline validation icon, positioned inside the input by its parent (a `relative` wrapper around the input only).
  * - Untouched: nothing
  * - Touched + valid: green check
- * - Touched + error: red x — hover (desktop) shows tooltip, tap (mobile) shows inline text below
- * - Also renders an sr-only role="alert" element with the error text so screen readers
- *   announce it via aria-describedby on the parent input.
+ * - Touched + error: red x. Decorative: the message itself is the visible `FieldError` under the field.
  */
-export const ValidationIcon = component$<ValidationIconProps>(({ touched, error, valid, errorId }) => {
-  const showTooltip = useSignal(false);
-  const showInlineError = useSignal(false);
-
+export const ValidationIcon = component$<ValidationIconProps>(({ touched, error, valid }) => {
   if (!touched) return null;
 
   if (valid) {
     return (
-      <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+      <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true">
         <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
         </svg>
@@ -33,41 +27,27 @@ export const ValidationIcon = component$<ValidationIconProps>(({ touched, error,
 
   if (error) {
     return (
-      <>
-        {/* Icon inside field */}
-        <div
-          class="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer z-10"
-          onMouseEnter$={() => { showTooltip.value = true; }}
-          onMouseLeave$={() => { showTooltip.value = false; }}
-          onClick$={() => { showInlineError.value = !showInlineError.value; }}
-        >
-          <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9" stroke-width="2" />
-            <path stroke-linecap="round" stroke-width="2" d="M15 9l-6 6M9 9l6 6" />
-          </svg>
-
-          {/* Desktop hover tooltip */}
-          {showTooltip.value && (
-            <div class="hidden md:block absolute right-0 top-full mt-1.5 z-50 bg-[#1a1a1a] text-white text-[11px] leading-tight px-2.5 py-1.5 rounded whitespace-nowrap shadow-lg">
-              {error}
-              <div class="absolute -top-1 right-2 w-2 h-2 bg-[#1a1a1a] rotate-45" />
-            </div>
-          )}
-        </div>
-
-        {/* Screen-reader-only alert — always present in DOM when error exists so
-            aria-describedby on the parent input resolves. */}
-        {errorId && (
-          <p id={errorId} role="alert" class="sr-only">{error}</p>
-        )}
-
-        {/* Mobile inline error — shown on tap */}
-        {showInlineError.value && (
-          <p class="md:hidden mt-1 text-[11px] text-red-500 leading-tight">{error}</p>
-        )}
-      </>
+      <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" stroke-width="2" />
+          <path stroke-linecap="round" stroke-width="2" d="M15 9l-6 6M9 9l6 6" />
+        </svg>
+      </div>
     );
   }
 
   return null;
+});
+
+/**
+ * The visible error message under a field, on every screen size (#407). The input points at it with
+ * `aria-describedby={id}` and `aria-invalid`; `role="alert"` announces it when it appears.
+ */
+export const FieldError = component$<{ id?: string; message?: string }>(({ id, message }) => {
+  if (!id || !message) return null;
+  return (
+    <p id={id} role="alert" class="mt-1 text-[12px] leading-snug text-[#b42318]">
+      {message}
+    </p>
+  );
 });

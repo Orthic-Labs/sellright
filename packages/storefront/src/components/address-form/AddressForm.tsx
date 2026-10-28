@@ -6,6 +6,7 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { lookupPostalCode } from '~/utils/postal-lookup';
 import { AddressCountrySelect } from './AddressCountrySelect';
 import { AddressTextInput } from './AddressTextInput';
+import { postcodeLabel, postcodeRequired, regionRequired } from '~/utils/address-rules';
 import { loadGuestShippingAddress, saveGuestShippingAddress } from './address-guest-storage';
 import { guestRestorePatch } from './guest-restore';
 import {
@@ -195,11 +196,13 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	});
 
 	const scheduleSync$ = $(() => {
+		// State and postcode count only where the country uses them (#407), so a GB or HK address can sync.
+		const country = localCountryCode.value || 'US';
 		const hasAllRequiredFields =
 			localFormData.value.streetLine1.trim() &&
 			localFormData.value.city.trim() &&
-			localFormData.value.province.trim() &&
-			localFormData.value.postalCode.trim();
+			(!regionRequired(country) || localFormData.value.province.trim()) &&
+			(!postcodeRequired(country) || localFormData.value.postalCode.trim());
 
 		if (hasAllRequiredFields) {
 			if (validationTimer.value) {
@@ -340,14 +343,14 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 								fieldName="postalCode"
 								id="postalCode"
 								value={localFormData.value.postalCode}
-								autoComplete="postal-code"
-								placeholder="Postal code"
+								autoComplete="shipping postal-code"
+								placeholder={postcodeRequired(localCountryCode.value || 'US') ? postcodeLabel(localCountryCode.value || 'US') : `${postcodeLabel(localCountryCode.value || 'US')} (optional)`}
 								class={getFieldClasses('postalCode')}
-								inputMode="numeric"
+								inputMode={(localCountryCode.value || 'US') === 'US' ? 'numeric' : 'text'}
 								onInput$={handleInputChange$}
 								onBlur$={handleFieldBlur$}
 								afterBlur$={$((value: string) => runPostalLookup$(value, localCountryCode.value))}
-								required
+								required={postcodeRequired(localCountryCode.value || 'US')}
 								disabled={isReviewMode}
 								touched={touchedFields.value.has('postalCode')}
 								error={validationErrors.value.postalCode || ''}
@@ -362,7 +365,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 							fieldName="streetLine1"
 							id="streetLine1"
 							value={localFormData.value.streetLine1}
-							autoComplete="street-address"
+							autoComplete="shipping address-line1"
 							placeholder="Street address"
 							class={getFieldClasses('streetLine1')}
 							onInput$={handleInputChange$}
@@ -381,7 +384,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 							fieldName="streetLine2"
 							id="streetLine2"
 							value={localFormData.value.streetLine2}
-							autoComplete="address-line2"
+							autoComplete="shipping address-line2"
 							placeholder="Apt, suite, unit (optional)"
 							class={getFieldClasses('streetLine2')}
 							onInput$={handleInputChange$}
@@ -396,7 +399,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 								fieldName="city"
 								id="city"
 								value={localFormData.value.city}
-								autoComplete="address-level2"
+								autoComplete="shipping address-level2"
 								placeholder="City"
 								class={getFieldClasses('city')}
 								onInput$={handleInputChange$}
@@ -415,12 +418,12 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 								fieldName="province"
 								id="province"
 								value={localFormData.value.province}
-								autoComplete="address-level1"
-								placeholder="State / Province"
+								autoComplete="shipping address-level1"
+								placeholder={regionRequired(localCountryCode.value || 'US') ? 'State / Province' : 'State / Province (optional)'}
 								class={getFieldClasses('province')}
 								onInput$={handleInputChange$}
 								onBlur$={handleFieldBlur$}
-								required
+								required={regionRequired(localCountryCode.value || 'US')}
 								disabled={isReviewMode}
 								touched={touchedFields.value.has('province')}
 								error={validationErrors.value.province || ''}
