@@ -1,50 +1,27 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+/**
+ * #406 product editor. Every field edit (title, description, status, variant price / sale price / stock / active /
+ * pre-order) is staged locally and sent only on Save changes. Structure and media (add or delete a variant, options,
+ * collections, images, archive) save immediately and say so. The page is full-bleed: Layout skips its padding for /products/:id.
+ */
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Package, Trash2, Plus, X, Upload, ChevronUp, ChevronDown } from 'lucide-react';
-import { api, auth, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
+import { ArrowLeft, Plus } from 'lucide-react';
+import { api, ApiError, auth, type ProductDetail } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
-import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
-
-type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; isPreOrder: boolean; preOrderPrice: string; shipDate: string; shipDateLabel: string; enabled: boolean; onHand: string }> };
-
-const dateInput = (value: string | null | undefined) => value ? new Date(value).toISOString().slice(0, 16) : '';
-
-function toDraft(p: ProductDetail): Draft {
-  return {
-    name: p.name, status: p.status, description: p.description ?? '',
-    variants: Object.fromEntries(p.variants.map((v) => [v.id, {
-      price: (v.price / 100).toFixed(2), salePrice: v.salePrice != null ? (v.salePrice / 100).toFixed(2) : '',
-      isPreOrder: v.isPreOrder ?? false, preOrderPrice: v.preOrderPrice != null ? (v.preOrderPrice / 100).toFixed(2) : '', shipDate: dateInput(v.shipDate), shipDateLabel: v.shipDateLabel ?? '',
-      enabled: v.enabled, onHand: String(v.onHand),
-    }])),
-  };
-}
-const toCents = (s: string) => Math.round(parseFloat(s) * 100);
-
-// Refresh untouched fields, retaining edits relative to the last accepted baseline.
-// Match variants by ID so additions, removals & reordering cannot move edits.
-function rebaseDraft(current: Draft, baseline: Draft, incoming: Draft): Draft {
-  const keepEdit = <T,>(value: T, previous: T, next: T): T => value === previous ? next : value;
-  return {
-    name: keepEdit(current.name, baseline.name, incoming.name),
-    status: keepEdit(current.status, baseline.status, incoming.status),
-    description: keepEdit(current.description, baseline.description, incoming.description),
-    variants: Object.fromEntries(Object.entries(incoming.variants).map(([id, next]) => {
-      const value = current.variants[id];
-      const previous = baseline.variants[id];
-      if (!value || !previous) return [id, next];
-      const merged = { ...next };
-      for (const key of Object.keys(next) as (keyof typeof next)[]) {
-        // Assign each key separately to preserve its string/boolean field type.
-        Object.assign(merged, { [key]: keepEdit(value[key], previous[key], next[key]) });
-      }
-      return [id, merged];
-    })),
-  };
-}
+import { useLeaveGuard } from '../redesign/leave-guard';
+import { ConflictBanner, LoadError, LoadingRows, SaveFailed } from '../redesign/states';
+import { AddVariant, type VariantSeed } from '../redesign/product/AddVariant';
+import { CollectionsCard } from '../redesign/product/CollectionsCard';
+import { MediaCard } from '../redesign/product/MediaCard';
+import { OptionsCard, useProductOptions } from '../redesign/product/OptionsCard';
+import { VariantTable } from '../redesign/product/VariantTable';
+import {
+  buildGrid, buildPlan, effective, hasEdit, plural, variantErrors,
+  type EditVal, type Edits,
+} from '../redesign/product/model';
 
 export default function ProductDetailPage() {
   const { id = '' } = useParams();
@@ -52,411 +29,266 @@ export default function ProductDetailPage() {
   return <ProductDetailEditor key={JSON.stringify([store?.slug, id])} id={id} />;
 }
 
+/** updatedAt is returned by GET /products/{id}; api.ts ProductDetail does not declare it yet. */
+const stamp = (x: ProductDetail): string | null => (x as ProductDetail & { updatedAt?: string }).updatedAt ?? null;
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 function ProductDetailEditor({ id }: { id: string }) {
   const { store } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
+  const nav = useNavigate();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const cur = store?.currency ?? 'USD';
+  const currencySymbol = (0).toLocaleString('en-US', { style: 'currency', currency: cur }).replace(/[\d.,\s]/g, '') || '$';
+  const key = useMemo(() => ['product', store?.slug, id], [store?.slug, id]);
 
-  const { data: p, isLoading, error } = useQuery({
-    queryKey: ['product', store?.slug, id],
-    queryFn: () => api.get<ProductDetail>(`/products/${id}`),
-  });
+  const { data: p, isLoading, error, refetch } = useQuery({ queryKey: key, queryFn: () => api.get<ProductDetail>(`/products/${id}`) });
+  const { data: optData } = useProductOptions(id, store?.slug);
 
-  const [draftState, setDraftState] = useState<{ current: Draft; baseline: Draft } | null>(null);
-  const draft = draftState?.current ?? null;
-  const setDraft = (update: Draft | null | ((current: Draft | null) => Draft | null)) => {
-    setDraftState((state) => {
-      const current = typeof update === 'function' ? update(state?.current ?? null) : update;
-      return state && current ? { ...state, current } : state;
-    });
+  const [edits, setEditsState] = useState<Edits>({});
+  const editsRef = useRef<Edits>({});
+  const setEdits = (next: Edits | ((c: Edits) => Edits)) => {
+    const v = typeof next === 'function' ? next(editsRef.current) : next;
+    editsRef.current = v;
+    setEditsState(v);
   };
-  const saving = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [conflict, setConflict] = useState(false);
+  const [conflictBusy, setConflictBusy] = useState(false);
+  const [failed, setFailed] = useState<{ count: number; detail: string } | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState<VariantSeed | null>(null);
+
+  // updatedAt as the person opened (or last saved) it. Background refetches must not move it, or a conflict would be masked.
+  const loadedAt = useRef<string | null>(null);
+  useEffect(() => { if (p && loadedAt.current === null) loadedAt.current = stamp(p); }, [p]);
+
   const active = useRef(true);
   const transportStore = useRef(auth.store).current;
-  // The transport store changes synchronously, before React may unmount this editor.
-  const isCurrentIdentity = () => active.current && auth.store === transportStore;
-  useEffect(() => {
-    active.current = true;
-    return () => { active.current = false; };
-  }, []);
-  useEffect(() => {
-    if (!p || saving.current) return;
-    const baseline = toDraft(p);
-    setDraftState((state) => ({ current: state ? rebaseDraft(state.current, state.baseline, baseline) : baseline, baseline }));
-  }, [p]);
+  const isCurrent = () => active.current && auth.store === transportStore;
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  const save = useMutation({
-    mutationFn: async ({ product: p, submitted: draft }: { product: ProductDetail; submitted: Draft }) => {
-      saving.current = true;
-      const checkIdentity = () => { if (!isCurrentIdentity()) throw new Error('Product changed while saving'); };
-      const patch = (path: string, body: Record<string, unknown>) => { checkIdentity(); return api.patch(path, body); };
-      // Reads started before/during PATCHes must not restore pre-save values.
-      await qc.cancelQueries({ queryKey: ['product', store?.slug, id], exact: true });
-      if (draft.name !== p.name || draft.status !== p.status || (draft.description ?? '') !== (p.description ?? '')) {
-        await patch(`/products/${p.id}`, { name: draft.name, status: draft.status, description: draft.description });
-      }
-      for (const v of p.variants) {
-        const d = draft.variants[v.id];
-        if (!d) continue; // row added after this draft was taken — nothing edited yet
-        const price = toCents(d.price);
-        const salePrice = d.salePrice.trim() === '' ? null : toCents(d.salePrice);
-        const preOrderPrice = d.preOrderPrice.trim() === '' ? null : toCents(d.preOrderPrice);
-        const onHand = Number(d.onHand);
-        // Guard bad input so we never PATCH NaN (which serializes to null / 422).
-        if (!Number.isFinite(price) || price < 0 || (salePrice !== null && (!Number.isFinite(salePrice) || salePrice < 0)) || (preOrderPrice !== null && (!Number.isFinite(preOrderPrice) || preOrderPrice < 0)) || !Number.isInteger(onHand) || onHand < 0) {
-          throw new Error(`Invalid price or stock for variant ${v.sku}`);
+  const eff = useMemo(() => (p ? effective(p, edits) : {}), [p, edits]);
+  const count = Object.keys(eff).length;
+  useLeaveGuard(count > 0);
+
+  const grid = useMemo(() => (p && optData ? buildGrid(optData.groups, p.variants) : null), [p, optData]);
+  const errorsOf = (v: ProductDetail['variants'][number]) => (p ? variantErrors(p, eff, v) : {});
+  const badVariants = p ? p.variants.filter((v) => Object.keys(errorsOf(v)).length > 0) : [];
+  const titleBad = hasEdit(eff, '_title') && !(eff['_title'] as string).trim();
+
+  const onEdit = (updates: [string, EditVal | undefined][]) => setEdits((c) => {
+    const n = { ...c };
+    for (const [k, v] of updates) { if (v === undefined) delete n[k]; else n[k] = v; }
+    return n;
+  });
+  const prodVal = (k: '_title' | '_desc' | '_status', base: string) => (hasEdit(edits, k) ? (edits[k] as string) : base);
+
+  const commit = (keys: string[], snap: Edits) => setEdits((c) => {
+    const n = { ...c };
+    for (const k of keys) if (k in n && sameJson(n[k], snap[k])) delete n[k];
+    return n;
+  });
+
+  const focusFirstBad = () => setTimeout(() => rootRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 60);
+
+  async function save() {
+    if (savingRef.current || !p) return;
+    const latest = qc.getQueryData<ProductDetail>(key) ?? p;
+    const snap = effective(latest, editsRef.current);
+    const n = Object.keys(snap).length;
+    if (!n) return;
+    const bad = latest.variants.filter((v) => Object.keys(variantErrors(latest, snap, v)).length > 0);
+    const badTitle = hasEdit(snap, '_title') && !(snap['_title'] as string).trim();
+    if (bad.length || badTitle) {
+      if (grid?.grouped) setExpanded((x) => { const nx = new Set(x); bad.forEach((v) => nx.add(grid.cells.get(v.id)!.a)); return nx; });
+      toast.error(bad.length ? `Fix ${plural(bad.length, 'variant')} with errors before saving. Nothing was saved.` : 'Enter a title before saving. Nothing was saved.');
+      focusFirstBad();
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true); setFailed(null); setConflict(false);
+    const plan = buildPlan(latest, snap);
+    const remaining = () => Object.keys(effective(latest, editsRef.current)).length;
+    try {
+      await qc.cancelQueries({ queryKey: key, exact: true });
+      const guardIdentity = () => { if (!isCurrent()) throw new Error('Product changed while saving'); };
+      if (plan.product) {
+        guardIdentity();
+        try {
+          const r = await api.patch<{ id: string; updatedAt?: string }>(`/products/${id}`, { ...plan.product.body, expectedUpdatedAt: loadedAt.current ?? undefined });
+          if (r.updatedAt) loadedAt.current = r.updatedAt;
+          commit(plan.product.keys, snap);
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409) { if (isCurrent()) setConflict(true); return; }
+          throw e;
         }
-        const vp: Record<string, unknown> = {};
-        if (price !== v.price) vp.price = price;
-        if (salePrice !== v.salePrice) vp.salePrice = salePrice;
-        if (d.isPreOrder !== (v.isPreOrder ?? false)) vp.isPreOrder = d.isPreOrder;
-        if (preOrderPrice !== (v.preOrderPrice ?? null)) vp.preOrderPrice = preOrderPrice;
-        if (d.shipDateLabel !== (v.shipDateLabel ?? '')) vp.shipDateLabel = d.shipDateLabel || null;
-        if (d.shipDate !== dateInput(v.shipDate)) vp.shipDate = d.shipDate ? new Date(`${d.shipDate}Z`).toISOString() : null;
-        if (d.enabled !== v.enabled) vp.enabled = d.enabled;
-        if (Object.keys(vp).length) await patch(`/variants/${v.id}`, vp);
-        if (onHand !== v.onHand) await patch(`/variants/${v.id}/stock`, { onHand });
       }
-      await qc.cancelQueries({ queryKey: ['product', store?.slug, id], exact: true });
-      checkIdentity();
-      return api.get<ProductDetail>(`/products/${p.id}`);
-    },
-    onSuccess: (product, { submitted }) => {
-      if (!isCurrentIdentity()) { qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: 'none' }); return; }
-      const baseline = toDraft(product);
-      setDraftState((state) => state && ({ current: rebaseDraft(state.current, submitted, baseline), baseline }));
-      qc.setQueryData(['product', store?.slug, id], product);
-      toast.success('Product saved');
-    },
-    onError: (e) => {
-      qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: isCurrentIdentity() ? 'active' : 'none' });
-      if (isCurrentIdentity()) toast.error('Save failed', (e as Error).message);
-    },
-    onSettled: () => { saving.current = false; },
-  });
-
-  const nav = useNavigate();
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id], refetchType: isCurrentIdentity() ? 'active' : 'none' });
-  const del = useMutation({ mutationFn: () => api.del(`/products/${id}`), onSuccess: () => { toast.success('Product archived'); nav('/products'); }, onError: (e) => toast.error('Archive failed', (e as Error).message) });
-  const delVariant = useMutation({ mutationFn: (vid: string) => api.del(`/variants/${vid}`), onSuccess: () => { invalidate(); toast.success('Variant deleted'); }, onError: (e) => toast.error('Delete failed', (e as Error).message) });
-  const [nv, setNv] = useState<{ sku: string; name: string; price: string; onHand: string } | null>(null);
-  const addVariant = useMutation({
-    mutationFn: async () => {
-      if (!nv) return;
-      const price = toCents(nv.price); const onHand = Number(nv.onHand || '0');
-      if (!nv.sku.trim() || !nv.name.trim() || Number.isNaN(price) || !Number.isInteger(onHand) || onHand < 0) throw new Error('SKU, name, valid price and stock required');
-      await api.post(`/products/${id}/variants`, { sku: nv.sku, name: nv.name, price, onHand });
-    },
-    onSuccess: () => { setNv(null); invalidate(); toast.success('Variant added'); },
-    onError: (e) => toast.error('Add variant failed', (e as Error).message),
-  });
-
-  // WP8c: featured-image upload — upload the file, then set it as the product's
-  // featured asset. The API re-encodes to webp + validates magic bytes server-side.
-  const [uploading, setUploading] = useState(false);
-  const [uploadErr, setUploadErr] = useState<string | null>(null);
-  async function onPickImage(file: File) {
-    if (!isCurrentIdentity()) return;
-    setUploadErr(null); setUploading(true);
-    try {
-      const asset = await uploadAsset(file);
-      if (!isCurrentIdentity()) return;
-      await api.patch(`/products/${id}`, { featuredAssetId: asset.id });
-      if (!isCurrentIdentity()) return;
-      invalidate();
-      toast.success('Featured image updated');
-    } catch (e) { if (isCurrentIdentity()) setUploadErr((e as Error).message); }
-    finally { if (isCurrentIdentity()) setUploading(false); }
+      for (const vp of plan.variants) {
+        guardIdentity();
+        try {
+          if (Object.keys(vp.patch).length) await api.patch(`/variants/${vp.id}`, vp.patch);
+          if (vp.onHand !== undefined) await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand });
+        } catch (e) { throw new Error(`${vp.sku}: ${(e as Error).message}`); }
+        commit(vp.keys, snap);
+      }
+      guardIdentity();
+      const fresh = await api.get<ProductDetail>(`/products/${id}`);
+      if (!isCurrent()) { void qc.invalidateQueries({ queryKey: key, refetchType: 'none' }); return; }
+      // A read started while the PATCHes were pending would otherwise land after this and restore the old copy.
+      await qc.cancelQueries({ queryKey: key, exact: true });
+      qc.setQueryData(key, fresh);
+      toast.success(`Saved ${plural(n, 'change')} to ${fresh.name}.`);
+    } catch (e) {
+      void qc.invalidateQueries({ queryKey: key, refetchType: isCurrent() ? 'active' : 'none' });
+      if (isCurrent()) setFailed({ count: remaining(), detail: `${(e as Error).message}.`.replace(/\.\.$/, '.') });
+    } finally {
+      savingRef.current = false;
+      if (isCurrent()) setSaving(false);
+    }
   }
-  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Featured image removed'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Remove failed', (e as Error).message); } });
-  // WP8c gallery (product_asset): upload → attach, remove, promote-to-featured.
-  async function addToGallery(file: File) {
-    if (!isCurrentIdentity()) return;
-    setUploadErr(null); setUploading(true);
+
+  const discard = () => {
+    const snap = { ...editsRef.current };
+    const n = count;
+    setEdits({}); setFailed(null); setConflict(false);
+    toast.push({ tone: 'info', title: `Discarded ${plural(n, 'change')}.`, ttl: 10000, action: { label: 'Undo', onClick: () => setEdits(snap) } });
+  };
+
+  const takeTheirs = async () => {
+    setConflictBusy(true);
     try {
-      const a = await uploadAsset(file);
-      if (!isCurrentIdentity()) return;
-      await api.post(`/products/${id}/assets`, { assetId: a.id });
-      if (!isCurrentIdentity()) return;
-      invalidate(); toast.success('Added to gallery');
-    } catch (e) { if (isCurrentIdentity()) setUploadErr((e as Error).message); }
-    finally { if (isCurrentIdentity()) setUploading(false); }
-  }
-  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Removed from gallery'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Remove failed', (e as Error).message); } });
-  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: () => { if (!isCurrentIdentity()) return; invalidate(); toast.success('Featured image updated'); }, onError: (e) => { if (isCurrentIdentity()) toast.error('Update failed', (e as Error).message); } });
+      const fresh = await api.get<ProductDetail>(`/products/${id}`);
+      qc.setQueryData(key, fresh); loadedAt.current = stamp(fresh);
+      setEdits({}); setConflict(false);
+    } catch (e) { toast.error("Couldn't load the latest copy", (e as Error).message); }
+    finally { setConflictBusy(false); }
+  };
+  const keepMine = async () => {
+    setConflictBusy(true);
+    try {
+      const fresh = await api.get<ProductDetail>(`/products/${id}`);
+      qc.setQueryData(key, fresh); loadedAt.current = stamp(fresh);
+      setConflict(false);
+    } catch (e) { toast.error("Couldn't load the latest copy", (e as Error).message); setConflictBusy(false); return; }
+    setConflictBusy(false);
+    await save();
+  };
 
-  if (isLoading) return <Loading />;
-  if (error) return <ErrorState title="Couldn't load this product" message={(error as Error).message} onRetry={invalidate} />;
-  if (!p || !draft) return null;
+  const deleteVariant = async (v: ProductDetail['variants'][number]) => {
+    if (!(await confirm({ title: `Delete variant ${v.sku}?`, description: 'This happens straight away and does not wait for Save changes.', tone: 'danger', confirmLabel: 'Delete' }))) return;
+    try {
+      await api.del(`/variants/${v.id}`);
+      setEdits((c) => Object.fromEntries(Object.entries(c).filter(([k]) => !k.startsWith(`${v.id}.`))));
+      await qc.invalidateQueries({ queryKey: key });
+      toast.success(`Deleted ${v.sku}.`);
+    } catch (e) { toast.error('Delete failed', (e as Error).message); }
+  };
+  const archive = async () => {
+    if (!p) return;
+    if (!(await confirm({ title: `Archive product "${p.name}"?`, description: 'Its variants will be archived too. Order history is preserved. This happens straight away.', tone: 'danger', confirmLabel: 'Archive' }))) return;
+    try {
+      await api.del(`/products/${id}`);
+      setEdits({});
+      toast.success('Product archived');
+      nav('/products');
+    } catch (e) { toast.error('Archive failed', (e as Error).message); }
+  };
 
-  const img = assetUrl(p.assetPath);
-  const serverDraft = toDraft(p);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(draftState?.baseline);
-  const setV = (vid: string, patch: Partial<Draft['variants'][string]>) =>
-    setDraft((d) => d && ({ ...d, variants: { ...d.variants, [vid]: { ...d.variants[vid]!, ...patch } } }));
+  const offer = (aId: string, bId: string) => {
+    const a = grid?.first.options.find((o) => o.id === aId);
+    const b = grid?.second.options.find((o) => o.id === bId);
+    if (a && b) setAdding({ name: `${a.value} / ${b.value}`, optionIds: [aId, bId] });
+  };
+
+  if (isLoading) return <div className="rd" aria-busy="true"><div className="savebar"><h1>Loading product…</h1></div><LoadingRows label="Loading product" rows={8} /></div>;
+  if (error || !p) return <div className="rd" style={{ padding: 24 }}><LoadError what="this product" detail={(error as Error | null)?.message} onRetry={() => void refetch()} /></div>;
+
+  const title = prodVal('_title', p.name);
+  const status = prodVal('_status', p.status);
+  const statusHint = status === 'active' ? 'Visible in the store and search.' : 'Hidden from the store. Only staff can see it.';
 
   return (
-    <>
+    <div className="rd" ref={rootRef} aria-busy={saving}>
       {confirmDialog}
-      <Link to="/products" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Products</Link>
-      <PageHeader
-        stackOnMobile
-        title={p.name}
-        subtitle={`/${p.slug}`}
-        actions={
-          <div className="flex items-center gap-2">
-            <StatusBadge value={p.status} />
-            <button className="btn-danger" disabled={del.isPending || save.isPending} onClick={async () => { if (await confirm({ title: `Archive product "${p.name}"?`, description: 'Its variants will be archived too. Order history is preserved.', tone: 'danger', confirmLabel: 'Archive' })) del.mutate(); }}>
-              {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Archive</>}
-            </button>
-            <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate({ product: p, submitted: draft })}>
-              {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
-            </button>
-          </div>
-        }
-      />
-      {(save.error || addVariant.error || del.error || delVariant.error) && (
-        <div className="mb-4"><InlineAlert tone="critical">{((save.error || addVariant.error || del.error || delVariant.error) as Error).message}</InlineAlert></div>
+      <div className="savebar">
+        <Link to="/products" className="btn ghost sm"><ArrowLeft aria-hidden="true" />Products</Link>
+        <h1>{title || p.name}</h1>
+        <span className={`pill ${status === 'active' ? 'ok' : 'neu'}`}>{status === 'active' ? 'Active' : 'Draft'}</span>
+        <span className="sp" />
+        {badVariants.length > 0 && <span className="err" style={{ fontSize: 12.5 }}>{plural(badVariants.length, 'variant')} with errors</span>}
+        {count > 0 ? <span className="dirty" role="status">{plural(count, 'unsaved change')}</span> : <span className="muted" style={{ fontSize: 12.5 }} role="status">All changes saved</span>}
+        <button type="button" className="btn" disabled={count === 0 || saving} onClick={discard}>Discard</button>
+        <button type="button" className="btn pri" disabled={count === 0 || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save changes'}</button>
+      </div>
+
+      {(conflict || failed) && (
+        <div style={{ padding: '12px 24px 0' }}>
+          {conflict
+            ? <ConflictBanner busy={conflictBusy} onTheirs={() => void takeTheirs()} onMine={() => void keepMine()}>Someone else saved this product after you opened it.</ConflictBanner>
+            : <SaveFailed count={failed!.count} detail={failed!.detail} busy={saving} onRetry={() => void save()} />}
+        </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 stack-y-5 min-w-0">
-          <FormSection title="Basics" description="Title, description, and core metadata shown to customers.">
-            <Field label="Title"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
-            <Field label="Description" hint="Markdown is not supported. Plain text only."><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
-          </FormSection>
-
-          <FormSection title="Variants & inventory" description="Edit price, sale price, on-hand stock, and active state per variant.">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead><tr>
-                  <th className="th">Variant</th><th className="th">Price</th><th className="th">Sale</th><th className="th text-center">On hand</th><th className="th text-center">Active</th><th className="th"></th>
-                </tr></thead>
-                <tbody>
-                  {p.variants.map((v: VariantRow) => {
-                    // A refetch (e.g. right after "Add variant") renders the new
-                    // row one pass before the effect above re-syncs `draft` —
-                    // fall back to the server values instead of crashing.
-                    const d = draft.variants[v.id] ?? serverDraft.variants[v.id]!;
-                    return (
-                      <Fragment key={v.id}><tr className="border-t border-gray-100">
-                        <td className="td"><div className="font-medium truncate max-w-[14rem]">{v.name}</div><div className="text-xs text-gray-400 truncate">{v.sku}{v.allocated > 0 && ` · ${v.allocated} allocated`}</div></td>
-                        <td className="td"><CurrencyInput value={d.price} onChange={(val) => setV(v.id, { price: val })} cur={cur} /></td>
-                        <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
-                        <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
-                        <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
-                        <td className="td text-right"><button className="text-gray-300 hover:text-danger" title="Delete variant" aria-label={`Delete variant ${v.sku}`} onClick={async () => { if (await confirm({ title: `Delete variant ${v.sku}?`, tone: 'danger', confirmLabel: 'Delete' })) delVariant.mutate(v.id); }}><X size={16} /></button></td>
-                      </tr>
-                      <tr><td colSpan={6} className="px-3 pb-4">
-                        <div className="flex flex-wrap items-end gap-4">
-                          <label className="flex items-center gap-2 text-sm py-2"><input type="checkbox" aria-label={`Preorder ${v.sku}`} className="h-4 w-4 accent-brand" checked={d.isPreOrder} onChange={(e) => setV(v.id, { isPreOrder: e.target.checked })} />Preorder</label>
-                          <Field label="Preorder price"><CurrencyInput label={`Preorder price ${v.sku}`} value={d.preOrderPrice} onChange={(value) => setV(v.id, { preOrderPrice: value })} cur={cur} /></Field>
-                          <Field label="Shipping label"><input type="text" maxLength={255} aria-label={`Shipping label ${v.sku}`} className="input max-w-full" value={d.shipDateLabel} onInput={(e) => setV(v.id, { shipDateLabel: e.currentTarget.value })} /></Field>
-                          <Field label="Ship date (UTC)"><input type="datetime-local" aria-label={`Ship date ${v.sku}`} className="input max-w-full" value={d.shipDate} onInput={(e) => setV(v.id, { shipDate: e.currentTarget.value })} /></Field>
-                        </div>
-                      </td></tr></Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="border-t border-gray-100 pt-3">
-              {nv ? (
-                <div className="flex flex-wrap items-end gap-2">
-                  <Field label="SKU"><input className="input w-32" value={nv.sku} onChange={(e) => setNv({ ...nv, sku: e.target.value })} /></Field>
-                  <Field label="Name"><input className="input w-32" value={nv.name} onChange={(e) => setNv({ ...nv, name: e.target.value })} placeholder="e.g. Black / M" /></Field>
-                  <Field label="Price"><input className="input w-24" inputMode="decimal" value={nv.price} onChange={(e) => setNv({ ...nv, price: e.target.value })} placeholder="0.00" /></Field>
-                  <Field label="On hand"><input className="input w-20" type="number" min={0} value={nv.onHand} onChange={(e) => setNv({ ...nv, onHand: e.target.value })} /></Field>
-                  <button className="btn-primary" disabled={addVariant.isPending} onClick={() => addVariant.mutate()}>{addVariant.isPending ? <Spinner className="text-white" /> : 'Add'}</button>
-                  <button className="btn-ghost" onClick={() => setNv(null)}>Cancel</button>
+      <fieldset disabled={saving} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+        <div className="grid2" style={{ paddingTop: 16 }}>
+          <div className="stack">
+            <div className="card">
+              <div className="cb-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="fld">
+                  <label htmlFor="pt">Title</label>
+                  <input id="pt" className={`inp${titleBad ? ' bad' : ''}`} value={title} aria-invalid={titleBad} aria-describedby="pt-e" onChange={(e) => onEdit([['_title', e.target.value]])} />
+                  <div className="err" id="pt-e">{titleBad ? 'Enter a title.' : ''}</div>
                 </div>
-              ) : (
-                <button className="btn-ghost" onClick={() => setNv({ sku: '', name: '', price: '', onHand: '0' })}><Plus size={15} /> Add variant</button>
+                <div className="fld">
+                  <label htmlFor="pdsc">Description</label>
+                  <textarea id="pdsc" className="inp" rows={4} value={prodVal('_desc', p.description ?? '')} onChange={(e) => onEdit([['_desc', e.target.value]])} />
+                  <span className="hint">Plain text. Shown on the product page.</span>
+                </div>
+              </div>
+            </div>
+
+            <VariantTable
+              p={p} edits={eff} grid={grid} currencySymbol={currencySymbol} errorsOf={errorsOf} onEdit={onEdit}
+              expanded={expanded} setExpanded={setExpanded} onDelete={(v) => void deleteVariant(v)} onOffer={offer}
+              headerExtra={<button type="button" className="btn sm" onClick={() => setAdding({ name: '' })}><Plus aria-hidden="true" />Add variant</button>}
+              footer={adding && (
+                <AddVariant key={adding.optionIds?.join('|') ?? 'new'} productId={id} storeSlug={store?.slug} ownVariants={p.variants} seed={adding}
+                  onDone={() => setAdding(null)} onCancel={() => setAdding(null)} />
               )}
-            </div>
-          </FormSection>
-          <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
-        </div>
+            />
 
-        <div className="stack-y-5 min-w-0">
-          <FormSection title="Status" description="Only active products appear in your storefront and search.">
-            <select className="input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
-              <option value="active">Active</option>
-              <option value="draft">Draft</option>
-            </select>
-          </FormSection>
-          <FormSection title="Media" description="Square crops work best. The first image is the one customers see in lists and search.">
-            <div className="aspect-square rounded-lg bg-gray-100 grid place-items-center overflow-hidden relative">
-              {img ? <img src={img} alt={p.name} className="h-full w-full object-cover" /> : <Package size={28} className="text-gray-300" />}
-              {uploading && <div className="absolute inset-0 bg-surface/60 grid place-items-center"><Spinner /></div>}
-            </div>
-            <div className="flex items-center gap-3 mt-2">
-              <label className="btn-ghost cursor-pointer text-sm">
-                <Upload size={14} /> {img ? 'Replace' : 'Upload'}
-                <input type="file" accept="image/*" className="hidden" disabled={uploading}
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickImage(f); e.currentTarget.value = ''; }} />
-              </label>
-              {img && <button className="text-sm text-gray-400 hover:text-danger" disabled={removeImage.isPending} onClick={() => removeImage.mutate()}>Remove</button>}
-            </div>
-            {uploadErr && <div className="text-xs text-danger mt-1">{uploadErr}</div>}
-            {p.images.length > 0 && (
-              <div className="grid grid-cols-3 gap-1.5 mt-3">
-                {p.images.map((im) => (
-                  <div key={im.assetId} className="group relative aspect-square rounded-sm bg-gray-100 overflow-hidden ring-1 ring-gray-100">
-                    <img src={assetUrl(im.path) ?? im.url} alt="" className="h-full w-full object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-[color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter] flex items-center justify-center gap-1.5">
-                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
-                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <label className="btn-ghost cursor-pointer text-sm mt-2 inline-flex">
-              <Upload size={14} /> Add to gallery
-              <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) addToGallery(f); e.currentTarget.value = ''; }} />
-            </label>
-          </FormSection>
-        </div>
-      </div>
-    </>
-  );
-}
-
-type OptGroup = { id: string; name: string; position: number; options: { id: string; value: string; position: number }[] };
-function OptionsEditor({ productId, storeSlug, variants }: { productId: string; storeSlug?: string; variants: { id: string; sku: string; optionIds?: string[] }[] }) {
-  const qc = useQueryClient();
-  const key = ['product-options', storeSlug, productId];
-  const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ groups: OptGroup[] }>(`/products/${productId}/options`) });
-  const invalidate = () => qc.invalidateQueries({ queryKey: key });
-  // Merchant-controlled ordering (API migration 0080). Both mutations send
-  // the FULL current order with two adjacent entries swapped — the reorder
-  // endpoint requires an exact permutation of the current set, so a partial
-  // list (e.g. "just move this one to index 2") is rejected rather than
-  // silently dropping whichever id was omitted.
-  const reorderGroups = useMutation({
-    mutationFn: (order: string[]) => api.put(`/products/${productId}/option-groups/reorder`, { order }),
-    onSuccess: invalidate,
-  });
-  const reorderOptions = useMutation({
-    mutationFn: ({ groupId, order }: { groupId: string; order: string[] }) => api.put(`/option-groups/${groupId}/options/reorder`, { order }),
-    onSuccess: invalidate,
-  });
-  const moveGroup = (groups: OptGroup[], index: number, dir: -1 | 1) => {
-    const target = index + dir;
-    if (target < 0 || target >= groups.length) return;
-    const order = groups.map((g) => g.id);
-    [order[index], order[target]] = [order[target]!, order[index]!];
-    reorderGroups.mutate(order);
-  };
-  const moveOption = (group: OptGroup, index: number, dir: -1 | 1) => {
-    const target = index + dir;
-    if (target < 0 || target >= group.options.length) return;
-    const order = group.options.map((o) => o.id);
-    [order[index], order[target]] = [order[target]!, order[index]!];
-    reorderOptions.mutate({ groupId: group.id, order });
-  };
-  // Per-variant option assignment writes through PUT and refreshes the product
-  // query (variant.optionIds lives on the product detail, not the options query).
-  const setVariantOptions = useMutation({
-    mutationFn: ({ variantId, optionIds }: { variantId: string; optionIds: string[] }) => api.put(`/variants/${variantId}/options`, { optionIds }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['product', storeSlug, productId] }),
-  });
-  const toggleVariantOption = (v: { id: string; optionIds?: string[] }, optionId: string) => {
-    const cur = new Set(v.optionIds ?? []);
-    if (cur.has(optionId)) cur.delete(optionId); else cur.add(optionId);
-    setVariantOptions.mutate({ variantId: v.id, optionIds: [...cur] });
-  };
-  const [gName, setGName] = useState('');
-  const [gValues, setGValues] = useState('');
-  const [valInput, setValInput] = useState<Record<string, string>>({});
-  const addGroup = useMutation({
-    mutationFn: () => api.post(`/products/${productId}/option-groups`, { name: gName.trim(), values: gValues.split(',').map((v) => v.trim()).filter(Boolean) }),
-    onSuccess: () => { setGName(''); setGValues(''); invalidate(); },
-  });
-  const addValue = useMutation({
-    mutationFn: (groupId: string) => api.post(`/option-groups/${groupId}/options`, { value: (valInput[groupId] ?? '').trim() }),
-    onSuccess: (_d, groupId) => { setValInput((m) => ({ ...m, [groupId]: '' })); invalidate(); },
-  });
-  const groups = data?.groups ?? [];
-  return (
-    <div className="card overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Options</div>
-      <div className="p-4 stack-y-3">
-        {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g, gi) => (
-          <div key={g.id} className="rounded-lg border border-gray-100 p-3">
-            <div className="flex items-center gap-1 mb-2">
-              {/* Up/down reorder — the group's display order across the
-                  storefront/manifest, not alphabetical (see 0080). */}
-              <div className="flex flex-col -my-1">
-                <button type="button" aria-label={`Move ${g.name} up`} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={gi === 0 || reorderGroups.isPending} onClick={() => moveGroup(groups, gi, -1)}><ChevronUp size={14} /></button>
-                <button type="button" aria-label={`Move ${g.name} down`} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={gi === groups.length - 1 || reorderGroups.isPending} onClick={() => moveGroup(groups, gi, 1)}><ChevronDown size={14} /></button>
-              </div>
-              <div className="font-medium text-sm">{g.name}</div>
-            </div>
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {g.options.map((o, oi) => (
-                <span key={o.id} className="inline-flex items-center gap-1 rounded-full bg-gray-100 pl-1 pr-2 py-0.5 text-xs">
-                  <span className="flex flex-col">
-                    <button type="button" aria-label={`Move ${o.value} up`} className="leading-none text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={oi === 0 || reorderOptions.isPending} onClick={() => moveOption(g, oi, -1)}><ChevronUp size={10} /></button>
-                    <button type="button" aria-label={`Move ${o.value} down`} className="leading-none text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={oi === g.options.length - 1 || reorderOptions.isPending} onClick={() => moveOption(g, oi, 1)}><ChevronDown size={10} /></button>
-                  </span>
-                  {o.value}
-                </span>
-              ))}
-              {g.options.length === 0 && <span className="text-xs text-gray-400">no values</span>}
-            </div>
-            <div className="flex gap-2">
-              <input className="input py-1 text-sm" placeholder="Add value" value={valInput[g.id] ?? ''} onChange={(e) => setValInput((m) => ({ ...m, [g.id]: e.target.value }))} />
-              <button className="btn-ghost text-sm" disabled={!(valInput[g.id] ?? '').trim() || addValue.isPending} onClick={() => addValue.mutate(g.id)}>Add</button>
-            </div>
+            <OptionsCard productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
           </div>
-        ))}
-        <div className="border-t border-gray-100 pt-3 flex flex-wrap items-end gap-2">
-          <div><label className="label">New group</label><input className="input w-32" placeholder="e.g. Size" value={gName} onChange={(e) => setGName(e.target.value)} /></div>
-          <div><label className="label">Values (comma-sep)</label><input className="input w-44" placeholder="S, M, L" value={gValues} onChange={(e) => setGValues(e.target.value)} /></div>
-          <button className="btn-primary" disabled={!gName.trim() || addGroup.isPending} onClick={() => addGroup.mutate()}>{addGroup.isPending ? <Spinner className="text-white" /> : <><Plus size={15} /> Add group</>}</button>
-        </div>
-        {(addGroup.error || addValue.error || setVariantOptions.error || reorderGroups.error || reorderOptions.error) && <div className="text-xs text-danger">{((addGroup.error || addValue.error || setVariantOptions.error || reorderGroups.error || reorderOptions.error) as Error).message}</div>}
-        {(() => {
-          const allValues = groups.flatMap((g) => g.options.map((o) => ({ ...o, group: g.name })));
-          if (!allValues.length || !variants.length) return null;
-          return (
-            <div className="border-t border-gray-100 pt-3">
-              <div className="text-xs font-medium text-gray-500 mb-2">Assign values to variants</div>
-              <div className="overflow-x-auto">
-                <table className="text-xs">
-                  <thead><tr><th className="text-left pr-2 pb-1"></th>{allValues.map((o) => <th key={o.id} className="px-1.5 pb-1 font-normal text-gray-500 whitespace-nowrap" title={o.group}>{o.value}</th>)}</tr></thead>
-                  <tbody>
-                    {variants.map((v) => (
-                      <tr key={v.id}>
-                        <td className="pr-2 py-0.5 font-medium whitespace-nowrap">{v.sku}</td>
-                        {allValues.map((o) => (
-                          <td key={o.id} className="px-1.5 text-center">
-                            <input type="checkbox" className="h-3.5 w-3.5 accent-brand" checked={(v.optionIds ?? []).includes(o.id)} disabled={setVariantOptions.isPending} onChange={() => toggleVariantOption(v, o.id)} />
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+          <div className="stack">
+            <div className="card">
+              <div className="ch"><h2>Status</h2></div>
+              <div className="cb-body">
+                <div className="seg" role="radiogroup" aria-label="Product status" style={{ width: '100%', display: 'flex' }}>
+                  {([['active', 'Active'], ['draft', 'Draft']] as const).map(([val, label]) => (
+                    <button key={val} type="button" role="radio" aria-checked={status === val} tabIndex={status === val ? 0 : -1} style={{ flex: 1 }}
+                      onClick={() => onEdit([['_status', val]])}
+                      onKeyDown={(e) => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); onEdit([['_status', val === 'active' ? 'draft' : 'active']]); } }}>{label}</button>
+                  ))}
+                </div>
+                <div className="hint" style={{ marginTop: 8 }}>{statusHint}{status !== p.status ? ' Takes effect when you save.' : ''}</div>
+                <div style={{ marginTop: 12 }}>
+                  <button type="button" className="btn dng sm" onClick={() => void archive()}>Archive product…</button>
+                  <div className="hint" style={{ marginTop: 6 }}>Hidden and removed from lists. Orders keep it. Archiving happens straight away.</div>
+                </div>
               </div>
             </div>
-          );
-        })()}
-      </div>
-    </div>
-  );
-}
 
-function CurrencyInput({ value, onChange, cur, placeholder, label }: { value: string; onChange: (v: string) => void; cur: string; placeholder?: string; label?: string }) {
-  const sym = (0).toLocaleString('en-US', { style: 'currency', currency: cur }).replace(/[\d.,\s]/g, '') || '$';
-  return (
-    <div className="relative w-28">
-      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">{sym}</span>
-      <input aria-label={label} className="input pl-6" inputMode="decimal" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+            <MediaCard p={p} storeSlug={store?.slug} getExpected={() => loadedAt.current} onUpdated={(iso) => { loadedAt.current = iso; }} isCurrent={isCurrent} />
+
+            <CollectionsCard productId={p.id} storeSlug={store?.slug} slug={p.slug} />
+          </div>
+        </div>
+      </fieldset>
     </div>
   );
 }

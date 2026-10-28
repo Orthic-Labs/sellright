@@ -7,26 +7,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ProductDetail } from '../api';
 
 const mocks = vi.hoisted(() => ({
-  id: 'p1', store: { slug: 'first', currency: 'USD' }, get: vi.fn(), patch: vi.fn(), post: vi.fn(), uploadAsset: vi.fn(), success: vi.fn(), error: vi.fn(),
+  id: 'p1', store: { slug: 'first', currency: 'USD' }, get: vi.fn(), patch: vi.fn(), post: vi.fn(), del: vi.fn(), push: vi.fn(), uploadAsset: vi.fn(), success: vi.fn(), error: vi.fn(),
 }));
 vi.mock('../api', () => ({
-  api: { get: mocks.get, patch: mocks.patch, post: mocks.post },
+  ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
+  api: { get: mocks.get, patch: mocks.patch, post: mocks.post, del: mocks.del },
   auth: { get store() { return localStorage.getItem('sr_admin_store'); } },
   assetUrl: (path: string | null) => path, uploadAsset: mocks.uploadAsset,
 }));
 vi.mock('../auth', () => ({ useAuth: () => ({ store: mocks.store }) }));
-vi.mock('../components/Toast', () => ({ useToast: () => ({ success: mocks.success, error: mocks.error }) }));
+vi.mock('../components/Toast', () => ({ useToast: () => ({ success: mocks.success, error: mocks.error, push: mocks.push }) }));
 vi.mock('react-router-dom', async (original) => ({
   ...await original<typeof import('react-router-dom')>(), useParams: () => ({ id: mocks.id }),
 }));
 
 import ProductDetailPage from './ProductDetail';
+import { ApiError } from '../api';
 
 function product(id = 'p1', name = 'Original'): ProductDetail {
-  return {
-    id, name, slug: id, description: 'Description', status: 'active', assetPath: '/image.webp', featuredAssetId: 'image', images: [],
+  return ({
+    id, name, slug: id, description: 'Description', status: 'active', updatedAt: '2026-01-01T00:00:00.000Z', assetPath: '/image.webp', featuredAssetId: 'image', images: [{ assetId: 'image', path: '/image.webp', position: 0 }, { assetId: 'second-image', path: '/second.webp', position: 1 }],
     variants: [{ id: 'v1', sku: 'SKU-1', name: 'First', price: 1000, salePrice: null, enabled: true, onHand: 4, allocated: 0, available: 4 }],
-  };
+  }) as ProductDetail;
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -37,11 +39,17 @@ let root: Root;
 let client: QueryClient;
 let products: Record<string, ProductDetail>;
 const key = () => ['product', mocks.store.slug, mocks.id];
+const isLocked = () => document.querySelector('fieldset')!.disabled;
 const server = () => products[`${mocks.store.slug}:${mocks.id}`]!;
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === text)!;
-const title = () => document.querySelector<HTMLInputElement>('section input')!;
-const price = (id = 'SKU-1') => [...document.querySelectorAll<HTMLTableRowElement>('tbody tr')].find((row) => row.textContent?.includes(id))!.querySelector<HTMLInputElement>('input[inputmode="decimal"]')!;
+const title = () => document.querySelector<HTMLInputElement>('#pt')!;
+const description = () => document.querySelector<HTMLTextAreaElement>('#pdsc')!;
+const row = (id: string) => [...document.querySelectorAll<HTMLTableRowElement>('tbody tr[data-vid]')].find((node) => node.textContent?.includes(id))!;
+const onHand = (id = 'SKU-1') => row(id).querySelector<HTMLInputElement>('input[aria-label^="On hand,"]')!;
+const clickText = (text: string) => act(async () => { button(text).click(); });
+const menuItem = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((node) => node.textContent === text)!;
+const price = (id = 'SKU-1') => row(id).querySelector<HTMLInputElement>('input[aria-label^="Price,"]')!;
 async function fill(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
   await act(async () => {
     const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -66,23 +74,33 @@ async function mount() {
   await act(async () => { render(); });
   await flush();
 }
+let revision = 0;
 function persist(path: string, body: Record<string, unknown>) {
+  const { expectedUpdatedAt: _expected, ...fields } = body;
   if (path.startsWith('/products/')) {
-    Object.assign(server(), body);
-    if (body.featuredAssetId === null) server().assetPath = null;
-  } else {
-    const variant = server().variants.find((row) => row.id === path.split('/')[2])!;
-    Object.assign(variant, body);
+    Object.assign(server(), fields);
+    if (fields.featuredAssetId === null) server().assetPath = null;
+    const updatedAt = `2026-02-01T00:00:0${++revision}.000Z`;
+    Object.assign(server(), { updatedAt });
+    return { id: server().id, updatedAt };
   }
+  const variant = server().variants.find((row) => row.id === path.split('/')[2])!;
+  if (path.endsWith('/stock')) variant.onHand = fields.onHand as number;
+  else Object.assign(variant, fields);
   return {};
 }
 beforeEach(() => {
   mocks.id = 'p1'; mocks.store = { slug: 'first', currency: 'USD' };
   localStorage.setItem('sr_admin_store', 'first');
   products = { 'first:p1': product(), 'first:p2': product('p2', 'Second product'), 'second:p1': product('p1', 'Second store') };
-  mocks.get.mockReset().mockImplementation(async (path: string) => path.endsWith('/options') ? { groups: [] } : structuredClone(server()));
+  revision = 0;
+  mocks.get.mockReset().mockImplementation(async (path: string) => {
+    if (path.endsWith('/options')) return { groups: [] };
+    if (path === '/collections') return { items: [] };
+    return structuredClone(server());
+  });
   mocks.patch.mockReset().mockImplementation(async (path: string, body: Record<string, unknown>) => persist(path, body));
-  mocks.post.mockReset().mockResolvedValue({});
+  mocks.post.mockReset().mockResolvedValue({}); mocks.del.mockReset().mockResolvedValue({}); mocks.push.mockReset();
   mocks.uploadAsset.mockReset().mockResolvedValue({ id: 'uploaded' });
   mocks.success.mockReset(); mocks.error.mockReset();
 });
@@ -95,19 +113,18 @@ describe('Product draft hydration', () => {
   it('retains title, description, status & variant edits after an independent media PATCH/refetch', async () => {
     await mount();
     await fill(title(), 'Unsaved title');
-    await fill(document.querySelector<HTMLTextAreaElement>('textarea')!, 'Unsaved description');
+    await fill(description(), 'Unsaved description');
     await fill(price(), '25.00');
-    await act(async () => {
-      const status = document.querySelector<HTMLSelectElement>('select')!;
-      status.value = 'draft'; status.dispatchEvent(new Event('change', { bubbles: true }));
-      button('Remove').click();
-    });
+    await clickText('Draft');
+    await act(async () => { document.querySelector<HTMLButtonElement>('button[aria-label="Actions for image 2"]')!.click(); });
+    await act(async () => { menuItem('Make main image').click(); });
     await flush();
-    expect(mocks.patch).toHaveBeenCalledWith('/products/p1', { featuredAssetId: null });
-    expect(client.getQueryData<ProductDetail>(key())!.featuredAssetId).toBeNull();
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+    expect(mocks.patch).toHaveBeenCalledWith('/products/p1', { featuredAssetId: 'second-image', expectedUpdatedAt: '2026-01-01T00:00:00.000Z' });
+    expect(client.getQueryData<ProductDetail>(key())!.featuredAssetId).toBe('second-image');
     expect(title().value).toBe('Unsaved title');
-    expect(document.querySelector('textarea')!.value).toBe('Unsaved description');
-    expect(document.querySelector('select')!.value).toBe('draft');
+    expect(description().value).toBe('Unsaved description');
+    expect(document.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('Draft');
     expect(price().value).toBe('25.00');
     expect(button('Save changes').disabled).toBe(false);
   });
@@ -133,20 +150,60 @@ describe('Product draft hydration', () => {
     expect(button('Save changes').disabled).toBe(true);
   });
 
-  it('accepts successful Save as baseline & preserves edits made while Save is pending', async () => {
+  it('sends nothing before Save changes', async () => {
+    await mount(); await fill(title(), 'Staged'); await fill(price(), '22.00'); await fill(onHand(), '9');
+    await flush();
+    expect(mocks.patch).not.toHaveBeenCalled(); expect(mocks.post).not.toHaveBeenCalled(); expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  it('sends the product PATCH first with expectedUpdatedAt, then the variant & its stock', async () => {
+    await mount(); await fill(title(), 'Submitted'); await fill(price(), '22.00'); await fill(onHand(), '9');
+    await clickText('Save changes'); await flush();
+    expect(mocks.patch.mock.calls).toEqual([
+      ['/products/p1', { name: 'Submitted', expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }],
+      ['/variants/v1', { price: 2200 }],
+      ['/variants/v1/stock', { onHand: 9 }],
+    ]);
+    // The next Save carries the stamp returned by the first.
+    await fill(title(), 'Again'); await clickText('Save changes'); await flush();
+    expect(mocks.patch.mock.calls[3]).toEqual(['/products/p1', { name: 'Again', expectedUpdatedAt: '2026-02-01T00:00:01.000Z' }]);
+  });
+
+  it('shows Use theirs / Keep mine on a 409 and sends no variant requests', async () => {
+    await mount(); await fill(title(), 'Submitted'); await fill(price(), '22.00');
+    mocks.patch.mockRejectedValueOnce(new ApiError(409, 'Product changed'));
+    await clickText('Save changes'); await flush();
+    expect(button('Use theirs')).toBeTruthy(); expect(button('Keep mine')).toBeTruthy();
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+    expect(mocks.patch.mock.calls.some(([path]) => String(path).startsWith('/variants/'))).toBe(false);
+    expect(title().value).toBe('Submitted'); expect(price().value).toBe('22.00');
+  });
+
+  it('blocks Save with a toast when variants have errors, sending nothing', async () => {
+    await mount(); await fill(title(), 'Submitted'); await fill(price(), 'abc');
+    await clickText('Save changes'); await flush();
+    expect(mocks.error).toHaveBeenCalledWith('Fix 1 variant with errors before saving. Nothing was saved.');
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(title().value).toBe('Submitted');
+  });
+
+  it('accepts successful Save as baseline & locks the form while Save is pending', async () => {
     await mount(); await fill(title(), 'Submitted'); await fill(price(), '22.00');
     const pending = deferred<void>();
     mocks.patch.mockImplementationOnce(async (path: string, body: Record<string, unknown>) => { await pending.promise; return persist(path, body); });
-    await act(async () => { button('Save changes').click(); });
-    await fill(title(), 'Typed during save'); await fill(price(), '23.00');
+    await clickText('Save changes');
+    expect(isLocked()).toBe(true);
+    expect(title().matches(':disabled')).toBe(true); expect(description().matches(':disabled')).toBe(true);
+    expect(price().matches(':disabled')).toBe(true); expect(onHand().matches(':disabled')).toBe(true);
+    expect(button('Saving…').disabled).toBe(true);
     await act(async () => { pending.resolve(); }); await flush();
+    expect(isLocked()).toBe(false);
     expect(server().name).toBe('Submitted'); expect(server().variants[0]!.price).toBe(2200);
-    expect(title().value).toBe('Typed during save'); expect(price().value).toBe('23.00');
-    expect(button('Save changes').disabled).toBe(false);
-    await fill(title(), 'Submitted'); await fill(price(), '22.00');
+    expect(title().value).toBe('Submitted'); expect(price().value).toBe('22.00');
     expect(button('Save changes').disabled).toBe(true);
     await fill(title(), 'Saved next');
-    await act(async () => { button('Save changes').click(); }); await flush();
+    expect(button('Save changes').disabled).toBe(false);
+    await clickText('Save changes'); await flush();
     expect(button('Save changes').disabled).toBe(true);
     expect(title().value).toBe('Saved next');
   });
@@ -156,7 +213,7 @@ describe('Product draft hydration', () => {
     const old = structuredClone(server()); const pending = deferred<ProductDetail>();
     mocks.get.mockImplementationOnce(() => pending.promise);
     await act(async () => { void client.invalidateQueries({ queryKey: key() }); }); await flush();
-    await act(async () => { button('Save changes').click(); }); await flush();
+    await clickText('Save changes'); await flush();
     expect(button('Save changes').disabled).toBe(true);
     await act(async () => { pending.resolve(old); }); await flush();
     expect(title().value).toBe('Saved title');
@@ -169,7 +226,7 @@ describe('Product draft hydration', () => {
     const old = structuredClone(server());
     const write = deferred<void>(); const read = deferred<ProductDetail>();
     mocks.patch.mockImplementationOnce(async (path: string, body: Record<string, unknown>) => { await write.promise; return persist(path, body); });
-    await act(async () => { button('Save changes').click(); });
+    await clickText('Save changes');
     mocks.get.mockImplementationOnce(() => read.promise);
     await act(async () => { void client.invalidateQueries({ queryKey: key() }); }); await flush();
     await act(async () => { write.resolve(); }); await flush();
@@ -183,7 +240,7 @@ describe('Product draft hydration', () => {
     await mount(); await fill(title(), 'Submitted'); await fill(price(), '22.00');
     const oldStoreProduct = server(); const write = deferred<void>();
     mocks.patch.mockImplementationOnce(async (_path: string, body: Record<string, unknown>) => { await write.promise; Object.assign(oldStoreProduct, body); return {}; });
-    await act(async () => { button('Save changes').click(); });
+    await clickText('Save changes');
     localStorage.setItem('sr_admin_store', 'second'); mocks.store = { slug: 'second', currency: 'USD' };
     await act(async () => { render(); }); await flush();
     await fill(title(), 'New store edit');
@@ -198,7 +255,7 @@ describe('Product draft hydration', () => {
     await mount(); await fill(title(), 'Submitted'); await fill(price(), '22.00');
     const oldStoreProduct = server(); const write = deferred<void>();
     mocks.patch.mockImplementationOnce(async (_path: string, body: Record<string, unknown>) => { await write.promise; Object.assign(oldStoreProduct, body); return {}; });
-    await act(async () => { button('Save changes').click(); });
+    await clickText('Save changes');
     const reads = mocks.get.mock.calls.length;
     // Leave the editor mounted: only the transport's active-store value changes.
     localStorage.setItem('sr_admin_store', 'second');
@@ -210,10 +267,13 @@ describe('Product draft hydration', () => {
     expect(title().value).toBe('Second store'); expect(server().variants[0]!.price).toBe(1000);
   });
 
-  it.each([{ index: 0, kind: 'featured image' }, { index: 1, kind: 'gallery image' }])('stops $kind upload attachment when transport store switches before cleanup', async ({ index }) => {
+  // Featured: the product has no main image yet, so the upload is attached to the gallery and then made main.
+  const noMain = () => { Object.assign(server(), { featuredAssetId: null, assetPath: null, images: [] }); };
+  it.each([{ kind: 'featured image' }, { kind: 'gallery image' }])('stops $kind upload attachment when transport store switches before cleanup', async ({ kind }) => {
+    if (kind === 'featured image') noMain();
     await mount(); const upload = deferred<{ id: string }>();
     mocks.uploadAsset.mockReturnValueOnce(upload.promise);
-    await pickImage(index);
+    await pickImage(0);
     expect(mocks.uploadAsset).toHaveBeenCalledTimes(1);
     const reads = mocks.get.mock.calls.length;
     localStorage.setItem('sr_admin_store', 'second');
@@ -224,15 +284,16 @@ describe('Product draft hydration', () => {
     mocks.store = { slug: 'second', currency: 'USD' };
     await act(async () => { render(); }); await flush();
     expect(title().value).toBe('Second store');
-    expect(server().featuredAssetId).toBe('image'); expect(server().images).toEqual([]);
+    expect(server().featuredAssetId).toBe('image');
   });
 
-  it.each([{ index: 0, kind: 'featured image' }, { index: 1, kind: 'gallery image' }])('ignores $kind attachment completion after store navigation', async ({ index }) => {
+  it.each([{ kind: 'featured image' }, { kind: 'gallery image' }])('ignores $kind attachment completion after store navigation', async ({ kind }) => {
+    if (kind === 'featured image') noMain();
     await mount(); const attachment = deferred<unknown>();
-    if (index === 0) mocks.patch.mockReturnValueOnce(attachment.promise);
+    if (kind === 'featured image') mocks.patch.mockReturnValueOnce(attachment.promise);
     else mocks.post.mockReturnValueOnce(attachment.promise);
-    await pickImage(index); await flush();
-    if (index === 0) expect(mocks.patch).toHaveBeenCalledWith('/products/p1', { featuredAssetId: 'uploaded' });
+    await pickImage(0); await flush();
+    if (kind === 'featured image') expect(mocks.patch).toHaveBeenCalledWith('/products/p1', expect.objectContaining({ featuredAssetId: 'uploaded' }));
     else expect(mocks.post).toHaveBeenCalledWith('/products/p1/assets', { assetId: 'uploaded' });
     localStorage.setItem('sr_admin_store', 'second'); mocks.store = { slug: 'second', currency: 'USD' };
     await act(async () => { render(); }); await flush();
@@ -241,7 +302,7 @@ describe('Product draft hydration', () => {
     await act(async () => { attachment.resolve({}); }); await flush();
     expect(title().value).toBe('New store edit'); expect(mocks.get).toHaveBeenCalledTimes(reads);
     expect(mocks.success).not.toHaveBeenCalled(); expect(mocks.error).not.toHaveBeenCalled();
-    expect(client.getQueryState(['product', 'first', 'p1'])!.isInvalidated).toBe(false);
+    expect(mocks.patch).toHaveBeenCalledTimes(kind === 'featured image' ? 1 : 0);
   });
 
   it('resets for product & store identity changes, ignoring previous identity responses', async () => {
