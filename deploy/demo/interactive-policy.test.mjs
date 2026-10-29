@@ -100,8 +100,10 @@ test('shipping quote: POST /v1/shop/shipping-methods takes only a bounded countr
     assert.equal(interactiveBody(p,{...body,...bad}),false,JSON.stringify(bad));
 });
 test('storefront server functions: only the US ZIP lookup, by its exact build hash',()=>{
-  const manifest={symbols:{s_zip:{displayName:'postal-lookup-server.tsx_lookupUsPostalServer_server'},s_track:{displayName:'track-order.service.ts_trackOrderServer_server'},
-    s_contact:{displayName:'content.tsx_submitFormServer_server'},s_aff:{displayName:'index.tsx_fetchAffiliateStatsServer_server'}}};
+  // Shape of a real dist-demo/q-manifest.json entry: keyed s_<hash>, and the browser sends the bare `hash` as ?qfunc=.
+  const manifest={symbols:{s_s_zip:{displayName:'postal-lookup-server.tsx_lookupUsPostalServer_server',hash:'s_zip'},s_s_track:{displayName:'track-order.service.ts_trackOrderServer_server',hash:'s_track'},
+    s_s_contact:{displayName:'content.tsx_submitFormServer_server',hash:'s_contact'},s_s_aff:{displayName:'index.tsx_fetchAffiliateStatsServer_server',hash:'s_aff'},
+    s_nohash:{displayName:'postal-lookup-server.tsx_lookupUsPostalServer_server'}}};
   const allowed=storefrontServerFunctionHashes(manifest);
   assert.deepEqual([...allowed],['s_zip']);
   assert.deepEqual([...storefrontServerFunctionHashes({})],[]);

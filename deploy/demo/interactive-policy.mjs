@@ -233,7 +233,7 @@ export function interactiveMutationAllowed(headers, host, auth, csrf) {
 // storefront POST (track order, contact form, affiliate stats, route actions) stays denied.
 export const storefrontServerFunctions = ['postal-lookup-server.tsx_lookupUsPostalServer_server'];
 export function storefrontServerFunctionHashes(manifest) {
-  return new Set(Object.entries(manifest?.symbols ?? {}).filter(([, symbol]) => storefrontServerFunctions.includes(symbol?.displayName)).map(([hash]) => hash));
+  return new Set(Object.entries(manifest?.symbols ?? {}).filter(([, symbol]) => storefrontServerFunctions.includes(symbol?.displayName) && typeof symbol.hash === 'string').map(([, symbol]) => symbol.hash));
 }
 export function storefrontServerFunctionAllowed(method, url, headers, allowed) {
   const hash = url.searchParams.get('qfunc');
