@@ -49,7 +49,7 @@ const directory=resolve(fileURLToPath(new URL('.',import.meta.url)));
 // using the plain root-mounted packages/admin/dist, untouched.
 const adminRoot=resolve(directory,'../../packages/admin/dist-demo');
 // Storefront server$() hashes a visitor may call (interactive-policy.mjs storefrontServerFunctions), from the demo
-// storefront build that ships in this same tree. A missing manifest allows none: the ZIP lookup just stays manual.
+// storefront build that ships in this same tree. A missing manifest allows none: postcode lookup just stays manual.
 const storefrontFunctions=storefrontServerFunctionHashes(await readFile(resolve(directory,'../../packages/storefront/dist-demo/q-manifest.json'),'utf8').then(JSON.parse).catch(error=>{console.error('Storefront q-manifest unreadable; no storefront server functions allowed:',error.message);return {};}));
 // The old vanilla /shop demo (interactive-shop.html/js/css) is retired — the
 // generic Qwik storefront (packages/storefront) owns /shop now. demo-admin.js
@@ -178,7 +178,7 @@ const server=createServer(async(req,res)=>{
       if(!sameOrigin||!visitor){visitor=await provision();if(sameOrigin)setVisitorCookies(res,visitor,url);}
       return json(200,{...(body.returnToken===true?{token:visitor.token}:{}),csrfToken:visitor.csrf,admin:{email:'admin'},stores:[{storeId:visitor.id,slug:visitor.slug,name:'Everyday Supply',currency:'USD',role:'manager'}]});
     }
-    // The US ZIP lookup (a storefront server$() call) is a same-origin, session-bound read of bundled data. Qwik's
+    // The postcode lookup (a storefront server$() call) is a same-origin, session-bound read. Qwik's
     // server-function fetch cannot carry the demo CSRF header, so it is admitted here, before the CSRF guard, by exact
     // build hash only; it never reaches /v1 or the visitor's store.
     if(storefrontServerFunctionAllowed(method,url,req.headers,storefrontFunctions)&&demoRouteTarget(url.pathname)==='storefront'){

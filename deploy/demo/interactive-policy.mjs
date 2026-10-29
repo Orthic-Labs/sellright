@@ -228,10 +228,11 @@ export function interactiveMutationAllowed(headers, host, auth, csrf) {
 }
 
 // Storefront server$() functions a visitor may POST to. Qwik names each by a build hash (`?qfunc=<hash>`, echoed in X-QRL),
-// so the allowed hashes are read from the storefront build's q-manifest.json by symbol name. Only the US ZIP lookup is
-// listed: it reads a dataset bundled into the server chunk and makes no API, database or network call. Every other
+// so the allowed hashes are read from the storefront build's q-manifest.json by symbol name. Only the postcode lookup is
+// listed: US codes come from a dataset bundled into the server chunk; GB/IN/other codes are looked up by the storefront
+// server from public postcode APIs (postal-lookup-core.ts). It never reaches /v1, the database or the visitor's store. Every other
 // storefront POST (track order, contact form, affiliate stats, route actions) stays denied.
-export const storefrontServerFunctions = ['postal-lookup-server.tsx_lookupUsPostalServer_server'];
+export const storefrontServerFunctions = ['postal-lookup-server.tsx_lookupPostalServer_server'];
 export function storefrontServerFunctionHashes(manifest) {
   return new Set(Object.entries(manifest?.symbols ?? {}).filter(([, symbol]) => storefrontServerFunctions.includes(symbol?.displayName) && typeof symbol.hash === 'string').map(([, symbol]) => symbol.hash));
 }
