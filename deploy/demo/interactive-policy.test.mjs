@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Writable} from 'node:stream';
-import {interactiveRequest, interactiveBody, sameOriginMutation, demoRouteTarget, allowedDemoHost, probeRequest, demoCheckoutBody, syntheticDemoAddress, forwardInteractiveResponse} from './interactive-policy.mjs';
+import {interactiveRequest, interactiveBody, sameOriginMutation, demoRouteTarget, allowedDemoHost, probeRequest, storefrontServerFunctionHashes, storefrontServerFunctionAllowed, demoCheckoutBody, syntheticDemoAddress, forwardInteractiveResponse} from './interactive-policy.mjs';
 test('demo exposes bounded commerce, never credentials, uploads or real gateway paths', () => {
   for (const path of ['/v1/admin/settings', '/v1/admin/staff', '/v1/admin/assets', '/v1/admin/webhooks', '/v1/admin/marketing/sync', '/v1/shop/orders/SR1/pay', '/v1/shop/orders/SR1/payment-intent', '/v1/admin/orders/export']) {
     for (const method of ['GET','POST','PATCH','DELETE']) assert.equal(interactiveRequest(method,path),false,path);
@@ -83,6 +83,41 @@ test('legacy estimate adapter keeps its cart-reference-only payload',()=>{
   assert.equal(interactiveBody(p,body),true);
   for(const extra of [{items:[{sku:'DEMO-NOTEBOOK',quantity:1}]},{shipCountry:'US'},{couponCodes:['WELCOME10']},{redeemPoints:1},{acceptedQuoteHash:'a'.repeat(64)}])
     assert.equal(interactiveBody(p,{...body,...extra}),false,JSON.stringify(extra));
+});
+test('shipping quote: POST /v1/shop/shipping-methods takes only a bounded country + demo-cart lines',()=>{
+  const p='/v1/shop/shipping-methods';
+  assert.equal(interactiveRequest('POST',p),true);
+  for(const method of ['PUT','PATCH','DELETE'])assert.equal(interactiveRequest(method,p),false,method);
+  assert.equal(interactiveRequest('POST','/v1/admin/shipping-methods'),false);
+  const body={country:'GB',items:[{sku:'DEMO-DESK-TRAY',quantity:2}]};
+  assert.equal(interactiveBody(p,body),true);
+  for(const ok of [{couponCodes:['WELCOME10']},{couponCode:'WELCOME10'},{redeemPoints:0},{country:'IN'},{items:Array.from({length:12},()=>({sku:'DEMO-NOTEBOOK',quantity:10}))}])
+    assert.equal(interactiveBody(p,{...body,...ok}),true,JSON.stringify(ok));
+  for(const bad of [{country:'gb'},{country:'GBR'},{country:undefined},{country:1},{items:[]},{items:undefined},{items:'x'},
+    {items:Array.from({length:13},()=>({sku:'DEMO-NOTEBOOK',quantity:1}))},{items:[{sku:'REAL-SKU',quantity:1}]},{items:[{sku:'DEMO-NOTEBOOK',quantity:0}]},
+    {items:[{sku:'DEMO-NOTEBOOK',quantity:11}]},{items:[{sku:'DEMO-NOTEBOOK',quantity:1,price:0}]},{couponCode:'<x>'},{couponCodes:['X'.repeat(33)]},{redeemPoints:-1},
+    {shipping:0},{email:'a@b.c'},{shippingAddress:{}}])
+    assert.equal(interactiveBody(p,{...body,...bad}),false,JSON.stringify(bad));
+});
+test('storefront server functions: only the US ZIP lookup, by its exact build hash',()=>{
+  const manifest={symbols:{s_zip:{displayName:'postal-lookup-server.tsx_lookupUsPostalServer_server'},s_track:{displayName:'track-order.service.ts_trackOrderServer_server'},
+    s_contact:{displayName:'content.tsx_submitFormServer_server'},s_aff:{displayName:'index.tsx_fetchAffiliateStatsServer_server'}}};
+  const allowed=storefrontServerFunctionHashes(manifest);
+  assert.deepEqual([...allowed],['s_zip']);
+  assert.deepEqual([...storefrontServerFunctionHashes({})],[]);
+  assert.deepEqual([...storefrontServerFunctionHashes(undefined)],[]);
+  const headers={'x-qrl':'s_zip','content-type':'application/qwik-json'};
+  const url=q=>new URL('https://demo.sellright.cc/checkout/'+q);
+  assert.equal(storefrontServerFunctionAllowed('POST',url('?qfunc=s_zip'),headers,allowed),true);
+  for(const hash of ['s_track','s_contact','s_aff','s_other'])
+    assert.equal(storefrontServerFunctionAllowed('POST',url('?qfunc='+hash),{...headers,'x-qrl':hash},allowed),false,hash);
+  assert.equal(storefrontServerFunctionAllowed('GET',url('?qfunc=s_zip'),headers,allowed),false);
+  assert.equal(storefrontServerFunctionAllowed('POST',url(''),headers,allowed),false);
+  assert.equal(storefrontServerFunctionAllowed('POST',url('?qfunc=s_zip'),{...headers,'x-qrl':'s_track'},allowed),false);
+  assert.equal(storefrontServerFunctionAllowed('POST',url('?qfunc=s_zip'),{'x-qrl':'s_zip','content-type':'application/json'},allowed),false);
+  // Route actions and GET-encoded server data ride on extra query keys; none are admitted.
+  for(const extra of ['&qaction=x','&qdata=x','&qfunc=s_track'])
+    assert.equal(storefrontServerFunctionAllowed('POST',url('?qfunc=s_zip'+extra),headers,allowed),false,extra);
 });
 test('the Host allowlist admits loopback, the public hostname and whatever address this process is bound to, nothing else',()=>{
   for(const host of ['localhost','127.0.0.1','demo.sellright.cc','172.22.0.1'])assert.equal(allowedDemoHost(host,'172.22.0.1'),true,host);

@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation,nativeDemoLogin,interactiveAuthHeaders,interactiveMutationAllowed,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,nativeDemoLogin,interactiveAuthHeaders,interactiveMutationAllowed,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,storefrontServerFunctionHashes,storefrontServerFunctionAllowed,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,resolveVisitorAuth,revokeVisitorSession,provisionVisitor,removeVisitor,cleanVisitors,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
 import {verifyDemoMigrations} from './migration-gate.mjs';
@@ -48,6 +48,9 @@ const directory=resolve(fileURLToPath(new URL('.',import.meta.url)));
 // The legacy read-only fallback (server.mjs, `run.mjs --read-only`) keeps
 // using the plain root-mounted packages/admin/dist, untouched.
 const adminRoot=resolve(directory,'../../packages/admin/dist-demo');
+// Storefront server$() hashes a visitor may call (interactive-policy.mjs storefrontServerFunctions), from the demo
+// storefront build that ships in this same tree. A missing manifest allows none: the ZIP lookup just stays manual.
+const storefrontFunctions=storefrontServerFunctionHashes(await readFile(resolve(directory,'../../packages/storefront/dist-demo/q-manifest.json'),'utf8').then(JSON.parse).catch(error=>{console.error('Storefront q-manifest unreadable; no storefront server functions allowed:',error.message);return {};}));
 // The old vanilla /shop demo (interactive-shop.html/js/css) is retired — the
 // generic Qwik storefront (packages/storefront) owns /shop now. demo-admin.js
 // is the only file this process still serves out of deploy/demo/ directly
@@ -99,9 +102,10 @@ function setVisitorCookies(res,visitor,url){
 // request yet — the browser hasn't seen the Set-Cookie response above this
 // call) is visible to the storefront's own SSR fetches on THIS same request,
 // not just the next one.
-function proxyToStorefront(req,res,cookie){
+function proxyToStorefront(req,res,cookie,body){
   return new Promise((done,fail)=>{
     const headers={...req.headers,host:`127.0.0.1:${STOREFRONT_PORT}`};
+    for(const name of Object.keys(headers))if(headers[name]===undefined)delete headers[name];
     if(cookie===undefined)delete headers.cookie;else headers.cookie=cookie;
     const upstream=httpRequest({host:'127.0.0.1',port:STOREFRONT_PORT,path:req.url,method:req.method,headers},upstreamRes=>{
       res.writeHead(upstreamRes.statusCode??502,upstreamRes.headers);
@@ -110,7 +114,7 @@ function proxyToStorefront(req,res,cookie){
       upstreamRes.on('error',fail);
     });
     upstream.on('error',fail);
-    req.pipe(upstream);
+    if(body===undefined)req.pipe(upstream);else upstream.end(body);
   });
 }
 async function bounded(visitor){
@@ -173,6 +177,17 @@ const server=createServer(async(req,res)=>{
       if(!sameOrigin&&(!nativeLogin||body.returnToken!==true))return json(403,{error:'Native demo login requires JSON and returnToken: true'});
       if(!sameOrigin||!visitor){visitor=await provision();if(sameOrigin)setVisitorCookies(res,visitor,url);}
       return json(200,{...(body.returnToken===true?{token:visitor.token}:{}),csrfToken:visitor.csrf,admin:{email:'admin'},stores:[{storeId:visitor.id,slug:visitor.slug,name:'Everyday Supply',currency:'USD',role:'manager'}]});
+    }
+    // The US ZIP lookup (a storefront server$() call) is a same-origin, session-bound read of bundled data. Qwik's
+    // server-function fetch cannot carry the demo CSRF header, so it is admitted here, before the CSRF guard, by exact
+    // build hash only; it never reaches /v1 or the visitor's store.
+    if(storefrontServerFunctionAllowed(method,url,req.headers,storefrontFunctions)&&demoRouteTarget(url.pathname)==='storefront'){
+      if(!sameOrigin||!visitor)return json(403,{error:'Same-origin demo session required'});
+      let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>2000)return json(413,{error:'Request too large'});chunks.push(chunk);}
+      const body=Buffer.concat(chunks);
+      const forwardCookie=[`sr_demo=${visitor.token}`,`sr_admin=${visitor.token}`,`sr_csrf=${visitor.csrf}`].join('; ');
+      try{return await proxyToStorefront({url:req.url,method,headers:{...req.headers,'content-length':String(body.length),'transfer-encoding':undefined}},res,forwardCookie,body);}
+      catch(e){console.error('Storefront proxy failed:',e.message);if(!res.headersSent)return json(502,{error:'Storefront is unavailable. Please retry shortly.'});res.end();return;}
     }
     const csrf=cookies(req.headers.cookie).sr_csrf;
     if(mutation&&!interactiveMutationAllowed(req.headers,url.host,auth,csrf))return json(403,{error:'Demo session or CSRF token is invalid'});

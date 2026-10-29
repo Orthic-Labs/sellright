@@ -36,7 +36,7 @@ export function interactiveRequest(method, path) {
     if (path.includes('/export')) return false;
     return reads.test(path) || featureReads.test(path) || shopReads.test(path);
   }
-  if (method === 'POST') return ['/v1/shop/cart', '/v1/shop/cart/estimate', '/v1/shop/checkout', '/v1/admin/promotions', '/v1/admin/products'].includes(path) ||
+  if (method === 'POST') return ['/v1/shop/cart', '/v1/shop/cart/estimate', '/v1/shop/shipping-methods', '/v1/shop/checkout', '/v1/admin/promotions', '/v1/admin/products'].includes(path) ||
     new RegExp(`^/v1/admin/products/${id}/variants$`).test(path) ||
     new RegExp(`^/v1/admin/orders/${id}/(refund|fulfill|cancel)$`).test(path) ||
     // Owner features. NOT allowed here: /v1/admin/reviews/{id} DELETE, loyalty
@@ -129,6 +129,12 @@ export function interactiveBody(path, body) {
   if (path === '/v1/admin/blog') return blogBody(body, false);
   if (new RegExp(`^/v1/admin/blog/${uuid}$`).test(path)) return blogBody(body, true);
   if(path==='/v1/shop/cart/estimate')return only(body,['cartToken','shippingMethodCode','couponCode'])&&/^[a-f0-9-]{36}$/.test(body.cartToken)&&['standard','express'].includes(body.shippingMethodCode)&&text(body.couponCode,32);
+  // Shipping quote for the cart drawer and checkout (storefront getShippingQuote): a priced read of the visitor's own store,
+  // no writes. Same SKU and quantity bounds as the cart it is quoted from.
+  if (path === '/v1/shop/shipping-methods') return only(body, ['country', 'items', 'couponCode', 'couponCodes', 'redeemPoints']) &&
+    typeof body.country === 'string' && /^[A-Z]{2}$/.test(body.country) && text(body.couponCode, 32) && optionalCouponCodes(body.couponCodes) && optionalRedeemPoints(body.redeemPoints) &&
+    Array.isArray(body.items) && body.items.length >= 1 && body.items.length <= 12 &&
+    body.items.every(line => only(line, ['sku', 'quantity']) && /^DEMO-[A-Z-]+$/.test(line.sku) && Number.isInteger(line.quantity) && line.quantity >= 1 && line.quantity <= 10);
   if (path === '/v1/admin/products') return only(body,['name','slug','description','status']) && text(body.name) && text(body.slug,100) && text(body.description,2000);
   if (/^\/v1\/admin\/products\/[^/]+\/variants$/.test(path)) return only(body,['sku','name','price','onHand']) && /^DEMO-[A-Z-]+$/.test(body.sku) && text(body.name) && Number.isInteger(body.price) && body.price>=0 && body.price<=100000 && Number.isInteger(body.onHand) && body.onHand>=0 && body.onHand<=1000;
   if (only(body,[]) && /^\/v1\/admin\/(products|variants|promotions)\/[^/]+$/.test(path)) return true;
@@ -219,6 +225,20 @@ export function interactiveMutationAllowed(headers, host, auth, csrf) {
   return !!(sameOrigin && auth.visitor && typeof csrf === 'string' && csrf &&
     headers['x-csrf-token'] === csrf &&
     createHash('sha256').update(csrf).digest('hex') === auth.visitor.config.csrfHash);
+}
+
+// Storefront server$() functions a visitor may POST to. Qwik names each by a build hash (`?qfunc=<hash>`, echoed in X-QRL),
+// so the allowed hashes are read from the storefront build's q-manifest.json by symbol name. Only the US ZIP lookup is
+// listed: it reads a dataset bundled into the server chunk and makes no API, database or network call. Every other
+// storefront POST (track order, contact form, affiliate stats, route actions) stays denied.
+export const storefrontServerFunctions = ['postal-lookup-server.tsx_lookupUsPostalServer_server'];
+export function storefrontServerFunctionHashes(manifest) {
+  return new Set(Object.entries(manifest?.symbols ?? {}).filter(([, symbol]) => storefrontServerFunctions.includes(symbol?.displayName)).map(([hash]) => hash));
+}
+export function storefrontServerFunctionAllowed(method, url, headers, allowed) {
+  const hash = url.searchParams.get('qfunc');
+  return method === 'POST' && !!hash && allowed.has(hash) && headers['x-qrl'] === hash &&
+    headers['content-type'] === 'application/qwik-json' && [...url.searchParams.keys()].join() === 'qfunc';
 }
 
 // Host header allowlist for the demo's own HTTP entry point. `bindHost` is
