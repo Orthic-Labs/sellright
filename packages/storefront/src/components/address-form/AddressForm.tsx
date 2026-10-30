@@ -308,6 +308,9 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		for (const field of fields) {
 			const el = document.getElementById(field) as HTMLInputElement | null;
 			if (el) el.value = '';
+			// The synced copy too: once the address was valid it holds the old value, and the task that mirrors it into
+			// the form (the checkout never sets hasUserInteracted) would put it straight back when the country lands.
+			if (shippingAddress[field]) shippingAddress[field] = '';
 		}
 		// A blanked required state shows its error now rather than at submit.
 		if ('province' in patch) {
