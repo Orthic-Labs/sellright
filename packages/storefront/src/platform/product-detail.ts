@@ -63,7 +63,9 @@ export async function modelsFromLive(set: readonly { key: string; slug: string }
 				if (!product) return null;
 				const r = await reviews(p.slug, { limit: 1 }).catch(() => null);
 				return buildModelProduct(product, { key: p.key, href: productPath(p.slug), ...liveProductMeta(product, r) });
-			} catch {
+			} catch (error) {
+				// detail() returns null for a real 404; a throw is the API failing. The page's own product must not turn into a 404.
+				if (p === set[0]) throw error;
 				return null;
 			}
 		}),
@@ -71,7 +73,7 @@ export async function modelsFromLive(set: readonly { key: string; slug: string }
 }
 
 /** The branded product page's detail. Status 404 for an invalid slug, an unknown product and a product with no variants. */
-export const useBrandProductDetail = routeLoader$(async ({ params, status, url }): Promise<BrandProductDetail | null> => {
+export const useBrandProductDetail = routeLoader$(async ({ params, status, url, headers }): Promise<BrandProductDetail | null> => {
 	if (!hasView('route.product')) return null;
 	const slug = productSlugOf(url.pathname, params);
 	if (slug === null) return null;
@@ -84,7 +86,14 @@ export const useBrandProductDetail = routeLoader$(async ({ params, status, url }
 	let models: (ModelProduct | null)[] | null = await modelsFromManifest(set);
 	if (!models) {
 		source = 'network';
-		models = await modelsFromLive(set);
+		try {
+			models = await modelsFromLive(set);
+		} catch {
+			// The API failed (not a 404): temporary, so 503 with Retry-After rather than "product not found".
+			headers.set('Retry-After', '30');
+			status(503);
+			return MISSING;
+		}
 	}
 	const product = models[0];
 	if (!product || product.variants.length === 0) {

@@ -63,7 +63,7 @@ export async function productFromManifest(slug: string, read = readCatalogGenera
   }
 }
 
-export const useProductLoader = routeLoader$(async ({ params, fail, status, url }) => {
+export const useProductLoader = routeLoader$(async ({ params, fail, status, url, headers }) => {
   // Brand views PR2: a branded product page has its own loader (useBrandProductDetail), and a route that is not the configured
   // product path (routes.json productPath) serves no product. Neither case does any I/O here.
   if (hasView('route.product') || url.pathname.split('/')[1] !== PRODUCT_PREFIX) return null;
@@ -99,9 +99,12 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url 
     const reviews = await reviewsRead;
     return { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
   } catch (error) {
+    // A real 404 came back as null above; anything thrown is the API failing (429, 5xx, network). Answer 503 so a brief outage
+    // never tells crawlers the product is gone (#408: demo PDPs returned 404 while its API was rate-limiting).
     console.error('Product loader error:', error);
-    status(404);
-    return fail(404, { message: `Product not found: ${slug}` });
+    headers.set('Retry-After', '30');
+    status(503);
+    return fail(503, { message: 'Product temporarily unavailable' });
   }
 }, PAGE_LOADER_OPTIONS);
 
