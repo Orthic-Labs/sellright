@@ -5,7 +5,7 @@ import { isServer } from '@qwik.dev/core/build';
 import { server$, useLocation } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
-import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
+import { mountTurnstileOnIntent, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { useFeaturedProducts } from '~/platform/home';
 import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/platform/blog';
 import { DECLARED_CONTENT } from '~/platform/brand-data';
@@ -39,8 +39,9 @@ export function useNewsletterForm() {
 	const ctl = useStore<ActionCtl>({ disposed: false, admitted: [] });
 
 	useVisibleTask$(({ cleanup }) => {
-		cleanup(() => { ctl.disposed = true; });
-		mountTurnstile('nl-turnstile', (t) => { token.value = t; }, () => { token.value = ''; });
+		// P7/V34: the Turnstile script loads on newsletter intent (focus/tap/typing in its form), not on page visibility.
+		const unmount = mountTurnstileOnIntent('nl-turnstile', (t) => { token.value = t; }, () => { token.value = ''; });
+		cleanup(() => { ctl.disposed = true; unmount(); });
 	});
 
 	const submit = $((rawEmail: string, rawHoneypot: string): Promise<FormResult> => {

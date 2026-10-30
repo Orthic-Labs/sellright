@@ -25,8 +25,9 @@ import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/
 import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { CACHE_POLICY_VERSION, resolveRouteCacheProfile } from '~/config/route-cache-policy';
-import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
+import { CACHE_POLICY_VERSION, resolveRouteCacheProfile, vetoEdgeCache } from '~/config/route-cache-policy';
+import { sellright } from '~/sellright/client';
+import { srShopIdentity, srErrorStatus, type SrMaintenanceStatus } from '~/utils/sellright';
 import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
 import { theme, identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
@@ -56,9 +57,10 @@ const PREVIEW_TOKEN_COOKIE = 'sr_preview_token';
  * "coming soon" page instead of the real storefront chrome (plan §1.5): an
  * unpublished store, viewed by someone without a valid preview token.
  */
-export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, status }) => {
+export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, status, headers }) => {
 	const queryToken = query.get('preview_token') ?? undefined;
 	if (queryToken) {
+		vetoEdgeCache(headers, 'preview');
 		// Persist it (30 days) so following the link once is enough for the rest
 		// of the visit/session — the API re-verifies the hash on every request
 		// regardless, this cookie is purely "don't make me paste it on every page".
@@ -75,7 +77,9 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 		}
 		// API unreachable (offline dev, demo wrapper not up yet, transient error)
 		// — fail OPEN to the static theme rather than showing "coming soon" for
-		// an outage that has nothing to do with publish state.
+		// an outage that has nothing to do with publish state. V39 / N10: that
+		// degraded page is never edge-cached (the publish gate is unknown).
+		vetoEdgeCache(headers, 'identity-fallback');
 		return { identity: identityFromStaticTheme(), notPublished: false };
 	}
 }, {
@@ -106,7 +110,19 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
  * for anything that gates whether a page is even servable) so a maintenance
  * window that ends mid-visit clears on the visitor's very next navigation.
  */
-export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
+export const useMaintenanceLoader = routeLoader$(async ({ headers }): Promise<SrMaintenanceStatus> => {
+	// V39 / N10: rendering still fails OPEN on an unreachable API (an outage must not masquerade as maintenance), but a response
+	// whose gate state is unknown, or that shows the maintenance screen, is never edge-cached.
+	try {
+		const { data } = await sellright().GET('/v1/maintenance', {});
+		const status = data as SrMaintenanceStatus;
+		if (status.maintenance !== false) vetoEdgeCache(headers, 'maintenance');
+		return status;
+	} catch {
+		vetoEdgeCache(headers, 'maintenance-unknown');
+		return { maintenance: false };
+	}
+});
 
 /** Resolve imported credentials before SSR can paint a signed-out account state. */
 export const useAuthLoader = routeLoader$(async ({ cookie, headers, url, sharedMap }) => {
@@ -121,6 +137,7 @@ export const useAuthLoader = routeLoader$(async ({ cookie, headers, url, sharedM
 	}
 	try {
 		const data = await bootstrapCustomer(headers, sharedMap);
+		vetoEdgeCache(headers, 'authenticated');
 		return { isAuthenticated: true, countryCode, customer: {
 			id: data.id, firstName: data.firstName ?? '', lastName: data.lastName ?? '', emailAddress: data.email,
 		} };

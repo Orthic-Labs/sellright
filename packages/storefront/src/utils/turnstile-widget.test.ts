@@ -44,3 +44,47 @@ describe('scoped Turnstile lifecycle', () => {
 		expect(render).not.toHaveBeenCalled();
 	});
 });
+
+describe('mountTurnstileOnIntent (P7/V34)', () => {
+	const scripts = () => document.querySelectorAll('script[src*="challenges.cloudflare.com/turnstile"]').length;
+
+	it('loads nothing until the shopper engages the newsletter form, then mounts once', async () => {
+		vi.stubEnv('VITE_TURNSTILE_SITE_KEY', 'site-key');
+		document.body.innerHTML = '<main><a id="other" href="#">x</a><section id="nl"><input id="email" type="email"><div id="nl-turnstile"></div></section></main>';
+		const { mountTurnstileOnIntent } = await import('./turnstile-widget');
+		const cleanup = mountTurnstileOnIntent('nl-turnstile', vi.fn(), vi.fn());
+		expect(scripts()).toBe(0);
+		document.getElementById('other')!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+		expect(scripts()).toBe(0);
+		document.getElementById('email')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+		expect(scripts()).toBe(1);
+		document.getElementById('email')!.dispatchEvent(new Event('input', { bubbles: true }));
+		expect(scripts()).toBe(1);
+		cleanup();
+	});
+
+	it('uses the enclosing <form> as the intent region and works for a container rendered later', async () => {
+		vi.stubEnv('VITE_TURNSTILE_SITE_KEY', 'site-key');
+		const { mountTurnstileOnIntent } = await import('./turnstile-widget');
+		const cleanup = mountTurnstileOnIntent('nl-turnstile', vi.fn(), vi.fn());
+		document.body.innerHTML = '<form><button id="go" type="button">go</button><div id="nl-turnstile"></div></form>';
+		document.getElementById('go')!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+		expect(scripts()).toBe(1);
+		cleanup();
+	});
+
+	it('cleanup before intent removes the listeners; no site key is a no-op', async () => {
+		vi.stubEnv('VITE_TURNSTILE_SITE_KEY', 'site-key');
+		document.body.innerHTML = '<section><input id="email"><div id="nl-turnstile"></div></section>';
+		const { mountTurnstileOnIntent } = await import('./turnstile-widget');
+		mountTurnstileOnIntent('nl-turnstile', vi.fn(), vi.fn())();
+		document.getElementById('email')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+		expect(scripts()).toBe(0);
+		vi.resetModules();
+		vi.stubEnv('VITE_TURNSTILE_SITE_KEY', '');
+		const fresh = await import('./turnstile-widget');
+		fresh.mountTurnstileOnIntent('nl-turnstile', vi.fn(), vi.fn());
+		document.getElementById('email')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+		expect(scripts()).toBe(0);
+	});
+});

@@ -62,7 +62,8 @@ export function isSelectionOutOfStock(
   return !isVariantPurchasable(selected);
 }
 
-/** Values available for groupIndex given prior selections, stock-filtered.
+/** Values of groupIndex that some purchasable variant pairs with every OTHER group's current choice (unchosen groups do not
+ *  constrain), so options can be picked in any order (#408). With no choices it is every value any purchasable variant has.
  *  LOCKED stock rule: every variant needs a live `inStock === true`; the
  *  pre-order flag never makes an out-of-stock variant selectable. */
 export function availableForGroup(
@@ -75,9 +76,10 @@ export function availableForGroup(
   for (const v of variants) {
     if (!v.options) continue;
     let ok = true;
-    for (let i = 0; i < groupIndex; i++) {
+    for (let i = 0; i < groups.length; i++) {
+      if (i === groupIndex) continue;
       const sel = selected[i];
-      if (!sel) { ok = false; break; }
+      if (!sel) continue;
       const opt = v.options.find(o => o.group?.name === groups[i].groupName);
       if (opt?.name !== sel) { ok = false; break; }
     }
@@ -87,6 +89,25 @@ export function availableForGroup(
     if (opt) out.add(opt.name);
   }
   return out;
+}
+
+/** The selection after choosing `value` in `groupIndex` (#408, any order). Other choices that some purchasable variant still pairs
+ *  with the new value are kept; the rest are cleared, so picking an option marked unavailable for the current choices swaps to a
+ *  combination that exists instead of leaving an impossible selection. */
+export function selectOptionValue(
+  variants: CatalogVariant[],
+  groups: { groupName: string; values: string[] }[],
+  selected: (string | null)[],
+  groupIndex: number,
+  value: string,
+): (string | null)[] {
+  const next = groups.map((_, i) => (i === groupIndex ? value : (selected[i] ?? null)));
+  for (let j = 0; j < groups.length; j++) {
+    if (j === groupIndex || !next[j]) continue;
+    const pair: (string | null)[] = groups.map((_, i) => (i === groupIndex ? value : i === j ? next[j] : null));
+    if (!availableForGroup(variants, groups, j, pair).has(next[j]!)) next[j] = null;
+  }
+  return next;
 }
 
 /** #398: the price an option would quote if picked now: the variant with this value in `groupIndex` and the shopper's current

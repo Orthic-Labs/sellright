@@ -64,6 +64,10 @@ export const CartProvider = component$(() => {
       cartState.cart = CartService.getCart();
       // Paint the last known count at once; the bootstrap read below replaces it.
       cartState.lastKnownQuantity = CartService.lastKnownQuantity();
+      // V27: a document loaded AT checkout reads the cart once, at checkout entry (`refreshCartLive`): this boot
+      // read and the entry read were the same live GET back to back on the same page load. Only the boot is skipped;
+      // the entry read is the LOCKED live check and always runs.
+      if (deferBootToCheckoutEntry(typeof location === 'undefined' ? '' : location.pathname)) return;
       CartService.bootstrap()
         .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
@@ -145,12 +149,39 @@ export function cartErrorMessage(error: unknown, fallback: string): string {
   return error instanceof CartError && error.message ? error.message : fallback;
 }
 
+/** V27: the checkout page's own path (not confirmation, alias seeds or the payment redirect). */
+export const isCheckoutEntryPath = (pathname: string): boolean => pathname === '/checkout' || pathname === '/checkout/';
+
+/** Set by the provider when it left this document's first cart read to checkout entry; consumed (once) by that entry.
+ *  Object holder so the minifier cannot fold it. Not a cache: it holds no cart data, only "nobody has read yet". */
+const checkoutBoot: { deferred: boolean } = { deferred: false };
+
+/** Provider side of V27: on a fresh document at the checkout path, skip the boot read and mark it for checkout entry. */
+export function deferBootToCheckoutEntry(pathname: string): boolean {
+  if (!isCheckoutEntryPath(pathname)) return false;
+  checkoutBoot.deferred = true;
+  return true;
+}
+
+/** Test seam: forget a deferred boot. */
+export function resetCheckoutBootForTest(): void {
+  checkoutBoot.deferred = false;
+}
+
 export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
   if (cartState.hasLoadedOnce) return;
+  // Someone else (e.g. a cart open) booted first: checkout entry then makes its own live read after this boot (V27).
+  checkoutBoot.deferred = false;
   const result = await CartService.bootstrap();
   applyResult(cartState, result);
   cartState.hasLoadedOnce = true;
 });
+
+/** V27: checkout entry asks whether the provider left this document's boot to it. When true, the entry skips
+ *  `loadCartIfNeeded` and its `refreshCartLive` IS the boot (one live GET instead of two identical ones). */
+export function isBootDeferredToCheckoutEntry(cartState: { hasLoadedOnce: boolean }): boolean {
+  return checkoutBoot.deferred && !cartState.hasLoadedOnce;
+}
 
 /** Live stock/price/coupon refresh — LOCKED to fire on cart open, checkout
  *  entry, and pre-submit. No cache, no TTL, no debounce, ever. */
@@ -176,14 +207,22 @@ export const refreshCartStock = $(async (cartState: CartContextState) => {
  *  5xx): the mirror then proves nothing, and the caller must not pick the normal checkout from it. A classified
  *  outcome (cart gone / merged / converted) is `'ok'` — the mirror already carries the answer. */
 export const refreshCartLive = $(async (cartState: CartContextState): Promise<'ok' | 'failed'> => {
+  // V27: on a document loaded at checkout the provider skipped its boot read; this live read is the boot
+  // (`CartService.bootstrap()`: legacy-intent migration, then the same live GET). Consumed once; every later call, and
+  // every call on any other document, is the plain live read. Never a reused result or promise.
+  const boot = isBootDeferredToCheckoutEntry(cartState);
+  checkoutBoot.deferred = false;
   try {
-    const res = await CartService.refresh();
+    const res = boot ? await CartService.bootstrap() : await CartService.refresh();
     applyResult(cartState, res);
+    if (boot) cartState.hasLoadedOnce = true;
     return 'ok';
   } catch (error) {
     console.error('CartContext: Failed to read the live cart:', error);
     reportError(cartState, error, 'Failed to load cart');
     return isDefinitiveCartFailure(error) ? 'ok' : 'failed';
+  } finally {
+    if (boot) cartState.isLoading = false;
   }
 });
 

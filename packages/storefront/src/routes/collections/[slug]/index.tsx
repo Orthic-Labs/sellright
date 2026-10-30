@@ -15,15 +15,22 @@ import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { siteUrl, theme } from '~/theme/theme.config';
 import { productPath } from '~/platform/product-path';
+import { COLLECTION_PAGE_SIZE, collectionPageCount, collectionPageParam } from './pagination';
 
-export const useCollectionLoader = routeLoader$(async ({ params, status }) => {
-  const collection = await fetchCollectionDetail(params.slug, { pageSize: 60 });
-  if (!collection) {
+export const useCollectionLoader = routeLoader$(async ({ params, status, query }) => {
+  const page = collectionPageParam(query.get('page'));
+  if (page === null) {
+    status(404);
+    return null;
+  }
+  const collection = await fetchCollectionDetail(params.slug, { page, pageSize: COLLECTION_PAGE_SIZE });
+  // A page past the end is a 404 (page 1 of an empty collection still renders its empty state).
+  if (!collection || (page > 1 && page > collectionPageCount(collection.total, COLLECTION_PAGE_SIZE))) {
     status(404);
     return null;
   }
   return collection;
-});
+}, { search: ['page'] });
 
 export default component$(() => {
   const collection = useCollectionLoader();
@@ -73,6 +80,17 @@ export default component$(() => {
           ))}
         </div>
       )}
+      {collectionPageCount(c.total, COLLECTION_PAGE_SIZE) > 1 && (
+        <nav class="mt-10 flex items-center justify-between gap-4" aria-label="Collection pages">
+          {c.page > 1 ? (
+            <Link href={c.page === 2 ? `/collections/${c.slug}/` : `/collections/${c.slug}/?page=${c.page - 1}`} rel="prev" class="btn-primary inline-flex w-auto px-6">Previous</Link>
+          ) : <span />}
+          <span class="text-[var(--color-text-muted,#71717a)]">Page {c.page} of {collectionPageCount(c.total, COLLECTION_PAGE_SIZE)}</span>
+          {c.page < collectionPageCount(c.total, COLLECTION_PAGE_SIZE) ? (
+            <Link href={`/collections/${c.slug}/?page=${c.page + 1}`} rel="next" class="btn-primary inline-flex w-auto px-6">Next</Link>
+          ) : <span />}
+        </nav>
+      )}
     </div>
   );
 });
@@ -90,8 +108,9 @@ export const head = ({ resolveValue, params }: any) => {
   return createSEOHead({
     title: collection.seoTitle || collection.name,
     description: collection.seoDescription || collection.description || `Shop ${collection.name} at ${theme.storeName}.`,
-    canonical: `${siteUrl}/collections/${params.slug}/`,
-    ogUrl: `${siteUrl}/collections/${params.slug}/`,
+    // Each page is its own canonical URL (page 1 has no query).
+    canonical: `${siteUrl}/collections/${params.slug}/${collection.page > 1 ? `?page=${collection.page}` : ''}`,
+    ogUrl: `${siteUrl}/collections/${params.slug}/${collection.page > 1 ? `?page=${collection.page}` : ''}`,
     schemas: [
       breadcrumbSchema,
       {

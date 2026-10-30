@@ -25,10 +25,14 @@ export const generateResponsiveSources = (src: string, widths: number[] = [320, 
 
   // Map widths to appropriate hosted-asset presets
   // NOTE: w= param is ignored by PresetOnlyStrategy — dimensions come from preset only
+  // Presets size the LONG edge (card 400, small 640, medium 1024, large 1280, xl 1600). For the 4:5 product photos that is a
+  // real width of 320/512/819/1024/1280, so the width descriptors used by RESPONSIVE_CONFIGS are those real widths: labelling
+  // medium "640w" made a 375px slot at 2x (750px) pick large when medium (819px) already covers it.
   const getPresetForWidth = (width: number) => {
     if (width <= 160) return 'thumb';
-    if (width <= 320) return 'small';
-    if (width <= 640) return 'medium';
+    if (width <= 320) return 'card';
+    if (width <= 512) return 'small';
+    if (width <= 819) return 'medium';
     if (width <= 1280) return 'large';
     if (width <= 1600) return 'xl';
     if (width <= 2048) return 'xxl';
@@ -78,17 +82,18 @@ export const generateResponsiveSources = (src: string, widths: number[] = [320, 
 
 // Predefined responsive configurations for common use cases
 export const RESPONSIVE_CONFIGS = {
-  // Product detail main image - capped at large/xl to avoid slow AVIF transforms (xxl=6s, ultra=8s cold)
+  // Product detail main image - capped at large (1024w real) to avoid slow AVIF transforms (xxl=6s, ultra=8s cold).
+  // 512/819/1024 = small/medium/large real widths of a 4:5 photo; a 375px slot at 2x (750px) now gets medium, not large.
   productMain: {
-    widths: [640, 1280],
-    sizes: '(max-width: 768px) 100vw, 1280px'
+    widths: [512, 819, 1024],
+    sizes: '(max-width: 768px) 100vw, 1024px'
   },
-  // Product card images - Added retina support
+  // Product card images: 512 = small, 819 = medium (real widths of a 4:5 photo; card slot is object-cover 3:4, ~1.07x zoom)
   productCard: {
-    widths: [320, 640], // Optimized for actual display size (~319px) with 2x density
+    widths: [512, 819],
     sizes: '(max-width: 768px) 50vw, 320px'
   },
-  // Thumbnail images - Added retina support
+  // Thumbnail images - Added retina support (160 = thumb, 320 = card)
   thumbnail: {
     widths: [160, 320], // Added 2x density for crisp thumbnails
     sizes: '160px'

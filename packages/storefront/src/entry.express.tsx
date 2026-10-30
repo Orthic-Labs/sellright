@@ -6,14 +6,14 @@ import {
 } from"@qwik.dev/router/middleware/node";
 import"dotenv/config";
 import express from"express";
-import { randomBytes } from"node:crypto";
+import { createHash, randomBytes } from"node:crypto";
 import { join, dirname, basename, posix } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
-import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
+import { NO_STORE_CACHE_CONTROL, createEdgeHtmlMiddleware, edgeHtmlCacheEnabled } from"./config/route-cache-policy";
 import { snapshotGuard } from"./utils/snapshot-guard";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
@@ -235,6 +235,9 @@ export const neverServedFromDisk = (rawPath: string): boolean => {
 };
 const rootStatic = express.static(distDir, {
   index: false, // Pages need fresh loaders and the per-request CSP nonce.
+  // V33: root files (favicon, icons, og images, IndexNow/verification files) are not content-hashed, so no `immutable`;
+  // one hour bounds how long a replaced file lingers. q-manifest.json and root scripts keep their revalidate rule below.
+  maxAge: '1h',
   redirect: false,
   dotfiles: 'allow',
   setHeaders: (res, path) => {
@@ -254,6 +257,15 @@ app.use((_req, res, next) => {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
   next();
 });
+
+// P4b (config/route-cache-policy.ts "HTML edge policy"): with SELLRIGHT_EDGE_HTML_CACHE=1, an anonymous request for a
+// stock-free content document is rendered into a buffer; if the finished response passes the response checks, its CSP nonce is
+// replaced by sha256 hashes of the exact inline scripts and it is marked EDGE_HTML_CACHE_CONTROL. Anything else (or any doubt:
+// veto, Set-Cookie, non-200, oversize) leaves the no-store default and the nonce CSP untouched. Off by default.
+app.use(createEdgeHtmlMiddleware({
+  enabled: edgeHtmlCacheEnabled(process.env),
+  sha256Base64: (text) => createHash('sha256').update(text, 'utf8').digest('base64'),
+}));
 
 // URL canonicalisation for public sections (STOREFRONT_CANONICAL_SECTIONS, default OFF). It sits after the snapshot guard
 // (documents and route data skip the static handlers above and are never redirected: they carry a file extension) and after

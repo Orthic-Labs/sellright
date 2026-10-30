@@ -7,6 +7,7 @@ import viteCompression from 'vite-plugin-compression';
 import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
 import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
+import { preloadGraphPlugin } from './src/platform/preload-graph';
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -118,6 +119,9 @@ export default defineConfig((config) => {
           type: 'smart',
         },
       }),
+      // P7/V30: the rc.3 preloader has no probability cut-off and fetched ~410 bundles per page after load by following
+      // lazy-QRL edges of the bundle graph. Keep static imports and route/symbol edges only (src/platform/preload-graph.ts).
+      preloadGraphPlugin(),
       tsconfigPaths(),
       imagetools({
         // Merge defaults INTO the caller's params — never replace them.

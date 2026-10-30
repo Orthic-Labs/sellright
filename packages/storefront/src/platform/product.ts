@@ -133,7 +133,9 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   let imagePreloadLinks: any[] = [];
   if (product?.images?.[0]) {
     imagePreloadLinks.push(
-      ...generateImagePreloadLinks(product.images[0], 'productMain', ['avif', 'webp']),
+      // One preload only (V32): avif + webp preloads both download in a browser that supports both. The <picture> avif source
+      // uses the identical URL set, so the preload is reused; webp-only browsers simply skip it.
+      ...generateImagePreloadLinks(product.images[0], 'productMain', ['avif']),
     );
   }
 

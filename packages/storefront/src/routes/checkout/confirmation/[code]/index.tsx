@@ -40,7 +40,7 @@ const ConfirmationPage = component$(() => {
 	useVisibleTask$(async ({ cleanup }) => {
 		// Abort in-flight reads and stop polling when the page unmounts —
 		// otherwise a shopper who navigates away leaves a loop re-reading the
-		// order (and writing state into a dead component) for up to ~12s.
+		// order (and writing state into a dead component) for up to ~12s (see CONFIRMATION_POLL_DELAYS_MS).
 		const ac = new AbortController();
 		cleanup(() => ac.abort());
 		try {

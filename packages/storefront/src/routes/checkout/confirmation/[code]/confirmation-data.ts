@@ -109,10 +109,21 @@ export const sleepAbortable = (ms: number, signal: AbortSignal): Promise<void> =
     signal.addEventListener('abort', done, { once: true });
   });
 
+/** V29: re-read delays while an order is still PendingPayment — short first (a webhook usually lands within a second
+ *  or two of the shopper's return), then backing off. Same ~12s window as the old fixed 8 x 1.5s schedule, but at most
+ *  six re-reads instead of eight. */
+export const CONFIRMATION_POLL_DELAYS_MS: readonly number[] = [750, 1000, 1500, 2000, 3000, 4000];
+
 /**
  * Read an order, re-reading while it is still PendingPayment (the gateway /
  * webhook that flips it to Paid may land a moment after the shopper does).
- * This NEVER upgrades the displayed state itself — it only re-reads.
+ * This NEVER upgrades the displayed state itself — it only re-reads. It stops
+ * at the first read whose state is anything but PendingPayment (settled,
+ * cancelled, declined), so a settled order costs one request.
+ *
+ * Delays follow `CONFIRMATION_POLL_DELAYS_MS` (backoff); `attempts` caps the
+ * number of re-reads, `delayMs` restores a fixed delay, `delaysMs` sets the
+ * whole schedule.
  *
  * Abortable: when `signal` aborts (the page unmounted / navigated away) the
  * loop stops at once — no further requests, no sleeping timer — and the
@@ -123,13 +134,17 @@ export const sleepAbortable = (ms: number, signal: AbortSignal): Promise<void> =
 export async function readOrderUntilSettled<T extends { state: string }>(
   read: (signal: AbortSignal) => Promise<T>,
   signal: AbortSignal,
-  opts: { attempts?: number; delayMs?: number; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
+  opts: { attempts?: number; delayMs?: number; delaysMs?: readonly number[]; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
 ): Promise<T | null> {
-  const { attempts = 8, delayMs = 1500, sleep = sleepAbortable } = opts;
+  const { sleep = sleepAbortable } = opts;
+  const base = opts.delaysMs
+    ?? (opts.delayMs !== undefined ? Array.from({ length: opts.attempts ?? CONFIRMATION_POLL_DELAYS_MS.length }, () => opts.delayMs!) : CONFIRMATION_POLL_DELAYS_MS);
+  const delays = opts.attempts !== undefined ? base.slice(0, opts.attempts) : base;
   if (signal.aborted) return null;
   let order = await read(signal);
-  for (let i = 0; i < attempts && order.state === 'PendingPayment'; i++) {
-    await sleep(delayMs, signal);
+  for (const delay of delays) {
+    if (order.state !== 'PendingPayment') break;
+    await sleep(delay, signal);
     if (signal.aborted) return null;
     order = await read(signal);
   }

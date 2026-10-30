@@ -1,6 +1,9 @@
 import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
 import { paymentElementOptions } from './payment-element-options';
-import { loadStripe, type Stripe, type StripeElements, type StripePaymentElement as StripePaymentElementHandle, type StripePaymentElementOptions } from '@stripe/stripe-js';
+// S5: the `pure` entry injects Stripe.js only when loadStripe() is called; the package root injects it as soon as this
+// module is imported (it was loaded on every checkout, including stores with no Stripe gateway).
+import { loadStripe } from '@stripe/stripe-js/pure';
+import type { Stripe, StripeElements, StripePaymentElement as StripePaymentElementHandle, StripePaymentElementOptions } from '@stripe/stripe-js';
 import type { PayableOrder } from './payable-order';
 
 /**

@@ -8,7 +8,7 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components/checkout/checkout-country';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { track } from '~/sellright/analytics';
-import { useCart, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { useCart, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
@@ -29,6 +29,7 @@ import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/vie
 import type { ResumeQueue } from '~/components/checkout/resume-selection';
 import { beginResumeFlow, cancelResumeFlow } from '~/components/checkout/resume-flow';
 import { submitOrderFlow } from '~/components/checkout/place-order-flow';
+import { pricingReadStep } from '~/components/checkout/checkout-pricing';
 import { applyPaymentInitError, applyPaymentProcessingChange } from '~/components/checkout/payment-callbacks';
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
@@ -94,6 +95,9 @@ const CheckoutContent = component$(() => {
   const shippingMethod = useSignal<ShopShippingMethod | null>(null);
   // Inputs of the last successful shipping quote on this page ('' = none): see the quote task below.
   const shippingQuoteKey = useSignal('');
+  // V27: a shipping quote for new inputs is in flight. The checkout-pricing read waits for it, so a destination change
+  // makes ONE pricing read (with the selected method) instead of one without the method and a second one with it.
+  const shippingQuotePending = useSignal(false);
   // Public runtime config — decides whether the Stripe Payment Element mounts
   // once the order reaches PendingPayment.
   const shopConfig = useSignal<ShopConfig | null>(null);
@@ -115,6 +119,7 @@ const CheckoutContent = component$(() => {
       shippingQuoteKey.value = '';
       shippingCents.value = null;
       shippingMethod.value = null;
+      shippingQuotePending.value = false;
       return;
     }
 
@@ -122,10 +127,15 @@ const CheckoutContent = component$(() => {
     // when the destination, items, coupons or totals (a repriced cart can move the free-shipping tier) changed since the
     // last successful quote on this page (#362).
     const quoteKey = JSON.stringify([countryCode, items, couponCodes, localCart.cart.subtotal, localCart.cart.discountTotal]);
-    if (quoteKey === shippingQuoteKey.value) return;
+    if (quoteKey === shippingQuoteKey.value) {
+      // Back on the inputs of the last good quote (a superseded run never clears the flag itself).
+      shippingQuotePending.value = false;
+      return;
+    }
 
     let cancelled = false;
     cleanup(() => { cancelled = true; });
+    shippingQuotePending.value = true;
 
     try {
       // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
@@ -148,6 +158,9 @@ const CheckoutContent = component$(() => {
       console.warn('[Checkout] Failed to fetch server shipping quote:', e);
       shippingCents.value = null;
       shippingMethod.value = null;
+    } finally {
+      // A superseded run leaves the flag to the run that replaced it.
+      if (!cancelled) shippingQuotePending.value = false;
     }
   });
 
@@ -156,14 +169,20 @@ const CheckoutContent = component$(() => {
     const billing = track(() => JSON.stringify(appState.billingAddress));
     const method = track(() => shippingMethod.value?.code);
     const points = track(() => redeemPoints.value);
+    const shippingPending = track(() => shippingQuotePending.value);
     const context = JSON.stringify([shipping, billing, method, points]);
     // Replacing an equal address/method object must not erase pending consent or start another quote read.
-    if (context === quoteFormContext.value) return;
-    quoteFormContext.value = context;
+    const step = pricingReadStep({ context, recorded: quoteFormContext.value, shippingPending });
+    if (step === 'same') return;
     confirmedQuoteHash.value = '';
     srState.quoteChange = null;
     CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: appState.shippingAddress?.countryCode,
       shippingMethodCode: method, ...(points > 0 ? { redeemPoints: points } : {}) });
+    // V27: while the shipping quote for new inputs is in flight the selected method is about to change; a pricing read
+    // now would be replaced by the method's own read a moment later. The context is not recorded, so this task reads
+    // when the flag clears (whether or not the method changed). Consent above is still reset at once.
+    if (step === 'wait') return;
+    quoteFormContext.value = context;
     let cancelled = false;
     cleanup(() => { cancelled = true; });
     if (!CartService.token()) return;
@@ -381,8 +400,12 @@ const CheckoutContent = component$(() => {
     // Started first so it overlaps the cart read; awaited before the form shows. A failure is tolerated here (the
     // method list is then empty and PLACE ORDER refuses until the config loads) — the resume path treats it as fatal.
     const configRead = ensureShopConfig().catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
-    await loadCartIfNeeded(localCart);
-    if (!current()) return;
+    // V27: on a document loaded at checkout the provider skipped its boot read, so the live entry read below is also the
+    // boot (one GET, not two identical ones). Otherwise (SPA navigation, a cart opened first) boot first as before.
+    if (!isBootDeferredToCheckoutEntry(localCart)) {
+      await loadCartIfNeeded(localCart);
+      if (!current()) return;
+    }
     const read = await refreshCartLive(localCart);
     if (!current()) return;
     const decision = decideCheckoutEntry({

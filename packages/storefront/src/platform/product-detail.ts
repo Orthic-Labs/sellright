@@ -149,7 +149,7 @@ export const brandProductHead = ({ resolveValue }: { resolveValue: (loader: unkn
 		ogUrl: canonical,
 		ogType: 'product',
 		productMeta: productOgMeta(jsonLd as Record<string, unknown> | null, product, theme.storeName),
-		links: image ? generateImagePreloadLinks(image, 'productMain', ['avif', 'webp']) : [],
+		links: image ? generateImagePreloadLinks(image, 'productMain', ['avif']) : [],
 		schemas,
 	}) as DocumentHeadValue;
 };

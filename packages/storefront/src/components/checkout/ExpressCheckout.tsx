@@ -1,6 +1,7 @@
 import { component$, useSignal, useVisibleTask$, type QRL } from '@qwik.dev/core';
 import { loadStripe, type StripeElements, type StripeExpressCheckoutElement } from '@stripe/stripe-js';
 import { getExpressQuote } from '~/providers/shop/checkout/checkout';
+import { afterLoadIdleOrInteraction } from '~/utils/load-trigger';
 import {
 	expressElementOptions,
 	expressMethods,
@@ -125,6 +126,10 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 			walletAvailable.value = false;
 		});
 		try {
+			// P7/V15: Stripe.js is not part of the critical load — it loads once the page has loaded and gone idle, or on the
+			// shopper's first interaction. The element stays hidden until `ready`, as before.
+			await afterLoadIdleOrInteraction();
+			if (disposed) return;
 			const stripe = await loadStripe(key);
 			if (disposed || !stripe) return;
 			// Deferred intent: the amount here is display only; the intent is minted server-side for the order's amount due.

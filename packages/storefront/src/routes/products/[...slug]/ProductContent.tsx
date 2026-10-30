@@ -9,7 +9,7 @@ import { ProductPageView } from './ProductPageView';
 import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
-import { findVariant, getOptionGroups, isPaintedSoldOut, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable } from './product-options';
+import { findVariant, getOptionGroups, isPaintedSoldOut, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
 
 /** One gallery image — native shape (no legacy `Asset` object, no `id`;
@@ -94,17 +94,9 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     if (!btn) return;
     const name = btn.dataset.groupName!;
     const val = btn.dataset.val!;
-    const isReset = btn.dataset.reset === '1';
     const idx = groups.value.findIndex(g => g.groupName === name);
-    if (isReset) {
-      const next = Array(groups.value.length).fill(null);
-      next[idx] = val;
-      selectedValues.value = next;
-    } else {
-      const next = [...selectedValues.value];
-      next[idx] = val;
-      selectedValues.value = next;
-    }
+    // #408: any order; choices the new value cannot pair with are cleared (it used to clear every later group on a first-group pick).
+    selectedValues.value = selectOptionValue(product.variants, groups.value, selectedValues.value, idx, val);
     if (idx === 0 && hasVariantAssets) {
       const firstGroupName = groups.value[0]?.groupName;
       const firstSel = val;

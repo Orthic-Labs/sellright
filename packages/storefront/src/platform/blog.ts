@@ -33,8 +33,8 @@ export const useRelatedPosts = routeLoader$(async (requestEvent) => {
     try {
         if (hasView('route.blog-post')) {
             // A `route.blog-post` view: related = shared tags, then recency, then slug over the latest posts, fetched per request.
-            const current = await requestEvent.resolveValue(useBlogPost);
-            const { items } = await getBlogPosts(RELATED_POOL, 0);
+            // V25: the related pool no longer waits for the post (no waterfall): both reads start together.
+            const [current, { items }] = await Promise.all([requestEvent.resolveValue(useBlogPost), getBlogPosts(RELATED_POOL, 0)]);
             return rankRelatedPosts({ slug, tags: current?.tags ?? [] }, items.map((p) => ({ ...p, publishedAt: p.publishDate || p.createdAt })), 3).map(({ publishedAt: _drop, ...p }) => p) as BlogPostSummary[];
         }
         const { items } = await getBlogPosts(6, 0);

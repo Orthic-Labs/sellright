@@ -3,8 +3,12 @@
 import { stripHtml } from '~/utils/sanitize';
 import { toSanitizedHtml, type SanitizedHtml } from '~/platform/sanitized';
 
+/**
+ * #408 item 4: the post title is the page's only <h1>. Markdown `# ` paragraphs and any authored <h1> in the body render as
+ * <h2> (attributes kept), site-wide: base page and brand views both read the body through useBlogPost.
+ */
 export function fixBodyHtml(html: string): string {
-	return html
+	return demoteBodyH1(html
 		// <p>---</p> → <hr>
 		.replace(/<p>\s*-{3,}\s*<\/p>/g, '<hr>')
 		// <p>## Heading</p> → <h2>Heading</h2>
@@ -13,7 +17,11 @@ export function fixBodyHtml(html: string): string {
 		.replace(/<p>\s*#{4}\s+(.+?)<\/p>/g, '<h4>$1</h4>')
 		.replace(/<p>\s*#{3}\s+(.+?)<\/p>/g, '<h3>$1</h3>')
 		.replace(/<p>\s*#{2}\s+(.+?)<\/p>/g, '<h2>$1</h2>')
-		.replace(/<p>\s*#{1}\s+(.+?)<\/p>/g, '<h1>$1</h1>');
+		.replace(/<p>\s*#{1}\s+(.+?)<\/p>/g, '<h2>$1</h2>'));
+}
+
+export function demoteBodyH1(html: string): string {
+	return html.replace(/<h1(?=[\s>/])/gi, '<h2').replace(/<\/h1\s*>/gi, '</h2>');
 }
 
 // stripHtml (DOMPurify, real HTML parser) instead of a hand-rolled implementation: a single-pass `/<[^>]+>/g` tag-strip can
@@ -77,12 +85,39 @@ export interface BlogBody {
 	toc: TocEntry[];
 }
 
+/**
+ * V25: the sanitiser ran on every render of a post. Its output is a pure function of the body bytes and the pipeline, so it
+ * is memoised by content revision (the exact input bytes, the key itself — no hash collisions) plus BLOG_BODY_PIPELINE_VERSION
+ * (bump on any change to fixBodyHtml/addHeadingIdsAndToc/the `blog` sanitiser policy). Bounded: at most BLOG_BODY_MEMO_MAX
+ * entries, bodies over BLOG_BODY_MEMO_MAX_BYTES are never kept, least-recently-used evicted first. Content only — a blog body
+ * carries no stock, cart or visitor state.
+ */
+export const BLOG_BODY_PIPELINE_VERSION = 1;
+export const BLOG_BODY_MEMO_MAX = 64;
+export const BLOG_BODY_MEMO_MAX_BYTES = 256 * 1024;
+const blogBodyMemo = new Map<string, BlogBody>();
+
 /** fixBodyHtml's output -> heading ids + TOC -> `blog` sanitiser policy -> TOC checked against the final body. */
 export function buildBlogBody(fixedHtml: string): BlogBody {
+	const key = `${BLOG_BODY_PIPELINE_VERSION}\u0000${fixedHtml}`;
+	const hit = blogBodyMemo.get(key);
+	if (hit) {
+		blogBodyMemo.delete(key);
+		blogBodyMemo.set(key, hit);
+		return { body: hit.body, toc: hit.toc.map((t) => ({ ...t })) };
+	}
 	const { html } = addHeadingIdsAndToc(fixedHtml);
 	const body = toSanitizedHtml(html, 'blog');
-	return { body, toc: tocFromSanitized(body.html) };
+	const built = { body, toc: tocFromSanitized(body.html) };
+	if (fixedHtml.length <= BLOG_BODY_MEMO_MAX_BYTES) {
+		blogBodyMemo.set(key, built);
+		while (blogBodyMemo.size > BLOG_BODY_MEMO_MAX) blogBodyMemo.delete(blogBodyMemo.keys().next().value as string);
+	}
+	return { body: built.body, toc: built.toc.map((t) => ({ ...t })) };
 }
+
+/** Test-only. */
+export const _blogBodyMemoSize = (): number => blogBodyMemo.size;
 
 export interface RelatedCandidate {
 	slug: string;

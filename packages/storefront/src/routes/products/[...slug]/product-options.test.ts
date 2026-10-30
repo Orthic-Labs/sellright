@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	areAllVariantsSoldOut,
 	availableForGroup,
+	selectOptionValue,
 	findVariant,
 	getOptionGroups,
 	isActivePreOrder,
@@ -350,5 +351,34 @@ describe('manifest in-stock hint (first paint before the live read)', () => {
 	});
 	it('the hint never makes a variant purchasable', () => {
 		expect(isVariantPurchasable(unchecked[0])).toBe(false);
+	});
+});
+
+describe('#408 options in any order', () => {
+	const group = (name: string) => ({ id: name, code: name, name });
+	const blade = (code: string) => ({ id: code, code, name: code, group: group('blade') });
+	const handle = (code: string) => ({ id: code, code, name: code, group: group('handle') });
+	const groups = [{ groupName: 'blade', values: ['Stonewash', 'Black'] }, { groupName: 'handle', values: ['Red', 'Blue'] }];
+	// Stonewash comes in Red and Blue; Black only in Red; Black/Blue is sold out.
+	const variants = [
+		variant({ sku: 'sw-red', inStock: true, options: [blade('Stonewash'), handle('Red')] }),
+		variant({ sku: 'sw-blue', inStock: true, options: [blade('Stonewash'), handle('Blue')] }),
+		variant({ sku: 'bk-red', inStock: true, options: [blade('Black'), handle('Red')] }),
+		variant({ sku: 'bk-blue', inStock: false, options: [blade('Black'), handle('Blue')] }),
+	];
+
+	it('a later group is open before the first is chosen', () => {
+		expect(availableForGroup(variants, groups, 1, [null, null])).toEqual(new Set(['Red', 'Blue']));
+	});
+
+	it('choosing the handle first narrows the blades, not the other way only', () => {
+		expect(availableForGroup(variants, groups, 0, [null, 'Blue'])).toEqual(new Set(['Stonewash']));
+		expect(availableForGroup(variants, groups, 1, ['Black', null])).toEqual(new Set(['Red']));
+	});
+
+	it('keeps a compatible choice and clears an impossible one', () => {
+		expect(selectOptionValue(variants, groups, [null, 'Red'], 0, 'Black')).toEqual(['Black', 'Red']);
+		expect(selectOptionValue(variants, groups, [null, 'Blue'], 0, 'Black')).toEqual(['Black', null]);
+		expect(selectOptionValue(variants, groups, ['Black', null], 1, 'Blue')).toEqual([null, 'Blue']);
 	});
 });

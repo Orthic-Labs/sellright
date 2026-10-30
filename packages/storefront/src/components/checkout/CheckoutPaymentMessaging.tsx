@@ -1,5 +1,8 @@
 import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import { loadStripe, type StripePaymentMethodMessagingElement } from '@stripe/stripe-js';
+// S5: `pure` defers Stripe.js until loadStripe() runs (only when messaging options exist); the package root injects it
+// on import, which loaded it on every checkout/PDP even with no Stripe gateway configured.
+import { loadStripe } from '@stripe/stripe-js/pure';
+import type { StripePaymentMethodMessagingElement } from '@stripe/stripe-js';
 import type { PaymentMessagingOptions } from './payment-messaging';
 
 /**

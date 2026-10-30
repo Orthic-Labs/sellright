@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, resolveConfirmationEmail, sleepAbortable, gatewayReturnVerificationError, PAYMENT_UNVERIFIED_MESSAGE, PAYMENT_VERIFY_FAILED_MESSAGE } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, CONFIRMATION_POLL_DELAYS_MS, resolveConfirmationEmail, sleepAbortable, gatewayReturnVerificationError, PAYMENT_UNVERIFIED_MESSAGE, PAYMENT_VERIFY_FAILED_MESSAGE } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
@@ -84,6 +84,37 @@ describe('readOrderUntilSettled (abortable receipt poll)', () => {
     const out = await readOrderUntilSettled(read, ac.signal, { sleep });
     expect(out).toBeNull();
     expect(read).toHaveBeenCalledTimes(1); // no read after the abort
+  });
+
+  it('V29: backs off (increasing delays) within the old ~12s window and makes at most 7 reads', async () => {
+    const read = vi.fn(async () => ({ state: 'PendingPayment' }));
+    const sleep = vi.fn(async (_ms: number, _s: AbortSignal) => {});
+    await readOrderUntilSettled(read, new AbortController().signal, { sleep });
+    const delays = sleep.mock.calls.map((c) => c[0]);
+    expect(delays).toEqual([...CONFIRMATION_POLL_DELAYS_MS]);
+    for (let i = 1; i < delays.length; i++) expect(delays[i]).toBeGreaterThan(delays[i - 1]);
+    expect(delays.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(12_500);
+    expect(read).toHaveBeenCalledTimes(CONFIRMATION_POLL_DELAYS_MS.length + 1);
+    expect(read.mock.calls.length).toBeLessThan(9); // the old fixed schedule's maximum
+  });
+
+  it('V29: stops at the first non-pending state (cancelled/declined too), never sleeping after it', async () => {
+    for (const terminal of ['Cancelled', 'Declined', 'Paid']) {
+      const states = ['PendingPayment', terminal, 'PendingPayment'];
+      const read = vi.fn(async () => ({ state: states.shift()! }));
+      const sleep = vi.fn(async () => {});
+      const out = await readOrderUntilSettled(read, new AbortController().signal, { sleep });
+      expect(out).toEqual({ state: terminal });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('a fixed delayMs keeps the old fixed schedule', async () => {
+    const read = vi.fn(async () => ({ state: 'PendingPayment' }));
+    const sleep = vi.fn(async (_ms: number, _s: AbortSignal) => {});
+    await readOrderUntilSettled(read, new AbortController().signal, { attempts: 2, delayMs: 1500, sleep });
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([1500, 1500]);
   });
 
   it('makes no request at all when already aborted, and passes the signal to read', async () => {

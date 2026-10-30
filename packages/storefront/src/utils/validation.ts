@@ -1,4 +1,4 @@
-import validator from 'validator';
+import isEmail from 'validator/es/lib/isEmail';
 import {
   postcodeNoun,
   validateAddressLine,
@@ -39,7 +39,7 @@ export const validateEmail = (email: string): ValidationResult => {
   }
 
   // Use validator for email
-  if (!validator.isEmail(email)) {
+  if (!isEmail(email)) {
     return { isValid: false, message: 'Please enter a valid email address' };
   }
 

@@ -238,10 +238,10 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           )}
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
-            const isLocked = groupIdx > 0 && !selectedValues.value[groupIdx - 1];
-            const available = isLocked
-              ? new Set<string>()
-              : availableForGroup(product.variants, groups.value, groupIdx, selectedValues.value);
+            // #408: every group is open from the start and can be chosen in any order. A value no purchasable variant has is
+            // disabled; one that only fails with the current choices stays clickable, marked unavailable (choosing it swaps).
+            const purchasable = availableForGroup(product.variants, groups.value, groupIdx, []);
+            const available = availableForGroup(product.variants, groups.value, groupIdx, selectedValues.value);
             const chosenVal = selectedValues.value[groupIdx];
             const isBladeGroup = isMulti && groupIdx === 0;
             const isColorGroup = /color|colour|handle/i.test(group.groupName);
@@ -249,9 +249,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             const isColorSingle = !isMulti && isColorGroup;
             return (
               <div key={group.groupName} style={groupIdx > 0 ? { paddingTop: '28px' } : {}}>
-                <div class={`sr-sel-group${isLocked ? ' locked' : ''}`}
-                  style={isMulti && groupIdx > 0 && isLocked ? { display: 'none' } : isMulti && groupIdx > 0 ? { animation: 'sr-fadeIn 0.2s ease' } : {}}
-                >
+                <div class="sr-sel-group">
                   <div class="sr-sel-head">
                     <span class="sr-sel-label">0{groupIdx + 1} — {group.groupName}</span>
                     {chosenVal && <span class="sr-sel-chosen">{chosenVal}</span>}
@@ -264,10 +262,10 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         return (
                           <button key={val}
                             class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
-                            disabled={!isAvail}
+                            disabled={!purchasable.has(val)}
+                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
                             data-group-name={group.groupName}
                             data-val={val}
-                            data-reset="1"
                             onClick$={handleGroupSelect$}
                           >
                             <div class="sr-blade-name">{val}</div>
@@ -285,7 +283,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         return (
                           <button key={val}
                             class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
-                            disabled={!isAvail}
+                            disabled={!purchasable.has(val)}
+                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -317,7 +316,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         return (
                           <button key={val}
                             class={`sr-pill${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
-                            disabled={!isAvail}
+                            disabled={!purchasable.has(val)}
+                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}

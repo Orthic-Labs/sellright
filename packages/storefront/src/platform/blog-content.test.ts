@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addHeadingIdsAndToc, buildBlogBody, fixBodyHtml, rankRelatedPosts, slugify, tocFromSanitized } from './blog-content';
+import { _blogBodyMemoSize, addHeadingIdsAndToc, BLOG_BODY_MEMO_MAX, buildBlogBody, fixBodyHtml, rankRelatedPosts, slugify, tocFromSanitized } from './blog-content';
 import { sanitizeBlogHtml, sanitizeHtml } from '~/utils/sanitize';
 import { toSanitizedHtml } from './sanitized';
 
@@ -120,5 +120,30 @@ describe('rankRelatedPosts', () => {
 	it('a post without a date sorts as oldest', () => {
 		const out = rankRelatedPosts({ slug: 'c', tags: [] }, [p('undated', [], null), p('dated', [], '2026-01-01')], 2).map((x) => x.slug);
 		expect(out).toEqual(['dated', 'undated']);
+	});
+});
+
+describe('#408 item 4: body <h1> renders as <h2>', () => {
+	it('demotes markdown `# ` and authored <h1> (attributes kept); the title stays the only h1', () => {
+		const out = fixBodyHtml('<p># Intro</p><h1 class="x">Big</h1><H1>Caps</H1 ><h10>n</h10>');
+		expect(out).toBe('<h2>Intro</h2><h2 class="x">Big</h2><h2>Caps</h2><h10>n</h10>');
+		expect(out).not.toMatch(/<h1[\s>]/i);
+	});
+	it('demoted headings join the TOC', () => {
+		const { toc } = buildBlogBody(fixBodyHtml('<h1>Big idea</h1><p>x</p>'));
+		expect(toc).toEqual([{ id: 'big-idea', text: 'Big idea' }]);
+	});
+});
+
+describe('V25: blog body memo', () => {
+	it('returns the same sanitised body for the same revision, bounded in size', () => {
+		const a = buildBlogBody('<h2>A</h2><script>x</script><p>a</p>');
+		const b = buildBlogBody('<h2>A</h2><script>x</script><p>a</p>');
+		expect(b.body.html).toBe(a.body.html);
+		expect(b.body.html).not.toContain('<script');
+		b.toc.push({ id: 'z', text: 'z' });
+		expect(buildBlogBody('<h2>A</h2><script>x</script><p>a</p>').toc).toHaveLength(1);
+		for (let i = 0; i < BLOG_BODY_MEMO_MAX + 10; i++) buildBlogBody(`<p>${i}</p>`);
+		expect(_blogBodyMemoSize()).toBeLessThanOrEqual(BLOG_BODY_MEMO_MAX);
 	});
 });
