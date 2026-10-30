@@ -120,7 +120,8 @@ export default defineConfig((config) => {
         },
       }),
       // P7/V30: the rc.3 preloader has no probability cut-off and fetched ~410 bundles per page after load by following
-      // lazy-QRL edges of the bundle graph. Keep static imports and route/symbol edges only (src/platform/preload-graph.ts).
+      // lazy-QRL edges of the bundle graph. Keep static imports and route/symbol edges only, plus (L10) one flat edge from
+      // each checkout-only bundle to its client-rendered checkout closure (src/platform/preload-graph.ts).
       preloadGraphPlugin(),
       tsconfigPaths(),
       imagetools({
