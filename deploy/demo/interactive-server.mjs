@@ -278,7 +278,11 @@ const server=createServer(async(req,res)=>{
         try{visitor=await provision();setVisitorCookies(res,visitor,url);}
         catch(e){return json(503,{error:e.message||'Could not start a demo session'});}
       }
-      const forwardCookie=visitor?[`sr_demo=${visitor.token}`,`sr_admin=${visitor.token}`,`sr_csrf=${visitor.csrf}`].join('; '):undefined;
+      // The visitor's own cart token and ship country also pass through (shape-checked), so the checkout's server-side summary
+      // read (storefront routes/checkout loader) sees the cart. The API still scopes every cart read to this visitor's store.
+      const own=cookies(req.headers.cookie);
+      const extra=[/^[a-f0-9-]{36}$/.test(own.sr_cart??'')?`sr_cart=${own.sr_cart}`:null,/^[A-Z]{2}$/.test(own.countryCode??'')?`countryCode=${own.countryCode}`:null].filter(Boolean);
+      const forwardCookie=visitor?[`sr_demo=${visitor.token}`,`sr_admin=${visitor.token}`,`sr_csrf=${visitor.csrf}`,...extra].join('; '):undefined;
       try{return await proxyToStorefront(req,res,forwardCookie);}
       catch(e){console.error('Storefront proxy failed:',e.message);if(!res.headersSent)return json(502,{error:'Storefront is unavailable. Please retry shortly.'});res.end();return;}
     }

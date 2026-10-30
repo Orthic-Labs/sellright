@@ -165,7 +165,7 @@ export default component$<{
 									src={resolveAssetPath(line.image) || '/asset_placeholder.webp'}
 									width={160}
 									height={200}
-									loading="lazy"
+									loading={isCheckoutView ? 'eager' : 'lazy'}
 									responsive="thumbnail"
 									alt={line.productName ? `${line.productName}, ${line.name}` : `Image of: ${line.name}`}
 								/>
