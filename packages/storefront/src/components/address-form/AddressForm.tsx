@@ -295,12 +295,12 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		scheduleSync$();
 	});
 
-	const clearAutofilled$ = $(() => {
+	const clearForCountry$ = $((country: string) => {
 		const live = (field: 'city' | 'province') => {
 			const el = document.getElementById(field) as HTMLInputElement | null;
 			return el ? el.value : localFormData.value[field];
 		};
-		const patch = countryChangeClearPatch({ current: { city: live('city'), province: live('province') }, autofilled });
+		const patch = countryChangeClearPatch({ country, current: { city: live('city'), province: live('province') }, autofilled });
 		delete autofilled.city;
 		delete autofilled.province;
 		const fields = Object.keys(patch) as Array<'city' | 'province'>;
@@ -308,6 +308,11 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		for (const field of fields) {
 			const el = document.getElementById(field) as HTMLInputElement | null;
 			if (el) el.value = '';
+		}
+		// A blanked required state shows its error now rather than at submit.
+		if ('province' in patch) {
+			touchedFields.value = new Set([...touchedFields.value, 'province']);
+			validateField$('province', '', country);
 		}
 		localFormData.value = { ...localFormData.value, ...patch };
 		scheduleSync$();
@@ -352,7 +357,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 								disabled={isReviewMode}
 								onChange$={$(async (value: string) => {
 									handleInputChange$('countryCode', value);
-									await clearAutofilled$();
+									await clearForCountry$(value);
 									if (localFormData.value.postalCode) {
 										runPostalLookup$(localFormData.value.postalCode, value);
 									}

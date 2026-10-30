@@ -123,11 +123,13 @@ export const postalLookupPatch = (input: {
 };
 
 /**
- * Which fields to blank when the country changes: only values a postal lookup wrote and that still hold exactly what
- * it wrote. A city/state from another country's postcode is wrong for the new one, but anything the shopper typed
- * (or changed after the lookup) is theirs and stays.
+ * Which fields to blank when the country changes to `country`. A city/state a postal lookup wrote (and still holding
+ * exactly what it wrote) came from the old country's postcode, so it goes. Anything the shopper typed stays, except a
+ * state that is not a valid region of the new country (typed "TX", then switched to Canada): that one is blanked so
+ * the form asks for it again.
  */
 export const countryChangeClearPatch = (input: {
+ country: string;
  current: Record<PostalLookupField, string>;
  autofilled: Partial<Record<PostalLookupField, string>>;
 }): Partial<Record<PostalLookupField, string>> => {
@@ -136,5 +138,7 @@ export const countryChangeClearPatch = (input: {
   const filled = input.autofilled[field];
   if (filled && input.current[field] === filled) patch[field] = '';
  }
+ const province = input.current.province.trim();
+ if (province && !validateStateProvince(province, input.country).isValid) patch.province = '';
  return patch;
 };

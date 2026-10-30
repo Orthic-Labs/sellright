@@ -40,15 +40,26 @@ describe('postalLookupPatch', () => {
 describe('countryChangeClearPatch', () => {
 	it('blanks city and state the lookup filled (IN 110001 then GB must not keep Central Delhi / Delhi)', () => {
 		const current = { city: 'Central Delhi', province: 'Delhi' };
-		expect(countryChangeClearPatch({ current, autofilled: { ...current } })).toEqual({ city: '', province: '' });
+		expect(countryChangeClearPatch({ country: 'GB', current, autofilled: { ...current } })).toEqual({ city: '', province: '' });
 	});
 
-	it('keeps values the shopper typed or changed after the lookup', () => {
-		expect(countryChangeClearPatch({ current: { city: 'Leeds', province: '' }, autofilled: {} })).toEqual({});
-		expect(countryChangeClearPatch({ current: { city: 'New Delhi', province: 'Delhi' }, autofilled: { city: 'Central Delhi', province: 'Delhi' } })).toEqual({ province: '' });
+	it('keeps a typed city and state that are valid for the new country (typed Austin / TX, then fixed the country to US)', () => {
+		expect(countryChangeClearPatch({ country: 'US', current: { city: 'Austin', province: 'TX' }, autofilled: {} })).toEqual({});
+	});
+
+	it('keeps values changed after the lookup', () => {
+		expect(countryChangeClearPatch({ country: 'GB', current: { city: 'New Delhi', province: 'Delhi' }, autofilled: { city: 'Central Delhi', province: 'Delhi' } })).toEqual({ province: '' });
+	});
+
+	it('blanks a typed state that is not a region of the new country, keeps the typed city', () => {
+		expect(countryChangeClearPatch({ country: 'CA', current: { city: 'Austin', province: 'TX' }, autofilled: {} })).toEqual({ province: '' });
+	});
+
+	it('keeps a typed region where the new country has no region list', () => {
+		expect(countryChangeClearPatch({ country: 'GB', current: { city: 'Leeds', province: 'West Yorkshire' }, autofilled: {} })).toEqual({});
 	});
 
 	it('does nothing to empty fields', () => {
-		expect(countryChangeClearPatch({ current: { city: '', province: '' }, autofilled: { city: 'Reno' } })).toEqual({});
+		expect(countryChangeClearPatch({ country: 'GB', current: { city: '', province: '' }, autofilled: { city: 'Reno' } })).toEqual({});
 	});
 });
