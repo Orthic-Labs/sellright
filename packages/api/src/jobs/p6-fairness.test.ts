@@ -102,12 +102,12 @@ describe('D8 reservation sweep: stable order + rotation', () => {
 });
 
 describe('D9 retry fairness', () => {
-  it('gateway events: due filter in SQL, stable order, 30th failed attempt goes manual', async () => {
+  it('gateway events: retried every pass (~30 min to manual review), stable order, 30th failed attempt goes manual', async () => {
     await reconcileGatewayEvents();
-    expect(h.sql[0]!.text).toMatch(/"(updated_at|updatedAt)" <= now\(\) - least\(/);
+    expect(h.sql[0]!.text).not.toMatch(/now\(\) - least\(/);
     expect(h.sql[0]!.text).toMatch(/"gateway_event"\."(updated_at|updatedAt)" asc.*"gateway_event"\."id" asc/);
     expect(MANUAL_AFTER_ATTEMPTS).toBe(30);
-    expect([0, 1, 2, 3, 4, 5, 20].map(gatewayEventRetryDelayMs)).toEqual([0, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000]);
+    expect([0, 1, 5, 29].map(gatewayEventRetryDelayMs)).toEqual([0, 0, 0, 0]);
   });
   it('listmonk: exponential per-row backoff capped at 6h', () => {
     expect([1, 2, 3].map(listmonkRetryDelayMs)).toEqual([300_000, 600_000, 1_200_000]);

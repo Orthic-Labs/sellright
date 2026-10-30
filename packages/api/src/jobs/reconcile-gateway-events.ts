@@ -11,9 +11,10 @@ import { observeImportedSezzlePayment, reconcileSezzleRefunds, resolveSezzleSess
  */
 export const MANUAL_AFTER_ATTEMPTS = 30;
 const EVENT_BATCH_LIMIT = 25;
-/** Retry backoff after `attempts` failed passes: 1, 2, 4, 8 then every 15 minutes. */
-export function gatewayEventRetryDelayMs(attempts: number): number {
-  return attempts <= 0 ? 0 : Math.min(60_000 * 2 ** (attempts - 1), 15 * 60_000);
+/** No backoff: a failed event is retried on every pass (~1/min), so it reaches manual review after ~30 minutes, the window a
+ *  failed payment's order is given before it cancels (Adrian, 2026-10-30). Kept as a function so a cadence change stays one place. */
+export function gatewayEventRetryDelayMs(_attempts: number): number {
+  return 0;
 }
 
 /** Ingress acknowledges only durable storage. This worker performs authoritative reads. */
@@ -21,15 +22,10 @@ export async function reconcileGatewayEvents() {
   const stores = await pool.query<{ id: string }>('SELECT id FROM store');
   let processed = 0;
   for (const store of stores.rows) {
-    // Due filter BEFORE the limit (D9): a failed event waits out its backoff
-    // (updated_at is stamped on every attempt) instead of being re-verified
-    // against the provider every minute; fresh events (attempts = 0) are due at
-    // once. Stable order: longest-waiting first, id as tiebreak.
+    // Every pending event is due each pass (no backoff, see gatewayEventRetryDelayMs). Stable order: longest-waiting first, id
+    // as tiebreak, so a stuck event cannot starve the others in the 25-event window.
     const events = await withStore(store.id, tx => tx.select().from(s.gatewayEvent)
-      .where(and(eq(s.gatewayEvent.status, 'pending'),
-        sql`${s.gatewayEvent.updatedAt} <= now() - least(
-          case when ${s.gatewayEvent.attempts} <= 0 then 0 else 60 * power(2, least(${s.gatewayEvent.attempts}, 10) - 1) end,
-          900) * interval '1 second'`))
+      .where(eq(s.gatewayEvent.status, 'pending'))
       .orderBy(asc(s.gatewayEvent.updatedAt), asc(s.gatewayEvent.id)).limit(EVENT_BATCH_LIMIT));
     for (const event of events) {
       await withAdvisoryLock('gateway-event:' + event.id, async () => {
