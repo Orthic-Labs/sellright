@@ -32,7 +32,7 @@ import { env } from '../env.js';
 import { autoDeliverStore } from '../jobs/auto-deliver.js';
 import { fulfillmentStatusSql } from '../orders/status-sql.js';
 import {
-  DEFAULT_EXPORT_COLUMNS, DEFAULT_LINE_COLUMNS, EXPORT_ROW_CAP, exportCellValues, exportColumnCatalog, fetchExportRows,
+  DEFAULT_EXPORT_COLUMNS, DEFAULT_LINE_COLUMNS, EXPORT_ROW_CAP, exportCellValues, exportColumnCatalog, fetchExportRows, iterateExportRows,
   parseExportColumnList, parseExportFilters, parseExportMode, resolveExportColumns,
 } from '../orders/export.js';
 import {
@@ -233,25 +233,35 @@ adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
     const st = requireStore(admin, c);
     const mode = parseExportMode(c.req.query('rows'));
     const cols = resolveExportColumns(parseExportColumnList(c.req.query('columns')), mode);
-    const rows = await fetchExportRows(st.storeId, exportFiltersFrom(c), mode);
+    const chunks = iterateExportRows(st.storeId, exportFiltersFrom(c), mode);
+    // Fetch the first chunk before any header goes out so a query failure is still a clean HTTP error.
+    const first = await chunks.next();
 
     const passThrough = new PassThrough();
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: passThrough, useStyles: true });
     const sheet = workbook.addWorksheet('Orders');
     sheet.columns = cols.map((x) => ({ header: x.key, key: x.key }));
-    for (const r of rows) sheet.addRow(exportCellValues(cols, r, { guard: false })).commit();
-    sheet.commit();
-    // Fire-and-forget: WorkbookWriter finalizes the ZIP into passThrough as rows
-    // are committed; commit() below flushes the remaining central-directory bytes
-    // and ends the stream. Do not await before returning — Hono streams the
-    // response as passThrough emits, matching the CSV route's download behaviour.
-    void workbook.commit();
+    // PERF C8: the consumer is attached below (Readable.toWeb) and the producer pauses on backpressure instead of
+    // queueing the whole workbook; a client abort destroys passThrough, which stops the loop and the generator.
+    const produce = async () => {
+      let current = first;
+      while (!current.done) {
+        for (const r of current.value) sheet.addRow(exportCellValues(cols, r, { guard: false })).commit();
+        if (passThrough.destroyed) { await chunks.return(undefined); return; }
+        if (passThrough.writableNeedDrain) await new Promise<void>((res) => { passThrough.once('drain', res); passThrough.once('close', res); });
+        if (passThrough.destroyed) { await chunks.return(undefined); return; }
+        current = await chunks.next();
+      }
+      sheet.commit();
+      await workbook.commit();
+    };
+    void produce().catch((e) => { passThrough.destroy(e instanceof Error ? e : new Error(String(e))); });
 
     const webStream = Readable.toWeb(passThrough) as ReadableStream;
+    // Row count is unknown before streaming: x-export-rows / x-export-capped are not sent for the xlsx stream.
     return c.body(webStream, 200, {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'content-disposition': `attachment; filename="orders-${st.slug}.xlsx"`,
-      'x-export-rows': String(rows.length), 'x-export-capped': rows.length >= EXPORT_ROW_CAP ? '1' : '0',
     });
   } catch (e) {
     if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
@@ -276,12 +286,15 @@ type PlannedRow = {
   _order?: typeof s.order.$inferSelect; _lines?: Array<typeof s.orderLine.$inferSelect>; _fulfillments?: Array<typeof s.fulfillment.$inferSelect>;
 };
 
-async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: boolean): Promise<PlannedRow[]> {
+/** State carried across chunks of one file so duplicate-in-file detection and suggestion candidates stay file-wide. */
+type PlanState = { seen: Set<string>; candidates: string[] | null };
+const TRACKING_IMPORT_CHUNK = 100;
+
+async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: boolean, state: PlanState = { seen: new Set(), candidates: null }, startIndex = 0): Promise<PlannedRow[]> {
   const out: PlannedRow[] = [];
-  const seen = new Set<string>();
-  let candidates: string[] | null = null;
-  for (let index = 0; index < rowsIn.length; index++) {
-    const raw = rowsIn[index]!;
+  const seen = state.seen;
+  for (let index = startIndex; index < startIndex + rowsIn.length; index++) {
+    const raw = rowsIn[index - startIndex]!;
     const code = normalizeOrderCode(raw.code);
     const tracking = normalizeTracking(raw.tracking);
     const { carrier, source } = resolveCarrier({ code, tracking, carrier: raw.carrier });
@@ -292,10 +305,10 @@ async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: bo
     const q = tx.select().from(s.order).where(sql`upper(${s.order.code}) = ${code}`).limit(1);
     const [o] = await (lock ? q.for('update') : q);
     if (!o) {
-      candidates ??= (await tx.select({ code: s.order.code }).from(s.order)
+      state.candidates ??= (await tx.select({ code: s.order.code }).from(s.order)
         .where(and(isNull(s.order.deletedAt), inArray(s.order.state, ['Paid', 'PartiallyRefunded'])))
         .orderBy(desc(s.order.createdAt)).limit(5000)).map((r) => r.code);
-      const suggestion = suggestOrderCode(code, candidates);
+      const suggestion = suggestOrderCode(code, state.candidates);
       out.push({ ...base, status: 'unknown_order', message: suggestion ? `no order ${code} — did you mean ${suggestion}?` : 'order not found', items: [], ...(suggestion ? { suggestion } : {}) });
       continue;
     }
@@ -383,17 +396,25 @@ adminOrderOps.openapi(
     if (!rowsIn.length) throw new HttpError(400, 'no rows found');
     if (rowsIn.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
     const batchId = randomUUID();
-    // One transaction for the whole batch — set true only inside the branch
-    // that actually mutates stock (a NEW fulfillment ships un-shipped units).
+    // PERF V42: bounded transactions (<= TRACKING_IMPORT_CHUNK rows each) instead of one for up to 5,000 rows. Duplicate
+    // detection is file-wide (shared PlanState); each chunk re-plans under its own row locks. A failed chunk stops the
+    // import: earlier chunks stay committed and the response reports the rest as not imported (re-running is safe: shipped rows classify as already-shipped).
     let stockChanged = false;
-    const result = await withStore(st.storeId, async (tx) => {
-      const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-      const storeCtx = { name: st.name, currency: st.currency, config: storeRow?.config ?? null };
-      // Re-plan under row locks: the preview was a snapshot, this is the truth.
-      const planned = await planTrackingRows(tx, rowsIn, true);
-      let updated = 0; let emailsQueued = 0;
-      const imported = new Set<number>();
-      for (const row of planned) {
+    const planState: PlanState = { seen: new Set(), candidates: null };
+    const allPlanned: PlannedRow[] = [];
+    const imported = new Set<number>();
+    let updated = 0; let emailsQueued = 0;
+    const [storeRow] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
+    const storeCtx = { name: st.name, currency: st.currency, config: storeRow?.config ?? null };
+    for (let start = 0; start < rowsIn.length; start += TRACKING_IMPORT_CHUNK) {
+      const chunkRows = rowsIn.slice(start, start + TRACKING_IMPORT_CHUNK);
+      try {
+        const chunkResult = await withStore(st.storeId, async (tx) => {
+          // Re-plan under row locks: the preview was a snapshot, this is the truth.
+          const planned = await planTrackingRows(tx, chunkRows, true, planState, start);
+          let cUpdated = 0; let cEmails = 0; let cStock = false;
+          const cImported = new Set<number>();
+          for (const row of planned) {
         if (!IMPORTABLE.has(row.status) || !row._order) continue;
         const o = row._order;
         let fulfillmentId: string;
@@ -409,7 +430,7 @@ adminOrderOps.openapi(
             if (l.variantId) {
               await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id, actor: admin.email });
-              stockChanged = true;
+              cStock = true;
             }
           }
         } else {
@@ -426,16 +447,29 @@ adminOrderOps.openapi(
         // #380: every shipment emails the customer (guests by their checkout contact); the dedupe key keeps it to one.
         if (row.customerEmail) {
           const queued = await enqueueShippingNotification(tx, st.storeId, storeCtx, row.customerEmail, { code: o.code, trackingCode: row.tracking, carrier: row.carrier, dedupeKey: dedupe });
-          if (queued) emailsQueued++;
+          if (queued) cEmails++;
         }
-        imported.add(row.index);
-        updated++;
+        cImported.add(row.index);
+        cUpdated++;
       }
-      const skipped = planned.length - updated;
-      const errors = planned.filter((r) => !imported.has(r.index)).map((r) => ({ code: r.code || '(blank)', error: r.message }));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tracking_import', entityId: batchId, action: 'batch', data: { source: body.source, fileName: body.fileName ?? null, total: planned.length, shipped: updated, skipped, emailsQueued, notify: true, errors: errors.slice(0, 50) } });
-      return { updated, errors, emailsQueued, skipped, rows: planned.map((r) => ({ ...publicRow(r), imported: imported.has(r.index) })) };
-    });
+          return { planned, cUpdated, cEmails, cStock, cImported };
+        });
+        allPlanned.push(...chunkResult.planned); updated += chunkResult.cUpdated; emailsQueued += chunkResult.cEmails;
+        if (chunkResult.cStock) stockChanged = true;
+        for (const i of chunkResult.cImported) imported.add(i);
+      } catch (e) {
+        for (let i = start; i < rowsIn.length; i++) {
+          const raw = rowsIn[i]!;
+          allPlanned.push({ index: i, code: normalizeOrderCode(raw.code), tracking: normalizeTracking(raw.tracking), carrier: null, carrierSource: 'unknown', status: 'interrupted' as never, message: 'import stopped before this row (an earlier batch failed); re-run the import', items: [] });
+        }
+        console.error('tracking import chunk failed', e instanceof Error ? e.message : e);
+        break;
+      }
+    }
+    const skipped = allPlanned.length - updated;
+    const errors = allPlanned.filter((r) => !imported.has(r.index)).map((r) => ({ code: r.code || '(blank)', error: r.message }));
+    await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tracking_import', entityId: batchId, action: 'batch', data: { source: body.source, fileName: body.fileName ?? null, total: allPlanned.length, shipped: updated, skipped, emailsQueued, notify: true, errors: errors.slice(0, 50) } }));
+    const result = { updated, errors, emailsQueued, skipped, rows: allPlanned.map((r) => ({ ...publicRow(r), imported: imported.has(r.index) })) };
     if (stockChanged) onStockChanged(st.slug);
     return c.json({ ...result, batchId, parse: info } as never, 200);
   }),

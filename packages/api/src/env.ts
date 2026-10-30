@@ -48,6 +48,21 @@ const EnvSchema = z.object({
   // tenant resolver, the webhook pass and the LISTEN session) and warns when that exceeds this budget, the role's
   // connection limit, or max_connections minus the superuser reserve.
   PG_CONNECTION_BUDGET: z.coerce.number().int().positive().optional(),
+  // #360 N7: =1 makes the budget binding — createApp refuses to start when the pool maxima exceed PG_CONNECTION_BUDGET
+  // (which must then be set). Default 0: warn only, as before.
+  PG_CONNECTION_BUDGET_ENFORCE: z.preprocess(emptyToUndefined, z.enum(['0', '1']).default('0')),
+  // Perf plan P0: who may read GET /v1/internal/metrics (Prometheus text; pool, request and event-loop metrics, no
+  // secrets or parameters). off (default) = 404; loopback = only a direct TCP peer on 127.0.0.0/8 or ::1 that sent
+  // no forwarding header; admin = an authenticated admin session or agent token.
+  METRICS_ACCESS: z.preprocess(emptyToUndefined, z.enum(['off', 'loopback', 'admin']).default('off')),
+  // Perf plan P0: a request-start header the reverse proxy ALWAYS sets/overwrites (nginx:
+  // `proxy_set_header X-Request-Start "t=${msec}";`), used for the access log's queueMs and the queue histogram.
+  // Unset (default) = no queue time; never name a header clients can set through the proxy.
+  METRICS_REQUEST_START_HEADER: z.preprocess(emptyToUndefined, z.string().trim().toLowerCase().regex(/^[a-z0-9-]+$/).optional()),
+  // #360 A13: total graceful-shutdown budget on SIGTERM/SIGINT (stop admitting, drain HTTP and job passes, close
+  // pools; forced exit at this deadline). Keep it below the process manager's kill timeout (pm2 kill_timeout,
+  // compose stop_grace_period). Default 10000, as before.
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(10_000),
   PGAPPNAME: z.string().trim().min(1).default('sellright-api'),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   // Interface to bind. Default 0.0.0.0 (reverse proxies on a Docker bridge

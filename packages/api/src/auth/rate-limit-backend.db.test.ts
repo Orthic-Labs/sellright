@@ -10,7 +10,7 @@ import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-d
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
-import { createPostgresRateLimitBackend } from './rate-limit-backend.js';
+import { createPostgresRateLimitBackend, reapRateLimitAttempts } from './rate-limit-backend.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'rate-limit-backend.db.test.ts');
@@ -81,4 +81,46 @@ describe('postgres rate-limit backend — cross-process sharing', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(await backend.consume('test-bucket', 'sliding-key', 1, 1)).toBe(0);
   });
+
+  it('P8 (A6/G1): a concurrent burst on one key admits exactly the cap without waiting on a lock', async () => {
+    const a = createPostgresRateLimitBackend();
+    const b = createPostgresRateLimitBackend();
+    const results = await Promise.all(Array.from({ length: 12 }, (_, i) => (i % 2 ? a : b).consume('burst', 'one-key', 60_000, 5)));
+    // Contended attempts back off and retry; any that exhaust their retries fail CLOSED (>0), never open.
+    expect(results.filter((r) => r === 0).length).toBeLessThanOrEqual(5);
+    const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM rate_limit_attempt WHERE bucket = 'burst' AND key = 'one-key'`);
+    expect(rows[0]!.n).toBe(results.filter((r) => r === 0).length);
+  });
+
+  it('P8 (A6/G1): a key whose lock is held elsewhere fails closed after bounded retries and holds no client', async () => {
+    const holder = await pool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['rate:held:k']);
+      const b = createPostgresRateLimitBackend({ lockTries: 3, backoffMs: [1, 1] });
+      expect(await b.consume('held', 'k', 60_000, 5)).toBe(1);
+      const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM rate_limit_attempt WHERE bucket = 'held'`);
+      expect(rows[0]!.n).toBe(0);
+    } finally {
+      await holder.query('ROLLBACK');
+      holder.release();
+    }
+  });
+
+  it('P8 (D4): the reaper deletes in bounded batches and keeps long-retention buckets', async () => {
+    await pool.query(`INSERT INTO rate_limit_attempt (bucket, key, attempted_at)
+      SELECT 'old', 'k' || g, now() - interval '2 days' FROM generate_series(1, 25) g`);
+    await pool.query(`INSERT INTO rate_limit_attempt (bucket, key, attempted_at) VALUES
+      ('admin-auth-known', 'admin:a|198.51.100.1', now() - interval '2 days'),
+      ('admin-auth-known', 'admin:b|198.51.100.1', now() - interval '40 days'),
+      ('fresh', 'k', now())`);
+    const first = await reapRateLimitAttempts(24, { batchSize: 10, maxBatches: 2, mode: 'postgres' });
+    expect(first).toEqual({ deleted: 20, complete: false });
+    const second = await reapRateLimitAttempts(24, { batchSize: 10, maxBatches: 5, mode: 'postgres' });
+    expect(second.complete).toBe(true);
+    expect(second.deleted).toBe(6); // 5 generic + the 40-day-old known marker
+    const { rows } = await pool.query<{ bucket: string }>(`SELECT bucket FROM rate_limit_attempt ORDER BY bucket`);
+    expect(rows.map((r) => r.bucket)).toEqual(['admin-auth-known', 'fresh']);
+  });
 });
+

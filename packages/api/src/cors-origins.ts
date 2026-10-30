@@ -50,27 +50,43 @@ export function adminCorsOrigins(): string[] {
 }
 
 /**
+ * P8 (G12c): shape rules for a credentialed shop-API Origin, DB-free and unit-testable.
+ *   - a bare origin only (scheme://host[:port], nothing after it), never the opaque 'null';
+ *   - production: https only, default port only (a store is served on 443; another port on the same host is another
+ *     origin that the store never declared);
+ *   - non-production: http is allowed too, and any port (dev servers).
+ * Returns the normalized hostname or null.
+ */
+export function parseShopCorsOrigin(origin: string, isDev: boolean): string | null {
+  let url: URL;
+  try { url = new URL(origin); } catch { return null; }
+  if (url.origin === 'null' || url.origin !== origin.replace(/\/+$/, '').toLowerCase()) return null;
+  if (url.protocol !== 'https:' && !(isDev && url.protocol === 'http:')) return null;
+  if (!isDev && url.port !== '') return null;
+  return normalizeHost(url.hostname);
+}
+
+/**
  * Full check for the CORS middleware: parses the Origin header and matches its
  * hostname against every store's config.hostnames (via resolveStoreByHost,
  * which already does the scan+match in one query) plus the dev-local
  * allowance (isAllowedOriginHost). Returns false for a missing/malformed
  * Origin (same-origin requests don't send one; the caller in app.ts only
  * invokes this when an Origin header is present).
+ *
+ * P8 (G12c): the scheme/port rules above apply, and when the caller supplies the store the REQUEST resolved to
+ * (`requestStoreId`), the Origin must belong to that same store — one store's storefront can no longer make
+ * credentialed calls that the API answers as another store. Callers that do not pass it keep the any-store check.
  */
-export async function isAllowedCorsOrigin(origin: string | undefined): Promise<boolean> {
+export async function isAllowedCorsOrigin(origin: string | undefined, opts: { requestStoreId?: string } = {}): Promise<boolean> {
   if (!origin) return false;
-  let hostname: string;
-  try {
-    hostname = new URL(origin).hostname;
-  } catch {
-    return false;
-  }
-  const host = normalizeHost(hostname);
+  const isDev = env.NODE_ENV !== 'production';
+  const host = parseShopCorsOrigin(origin, isDev);
   if (!host) return false;
 
-  const isDev = env.NODE_ENV !== 'production';
   if (isAllowedOriginHost(host, [], isDev)) return true; // dev-local allowance only, no store list yet
 
   const store = await resolveStoreByHost(host);
-  return store !== null;
+  if (store === null) return false;
+  return opts.requestStoreId === undefined || store.id === opts.requestStoreId;
 }

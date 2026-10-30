@@ -40,7 +40,7 @@
 import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { emitEvent } from '../webhooks/emit.js';
+import { emitEvents } from '../webhooks/emit.js';
 import { env } from '../env.js';
 import { cartLifecycleFromConfig, type CartLifecycleConfig } from '../cart/ttl.js';
 
@@ -48,6 +48,11 @@ import { cartLifecycleFromConfig, type CartLifecycleConfig } from '../cart/ttl.j
 // single synchronous storm of UPDATE + emitEvent (jury: event-burst bound).
 const ABANDON_BATCH = 500;
 const PURGE_BATCH = 500;
+// V64 (perf plan P6): each store's per-run cap is worked in transactions of at
+// most this many carts, so no transaction holds 500 cart row locks (blocking
+// those shoppers) while it does per-cart writes. Each transaction does one
+// batched UPDATE and one batched event insert instead of 2–3 round trips per cart.
+export const CART_TX_BATCH = 100;
 
 async function activeStores(): Promise<Array<{ id: string; config: unknown }>> {
   const { rows } = await pool.query<{ id: string; config: unknown }>('select id, config from store');
@@ -64,39 +69,45 @@ const lifecycleFor = (config: unknown, fallbackHours: number): CartLifecycleConf
 /** Mark active carts with items + no activity past the store's inactivity
  *  window as abandoned. `defaultWindowHours` is the deployment default (env),
  *  overridden per store by config.cart.abandonAfterHours. */
-export async function abandonStaleCarts(defaultWindowHours: number): Promise<{ abandoned: number }> {
+export async function abandonStaleCarts(defaultWindowHours: number, opts: { txBatch?: number } = {}): Promise<{ abandoned: number }> {
+  const txBatch = Math.max(1, Math.min(ABANDON_BATCH, Math.floor(opts.txBatch ?? CART_TX_BATCH)));
   let abandoned = 0;
   for (const store of await activeStores()) {
     const cutoff = new Date(Date.now() - lifecycleFor(store.config, defaultWindowHours).abandonAfterHours * 60 * 60 * 1000);
-    abandoned += await withStore(store.id, async (tx) => {
-      // Scan-and-lock in one step (FOR UPDATE): a shopper write to one of
-      // these rows blocks our scan until it commits, then Postgres
-      // re-evaluates the predicate on the fresh version — a cart touched in
-      // the window is dropped before it is ever a candidate. Once locked, a
-      // candidate row cannot change under us.
-      const stale = await tx
-        .select({ id: s.cart.id, token: s.cart.token, email: s.cart.email })
-        .from(s.cart)
-        .where(and(eq(s.cart.storeId, store.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, cutoff),
-          sql`exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`))
-        .limit(ABANDON_BATCH)
-        .for('update');
-      let flipped = 0;
-      for (const c of stale) {
+    const eligible = and(eq(s.cart.storeId, store.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, cutoff),
+      sql`exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`);
+    for (let scanned = 0; scanned < ABANDON_BATCH;) {
+      const take = Math.min(txBatch, ABANDON_BATCH - scanned);
+      const batch = await withStore(store.id, async (tx) => {
+        // Scan-and-lock in one step (FOR UPDATE, stable id order): a shopper
+        // write to one of these rows blocks our scan until it commits, then
+        // Postgres re-evaluates the predicate on the fresh version — a cart
+        // touched in the window is dropped before it is ever a candidate.
+        // Once locked, a candidate row cannot change under us.
+        const stale = await tx
+          .select({ id: s.cart.id })
+          .from(s.cart)
+          .where(eligible)
+          .orderBy(s.cart.id)
+          .limit(take)
+          .for('update');
+        if (!stale.length) return { scanned: 0, flipped: 0 };
         // Full-eligibility recheck in the write predicate (still active,
         // still unconverted, still idle past the cutoff, still non-empty):
         // under the FOR UPDATE lock this is infallible — it exists so the
         // write stays correct even if the lock discipline above is ever
-        // weakened. The event fires only for carts we actually flipped.
-        const [row] = await tx.update(s.cart)
+        // weakened. Events fire only for carts we actually flipped.
+        const flipped = await tx.update(s.cart)
           .set({ status: 'abandoned', updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })
-          .where(and(eq(s.cart.id, c.id), eq(s.cart.status, 'active'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, cutoff),
-            sql`exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`))
-          .returning({ id: s.cart.id });
-        if (row) { flipped += 1; await emitEvent(tx, store.id, 'cart.abandoned', { token: c.token, email: c.email }); }
-      }
-      return flipped;
-    });
+          .where(and(inArray(s.cart.id, stale.map((c) => c.id)), eligible))
+          .returning({ id: s.cart.id, token: s.cart.token, email: s.cart.email });
+        await emitEvents(tx, store.id, 'cart.abandoned', flipped.map((c) => ({ token: c.token, email: c.email })));
+        return { scanned: stale.length, flipped: flipped.length };
+      });
+      abandoned += batch.flipped;
+      scanned += batch.scanned;
+      if (batch.scanned < take) break;
+    }
   }
   return { abandoned };
 }
@@ -112,67 +123,81 @@ const TTL_PURGEABLE: Array<'active' | 'merged'> = ['active', 'merged'];
  *  when the store configured config.cart.retentionDays — abandoned carts idle
  *  past that window. Converted carts are never deleted (payment-recovery
  *  anchor) and orders are never touched. Batched deletes, no per-row loop. */
-export async function cleanupExpiredCarts(): Promise<{ deleted: number }> {
+export async function cleanupExpiredCarts(opts: { txBatch?: number } = {}): Promise<{ deleted: number }> {
+  const txBatch = Math.max(1, Math.min(PURGE_BATCH, Math.floor(opts.txBatch ?? CART_TX_BATCH)));
   let deleted = 0;
   const now = new Date();
   for (const store of await activeStores()) {
     const lifecycle = lifecycleFor(store.config, env.CART_ABANDON_HOURS);
-    deleted += await withStore(store.id, async (tx) => {
-      // Scan-and-lock in one step (FOR UPDATE): every shopper mutation writes
-      // the cart row, so a cart touched in the scan→write window either is
-      // re-evaluated on its fresh version when the lock wait resolves
-      // (EvalPlanQual — fresh expiresAt, or a just-committed line failing the
-      // not-exists check) or waits for our commit. Once locked, candidates
-      // cannot change under us.
-      const ttlDoomed = await tx.select({ id: s.cart.id }).from(s.cart).where(
-        and(eq(s.cart.storeId, store.id), lt(s.cart.expiresAt, now), inArray(s.cart.status, TTL_PURGEABLE), isNull(s.cart.convertedOrderId),
-          sql`not exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`))
-        .limit(PURGE_BATCH)
-        .for('update');
-
-      let aged: Array<{ id: string }> = [];
-      let retentionCutoff: Date | null = null;
-      if (lifecycle.retentionDays != null) {
-        // Retention window on abandoned carts only — 'active'/'merged' carts
-        // are owned by the TTL rule above; 'converted' carts are never purged.
-        retentionCutoff = new Date(now.getTime() - lifecycle.retentionDays * 24 * 60 * 60 * 1000);
-        aged = await tx.select({ id: s.cart.id }).from(s.cart).where(
-          and(eq(s.cart.storeId, store.id), eq(s.cart.status, 'abandoned'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, retentionCutoff)))
-          .limit(PURGE_BATCH)
-          .for('update');
-      }
-      if (!ttlDoomed.length && !aged.length) return 0;
-
-      // Strip lines only for carts this pass is deleting — the retention set
-      // carries its lines into the purge (the FK needs them gone first), and
-      // the TTL set is empty by predicate so this is a no-op for it. Locked
-      // candidates can't escape the delete below, so no surviving cart ever
-      // loses lines here.
-      const doomed = [...new Set([...ttlDoomed, ...aged].map((c) => c.id))];
-      await tx.delete(s.cartLine).where(inArray(s.cartLine.cartId, doomed));
-
-      let gone = 0;
-      if (ttlDoomed.length) {
-        // Recheck FULL eligibility at delete time: still expired, still a
-        // purgeable status, still unconverted, and STILL EMPTY — a cart that
-        // gained a line in the window is skipped, not emptied-and-deleted.
-        gone += (await tx.delete(s.cart).where(
-          and(eq(s.cart.storeId, store.id), inArray(s.cart.id, ttlDoomed.map((c) => c.id)),
-            lt(s.cart.expiresAt, now), inArray(s.cart.status, TTL_PURGEABLE), isNull(s.cart.convertedOrderId),
+    // V64: up to PURGE_BATCH per rule per run, in transactions of txBatch.
+    for (let ttlSeen = 0, agedSeen = 0; ttlSeen < PURGE_BATCH || agedSeen < PURGE_BATCH;) {
+      const ttlTake = Math.min(txBatch, PURGE_BATCH - ttlSeen);
+      const agedTake = Math.min(txBatch, PURGE_BATCH - agedSeen);
+      const batch = await withStore(store.id, async (tx) => {
+        // Scan-and-lock in one step (FOR UPDATE): every shopper mutation writes
+        // the cart row, so a cart touched in the scan→write window either is
+        // re-evaluated on its fresh version when the lock wait resolves
+        // (EvalPlanQual — fresh expiresAt, or a just-committed line failing the
+        // not-exists check) or waits for our commit. Once locked, candidates
+        // cannot change under us.
+        const ttlDoomed = ttlTake <= 0 ? [] : await tx.select({ id: s.cart.id }).from(s.cart).where(
+          and(eq(s.cart.storeId, store.id), lt(s.cart.expiresAt, now), inArray(s.cart.status, TTL_PURGEABLE), isNull(s.cart.convertedOrderId),
             sql`not exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`))
-          .returning({ id: s.cart.id })).length;
-      }
-      if (aged.length) {
-        // Same for the retention rule: still abandoned, still unconverted,
-        // still idle past the cutoff — a resumed cart (status back to
-        // 'active', fresh updatedAt) survives untouched.
-        gone += (await tx.delete(s.cart).where(
-          and(eq(s.cart.storeId, store.id), inArray(s.cart.id, aged.map((c) => c.id)),
-            eq(s.cart.status, 'abandoned'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, retentionCutoff!)))
-          .returning({ id: s.cart.id })).length;
-      }
-      return gone;
-    });
+          .orderBy(s.cart.id)
+          .limit(ttlTake)
+          .for('update');
+
+        let aged: Array<{ id: string }> = [];
+        let retentionCutoff: Date | null = null;
+        if (lifecycle.retentionDays != null && agedTake > 0) {
+          // Retention window on abandoned carts only — 'active'/'merged' carts
+          // are owned by the TTL rule above; 'converted' carts are never purged.
+          retentionCutoff = new Date(now.getTime() - lifecycle.retentionDays * 24 * 60 * 60 * 1000);
+          aged = await tx.select({ id: s.cart.id }).from(s.cart).where(
+            and(eq(s.cart.storeId, store.id), eq(s.cart.status, 'abandoned'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, retentionCutoff)))
+            .orderBy(s.cart.id)
+            .limit(agedTake)
+            .for('update');
+        }
+        const seen = { ttl: ttlDoomed.length, aged: aged.length };
+        if (!ttlDoomed.length && !aged.length) return { ...seen, gone: 0 };
+
+        // Strip lines only for carts this pass is deleting — the retention set
+        // carries its lines into the purge (the FK needs them gone first), and
+        // the TTL set is empty by predicate so this is a no-op for it. Locked
+        // candidates can't escape the delete below, so no surviving cart ever
+        // loses lines here.
+        const doomed = [...new Set([...ttlDoomed, ...aged].map((c) => c.id))];
+        await tx.delete(s.cartLine).where(inArray(s.cartLine.cartId, doomed));
+
+        let gone = 0;
+        if (ttlDoomed.length) {
+          // Recheck FULL eligibility at delete time: still expired, still a
+          // purgeable status, still unconverted, and STILL EMPTY — a cart that
+          // gained a line in the window is skipped, not emptied-and-deleted.
+          gone += (await tx.delete(s.cart).where(
+            and(eq(s.cart.storeId, store.id), inArray(s.cart.id, ttlDoomed.map((c) => c.id)),
+              lt(s.cart.expiresAt, now), inArray(s.cart.status, TTL_PURGEABLE), isNull(s.cart.convertedOrderId),
+              sql`not exists (select 1 from cart_line cl where cl.cart_id = ${s.cart.id})`))
+            .returning({ id: s.cart.id })).length;
+        }
+        if (aged.length) {
+          // Same for the retention rule: still abandoned, still unconverted,
+          // still idle past the cutoff — a resumed cart (status back to
+          // 'active', fresh updatedAt) survives untouched.
+          gone += (await tx.delete(s.cart).where(
+            and(eq(s.cart.storeId, store.id), inArray(s.cart.id, aged.map((c) => c.id)),
+              eq(s.cart.status, 'abandoned'), isNull(s.cart.convertedOrderId), lt(s.cart.updatedAt, retentionCutoff!)))
+            .returning({ id: s.cart.id })).length;
+        }
+        return { ...seen, gone };
+      });
+      deleted += batch.gone;
+      ttlSeen += batch.ttl;
+      agedSeen += batch.aged;
+      // Stop once neither rule filled its window (backlog drained or run cap reached).
+      if ((ttlTake <= 0 || batch.ttl < ttlTake) && (agedTake <= 0 || batch.aged < agedTake)) break;
+    }
   }
   return { deleted };
 }

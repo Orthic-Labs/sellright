@@ -24,6 +24,16 @@ const HOSTS = {
 
 export type ApnsEnvironment = keyof typeof HOSTS;
 
+/**
+ * A2 (perf plan P6): explicit APNs workflow deadline. A session that never
+ * connects, or a stream Apple never answers, used to hang the push-outbox pass
+ * indefinitely (node:http2 has no default request timeout). Past this deadline
+ * the session is destroyed and the send rejects; the outbox records a failed
+ * attempt and its own backoff applies. The outcome is unknown, not "not sent":
+ * a retry may duplicate an alert, which APNs collapse ids mitigate.
+ */
+export const APNS_REQUEST_DEADLINE_MS = 15_000;
+
 /** Apple rejects a provider token older than 1h; refresh at 50m for headroom. */
 const TOKEN_TTL_MS = 50 * 60 * 1000;
 
@@ -99,8 +109,15 @@ export async function sendApns(args: {
   let session: ClientHttp2Session | null = null;
   try {
     session = connect(host);
-    return await new Promise<ApnsResult>((resolve, reject) => {
+    return await new Promise<ApnsResult>((settle, fail) => {
       const s = session!;
+      const timer = setTimeout(() => {
+        fail(new Error(`apns_deadline_exceeded after ${APNS_REQUEST_DEADLINE_MS}ms`));
+        s.destroy();
+      }, APNS_REQUEST_DEADLINE_MS);
+      timer.unref?.();
+      const resolve = (r: ApnsResult) => { clearTimeout(timer); settle(r); };
+      const reject = (e: unknown) => { clearTimeout(timer); fail(e); };
       s.once('error', reject);
 
       const headers: Record<string, string> = {
@@ -138,7 +155,7 @@ export async function sendApns(args: {
       req.end(body);
     });
   } finally {
-    session?.close();
+    if (session && !session.destroyed) session.close();
   }
 }
 

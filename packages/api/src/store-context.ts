@@ -40,6 +40,20 @@ interface CacheEntry<T> { value: T; expiresAt: number; }
 
 const slugCache = new Map<string, CacheEntry<StoreCtx>>();
 const hostCache = new Map<string, CacheEntry<StoreCtx>>();
+/**
+ * P8 (C7/G2): bounded NEGATIVE host cache. Every unmatched Host used to scan the whole store registry, so a scanner
+ * cycling random Host headers (or a CORS preflight per random Origin) turned each request into a full-table read.
+ * A miss is now remembered for NEGATIVE_TTL_MS (short: a newly added hostname must start working quickly even if a
+ * broadcast is lost), capped at NEGATIVE_MAX_ENTRIES, and ANY store invalidation flushes it entirely — a hostname
+ * that was just added to some store is never answered from a stale miss. Concurrent misses for one host share a
+ * single registry scan (inflightHost).
+ */
+const NEGATIVE_TTL_MS = 15 * 1000;
+const NEGATIVE_MAX_ENTRIES = 2000;
+const MAX_HOST_LENGTH = 253;
+const hostMissCache = new Map<string, number>(); // host -> expiresAt
+const inflightHost = new Map<string, Promise<StoreCtx | null>>();
+let hostGeneration = 0; // bumped by every invalidation; a scan started before one never writes a negative entry
 
 function readCache<T>(m: Map<string, CacheEntry<T>>, key: string): T | undefined {
   const e = m.get(key);
@@ -81,6 +95,8 @@ function writeCache<T>(m: Map<string, CacheEntry<T>>, key: string, value: T): vo
  * - `invalidateStoreCache()` → flush everything (process-wide flush; tests).
  */
 export function invalidateStoreCache(slug?: string, host?: string): void {
+  hostMissCache.clear();
+  hostGeneration++;
   if (slug === undefined && host === undefined) {
     slugCache.clear();
     hostCache.clear();
@@ -224,8 +240,8 @@ export async function _stopStoreCacheInvalidationListenerForTest(): Promise<void
 }
 
 /** Test-only: peek at current cache sizes. Not part of the public surface. */
-export function _cacheSizeForTest(): { slug: number; host: number } {
-  return { slug: slugCache.size, host: hostCache.size };
+export function _cacheSizeForTest(): { slug: number; host: number; hostMiss: number } {
+  return { slug: slugCache.size, host: hostCache.size, hostMiss: hostMissCache.size };
 }
 
 /** Slug shape: lowercase, 1-64 chars, alnum + dash/underscore, must start+end alnum. */
@@ -346,23 +362,46 @@ function hostnamesFromConfig(config: unknown): string[] {
  * yet at this point in the request lifecycle.
  */
 export async function resolveStoreByHost(host: string): Promise<StoreCtx | null> {
+  // G12e: a hostname is at most 253 octets; anything longer can match no store and is not worth a cache slot.
+  if (!host || host.length > MAX_HOST_LENGTH) return null;
   const cached = readCache(hostCache, host);
   if (cached) return cached;
+  const missUntil = hostMissCache.get(host);
+  if (missUntil !== undefined) {
+    if (missUntil > Date.now()) return null;
+    hostMissCache.delete(host);
+  }
+  const pending = inflightHost.get(host);
+  if (pending) return pending;
+  const generation = hostGeneration;
+  const scan = scanStoresForHost(host).then((row) => {
+    if (row) writeCache(hostCache, host, row);
+    else if (generation === hostGeneration) rememberHostMiss(host);
+    return row;
+  }).finally(() => { inflightHost.delete(host); });
+  inflightHost.set(host, scan);
+  return scan;
+}
+
+function rememberHostMiss(host: string): void {
+  hostMissCache.delete(host);
+  hostMissCache.set(host, Date.now() + NEGATIVE_TTL_MS);
+  while (hostMissCache.size > NEGATIVE_MAX_ENTRIES) {
+    const oldest = hostMissCache.keys().next().value;
+    if (oldest === undefined) break;
+    hostMissCache.delete(oldest);
+  }
+}
+
+async function scanStoresForHost(host: string): Promise<StoreCtx | null> {
   const stripped = stripHostPrefix(host, hostStripPrefixes());
   const r = await pool.query<StoreCtx>(
     'SELECT id, slug, name, currency, tax_rate AS "taxRate", tax_inclusive AS "taxInclusive", shipping_taxable AS "shippingTaxable", config FROM store',
   );
   for (const row of r.rows) {
     const hostnames = hostnamesFromConfig(row.config);
-    if (hostMatchesAny(host, hostnames) || (stripped !== host && hostMatchesAny(stripped, hostnames))) {
-      writeCache(hostCache, host, row);
-      return row;
-    }
+    if (hostMatchesAny(host, hostnames) || (stripped !== host && hostMatchesAny(stripped, hostnames))) return row;
   }
-  // Don't cache negative lookups — config.hostnames changes invalidate the
-  // hostCache via the slug path on next settings save, but a stale "no match"
-  // entry would defeat that. Negative cache is bounded by traffic to the
-  // unmatched host, which is naturally a small set.
   return null;
 }
 
@@ -387,12 +426,16 @@ export async function resolveStoreByHost(host: string): Promise<StoreCtx | null>
  * re-import of db/client.js).
  */
 export async function resolveStoreForRequest(
-  opts: { storeSlugHeader?: string; host?: string; forwardedHost?: string },
+  opts: { storeSlugHeader?: string; host?: string; forwardedHost?: string; trustedIngress?: boolean },
   isProduction: boolean = env.NODE_ENV === 'production',
 ): Promise<StoreCtx> {
-  if (opts.storeSlugHeader) return resolveStore(opts.storeSlugHeader);
+  // P8 (G12b): tenant-routing headers are honoured only from ingress the deployment controls. `trustedIngress`
+  // undefined keeps the historical behaviour (callers that have not been wired yet); false — a request that reached
+  // the API directly from a public peer — routes by the Host header alone.
+  const trustHeaders = opts.trustedIngress !== false;
+  if (trustHeaders && opts.storeSlugHeader) return resolveStore(opts.storeSlugHeader);
 
-  const host = normalizeHost(opts.forwardedHost) ?? normalizeHost(opts.host);
+  const host = (trustHeaders ? normalizeHost(opts.forwardedHost) : null) ?? normalizeHost(opts.host);
   if (host) {
     const byHost = await resolveStoreByHost(host);
     if (byHost) return byHost;

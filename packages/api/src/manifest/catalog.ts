@@ -24,6 +24,17 @@ import * as s from '../db/schema.js';
 import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
 import { CatalogReuseError, publishGeneration, readCurrentCatalogReuseSnapshot, type CatalogReuse } from './publish.js';
 import { aggregatesForProducts } from '../reviews/reviews.js';
+import { purgeAfterPublish } from '../cache/purge-hook.js';
+import { productPath, seoConfigFromStore } from '../seo/config.js';
+
+/**
+ * N9 / F5: thrown AFTER a generation was published when the follow-up edge purge failed or timed out. The new
+ * generation is live; the caller must keep its durable catalog_manifest_pending marker so the drain pass
+ * republishes and purges again (persisted retry, no in-memory-only retry).
+ */
+export class CatalogPurgeError extends Error {
+  constructor(readonly published: { generation: string; products: number }) { super('Catalog published but edge purge failed'); }
+}
 
 const assetUrl = (path: string | null | undefined) => !path ? null : (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }, rule: VariantPriceRule) =>
@@ -302,6 +313,14 @@ async function productIdsForVariants(tx: Tx, storeId: string, variantIds: string
   return [...new Set(rows.map((r) => r.productId))];
 }
 
+/** V60 / #357: product ids named by a content trigger, confined to this store (a foreign id resolves to nothing). */
+async function productIdsInStore(tx: Tx, storeId: string, productIds: string[]): Promise<string[]> {
+  if (!productIds.length) return [];
+  const rows = await tx.select({ id: s.product.id }).from(s.product)
+    .where(and(eq(s.product.storeId, storeId), inArray(s.product.id, productIds)));
+  return rows.map((r) => r.id);
+}
+
 /** Slugs for a set of product ids, regardless of status/deleted — needed to
  *  find and drop a manifest entry for a product that no longer recomputes
  *  (archived/deleted since the last publish). */
@@ -338,15 +357,29 @@ function mergeByName<T extends { name: string }>(unchanged: T[], fresh: T[]): T[
   return merged;
 }
 
-export async function publishCatalogManifest(args: { outDir: string; storeSlug: string; variantIds?: string[] }) {
+/**
+ * `variantIds` / `productIds` scope the DB work to the owning products (stock / product-edit triggers); either may
+ * be given, both are unioned. Neither means a full rebuild.
+ *
+ * N9 / F5: the edge purge runs only AFTER `publishGeneration` atomically and durably swapped `current` — the
+ * standard shop set, plus every affected product's page (old and new slug, so a rename purges both). Set
+ * `purge: false` to publish without purging. A failed/timed-out purge throws CatalogPurgeError after publication so
+ * the caller's durable marker survives for retry.
+ */
+export async function publishCatalogManifest(args: { outDir: string; storeSlug: string; variantIds?: string[]; productIds?: string[]; purge?: boolean }) {
   const now = new Date().toISOString();
   const store = await resolveStore(args.storeSlug);
   const priceRule = variantPriceRuleFromConfig(store.config);
+  const wantsScope = !!(args.variantIds?.length || args.productIds?.length);
+  let affectedSlugs: string[] = [];
 
-  const current = args.variantIds?.length ? await readCurrentCatalogReuseSnapshot(args.outDir, args.storeSlug) : null;
-  const scoped: PublishPayload | null = current && args.variantIds?.length
+  const current = wantsScope ? await readCurrentCatalogReuseSnapshot(args.outDir, args.storeSlug) : null;
+  const scoped: PublishPayload | null = current && wantsScope
     ? await withStore(store.id, async (tx): Promise<PublishPayload | null> => {
-        const affectedProductIds = await productIdsForVariants(tx, store.id, args.variantIds!);
+        const affectedProductIds = [...new Set([
+          ...await productIdsForVariants(tx, store.id, args.variantIds ?? []),
+          ...await productIdsInStore(tx, store.id, args.productIds ?? []),
+        ])];
         if (!affectedProductIds.length) return null; // variant(s) resolved to nothing real — full scan is the safe default
         // Sequential, not Promise.all: these share one transaction/connection.
         const { manifestProducts: freshEntries, details: freshDetails, manifestProductsV2: freshV2, detailsV2: freshDetailsV2 } = await buildEntries(tx, store, priceRule, affectedProductIds);
@@ -355,6 +388,7 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
         // affected owners disappear when no fresh entry is built.
         const affectedIds = new Set(affectedProductIds);
         const staleSlugs = new Set([...possiblyStaleSlugs, ...current.v2.manifest.products.filter(p => affectedIds.has(p.id as string)).map(p => p.slug)]);
+        affectedSlugs = [...staleSlugs];
         const unchanged = current.v1.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as ManifestProductEntry[];
         const unchangedV2 = current.v2.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as NativeProductManifestEntryV2[];
         const manifestProducts = mergeByName(unchanged, freshEntries);
@@ -380,10 +414,17 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
     };
   });
   const publish = (payload: PublishPayload) => publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, ...payload });
+  let result: Awaited<ReturnType<typeof publishGeneration>> | null = null;
   if (scoped) {
-    try { return await publish(scoped); }
+    try { result = await publish(scoped); }
     catch (error) { if (!(error instanceof CatalogReuseError)) throw error; }
   }
   // A stale identity/race discards its stage before exactly one full rebuild.
-  return publish(await fullPayload());
+  result ??= await publish(await fullPayload());
+  if (args.purge !== false) {
+    const seo = seoConfigFromStore({ name: store.name, config: store.config });
+    const outcome = await purgeAfterPublish(args.storeSlug, affectedSlugs.map((slug) => productPath(seo, slug)));
+    if (outcome === 'failed') throw new CatalogPurgeError(result);
+  }
+  return result;
 }

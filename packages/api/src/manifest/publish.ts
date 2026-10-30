@@ -31,6 +31,20 @@ const identity = (metadata: BigIntStats): FileIdentity => Object.fromEntries(ide
 const matchesIdentity = (a: FileIdentity, b: FileIdentity, afterLink = false) => (afterLink ? contentKeys : identityKeys).every(key => a[key] === b[key]);
 const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 
+// V66: atomic rename gives readers all-or-nothing visibility; crash durability also needs the bytes and the directory
+// entries on disk before `current` points at them. Freshly written files are fsynced in bounded parallel batches
+// after staging (hardlinked reuse files were synced when their own generation was published), then the generation's
+// directories, then — after the pointer rename — the catalog root, so a power loss can never leave `current`
+// naming a generation whose files are empty or missing.
+const FSYNC_BATCH = 16;
+async function syncPath(path: string): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY);
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+async function syncAll(paths: readonly string[]): Promise<void> {
+  for (let i = 0; i < paths.length; i += FSYNC_BATCH) await Promise.all(paths.slice(i, i + FSYNC_BATCH).map(syncPath));
+}
+
 async function openTrustedFile(path: string) {
   if (typeof constants.O_NOFOLLOW !== 'number') throw new Error('Catalog no-follow reads unavailable');
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -195,12 +209,14 @@ export async function publishGeneration(input: Input) {
   const pointer = join(root, `.current-${generation}`);
   let published = false;
   let claimedTarget = false;
+  const written: string[] = [];
+  const stage = async (path: string, bytes: string | Buffer, flag?: 'wx') => { await writeFile(path, bytes, flag ? { flag } : undefined); written.push(path); };
   try {
     await mkdir(target);
     claimedTarget = true;
     await mkdir(join(target, 'products'));
     await mkdir(join(target, 'products-v2'));
-    await writeFile(join(target, 'shop-catalog.json'), JSON.stringify(input.manifest));
+    await stage(join(target, 'shop-catalog.json'), JSON.stringify(input.manifest));
     const inventory: ReuseInventory = { version: 1, v1: Object.create(null), v2: Object.create(null) };
     const writeDetails = async (folder: string, details: { slug: string }[], files: Record<string, ReuseFile>, pinned?: Record<string, ReuseFile>) => {
       const freshSlugs = new Set(details.map(detail => detail.slug));
@@ -225,7 +241,7 @@ export async function publishGeneration(input: Input) {
           await rm(destination, { force: true });
         }
         const bytes = JSON.stringify(detail);
-        await writeFile(destination, bytes);
+        await stage(destination, bytes);
         const opened = await openTrustedFile(destination);
         try { files[detail.slug] = { digest: digest(bytes), identity: opened.identity }; }
         finally { await opened.file.close(); }
@@ -247,7 +263,7 @@ export async function publishGeneration(input: Input) {
               if (!['EXDEV', 'EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS', 'EMLINK'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
               const bytes = await opened.file.readFile();
               if (digest(bytes) !== expected.digest || !matchesIdentity(identity(await opened.file.stat({ bigint: true })), opened.identity)) throw new Error('Changed catalog reuse bytes');
-              await writeFile(destination, bytes, { flag: 'wx' });
+              await stage(destination, bytes, 'wx');
               const copied = await openTrustedFile(destination);
               try { files[slug] = { digest: expected.digest, identity: copied.identity }; }
               finally { await copied.file.close(); }
@@ -264,7 +280,7 @@ export async function publishGeneration(input: Input) {
       }
     };
     await writeDetails('products', input.details, inventory.v1, input.reuse?.inventory?.v1);
-    await writeFile(join(target, 'shop-catalog.v2.json'), JSON.stringify(input.manifestV2 ?? null));
+    await stage(join(target, 'shop-catalog.v2.json'), JSON.stringify(input.manifestV2 ?? null));
     await writeDetails('products-v2', detailsV2, inventory.v2, input.reuse?.inventory?.v2);
     // Cleanup changes shared inodes' ctime/nlink. Finish owned unlinks before
     // capturing metadata in the new marker; retain previous & recent readers.
@@ -288,10 +304,13 @@ export async function publishGeneration(input: Input) {
     }
     // format 2 carries both public formats; inventory is writer-private,
     // versioned metadata for immutable detail reuse.
-    await writeFile(join(target, 'marker.json'), JSON.stringify({ format: 2, source: 'sellright', storeSlug: input.storeSlug, generation, generatedAt: new Date().toISOString(), inventory }));
+    await stage(join(target, 'marker.json'), JSON.stringify({ format: 2, source: 'sellright', storeSlug: input.storeSlug, generation, generatedAt: new Date().toISOString(), inventory }));
+    await syncAll(written);
+    await syncAll([join(target, 'products'), join(target, 'products-v2'), target, generations]);
     await symlink(`generations/${generation}`, pointer);
     await rename(pointer, join(root, 'current'));
     published = true;
+    await syncPath(root);
     return { generation, products: input.details.length + (input.reuse?.inventory ? reuse.size : 0) };
   } finally {
     await rm(pointer, { force: true });

@@ -388,9 +388,12 @@ admin.openapi(
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .$dynamic();
       const rows = await (where ? base.where(where) : base)
-        .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`))
+        .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`), desc(s.order.id))
         .limit(pageSize).offset((page - 1) * pageSize);
-      const cntBase = tx.select({ n: sql<number>`count(*)::int` }).from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId)).$dynamic();
+      // PERF C10: the customer join only matters for the `q` search (contact/name predicates); a LEFT JOIN on the customer PK cannot change the count otherwise.
+      const cntBase = (q
+        ? tx.select({ n: sql<number>`count(*)::int` }).from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
+        : tx.select({ n: sql<number>`count(*)::int` }).from(s.order)).$dynamic();
       const [cnt] = await (where ? cntBase.where(where) : cntBase);
       return {
         items: rows.map((r) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),

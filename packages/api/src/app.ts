@@ -83,6 +83,7 @@ import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { CACHEABLE_EXCEPTIONS, cachePolicy, listRegisteredCacheableExceptions, validateCacheableExceptions, type CacheableException } from './cache-policy.js';
 import { err as logErr } from './lib/logger.js';
+import { renderPrometheus } from './lib/metrics.js';
 import { listApiPlugins } from './plugins.js';
 import { installDefaultStoreKitPolicy } from './licensing/storekit/default-policy.js';
 import { installDefaultPaymentPolicy } from './payments/policy/default-policy.js';
@@ -105,6 +106,29 @@ export function openapiAdminOnly(isProduction: () => boolean): MiddlewareHandler
     const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
     if (!admin) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     await next();
+  };
+}
+
+const FORWARDING_HEADERS = ['forwarded', 'x-forwarded-for', 'x-real-ip', 'cf-connecting-ip', 'true-client-ip'] as const;
+const isLoopbackPeer = (addr: string | undefined) => !!addr && (/^127\.\d+\.\d+\.\d+$/.test(addr) || addr === '::1' || /^::ffff:127\.\d+\.\d+\.\d+$/i.test(addr));
+
+/** Perf plan P0: the gate in front of GET /v1/internal/metrics (METRICS_ACCESS). `off` answers 404 as if the route
+ *  did not exist; `loopback` admits only a DIRECT loopback TCP peer that sent no forwarding header (a request relayed
+ *  by nginx or any proxy on the host carries one, and nginx on the Docker bridge is not loopback) and answers 404
+ *  otherwise; `admin` requires an admin session or agent token (401 without). */
+export function metricsAccess(mode: () => 'off' | 'loopback' | 'admin'): MiddlewareHandler {
+  return async (c, next) => {
+    const m = mode();
+    if (m === 'loopback') {
+      const peer = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress;
+      if (isLoopbackPeer(peer) && FORWARDING_HEADERS.every((h) => c.req.header(h) === undefined)) return next();
+    } else if (m === 'admin') {
+      const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+      const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
+      if (!admin) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+      return next();
+    }
+    return errJson(c, 404, 'NOT_FOUND', 'not found');
   };
 }
 
@@ -173,7 +197,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // OBS-1: per-request access log. One JSON line per request with method,
   // path, status, duration_ms — emitted at the end so all three values are
   // known. Stays behind the request-id middleware so the line carries it.
-  app.use('*', accessLogMiddleware());
+  app.use('*', accessLogMiddleware({ requestStartHeader: () => env.METRICS_REQUEST_START_HEADER }));
 
   // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
   app.use('*', preRoutePolicy(listApiPlugins));
@@ -471,6 +495,18 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     } finally {
       clearTimeout(timer);
     }
+  });
+
+  // Perf plan P0: private metrics (Prometheus text): per-route request histograms, every pool's gauges, latency
+  // histograms and timeout/cancel counters, job admission and event-loop delay/utilization. Gated by METRICS_ACCESS
+  // (default off → 404). Not in the OpenAPI contract: it is an operator surface, not an API.
+  app.get('/v1/internal/metrics', metricsAccess(() => env.METRICS_ACCESS), (c) => {
+    const jobs = admissionGauges();
+    const body = renderPrometheus({
+      sellright_jobs_active_passes: { help: 'Job passes holding an admission slot', value: jobs.active },
+      sellright_jobs_overdue_passes: { help: 'Admitted job passes past JOBS_PASS_DEADLINE_MS (still holding their slots)', value: jobs.overdue },
+    });
+    return c.body(body, 200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
   });
 
   app.onError((err, c) => {

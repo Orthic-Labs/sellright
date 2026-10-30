@@ -17,7 +17,7 @@ import { lockMembershipAsCaller } from './admin-settings-advanced.js';
 import { encryptSecret, last4 as computeLast4 } from '../security/secret-crypto.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 import { readSecret, purposeKey, scopeFor } from './admin-payment-settings.js';
-import { SMTP_PRESETS, SmtpConfig, smtpConfigFromStoreConfig, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
+import { SMTP_PRESETS, SMTP_POLICY_MESSAGES, SmtpConfig, SmtpDestinationError, checkSmtpDestinationShape, resolveSmtpDestination, smtpConfigFromStoreConfig, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
 import { invalidateStoreTransport, sendEmail } from '../email/mailer.js';
 
 export const adminEmailSettings = new OpenAPIHono();
@@ -46,10 +46,11 @@ adminEmailSettings.openapi(
   }),
 );
 
+// G12e: every field is bounded (a hostname is <=253 octets, an address <=254).
 const UpdateBody = z.object({
   preset: z.enum(['custom', 'gmail', 'ses', 'postmark', 'resend']),
-  host: z.string().optional(), port: z.number().int().positive().optional(), secure: z.boolean().optional(),
-  user: z.string().optional(), from: z.string().email().optional(), credential: z.string().optional(),
+  host: z.string().max(253).optional(), port: z.number().int().positive().max(65535).optional(), secure: z.boolean().optional(),
+  user: z.string().max(320).optional(), from: z.string().max(254).email().optional(), credential: z.string().max(4096).optional(),
 });
 
 adminEmailSettings.openapi(
@@ -59,6 +60,7 @@ adminEmailSettings.openapi(
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody },
+      400: { description: 'SMTP destination not allowed', ...errBody },
       409: { description: 'Managed by server configuration', ...errBody },
     },
   }),
@@ -70,6 +72,13 @@ adminEmailSettings.openapi(
     if (isEnvManaged(env.SMTP_HOST)) throw new HttpError(409, 'Email is managed by server configuration (SMTP_HOST is set)');
     const b = c.req.valid('json');
     const resolved = resolveSmtpPreset(b.preset as SmtpPresetId, { host: b.host, port: b.port, secure: b.secure });
+    // G10: a store's SMTP destination must be a public mail host on a mail port. Checked (shape + DNS) before saving;
+    // the test send and the mailer re-check at connect time, since DNS can change after the save.
+    const shape = checkSmtpDestinationShape(resolved.host, resolved.port);
+    if (shape) throw new HttpError(400, SMTP_POLICY_MESSAGES[shape]);
+    try { await resolveSmtpDestination(resolved.host, resolved.port); } catch (e) {
+      throw new HttpError(400, e instanceof SmtpDestinationError ? e.message : SMTP_POLICY_MESSAGES.host_unresolvable);
+    }
 
     // ONE transaction: re-authorize the caller as an owner under the store's membership lock (a caller demoted or
     // removed while this request waited is refused), then write the SMTP config and its credential atomically.
@@ -104,7 +113,7 @@ adminEmailSettings.openapi(
   }),
 );
 
-const TestSendBody = z.object({ to: z.string().email() });
+const TestSendBody = z.object({ to: z.string().max(254).email() });
 
 adminEmailSettings.openapi(
   createRoute({
@@ -121,7 +130,10 @@ adminEmailSettings.openapi(
       // Env-managed: exercise the real, already-configured mailer.
       const result = await sendEmail({ to, subject: 'SellRight test email', text: 'Test email from SellRight.', html: '<p>Test email from SellRight.</p>' });
       if (result.delivered) await markEmailVerified(st.storeId);
-      return c.json({ delivered: result.delivered, error: result.reason }, 200);
+      // G10: only the mailer's fixed reason codes are reflected, never transport error text.
+      const reason = result.reason === undefined || result.reason === 'smtp_not_configured' || result.reason === 'forbidden_sender_domain'
+        ? result.reason : 'Could not deliver through the server-configured SMTP account';
+      return c.json({ delivered: result.delivered, error: reason }, 200);
     }
 
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));

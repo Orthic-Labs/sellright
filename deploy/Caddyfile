@@ -5,19 +5,58 @@
         trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
         client_ip_headers CF-Connecting-IP
         trusted_proxies_strict
+        # P8 (C11): explicit edge limits instead of unbounded defaults. A slow client cannot hold a connection open
+        # forever while sending headers or a body; idle keep-alives are reaped.
+        timeouts {
+            read_header 10s
+            read_body 30s
+            write 120s
+            idle 2m
+        }
+        max_header_size 32KB
+    }
+}
+
+# P8 (G11): security headers for every public site. HSTS without includeSubDomains/preload — this template cannot
+# know whether every subdomain of the operator's domain serves HTTPS. nosniff matches the admin nginx template.
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}
+
+# Caddy resolves visitor identity from trusted Cloudflare sockets or the direct peer, then replaces X-Real-IP & strips
+# the public header before forwarding privately. The edge never forwards a client-supplied CF-Connecting-IP: behind it
+# the API (and storefront) would otherwise trust a forged per-request identity when BEHIND_CLOUDFLARE=1 (security audit
+# P1a). X-Forwarded-Host is likewise set by the edge (Caddy replaces any client value) — the storefront and API route
+# tenants by it.
+(private_upstream) {
+    header_up X-Real-IP {client_ip}
+    header_up -CF-Connecting-IP
+    # C11: bounded upstream waits — a stuck backend answers 502/504 instead of parking the visitor indefinitely.
+    transport http {
+        dial_timeout 5s
+        response_header_timeout 60s
+    }
+}
+
+# C11: request body cap at the edge. 11MB = the admin asset-upload limit (10 MiB) plus multipart overhead; the API
+# applies its own tighter per-route caps (2 MiB default, 512 KiB for Stripe webhooks) behind this.
+(body_limit) {
+    request_body {
+        max_size 11MB
     }
 }
 
 {$SELLRIGHT_DOMAIN} {
     encode zstd gzip
+    import security_headers
+    import body_limit
 
-    # Caddy resolves visitor identity from trusted Cloudflare sockets or the direct peer,
-    # then replaces X-Real-IP & strips the public header before forwarding privately.
     reverse_proxy admin:8080 {
-        header_up X-Real-IP {client_ip}
-        # The edge never forwards a client-supplied CF-Connecting-IP: behind it the API (and storefront) would
-        # otherwise trust a forged per-request identity when BEHIND_CLOUDFLARE=1 (security audit P1a).
-        header_up -CF-Connecting-IP
+        import private_upstream
     }
 }
 
@@ -30,11 +69,25 @@
 # set it get byte-identical behavior to before the storefront service existed.
 {$SELLRIGHT_STOREFRONT_DOMAIN:-:8090} {
     encode zstd gzip
+    import security_headers
+    import body_limit
 
-    reverse_proxy storefront:4100 {
-        header_up X-Real-IP {client_ip}
-        # The edge never forwards a client-supplied CF-Connecting-IP: behind it the API (and storefront) would
-        # otherwise trust a forged per-request identity when BEHIND_CLOUDFLARE=1 (security audit P1a).
-        header_up -CF-Connecting-IP
+    # P8 (E1): the browser calls the API and loads uploaded media on the storefront's own origin. Those paths used
+    # to fall through to the SSR server (which has neither); route them like the admin site does: /v1/ straight to
+    # the API, /assets/ to the admin nginx that serves the shared read-only assets volume.
+    handle /v1/* {
+        reverse_proxy api:3300 {
+            import private_upstream
+        }
+    }
+    handle /assets/* {
+        reverse_proxy admin:8080 {
+            import private_upstream
+        }
+    }
+    handle {
+        reverse_proxy storefront:4100 {
+            import private_upstream
+        }
     }
 }

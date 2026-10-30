@@ -11,7 +11,7 @@
  * own those files either.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
@@ -29,12 +29,13 @@ export const adminSeo = new OpenAPIHono();
  *  settings can't clobber concurrent writes to `payments`/`pricing`/etc. */
 async function mutateSeoConfig(storeId: string, actor: string, mutate: (seo: Record<string, unknown>) => Record<string, unknown>): Promise<Record<string, unknown>> {
   const { slug, nextSeo } = await withStore(storeId, async (tx) => {
-    const [row] = await tx.select({ slug: s.store.slug, config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('update').limit(1);
+    const [row] = await tx.select({ slug: s.store.slug, config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('no key update').limit(1);
     const prevConfig = (row?.config as Record<string, unknown> | null) ?? {};
     const prevSeo = (prevConfig.seo as Record<string, unknown> | undefined) ?? {};
     const nextSeo = mutate(prevSeo);
     const nextConfig = { ...prevConfig, seo: nextSeo };
-    await tx.update(s.store).set({ config: nextConfig }).where(eq(s.store.id, storeId));
+    // PERF V54: skip the whole-row rewrite when the SEO sub-object is unchanged (audit row below still records the request).
+    if (JSON.stringify(nextSeo) !== JSON.stringify(prevSeo)) await tx.update(s.store).set({ config: nextConfig }).where(eq(s.store.id, storeId));
     // SR-16: durable audit record. seo config carries no secrets (indexNowKey
     // is a public verification token by design — IndexNow publishes it at a
     // world-readable URL), so the full before/after is safe to log.
@@ -194,6 +195,32 @@ async function loadSitemapInputs(storeId: string, config: ReturnType<typeof seoC
   }));
 }
 
+/** PERF V53: the preview rebuilds catalog-wide inputs on every GET. Cache them per store keyed by a cheap revision
+ *  (counts + max(updated_at) of the three sources, the visible-blog count so a scheduled publish invalidates, and the
+ *  config fields that shape the inputs). The refresh route never uses the cache. */
+const previewInputsCache = new Map<string, { rev: string; inputs: SitemapInputs }>();
+const PREVIEW_CACHE_MAX = 64;
+
+async function sitemapRevision(storeId: string, config: ReturnType<typeof seoConfigFromStore>): Promise<string> {
+  const r = await withStore(storeId, (tx) => tx.execute(sql`
+    select
+      (select count(*)::text || ':' || coalesce(max(updated_at)::text, '') from product where store_id = ${storeId} and status = 'active' and deleted_at is null) as p,
+      (select count(*)::text || ':' || coalesce(max(updated_at)::text, '') from collection where store_id = ${storeId} and published = true) as c,
+      (select count(*)::text || ':' || coalesce(max(updated_at)::text, '') from blog_post where store_id = ${storeId} and is_published = true and (publish_date is null or publish_date <= now())) as b`));
+  const row = (r as unknown as { rows: Array<{ p: string; c: string; b: string }> }).rows[0];
+  return JSON.stringify([row?.p, row?.c, row?.b, config.staticPaths, config.productUrlPattern]);
+}
+
+async function cachedSitemapInputs(storeId: string, config: ReturnType<typeof seoConfigFromStore>): Promise<SitemapInputs> {
+  const rev = await sitemapRevision(storeId, config);
+  const hit = previewInputsCache.get(storeId);
+  if (hit && hit.rev === rev) return hit.inputs;
+  const inputs = await loadSitemapInputs(storeId, config);
+  if (previewInputsCache.size >= PREVIEW_CACHE_MAX) previewInputsCache.delete(previewInputsCache.keys().next().value as string);
+  previewInputsCache.set(storeId, { rev, inputs });
+  return inputs;
+}
+
 const previewFile = z.object({
   name: z.string(), url: z.string(), kind: z.enum(['main', 'products', 'collections', 'blog']), count: z.number().int(),
   urls: z.array(z.object({ loc: z.string(), lastmod: z.string().nullable() })), truncated: z.boolean(),
@@ -220,7 +247,7 @@ adminSeo.openapi(
     const config = seoConfigFromStore(row!);
     const flags = { indexNowConfigured: config.indexNowKey != null, cloudflareConfigured: resolveCloudflareConfig(st.slug) != null };
     if (!config.siteUrl) return c.json({ configured: false, siteUrl: null, indexUrl: null, totalUrls: 0, files: [], ...flags }, 200);
-    const preview = buildSitemapPreview(config.siteUrl, await loadSitemapInputs(st.storeId, config));
+    const preview = buildSitemapPreview(config.siteUrl, await cachedSitemapInputs(st.storeId, config));
     return c.json({ configured: true, siteUrl: preview.siteUrl, indexUrl: preview.indexUrl, totalUrls: preview.totalUrls, files: preview.files, ...flags }, 200);
   }),
 );

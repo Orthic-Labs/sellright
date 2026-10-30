@@ -105,63 +105,154 @@ export function createMemoryRateLimitBackend(): RateLimitBackend {
 // processed_event; see rls-tables.test.ts's EXEMPT set). Queried via the
 // unscoped owner `pool`, matching jobs/leader-lock.ts's own advisory-lock
 // pattern for cross-cutting, non-tenant infra state.
-export function createPostgresRateLimitBackend(): RateLimitBackend {
-  async function pruneAndCount(bucket: string, key: string, windowMs: number): Promise<{ n: number; oldest: Date | null }> {
-    await pool.query(
-      `DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval`,
-      [bucket, key, windowMs],
-    );
-    const { rows } = await pool.query<{ n: string; oldest: Date | null }>(
-      `SELECT count(*)::int AS n, min(attempted_at) AS oldest FROM rate_limit_attempt WHERE bucket = $1 AND key = $2`,
-      [bucket, key],
-    );
-    return { n: Number(rows[0]?.n ?? 0), oldest: rows[0]?.oldest ?? null };
-  }
+//
+// P8 (A6/G1, perf plan 2026-10-24): consume() used to hold a pooled client across BEGIN → pg_advisory_xact_lock (an
+// unbounded server-side WAIT) → DELETE → SELECT → INSERT → COMMIT. A burst on one key (ten parallel cart reads, a
+// login spray) parked one pool client per waiter, so the limiter itself could exhaust the request pool. Now:
+//   - the lock is pg_try_advisory_xact_lock — never waits; a contended attempt commits immediately, RELEASES its client,
+//     backs off in JS (no client held) and retries a bounded number of times, then fails CLOSED (deny, retry 1 s);
+//   - once the lock is held, prune + count + conditional insert is ONE statement whose snapshot is taken after the lock
+//     (READ COMMITTED: a new snapshot per statement), so a concurrent burst still cannot all observe "under cap" —
+//     distributed enforcement across API processes is unchanged;
+//   - check() / recordFailure() / clear() are single autocommit statements (no transaction, no lock).
+const CONSUME_LOCK_TRIES = 6;
+const CONSUME_BACKOFF_MS = [5, 10, 20, 40, 80];
+
+const CONSUME_SQL = `WITH pruned AS (
+  DELETE FROM rate_limit_attempt
+   WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval
+), cur AS (
+  SELECT count(*)::int AS n, min(attempted_at) AS oldest
+    FROM rate_limit_attempt
+   WHERE bucket = $1 AND key = $2 AND attempted_at >= now() - ($3 || ' milliseconds')::interval
+), ins AS (
+  INSERT INTO rate_limit_attempt (bucket, key) SELECT $1, $2 FROM cur WHERE cur.n < $4::int RETURNING 1
+)
+SELECT cur.n, cur.oldest, EXISTS (SELECT 1 FROM ins) AS admitted FROM cur`;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export function createPostgresRateLimitBackend(opts: { lockTries?: number; backoffMs?: readonly number[] } = {}): RateLimitBackend {
+  const lockTries = Math.max(1, opts.lockTries ?? CONSUME_LOCK_TRIES);
+  const backoff = opts.backoffMs ?? CONSUME_BACKOFF_MS;
   function retryFrom(oldest: Date | null, windowMs: number): number {
     if (!oldest) return 1;
     return Math.max(1, Math.ceil((windowMs - (Date.now() - oldest.getTime())) / 1000));
   }
+  /** One non-blocking attempt: 'busy' when another request holds this key's lock right now. */
+  async function consumeOnce(bucket: string, key: string, windowMs: number, maxAttempts: number): Promise<number | 'busy'> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query<{ got: boolean }>(
+        'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got', [`rate:${bucket}:${key}`],
+      );
+      if (!lockRows[0]?.got) { await client.query('COMMIT'); return 'busy'; }
+      const { rows } = await client.query<{ n: number; oldest: Date | null; admitted: boolean }>(
+        CONSUME_SQL, [bucket, key, String(windowMs), maxAttempts],
+      );
+      await client.query('COMMIT');
+      const row = rows[0];
+      if (row?.admitted) return 0;
+      return retryFrom(row?.oldest ?? null, windowMs);
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
   return {
     async check(bucket, key, windowMs, maxAttempts) {
-      const { n, oldest } = await pruneAndCount(bucket, key, windowMs);
-      return n < maxAttempts ? 0 : retryFrom(oldest, windowMs);
+      // Read-only: expired rows are ignored by the time filter (pruning happens on the write paths and in the reaper).
+      const { rows } = await pool.query<{ n: number; oldest: Date | null }>(
+        `SELECT count(*)::int AS n, min(attempted_at) AS oldest FROM rate_limit_attempt
+          WHERE bucket = $1 AND key = $2 AND attempted_at >= now() - ($3 || ' milliseconds')::interval`,
+        [bucket, key, String(windowMs)],
+      );
+      const n = Number(rows[0]?.n ?? 0);
+      return n < maxAttempts ? 0 : retryFrom(rows[0]?.oldest ?? null, windowMs);
     },
     async consume(bucket, key, windowMs, maxAttempts) {
-      // Atomic across concurrent requests and API processes: prune + count + insert run in one transaction under a
-      // per-(bucket, key) advisory lock, so a burst can never all observe "under cap" (security audit P1a).
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`rate:${bucket}:${key}`]);
-        await client.query(
-          `DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval`,
-          [bucket, key, windowMs],
-        );
-        const { rows } = await client.query<{ n: string; oldest: Date | null }>(
-          `SELECT count(*)::int AS n, min(attempted_at) AS oldest FROM rate_limit_attempt WHERE bucket = $1 AND key = $2`,
-          [bucket, key],
-        );
-        const n = Number(rows[0]?.n ?? 0);
-        if (n >= maxAttempts) { await client.query('COMMIT'); return retryFrom(rows[0]?.oldest ?? null, windowMs); }
-        await client.query(`INSERT INTO rate_limit_attempt (bucket, key) VALUES ($1, $2)`, [bucket, key]);
-        await client.query('COMMIT');
-        return 0;
-      } catch (e) {
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw e;
-      } finally {
-        client.release();
+      for (let i = 0; i < lockTries; i++) {
+        const r = await consumeOnce(bucket, key, windowMs, maxAttempts);
+        if (r !== 'busy') return r;
+        if (i < lockTries - 1) {
+          const base = backoff[Math.min(i, backoff.length - 1)] ?? 0;
+          await sleep(base + Math.floor(Math.random() * (base + 1)));
+        }
       }
+      // Still contended after the bounded retries: fail closed. Only a same-key burst can get here, which is exactly
+      // the traffic a limiter exists to refuse; the caller answers 429 with a 1 s retry.
+      return 1;
     },
     async recordFailure(bucket, key, windowMs) {
       await pool.query(
-        `DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval`,
-        [bucket, key, windowMs],
+        `WITH pruned AS (
+           DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2 AND attempted_at < now() - ($3 || ' milliseconds')::interval
+         ) INSERT INTO rate_limit_attempt (bucket, key) VALUES ($1, $2)`,
+        [bucket, key, String(windowMs)],
       );
-      await pool.query(`INSERT INTO rate_limit_attempt (bucket, key) VALUES ($1, $2)`, [bucket, key]);
     },
     async clear(bucket, key) {
       await pool.query(`DELETE FROM rate_limit_attempt WHERE bucket = $1 AND key = $2`, [bucket, key]);
+    },
+  };
+}
+
+// ── in-process fast-deny (addition, never a replacement) ─────────────────────
+/**
+ * P8 (A6/G1): wraps the DISTRIBUTED backend with a bounded per-process memo of recent refusals. Once the shared store
+ * has said "over the cap, retry in N s" for (bucket, key), this process answers the same refusal without a database
+ * round trip for min(N, maxDenyMs). It can only ever DENY — every allow still comes from the shared backend, so
+ * enforcement across API processes is unchanged. clear() drops the local memo; a clear() in ANOTHER process is seen
+ * here at most maxDenyMs later (a refused key that another process just cleared — rare, and bounded).
+ */
+export function createFastDenyRateLimitBackend(inner: RateLimitBackend, opts: { maxEntries?: number; maxDenyMs?: number } = {}): RateLimitBackend {
+  const maxEntries = opts.maxEntries ?? 10_000;
+  const maxDenyMs = opts.maxDenyMs ?? 10_000;
+  const denied = new Map<string, number>(); // key -> deny-until epoch ms
+  const k = (bucket: string, key: string) => `${bucket}\u0000${key}`;
+  const cached = (mk: string): number => {
+    const until = denied.get(mk);
+    if (until === undefined) return 0;
+    const left = until - Date.now();
+    if (left <= 0) { denied.delete(mk); return 0; }
+    return Math.max(1, Math.ceil(left / 1000));
+  };
+  const remember = (mk: string, retrySeconds: number) => {
+    if (retrySeconds <= 0) return;
+    denied.delete(mk);
+    denied.set(mk, Date.now() + Math.min(retrySeconds * 1000, maxDenyMs));
+    while (denied.size > maxEntries) {
+      const oldest = denied.keys().next().value;
+      if (oldest === undefined) break;
+      denied.delete(oldest);
+    }
+  };
+  return {
+    async check(bucket, key, windowMs, maxAttempts) {
+      const mk = k(bucket, key);
+      const hit = cached(mk);
+      if (hit > 0) return hit;
+      const r = await inner.check(bucket, key, windowMs, maxAttempts);
+      remember(mk, r);
+      return r;
+    },
+    async consume(bucket, key, windowMs, maxAttempts) {
+      const mk = k(bucket, key);
+      const hit = cached(mk);
+      if (hit > 0) return hit;
+      const r = await inner.consume(bucket, key, windowMs, maxAttempts);
+      remember(mk, r);
+      return r;
+    },
+    async recordFailure(bucket, key, windowMs) {
+      await inner.recordFailure(bucket, key, windowMs);
+    },
+    async clear(bucket, key) {
+      denied.delete(k(bucket, key));
+      await inner.clear(bucket, key);
     },
   };
 }
@@ -177,7 +268,7 @@ export function rateLimitBackend(): RateLimitBackend {
     // unless a test explicitly asks for postgres (DB-gated rate-limit
     // suites do exactly that). Production defaults to postgres.
     const mode = env.RATE_LIMIT_BACKEND ?? (env.NODE_ENV === 'test' ? 'memory' : 'postgres');
-    singleton = mode === 'memory' ? createMemoryRateLimitBackend() : createPostgresRateLimitBackend();
+    singleton = mode === 'memory' ? createMemoryRateLimitBackend() : createFastDenyRateLimitBackend(createPostgresRateLimitBackend());
   }
   return singleton;
 }
@@ -188,24 +279,56 @@ export function _setRateLimitBackendForTest(b: RateLimitBackend | undefined): vo
   singleton = b;
 }
 
+/** Buckets whose rows must outlive the generic 24 h retention (their window is longer). Keyed by bucket name; value in hours. */
+export const LONG_RETENTION_BUCKETS: Readonly<Record<string, number>> = { 'admin-auth-known': 30 * 24 };
+
 /**
  * Housekeeping for the Postgres backend: every consume()/recordFailure() call
  * already prunes ITS OWN (bucket, key) pair opportunistically, but a
  * (bucket, key) that is never queried again (a one-off IP, a bucket for a
  * feature nobody hits twice) leaves its rows behind forever otherwise. This
  * is pure retention cleanup — a rate_limit_attempt row has ZERO business
- * meaning once it falls out of every plausible window, unlike e.g.
- * processed_event's idempotency concern — so it always applies, no dry-run
- * flag, matching cart-maintenance.ts's own always-apply posture. Wired into
- * jobs/scheduler.ts. No-op (and safe to call) under the memory backend —
- * there is no table to sweep.
+ * meaning once it falls out of every plausible window. Wired into
+ * jobs/scheduler.ts. No-op (and safe to call) under the memory backend.
+ *
+ * P8 (D4): bounded. Each pass deletes at most `batchSize` rows per statement and at most `maxBatches` statements, so a
+ * backlog (after an outage or a spray) is drained over several scheduler ticks instead of one long table-wide DELETE.
+ * Efficient with the attempted_at index (migration in the P8 report); correct without it.
  */
-export async function reapRateLimitAttempts(retentionHours = 24): Promise<{ deleted: number }> {
-  const mode = env.RATE_LIMIT_BACKEND ?? (env.NODE_ENV === 'test' ? 'memory' : 'postgres');
-  if (mode === 'memory') return { deleted: 0 };
-  const res = await pool.query(
-    `DELETE FROM rate_limit_attempt WHERE attempted_at < now() - ($1 || ' hours')::interval`,
-    [retentionHours],
-  );
-  return { deleted: res.rowCount ?? 0 };
+export async function reapRateLimitAttempts(
+  retentionHours = 24,
+  opts: { batchSize?: number; maxBatches?: number; mode?: 'postgres' | 'memory' } = {},
+): Promise<{ deleted: number; complete: boolean }> {
+  const mode = opts.mode ?? env.RATE_LIMIT_BACKEND ?? (env.NODE_ENV === 'test' ? 'memory' : 'postgres');
+  if (mode === 'memory') return { deleted: 0, complete: true };
+  const batchSize = Math.max(1, Math.min(opts.batchSize ?? 5000, 50_000));
+  const maxBatches = Math.max(1, opts.maxBatches ?? 20);
+  const longBuckets = Object.keys(LONG_RETENTION_BUCKETS);
+  const passes: Array<{ where: string; params: unknown[] }> = [
+    { where: `attempted_at < now() - ($1 || ' hours')::interval AND NOT (bucket = ANY($2::text[]))`, params: [String(retentionHours), longBuckets] },
+    ...longBuckets.map((b) => ({
+      where: `attempted_at < now() - ($1 || ' hours')::interval AND bucket = $2`,
+      params: [String(Math.max(retentionHours, LONG_RETENTION_BUCKETS[b]!)), b] as unknown[],
+    })),
+  ];
+  let deleted = 0;
+  let batches = 0;
+  let complete = true;
+  for (const pass of passes) {
+    for (;;) {
+      if (batches >= maxBatches) { complete = false; break; }
+      const res = await pool.query(
+        `DELETE FROM rate_limit_attempt WHERE id IN (
+           SELECT id FROM rate_limit_attempt WHERE ${pass.where} LIMIT ${batchSize}
+         )`,
+        pass.params,
+      );
+      batches++;
+      const n = res.rowCount ?? 0;
+      deleted += n;
+      if (n < batchSize) break;
+    }
+    if (!complete) break;
+  }
+  return { deleted, complete };
 }

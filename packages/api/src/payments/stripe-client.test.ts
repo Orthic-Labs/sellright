@@ -10,7 +10,7 @@ vi.mock('stripe', () => ({
   },
 }));
 
-import { STRIPE_API_VERSION, newStripeClient } from './stripe-client.js';
+import { STRIPE_API_VERSION, STRIPE_MAX_NETWORK_RETRIES, STRIPE_REQUEST_TIMEOUT_MS, STRIPE_TOTAL_DEADLINE_MS, newStripeClient } from './stripe-client.js';
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
 function productionSources(dir = SRC, out: string[] = []): string[] {
@@ -32,9 +32,10 @@ describe('Stripe request API version', () => {
   it('newStripeClient constructs every client with the explicit apiVersion constant', () => {
     newStripeClient('sk_test_a');
     newStripeClient('sk_live_b');
+    const config = { apiVersion: STRIPE_API_VERSION, timeout: STRIPE_REQUEST_TIMEOUT_MS, maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES };
     expect(constructed).toEqual([
-      { key: 'sk_test_a', config: { apiVersion: STRIPE_API_VERSION } },
-      { key: 'sk_live_b', config: { apiVersion: STRIPE_API_VERSION } },
+      { key: 'sk_test_a', config },
+      { key: 'sk_live_b', config },
     ]);
   });
 
@@ -50,5 +51,16 @@ describe('Stripe request API version', () => {
     expect(sources['payments/stripe.ts']!.match(/newStripeClient\(/g)).toHaveLength(2); // resolveStripeClient + webhook verifier
     expect(sources['routes/admin-payment-settings.ts']!.match(/newStripeClient\(/g)).toHaveLength(3); // key verify + webhook provision + wallet domain registration
     for (const src of Object.values(sources)) expect(src).not.toMatch(/apiVersion/);
+  });
+});
+
+describe('A7/C1 explicit Stripe deadlines', () => {
+  it('sets the per-attempt timeout explicitly, well under the SDK default 80s', () => {
+    expect(STRIPE_REQUEST_TIMEOUT_MS).toBe(20_000);
+    expect(STRIPE_MAX_NETWORK_RETRIES).toBe(1);
+  });
+  it('bounds total elapsed time: attempts x timeout + the SDK max retry backoff (5s each)', () => {
+    expect(STRIPE_TOTAL_DEADLINE_MS).toBe((STRIPE_MAX_NETWORK_RETRIES + 1) * STRIPE_REQUEST_TIMEOUT_MS + STRIPE_MAX_NETWORK_RETRIES * 5_000);
+    expect(STRIPE_TOTAL_DEADLINE_MS).toBeLessThanOrEqual(45_000);
   });
 });

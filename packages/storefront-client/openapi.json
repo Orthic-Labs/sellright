@@ -19,6 +19,7 @@
           "AUTH_REQUIRED",
           "BIRTHDAY_ALREADY_SET",
           "BOT_CHECK_FAILED",
+          "BUSY",
           "CART_INVALID",
           "CART_NOT_FOUND",
           "CART_TOO_LARGE",
@@ -44,6 +45,7 @@
           "GOOGLE_TOKEN_INVALID",
           "IDEMPOTENCY_KEY_REQUIRED",
           "IDEMPOTENCY_PAYLOAD_MISMATCH",
+          "INVALID_ADDRESS",
           "INVALID_BIRTHDAY",
           "INVALID_CHECKOUT_REQUEST",
           "INVALID_CREDENTIALS",
@@ -1059,7 +1061,7 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1,
+              "minLength": 2,
               "maxLength": 120
             },
             "required": true,
@@ -5184,11 +5186,26 @@
             }
           },
           "400": {
-            "description": "Malformed checkout request body or Idempotency-Key header",
+            "description": "Malformed checkout request body or Idempotency-Key header, or an invalid address (INVALID_ADDRESS, with one message per field in `fields`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiError"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "fields": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -6684,20 +6701,25 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8
+                    "minLength": 8,
+                    "maxLength": 1024
                   },
                   "firstName": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 100
                   },
                   "lastName": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 100
                   },
                   "turnstileToken": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [
@@ -6815,13 +6837,16 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                   },
                   "turnstileToken": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 2048
                   },
                   "rememberMe": {
                     "type": "boolean",
@@ -6943,6 +6968,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Sign-in temporarily saturated; retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -6958,6 +6993,7 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "turnstileToken": {
@@ -7025,7 +7061,8 @@
                 "properties": {
                   "credential": {
                     "type": "string",
-                    "minLength": 20
+                    "minLength": 20,
+                    "maxLength": 16384
                   }
                 },
                 "required": [
@@ -7280,7 +7317,8 @@
                 "properties": {
                   "identityToken": {
                     "type": "string",
-                    "minLength": 20
+                    "minLength": 20,
+                    "maxLength": 16384
                   }
                 },
                 "required": [
@@ -7422,10 +7460,12 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "turnstileToken": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [
@@ -7498,7 +7538,8 @@
                 "properties": {
                   "token": {
                     "type": "string",
-                    "minLength": 20
+                    "minLength": 20,
+                    "maxLength": 512
                   }
                 },
                 "required": [
@@ -7658,6 +7699,7 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 254,
               "format": "email"
             },
             "required": true,
@@ -12595,6 +12637,102 @@
         }
       }
     },
+    "/v1/shop/orders/{code}/state": {
+      "get": {
+        "summary": "Compact order state (receipt-token or owner scoped) for confirmation polling",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "rt",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "completed",
+                        "cancelled",
+                        "archived"
+                      ]
+                    },
+                    "paymentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "authorized",
+                        "paid",
+                        "partially_refunded",
+                        "refunded",
+                        "voided",
+                        "failed",
+                        "balance_due"
+                      ]
+                    },
+                    "fulfillmentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "unfulfilled",
+                        "partially_fulfilled",
+                        "fulfilled",
+                        "partially_delivered",
+                        "delivered"
+                      ]
+                    },
+                    "grandTotal": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "state",
+                    "status",
+                    "paymentStatus",
+                    "fulfillmentStatus",
+                    "grandTotal"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shop/pro/link-storekit": {
       "post": {
         "summary": "Link a VERIFIED App Store purchase to the signed-in account and activate this device",
@@ -12810,6 +12948,24 @@
           },
           "404": {
             "description": "Unknown store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Feed build already in progress; retry later",
             "content": {
               "application/json": {
                 "schema": {
@@ -15562,6 +15718,23 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "tofulfil",
+                "pre",
+                "partial",
+                "unpaid",
+                "shipped",
+                "refunded",
+                "cancelled"
+              ]
+            },
+            "required": false,
+            "name": "tab",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "default": 1
@@ -15611,6 +15784,82 @@
                     "total",
                     "page",
                     "pageSize"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/tab-counts": {
+      "get": {
+        "summary": "Order counts per admin tab",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "excludeDemo",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tofulfil": {
+                      "type": "number"
+                    },
+                    "pre": {
+                      "type": "number"
+                    },
+                    "partial": {
+                      "type": "number"
+                    },
+                    "unpaid": {
+                      "type": "number"
+                    },
+                    "shipped": {
+                      "type": "number"
+                    },
+                    "refunded": {
+                      "type": "number"
+                    },
+                    "cancelled": {
+                      "type": "number"
+                    },
+                    "all": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "tofulfil",
+                    "pre",
+                    "partial",
+                    "unpaid",
+                    "shipped",
+                    "refunded",
+                    "cancelled",
+                    "all"
                   ]
                 }
               }
@@ -17488,6 +17737,10 @@
                     "type": "string",
                     "nullable": true,
                     "format": "uuid"
+                  },
+                  "expectedUpdatedAt": {
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -17504,10 +17757,14 @@
                   "properties": {
                     "id": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "id"
+                    "id",
+                    "updatedAt"
                   ]
                 }
               }
@@ -17525,6 +17782,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -31153,25 +31420,30 @@
                     ]
                   },
                   "host": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 253
                   },
                   "port": {
                     "type": "integer",
                     "minimum": 0,
-                    "exclusiveMinimum": true
+                    "exclusiveMinimum": true,
+                    "maximum": 65535
                   },
                   "secure": {
                     "type": "boolean"
                   },
                   "user": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 320
                   },
                   "from": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "credential": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 4096
                   }
                 },
                 "required": [
@@ -31196,6 +31468,16 @@
                   "required": [
                     "ok"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "SMTP destination not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -31244,6 +31526,7 @@
                 "properties": {
                   "to": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   }
                 },
@@ -33524,6 +33807,27 @@
     "/v1/admin/blog": {
       "get": {
         "summary": "List blog posts",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -33538,6 +33842,10 @@
                         "nullable": true
                       }
                     },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "seoContract": {
                       "type": "string"
                     },
@@ -33547,6 +33855,7 @@
                   },
                   "required": [
                     "items",
+                    "nextCursor",
                     "seoContract",
                     "createContract"
                   ]
@@ -35274,7 +35583,9 @@
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
             },
             "required": true,
             "name": "code",
@@ -35314,6 +35625,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {

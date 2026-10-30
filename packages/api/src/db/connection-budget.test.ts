@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { connectionBudget } from './client.js';
+import { assertConnectionBudget, ConnectionBudgetError, connectionBudget, FIXED_POOL_MAX, poolMax } from './client.js';
 import type { Env } from '../env.js';
 
 // #360 N7: the per-process maximum counts every pool plus the tenant resolver, the webhook pass and the listener.
@@ -43,5 +43,31 @@ describe('connectionBudget', () => {
       .filter((f) => !f.startsWith('scripts/'))
       .sort();
     expect(constructing).toEqual([...Object.keys(RUNTIME), ...OPERATOR_ONLY].sort());
+  });
+});
+
+describe('connection budget enforcement (#360 N7)', () => {
+  const e = (over: Partial<Env>) => ({ PGPOOL_MAX: 10, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4, PG_CONNECTION_BUDGET_ENFORCE: '0', ...over }) as Env;
+
+  it('warn-only by default: an over-budget configuration still starts', () => {
+    expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET: 20 }))).not.toThrow();
+  });
+
+  it('PG_CONNECTION_BUDGET_ENFORCE=1 refuses pool maxima over the budget, and accepts ones that fit', () => {
+    expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET_ENFORCE: '1', PG_CONNECTION_BUDGET: 29 }))).toThrow(ConnectionBudgetError);
+    expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET_ENFORCE: '1', PG_CONNECTION_BUDGET: 30 }))).not.toThrow();
+    // the plan's example share: API 16 + runner 4 inside a 20-connection service allocation needs smaller pools
+    expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET_ENFORCE: '1', PG_CONNECTION_BUDGET: 20, PGPOOL_MAX: 6, PGJOBS_POOL_MAX: 4, PGLOCKS_POOL_MAX: 2 }))).not.toThrow();
+  });
+
+  it('PG_CONNECTION_BUDGET_ENFORCE=1 without a budget is a configuration error', () => {
+    expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET_ENFORCE: '1' }))).toThrow(/needs PG_CONNECTION_BUDGET/);
+  });
+
+  it('poolMax hands each budgeted pool its share, so constructors and the budget cannot drift', () => {
+    expect(poolMax('tenantResolution', e({}))).toBe(FIXED_POOL_MAX.tenantResolution);
+    expect(poolMax('webhookPass', e({}))).toBe(FIXED_POOL_MAX.webhookPass);
+    expect(poolMax('requests', e({ PGPOOL_MAX: 17 }))).toBe(17);
+    expect(poolMax('advisory', e({ PGPOOL_MAX: 40 }))).toBe(4);
   });
 });

@@ -31,7 +31,9 @@ const { envMock, publishSpy, logInfo, errError, markPending, clearPending, leade
 }));
 
 vi.mock('../env.js', () => ({ env: envMock }));
-vi.mock('./catalog.js', () => ({ publishCatalogManifest: (args: { outDir: string; storeSlug: string; variantIds?: string[] }) => publishSpy(args) }));
+vi.mock('./catalog.js', () => ({ CatalogPurgeError: class CatalogPurgeError extends Error { constructor(readonly published: { generation: string }) { super('purge failed'); } }, publishCatalogManifest: (args: { outDir: string; storeSlug: string; variantIds?: string[] }) => publishSpy(args) }));
+const purgeHook = vi.hoisted(() => ({ onCatalogCacheChanged: vi.fn() }));
+vi.mock('../cache/purge-hook.js', () => purgeHook);
 // Single-process unit test: the real advisory lock is exercised by the DB
 // suites (release-stale-allocations.test.ts, auto-deliver.test.ts). Here it's
 // a pass-through so the in-process generating/trailing coalescing is what's
@@ -44,7 +46,7 @@ vi.mock('../lib/logger.js', () => ({ log: { info: (...a: unknown[]) => logInfo(.
 vi.mock('../store-context.js', () => ({ resolveStore: async (slug: string) => ({ id: `store-id-${slug}`, slug, name: slug, currency: 'USD', taxRate: 0, taxInclusive: false, shippingTaxable: false, config: null }) }));
 vi.mock('./manifest-pending.js', () => ({ markManifestRegenerationPending: markPending, clearManifestRegenerationPending: clearPending }));
 
-import { onStockChanged, _resetStockHookStateForTest } from './stock-hook.js';
+import { onCatalogContentChanged, onStockChanged, _resetStockHookStateForTest } from './stock-hook.js';
 
 async function flush(times = 5) {
   for (let i = 0; i < times; i++) await Promise.resolve();
@@ -263,5 +265,37 @@ describe('burst oracle (plan A9 scenario 10)', () => {
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     expect(code).not.toMatch(/\b(setTimeout|setInterval|setImmediate)\s*\(/);
     expect(code).not.toMatch(/\bdebounce|\bthrottle/i);
+  });
+});
+
+describe('V60 / N9 — content triggers and purge ordering', () => {
+  beforeEach(() => purgeHook.onCatalogCacheChanged.mockClear());
+
+  it('a product edit schedules a product-scoped publication, and does not purge ahead of it', async () => {
+    onCatalogContentChanged('demo-store', ['prod-1'], { productPath: '/products/a/' });
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    expect(publishSpy.mock.calls[0]![0]).toEqual({ outDir: '/tmp/stock-hook-test', storeSlug: 'demo-store', productIds: ['prod-1'] });
+    expect(purgeHook.onCatalogCacheChanged).not.toHaveBeenCalled();
+  });
+
+  it('a stock trigger no longer purges before its publication', async () => {
+    onStockChanged('demo-store', ['v1']);
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    expect(purgeHook.onCatalogCacheChanged).not.toHaveBeenCalled();
+  });
+
+  it('purges at once where this deployment publishes no catalog', () => {
+    onCatalogContentChanged('other-store', ['prod-1'], { productPath: '/products/a/' });
+    expect(purgeHook.onCatalogCacheChanged).toHaveBeenCalledWith('other-store', { productPath: '/products/a/' });
+    expect(publishSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the durable marker when publication succeeded but the purge failed', async () => {
+    const { CatalogPurgeError } = await import('./catalog.js');
+    publishSpy.mockImplementationOnce(async () => { throw new CatalogPurgeError({ generation: 'g', products: 1 }); });
+    onCatalogContentChanged('demo-store', ['prod-1']);
+    await vi.waitFor(() => expect(errError).toHaveBeenCalled());
+    await flush();
+    expect(clearPending).not.toHaveBeenCalled();
   });
 });

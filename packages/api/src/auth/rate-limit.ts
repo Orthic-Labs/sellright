@@ -12,6 +12,7 @@
  * buckets are attempt-counted because those routes do not have an equivalent
  * authentication-failure signal and every request is abuse-relevant.
  */
+import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { env } from '../env.js';
 import { rateLimitBackend } from './rate-limit-backend.js';
@@ -20,8 +21,47 @@ const WINDOW_MS = 15 * 60 * 1000; // 15 min
 const MAX_FAILURES = 8;
 const BUCKET = 'auth';
 
+/**
+ * P8 (G9): rate-limit identity of a client address. IPv4 stays the full address (NAT/CGNAT means a shared /24 is many
+ * unrelated people, so v4 is never widened). IPv6 is reduced to its /64: one subscriber line or host normally receives
+ * a whole /64, so per-address buckets were trivially bypassed by rotating the low 64 bits. IPv4-mapped IPv6 is treated
+ * as IPv4. Anything that is not an IP (the '*' sentinel, 'unknown') passes through unchanged. Applies to rate-limit
+ * KEYS only — clientIp() (audit, logs) still reports the full address.
+ */
+export function rateLimitIpKey(ip: string): string {
+  const raw = ip.trim();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(raw);
+  if (mapped) return mapped[1]!;
+  if (isIP(raw) !== 6) return raw;
+  const groups = expandIpv6(raw.split('%')[0]!);
+  if (!groups) return raw.toLowerCase();
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+function expandIpv6(addr: string): string[] | null {
+  const lower = addr.toLowerCase();
+  // An embedded dotted quad occupies the last two groups.
+  const dotted = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+  let text = lower;
+  if (dotted) {
+    const o = dotted[2]!.split('.').map(Number);
+    text = `${dotted[1]}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
+  }
+  const [head, tail] = text.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail !== undefined ? (tail ? tail.split(':') : []) : [];
+  const groups = tail !== undefined ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return groups.length === 8 ? groups.map((g) => g.padStart(4, '0')) : null;
+}
+
+/** P8 (G12e): identifiers are request input; a key never grows with it. Long ones are replaced by a digest. */
+function boundIdentifier(identifier: string): string {
+  const lower = identifier.toLowerCase();
+  return lower.length <= 320 ? lower : `sha256:${createHash('sha256').update(lower).digest('hex')}`;
+}
+
 function keyFor(ip: string, identifier: string): string {
-  return `${ip}|${identifier.toLowerCase()}`;
+  return `${rateLimitIpKey(ip)}|${boundIdentifier(identifier)}`;
 }
 
 /**
@@ -64,6 +104,57 @@ export async function clearLoginAttempts(ip: string, identifier: string): Promis
   await rateLimitBackend().clear(BUCKET, keyFor(ip, identifier));
 }
 
+// ── customer authentication aggregate (P8 / G6) ──────────────────────────────
+// The (ip, identifier) budget above leaves an aggregate gap: one address can spray a few guesses at many e-mails and
+// every pair stays under its 8. This failure-counted per-address budget closes it (shoppers behind one NAT share it,
+// hence the higher cap; a success never clears it — a correct password elsewhere says nothing about the sprayer).
+// Deliberately NOT keyed per account across addresses: that would let anyone lock a real customer out.
+const CUSTOMER_AUTH_IP_BUCKET = 'auth-ip';
+const CUSTOMER_AUTH_IP_MAX_FAILURES = 40;
+
+/** Check-only: seconds until this address may try again (0 = allowed). Pair with recordCustomerAuthIpFailure(). */
+export async function customerAuthIpRetryAfter(ip: string): Promise<number> {
+  return rateLimitBackend().check(CUSTOMER_AUTH_IP_BUCKET, rateLimitIpKey(ip), WINDOW_MS, CUSTOMER_AUTH_IP_MAX_FAILURES);
+}
+export async function recordCustomerAuthIpFailure(ip: string): Promise<void> {
+  await rateLimitBackend().recordFailure(CUSTOMER_AUTH_IP_BUCKET, rateLimitIpKey(ip), WINDOW_MS);
+}
+
+// ── gift-card balance lookups (P8 / G12a) ────────────────────────────────────
+// GET /v1/shop/gift-card/{code} answers the balance of whatever code is guessed. Two budgets per (store, address):
+// an attempt ceiling, and a much smaller budget of MISSES (unknown codes), which is what enumeration spends.
+const GIFT_CARD_BUCKET = 'gift-card';
+const GIFT_CARD_WINDOW_MS = 60 * 60 * 1000;
+const GIFT_CARD_MAX_LOOKUPS = 60;
+const GIFT_CARD_MAX_MISSES = 10;
+
+/** Consume one lookup and check the miss budget. Returns retry-after seconds (>0 = refuse) or 0. */
+export async function giftCardLookupRetryAfter(ip: string, storeId: string): Promise<number> {
+  const b = rateLimitBackend();
+  const who = `${storeId}|${rateLimitIpKey(ip)}`;
+  const misses = await b.check(GIFT_CARD_BUCKET, `miss:${who}`, GIFT_CARD_WINDOW_MS, GIFT_CARD_MAX_MISSES);
+  if (misses > 0) return misses;
+  return b.consume(GIFT_CARD_BUCKET, `lookup:${who}`, GIFT_CARD_WINDOW_MS, GIFT_CARD_MAX_LOOKUPS);
+}
+export async function recordGiftCardMiss(ip: string, storeId: string): Promise<void> {
+  await rateLimitBackend().recordFailure(GIFT_CARD_BUCKET, `miss:${storeId}|${rateLimitIpKey(ip)}`, GIFT_CARD_WINDOW_MS);
+}
+
+// ── webhook signature failures (P8 / C9, G5) ─────────────────────────────────
+// A nonempty but wrong Stripe signature makes the webhook route try every store's stored secret (one DB read per
+// store and mode). Each address may fail that fan-out only a few times per minute; a well-formed request from the
+// provider never fails it, so the budget is invisible to real deliveries.
+const WEBHOOK_SIG_BUCKET = 'webhook-signature';
+const WEBHOOK_SIG_WINDOW_MS = 60 * 1000;
+const WEBHOOK_SIG_MAX_FAILURES = 20;
+
+export async function webhookSignatureRetryAfter(provider: string, ip: string): Promise<number> {
+  return rateLimitBackend().check(WEBHOOK_SIG_BUCKET, `${provider}|${rateLimitIpKey(ip)}`, WEBHOOK_SIG_WINDOW_MS, WEBHOOK_SIG_MAX_FAILURES);
+}
+export async function recordWebhookSignatureFailure(provider: string, ip: string): Promise<void> {
+  await rateLimitBackend().recordFailure(WEBHOOK_SIG_BUCKET, `${provider}|${rateLimitIpKey(ip)}`, WEBHOOK_SIG_WINDOW_MS);
+}
+
 // check-email (issue #389): attempt-counted, 10 per minute per IP, matching the
 // the previous platform checkCustomerEmail limit (V/auth-flow/auth-flow.resolver.ts:43-51).
 // Over the limit the route answers a silent exists:false, never a 429.
@@ -73,7 +164,7 @@ const CHECK_EMAIL_MAX_ATTEMPTS = 10;
 
 /** Consume one check-email probe for this IP. Returns retry-after seconds (>0) when over the limit, else 0. */
 export async function checkEmailRetryAfter(ip: string): Promise<number> {
-  return rateLimitBackend().consume(CHECK_EMAIL_BUCKET, ip, CHECK_EMAIL_WINDOW_MS, CHECK_EMAIL_MAX_ATTEMPTS);
+  return rateLimitBackend().consume(CHECK_EMAIL_BUCKET, rateLimitIpKey(ip), CHECK_EMAIL_WINDOW_MS, CHECK_EMAIL_MAX_ATTEMPTS);
 }
 
 // ── admin credential checks (P1a, security audit 2026-10-15) ─────────────────
@@ -91,21 +182,37 @@ export async function checkEmailRetryAfter(ip: string): Promise<number> {
 // and the account budget; the per-IP budget keeps the reservation (a shared NAT
 // signing in many admins is still far below its cap). `account` is the
 // normalized admin e-mail on every route, so the routes share one budget.
+//
+// P8 (G7): the account-wide budget let anyone lock an admin out by spending it from many addresses. A network that
+// has completed a PASSWORD-verified check for this account in the last 30 days (clearAdminAuthFailures records it,
+// keyed by the rate-limit address identity — IPv6 /64) is no longer charged to, or refused by, the account-wide budget.
+// It still pays the per-IP and (ip, account) budgets, so brute force from a known network stays capped at 8 per
+// 15 min, and every unknown network keeps the full three-bucket gate (the cross-IP botnet case is unchanged).
 const ACCOUNT_BUCKET = 'admin-auth-account';
 const IP_BUCKET = 'admin-auth-ip';
+const KNOWN_BUCKET = 'admin-auth-known';
 const ACCOUNT_WINDOW_MS = 60 * 60 * 1000;
 const IP_WINDOW_MS = 15 * 60 * 1000;
+const KNOWN_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // keep in step with LONG_RETENTION_BUCKETS in rate-limit-backend.ts
 
-const adminKey = (account: string) => `admin:${account.toLowerCase()}`;
+const adminKey = (account: string) => `admin:${boundIdentifier(account)}`;
+const knownKey = (ip: string, account: string) => `${adminKey(account)}|${rateLimitIpKey(ip)}`;
+
+async function isKnownAdminNetwork(ip: string, account: string): Promise<boolean> {
+  return (await rateLimitBackend().check(KNOWN_BUCKET, knownKey(ip, account), KNOWN_WINDOW_MS, 1)) > 0;
+}
 
 /** Reserve one credential attempt. Returns seconds until the caller may try again (>0 = refuse, nothing verified);
- *  0 = the attempt is counted in all three budgets and verification may proceed. */
+ *  0 = the attempt is counted in the applicable budgets and verification may proceed. */
 export async function reserveAdminAuthAttempt(ip: string, account: string): Promise<number> {
   const b = rateLimitBackend();
-  const perIp = await b.consume(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
+  const ipKey = rateLimitIpKey(ip);
+  const perIp = await b.consume(IP_BUCKET, ipKey, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
   if (perIp > 0) return perIp;
-  const acct = await b.consume(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS, env.ADMIN_AUTH_ACCOUNT_MAX_FAILURES);
-  if (acct > 0) return acct;
+  if (!(await isKnownAdminNetwork(ip, account))) {
+    const acct = await b.consume(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS, env.ADMIN_AUTH_ACCOUNT_MAX_FAILURES);
+    if (acct > 0) return acct;
+  }
   return b.consume(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS, MAX_FAILURES);
 }
 
@@ -113,7 +220,7 @@ export async function reserveAdminAuthAttempt(ip: string, account: string): Prom
  *  no live challenge, only the per-IP budget (a dead token must not spend some account's budget). */
 export async function reserveAdminSecondStepAttempt(ip: string, account: string | null): Promise<number> {
   if (account) return reserveAdminAuthAttempt(ip, account);
-  return rateLimitBackend().consume(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
+  return rateLimitBackend().consume(IP_BUCKET, rateLimitIpKey(ip), IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
 }
 
 /** Admin "forgot password" (issue #333): attempt-counted per IP and per account so it cannot be used to mail-bomb an
@@ -122,20 +229,23 @@ const RESET_BUCKET = 'admin-reset';
 /** Reset-link checks and redemptions: their own per-IP budget (the token is 256 random bits; this only blunts floods),
  *  so loading a reset page never spends the admin sign-in budget of a shared address. */
 export async function reserveAdminResetTokenUse(ip: string): Promise<number> {
-  return rateLimitBackend().consume(RESET_BUCKET, `token-ip:${ip}`, IP_WINDOW_MS, 30);
+  return rateLimitBackend().consume(RESET_BUCKET, `token-ip:${rateLimitIpKey(ip)}`, IP_WINDOW_MS, 30);
 }
 export async function reserveAdminResetRequest(ip: string, account: string): Promise<number> {
   const b = rateLimitBackend();
-  const perIp = await b.consume(RESET_BUCKET, `ip:${ip}`, IP_WINDOW_MS, 10);
+  const perIp = await b.consume(RESET_BUCKET, `ip:${rateLimitIpKey(ip)}`, IP_WINDOW_MS, 10);
   if (perIp > 0) return perIp;
-  return b.consume(RESET_BUCKET, `acct:${account.toLowerCase()}`, ACCOUNT_WINDOW_MS, 3);
+  return b.consume(RESET_BUCKET, `acct:${boundIdentifier(account)}`, ACCOUNT_WINDOW_MS, 3);
 }
 
-/** After a PASSWORD-verified success: forget the (ip, account) and account budgets. Never call it after a check that
- *  did not verify the password (a TOTP-only operation must not reset password-guessing budgets). */
+/** After a PASSWORD-verified success: forget the (ip, account) and account budgets, and remember this network as one
+ *  the account signs in from (G7). Never call it after a check that did not verify the password (a TOTP-only operation
+ *  must not reset password-guessing budgets or mark a network as known). */
 export async function clearAdminAuthFailures(ip: string, account: string): Promise<void> {
   const b = rateLimitBackend();
-  await Promise.all([b.clear(BUCKET, keyFor(ip, adminKey(account))), b.clear(ACCOUNT_BUCKET, adminKey(account))]);
+  const known = knownKey(ip, account);
+  await Promise.all([b.clear(BUCKET, keyFor(ip, adminKey(account))), b.clear(ACCOUNT_BUCKET, adminKey(account)), b.clear(KNOWN_BUCKET, known)]);
+  await b.recordFailure(KNOWN_BUCKET, known, KNOWN_WINDOW_MS); // one fresh marker row per (account, network)
 }
 
 /**
@@ -245,4 +355,18 @@ export function clientIp(c: { req: { header: (k: string) => string | undefined }
       trustedProxies: (env.TRUSTED_PROXY_CIDRS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
     },
   );
+}
+
+/**
+ * P8 (G12b): whether this request arrived through ingress the deployment controls — the same peer test pickClientIp
+ * applies before honouring proxy headers (TRUSTED_PROXY_CIDRS when configured, else loopback/private/link-local, or no
+ * socket at all for in-process requests). Tenant-routing headers (x-store-slug, x-forwarded-host) are only meaningful
+ * from such a peer; a directly exposed API must route by the Host it was actually reached on.
+ */
+export function isTrustedIngressPeer(c: { env?: unknown }): boolean {
+  const e = (c.env ?? undefined) as ConnEnv | undefined;
+  const peer = normalizePeer(e?.incoming?.socket?.remoteAddress ?? e?.remoteAddr);
+  if (peer === undefined) return true;
+  const trusted = (env.TRUSTED_PROXY_CIDRS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return trusted.length ? inCidrs(peer, trusted) : isLocalProxyAddress(peer);
 }

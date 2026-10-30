@@ -110,30 +110,30 @@ describe('resolveStore cache (PERF-2)', () => {
     await resolveStore('alpha');
     await resolveStore('beta');
     await resolveStoreByHost('alpha.example');
-    expect(_cacheSizeForTest()).toEqual({ slug: 2, host: 1 });
+    expect(_cacheSizeForTest()).toEqual({ slug: 2, host: 1, hostMiss: 0 });
 
     invalidateStoreCache();
-    expect(_cacheSizeForTest()).toEqual({ slug: 0, host: 0 });
+    expect(_cacheSizeForTest()).toEqual({ slug: 0, host: 0, hostMiss: 0 });
   });
 
   it('invalidateStoreCache(slug) also drops host entries cached against that slug', async () => {
     queryImpl = vi.fn(async () => ({ rows: [STORE_A] }));
     await resolveStore('alpha'); // seeds slug cache
     await resolveStoreByHost('alpha.example'); // seeds host cache with STORE_A
-    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 1 });
+    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 1, hostMiss: 0 });
 
     invalidateStoreCache('alpha');
-    expect(_cacheSizeForTest()).toEqual({ slug: 0, host: 0 }); // both dropped
+    expect(_cacheSizeForTest()).toEqual({ slug: 0, host: 0, hostMiss: 0 }); // both dropped
   });
 
   it('invalidateStoreCache(undefined, host) drops only that host entry', async () => {
     queryImpl = vi.fn(async () => ({ rows: [STORE_A, STORE_B] }));
     await resolveStore('alpha');
     await resolveStoreByHost('alpha.example');
-    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 1 });
+    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 1, hostMiss: 0 });
 
     invalidateStoreCache(undefined, 'alpha.example');
-    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 0 });
+    expect(_cacheSizeForTest()).toEqual({ slug: 1, host: 0, hostMiss: 0 });
   });
 
   it('a fresh slug hits the DB independently of other slug cache entries', async () => {
@@ -165,13 +165,17 @@ describe('resolveStoreByHost cache (PERF-2)', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('a negative lookup (no store declares the host) is NOT cached — next call re-queries', async () => {
+  it('a negative lookup is cached briefly and dropped by invalidateStoreCache (a hostname-add edit invalidates)', async () => {
     const spy = vi.fn(async () => ({ rows: [STORE_A] })); // hostnames don't include 'unknown.example'
     queryImpl = spy;
 
     expect(await resolveStoreByHost('unknown.example')).toBeNull();
     expect(await resolveStoreByHost('unknown.example')).toBeNull();
-    // Negative misses must re-query so a hostname-add edit takes effect before TTL.
+    // An unknown host is not re-scanned on every request (#360 C7/G2)...
+    expect(spy).toHaveBeenCalledTimes(1);
+    // ...and the store edit that adds the hostname clears the miss.
+    invalidateStoreCache();
+    expect(await resolveStoreByHost('unknown.example')).toBeNull();
     expect(spy).toHaveBeenCalledTimes(2);
   });
 

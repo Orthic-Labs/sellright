@@ -35,8 +35,10 @@ check_os() {
 check_resources() {
   mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
   mem_mb=$((mem_kb / 1024))
-  if [ "$mem_mb" -lt 1800 ]; then
-    die "at least 2 GiB RAM required, found ${mem_mb} MiB"
+  # P8 (E3): compose.yaml budgets ~3.2 GiB across services (postgres 1g, api 1g, storefront 768m, caddy 256m,
+  # admin 128m). A 4 GiB host reports roughly 3.7-3.9 GiB MemTotal after the kernel's reservation.
+  if [ "$mem_mb" -lt 3600 ]; then
+    die "at least 4 GiB RAM required, found ${mem_mb} MiB"
   fi
   avail_kb=$(df -Pk / | awk 'NR==2{print $4}')
   avail_gb=$((avail_kb / 1024 / 1024))

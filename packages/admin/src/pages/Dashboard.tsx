@@ -59,7 +59,7 @@ export default function Dashboard() {
   const trend = useQuery({
     queryKey: ['dash-trend', store?.slug],
     queryFn: () => api.get<{ totalRevenue: number; totalOrders: number; series: TrendSeries }>(`/reports/sales?days=30`),
-    enabled: !!data && data.orders > 0,
+    // V46: runs alongside the KPI query instead of after it; the trend is only shown once the store has orders.
   });
 
   if (isLoading) return <Loading />;
@@ -69,7 +69,7 @@ export default function Dashboard() {
   const fresh = data.orders === 0;
 
   // Trend computation is local — never invent deltas.
-  const series = trend.data?.series ?? [];
+  const series = fresh ? [] : (trend.data?.series ?? []);
   const t = totals(series);
   const windows = periodWindows(series);
   const revDelta = halfPeriodDelta(series, (p) => p.revenue);
@@ -115,7 +115,7 @@ export default function Dashboard() {
           </div>
 
           {/* 30-day trend — derived from real /reports/sales series. */}
-          {!trend.isLoading && trend.data && trend.data.series.length >= 4 && (
+          {!fresh && !trend.isLoading && trend.data && trend.data.series.length >= 4 && (
             <section className="card overflow-hidden mb-6" aria-label="30-day sales trend">
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                 <h2 className="flex items-center gap-2 text-sm font-semibold"><TrendingUp size={15} className="text-gray-400" /> Last 30 days</h2>

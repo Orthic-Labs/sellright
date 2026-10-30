@@ -156,47 +156,67 @@ export async function postPaidOrderRewards(tx: Tx, input: {
 
 const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
 
+/** Birthday customers per batch transaction (D6). */
+export const BIRTHDAY_BATCH = 100;
+
 /**
- * Birthday bonus pass: customers whose stored month/day is today (UTC) get
- * one bonus per calendar year. A Feb 29 birthday is honoured on Feb 28 in
- * non-leap years. Only verified, non-deleted customers qualify. Safe to run
- * as often as the scheduler likes — source_ref carries the year.
+ * One birthday batch, inside the caller's transaction: up to `limit` due
+ * customers after the keyset cursor `after`. Customers whose stored month/day
+ * is today (UTC) get one bonus per calendar year; a Feb 29 birthday is honoured
+ * on Feb 28 in non-leap years. Only verified, non-deleted customers qualify.
+ * The NOT EXISTS exclusion (source_ref carries the year) keeps an hourly
+ * re-scan from re-granting and from re-reading already granted customers.
+ * Returns `next` = cursor for the following batch, or null when done.
  */
-export async function grantBirthdayBonuses(tx: Tx, storeId: string, now = new Date()): Promise<number> {
+export async function grantBirthdayBonusBatch(
+  tx: Tx, storeId: string, now: Date, after: string | null, limit = BIRTHDAY_BATCH,
+): Promise<{ granted: number; next: string | null }> {
   const { program, name, currency, config } = await storeProgram(tx, storeId);
-  if (!program.enabled || program.birthdayBonusPoints <= 0) return 0;
+  if (!program.enabled || program.birthdayBonusPoints <= 0) return { granted: 0, next: null };
   const month = now.getUTCMonth() + 1; const day = now.getUTCDate(); const year = now.getUTCFullYear();
   const days = month === 2 && day === 28 && !isLeap(year) ? [28, 29] : [day];
-  const BATCH = 500;
+  // Exclude customers already granted this year so a full batch of
+  // processed customers can never starve the rest.
+  const due: Array<{ id: string; email: string }> = await tx.select({ id: s.customer.id, email: s.customer.email }).from(s.customer)
+    .where(and(
+      eq(s.customer.storeId, storeId), eq(s.customer.birthMonth, month), inArray(s.customer.birthDay, days),
+      eq(s.customer.emailVerified, true), sql`${s.customer.deletedAt} IS NULL`,
+      after ? sql`${s.customer.id} > ${after}` : sql`true`,
+      sql`NOT EXISTS (SELECT 1 FROM loyalty_ledger ll WHERE ll.store_id = ${storeId} AND ll.customer_id = ${s.customer.id} AND ll.source_ref = 'bonus:birthday:' || ${s.customer.id}::text || ':' || ${String(year)})`,
+    ))
+    .orderBy(s.customer.id).limit(limit);
+  let granted = 0;
+  for (const c of due) {
+    const id = await postBonus(tx, {
+      storeId, customerId: c.id, points: program.birthdayBonusPoints, rule: 'birthday',
+      sourceRef: `bonus:birthday:${c.id}:${year}`, expiryDays: program.expiryDays, metadata: { year }, at: now,
+    });
+    if (!id) continue;
+    granted++;
+    const { available } = await loyaltyBalance(tx, c.id, now);
+    await enqueuePointsEarned(tx, storeId, { name, currency, config }, c.email, {
+      points: program.birthdayBonusPoints, balance: available,
+      lines: [{ label: BONUS_LABELS.birthday, points: program.birthdayBonusPoints }],
+      dedupeKey: `points_earned:bonus:${id}`,
+    });
+  }
+  return { granted, next: due.length < limit ? null : due[due.length - 1]!.id };
+}
+
+/**
+ * Birthday bonus pass in the caller's single transaction (admin/test path).
+ * The scheduler (jobs/birthday-bonus.ts) instead commits each batch in its own
+ * transaction (D6). Safe to run as often as the scheduler likes — source_ref
+ * carries the year.
+ */
+export async function grantBirthdayBonuses(tx: Tx, storeId: string, now = new Date()): Promise<number> {
   let granted = 0;
   let after: string | null = null; // keyset cursor: guarantees termination
   for (;;) {
-    // Exclude customers already granted this year so a full batch of
-    // processed customers can never starve the rest; drain until empty.
-    const due: Array<{ id: string; email: string }> = await tx.select({ id: s.customer.id, email: s.customer.email }).from(s.customer)
-      .where(and(
-        eq(s.customer.storeId, storeId), eq(s.customer.birthMonth, month), inArray(s.customer.birthDay, days),
-        eq(s.customer.emailVerified, true), sql`${s.customer.deletedAt} IS NULL`,
-        after ? sql`${s.customer.id} > ${after}` : sql`true`,
-        sql`NOT EXISTS (SELECT 1 FROM loyalty_ledger ll WHERE ll.store_id = ${storeId} AND ll.customer_id = ${s.customer.id} AND ll.source_ref = 'bonus:birthday:' || ${s.customer.id}::text || ':' || ${String(year)})`,
-      ))
-      .orderBy(s.customer.id).limit(BATCH);
-    for (const c of due) {
-      const id = await postBonus(tx, {
-        storeId, customerId: c.id, points: program.birthdayBonusPoints, rule: 'birthday',
-        sourceRef: `bonus:birthday:${c.id}:${year}`, expiryDays: program.expiryDays, metadata: { year }, at: now,
-      });
-      if (!id) continue;
-      granted++;
-      const { available } = await loyaltyBalance(tx, c.id, now);
-      await enqueuePointsEarned(tx, storeId, { name, currency, config }, c.email, {
-        points: program.birthdayBonusPoints, balance: available,
-        lines: [{ label: BONUS_LABELS.birthday, points: program.birthdayBonusPoints }],
-        dedupeKey: `points_earned:bonus:${id}`,
-      });
-    }
-    if (due.length < BATCH) break;
-    after = due[due.length - 1]!.id;
+    const batch: { granted: number; next: string | null } = await grantBirthdayBonusBatch(tx, storeId, now, after);
+    granted += batch.granted;
+    if (!batch.next) break;
+    after = batch.next;
   }
   return granted;
 }

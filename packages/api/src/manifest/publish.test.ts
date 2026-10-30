@@ -23,6 +23,23 @@ afterEach(async () => {
 });
 
 describe('catalog generation publication', () => {
+  it('V66: fsyncs every staged file and directory, and the root after the pointer swap', async () => {
+    const outDir = await root();
+    const synced: string[] = [];
+    vi.mocked(open).mockImplementation((async (path: Parameters<typeof realFs.open>[0], ...rest: unknown[]) => {
+      const handle = await (realFs.open as (...a: unknown[]) => ReturnType<typeof realFs.open>)(path, ...rest);
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => { synced.push(String(path)); return sync(); };
+      return handle;
+    }) as typeof realFs.open);
+    const { generation } = await publishGeneration({ outDir, storeSlug: 'fixture', manifest: { products: [] }, details: [{ slug: 'a' }], manifestV2: { products: [] }, detailsV2: [{ slug: 'a' }] });
+    const gen = join(outDir, 'generations', generation);
+    for (const path of ['shop-catalog.json', 'shop-catalog.v2.json', 'marker.json', 'products/a.json', 'products-v2/a.json', 'products', 'products-v2']) expect(synced).toContain(join(gen, path));
+    expect(synced).toContain(gen);
+    expect(synced).toContain(join(outDir, 'generations'));
+    expect(synced.at(-1)).toBe(outDir);
+  });
+
   it('prevents two stores claiming the same new destination concurrently', async () => {
     const outDir = await root();
     const results = await Promise.allSettled(['store-a', 'store-b'].map(storeSlug => publishGeneration({ outDir, storeSlug, manifest: { storeSlug }, details: [] })));

@@ -40,14 +40,16 @@ COPY --from=build --chown=node:node /runtime/ ./
 COPY --from=build --chown=node:node /workspace/packages/api/dist ./dist
 COPY --from=build --chown=node:node /workspace/packages/api/drizzle ./drizzle
 
-RUN mkdir -p /app/var/assets /app/var/downloads /app/var/state \
+RUN mkdir -p /app/var/assets /app/var/downloads /app/var/state /app/var/catalog \
  && chown -R node:node /app/var
 
 USER node
 EXPOSE 3300
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3300)+'/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+# P8 (E9): the probe no longer starts a whole Node process (tens of MB, ~100 ms CPU) every 30 s. bash's /dev/tcp
+# speaks plain HTTP/1.0 to the liveness route; `timeout` bounds it. Both ship in bookworm-slim (bash, coreutils).
+HEALTHCHECK --interval=30s --timeout=4s --start-period=20s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT:-3300} && printf 'GET /v1/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && timeout 3 head -n 1 <&3 | grep -q ' 200 '"]
 
 # Single-instance/default deployment: migrate to the exact image schema, run
 # create-only first-store bootstrap when BOOTSTRAP_STORE_SLUG is configured,

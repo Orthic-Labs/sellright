@@ -32,7 +32,7 @@ import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { normalizeAttribution, OrderAttributionIn } from '../orders/attribution.js';
 import { adMatchFor, OrderTrackingIn } from '../orders/ad-match.js';
-import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodes, type PricedCart } from './cart.js';
+import { cartResponse, priceCart, promotionStackErrorJson, CartOut, EstimateOut, CouponCodesIn, type PricedCart } from './cart.js';
 import { CartTooLargeError, boundedCartItems, cartTooLargeFields } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
@@ -268,7 +268,7 @@ checkout.openapi(
               shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
-              couponCodes: CouponCodes.optional(), acceptedQuoteHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+              couponCodes: CouponCodesIn.optional(), acceptedQuoteHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
               giftCardCode: z.string().optional(), // applied as a tender against the order total
               // Loyalty points to spend (signed-in customers only). A DISCOUNT
               // applied before tax, re-validated under a per-customer lock

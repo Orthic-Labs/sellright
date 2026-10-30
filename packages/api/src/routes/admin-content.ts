@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { onBlogContentChanged } from '../cache/purge-hook.js';
 import * as s from '../db/schema.js';
 import { autoExcerpt, computeReadingTime, sanitizeBlogHtml } from '../lib/sanitize-html.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
@@ -13,17 +14,31 @@ const cleanTags = (tags: string[]) => tags.map((x) => x.trim()).filter(Boolean);
 adminContent.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/blog', summary: 'List blog posts',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), seoContract: z.string(), createContract: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { query: z.object({ limit: z.coerce.number().int().min(1).max(500).optional(), cursor: z.string().max(200).optional() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), nextCursor: z.string().nullable(), seoContract: z.string(), createContract: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     // Newest first by creation time (the previous platform's list sorted createdAt DESC); id breaks ties deterministically.
-    const items = await withStore(st.storeId, async (tx) =>
+    // PERF C13: bounded (default/max 500) with keyset cursor `<createdAt ISO>|<id>`; nextCursor is null on the last page.
+    const { limit = 500, cursor } = c.req.valid('query');
+    let after: { at: Date; id: string } | undefined;
+    if (cursor) {
+      const [at, cid] = cursor.split('|');
+      const d = new Date(at ?? '');
+      if (!cid || Number.isNaN(d.getTime()) || !/^[0-9a-f-]{36}$/i.test(cid)) throw new HttpError(400, 'invalid cursor');
+      after = { at: d, id: cid };
+    }
+    const rows = await withStore(st.storeId, async (tx) =>
       tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, isPublished: s.blogPost.isPublished, publishDate: s.blogPost.publishDate, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, tags: s.blogPost.tags, createdAt: s.blogPost.createdAt })
-        .from(s.blogPost).orderBy(desc(s.blogPost.createdAt), desc(s.blogPost.id)),
+        .from(s.blogPost).where(after ? or(lt(s.blogPost.createdAt, after.at), and(eq(s.blogPost.createdAt, after.at), lt(s.blogPost.id, after.id))) : undefined)
+        .orderBy(desc(s.blogPost.createdAt), desc(s.blogPost.id)).limit(limit + 1),
     );
-    return c.json({ items: items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null, createdAt: p.createdAt?.toISOString() ?? null })), seoContract: BLOG_CONTRACT, createContract: CREATE_CONTRACT }, 200);
+    const items = rows.slice(0, limit);
+    const last = rows.length > limit ? items[items.length - 1] : undefined;
+    const nextCursor = last?.createdAt ? `${last.createdAt.toISOString()}|${last.id}` : null;
+    return c.json({ items: items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null, createdAt: p.createdAt?.toISOString() ?? null })), nextCursor, seoContract: BLOG_CONTRACT, createContract: CREATE_CONTRACT }, 200);
   }),
 );
 
@@ -42,6 +57,8 @@ adminContent.openapi(
     const b = c.req.valid('json');
     const key = createKey(c.req.header('idempotency-key'));
     const slug = blogSlug(b.slug?.trim() ? b.slug : b.title);
+    // PERF C2: sanitise (CPU-bound, synchronous) before the transaction/row locks are taken.
+    const bodyHtml = sanitizeBlogHtml(b.body ?? '');
     let out: { id: string; slug: string };
     try {
       out = await withStore(st.storeId, async (tx) => {
@@ -50,7 +67,6 @@ adminContent.openapi(
         await ownedFeaturedAsset(tx, st.storeId, b.featuredAssetId);
         // A taken slug is an error the author resolves, never a silent suffix.
         await ensureSlugUnique(tx, st.storeId, slug);
-        const bodyHtml = sanitizeBlogHtml(b.body ?? '');
         const [p] = await tx.insert(s.blogPost).values({
           storeId: st.storeId, title: b.title, slug, excerpt: b.excerpt?.trim() || autoExcerpt(bodyHtml), body: b.body ?? null, bodyHtml,
           // Never default the byline to the staff member's login email: it is published on the storefront.
@@ -63,6 +79,8 @@ adminContent.openapi(
         return result;
       });
     } catch (e) { rethrowSlugConflict(e, slug); }
+    // After commit: the edge-cached blog index/post must not keep serving the old version (#360 P4b).
+    onBlogContentChanged(st.slug, [out.slug]);
     return c.json(out, 200);
   }),
 );
@@ -116,7 +134,9 @@ adminContent.openapi(
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
     const slug = b.slug === undefined ? undefined : blogSlug(b.slug);
-    let result: { id: string; seoRevision: string };
+    // PERF C2: sanitise outside the transaction so the blog row lock is not held during CPU work.
+    const bodyHtml = b.body === undefined ? undefined : sanitizeBlogHtml(b.body);
+    let result: { id: string; seoRevision: string; slugs: string[] };
     try {
       result = await withStore(st.storeId, async (tx) => {
         const p = await lockedBlog(tx, st.storeId, id, b.expectedRevision);
@@ -127,8 +147,7 @@ adminContent.openapi(
         // An unchanged slug is left byte-for-byte alone (posts imported earlier may predate the normaliser).
         if (slug !== undefined && b.slug !== p.slug && slug !== p.slug) { await ensureSlugUnique(tx, st.storeId, slug, id); patch.slug = slug; }
         if (b.excerpt !== undefined) patch.excerpt = b.excerpt;
-        if (b.body !== undefined) {
-          const bodyHtml = sanitizeBlogHtml(b.body);
+        if (b.body !== undefined && bodyHtml !== undefined) {
           Object.assign(patch, { body: b.body, bodyHtml, readingTime: computeReadingTime(bodyHtml) });
           // Blank excerpt supplied, or none stored and none supplied: regenerate from the new body.
           if ((b.excerpt !== undefined && !b.excerpt.trim()) || (b.excerpt === undefined && !p.excerpt)) patch.excerpt = autoExcerpt(bodyHtml);
@@ -137,10 +156,12 @@ adminContent.openapi(
         if (b.publishDate !== undefined) patch.publishDate = b.publishDate ? new Date(b.publishDate) : null;
         if (!Object.keys(patch).length) throw new HttpError(400, 'no editable blog fields');
         const [updated] = await tx.update(s.blogPost).set(patch).where(eq(s.blogPost.id, id)).returning();
-        return { id, seoRevision: blogRevision(updated) };
+        return { id, seoRevision: blogRevision(updated), slugs: [p.slug, updated!.slug] };
       });
     } catch (e) { rethrowSlugConflict(e, slug); }
-    return c.json(result, 200);
+    const { slugs, ...body } = result;
+    onBlogContentChanged(st.slug, [...new Set(slugs)]);
+    return c.json(body, 200);
   }),
 );
 
@@ -154,7 +175,8 @@ adminContent.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
-    await withStore(st.storeId, async (tx) => { await tx.delete(s.blogPost).where(eq(s.blogPost.id, id)); });
+    const deleted = await withStore(st.storeId, async (tx) => tx.delete(s.blogPost).where(eq(s.blogPost.id, id)).returning({ slug: s.blogPost.slug }));
+    onBlogContentChanged(st.slug, deleted.map((d) => d.slug));
     return c.json({ id }, 200);
   }),
 );

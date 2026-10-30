@@ -20,7 +20,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Context, MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
+import { performance } from 'node:perf_hooks';
 import { log } from './logger.js';
+import { observeRequest, queueMsFromHeader, runInRequestScope, type RequestStats } from './metrics.js';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
 
@@ -60,20 +62,38 @@ export function requestIdMiddleware(): MiddlewareHandler {
  * automatically) — keeping the access log + handler log on the same logger
  * family is what lets you grep one requestId and see the whole story.
  */
-export function accessLogMiddleware(): MiddlewareHandler {
+export function accessLogMiddleware(options: AccessLogOptions = {}): MiddlewareHandler {
   return async (c, next) => {
-    const start = Date.now();
-    await next();
-    const durationMs = Date.now() - start;
+    const start = performance.now(); // monotonic: a wall-clock step never yields a negative or inflated duration
+    const header = options.requestStartHeader?.();
+    const queueMs = header ? queueMsFromHeader(c.req.header(header)) : undefined;
+    const stats: RequestStats = { dbAcquires: 0, dbAcquireMs: 0 };
+    await runInRequestScope(stats, next);
+    const durationMs = round1(performance.now() - start);
+    const route = loggedPath(c);
+    const status = c.res.status;
+    observeRequest({ method: c.req.method, route, status, durationMs, dbAcquireMs: stats.dbAcquireMs, queueMs });
     log.info('request', {
       requestId: c.var.requestId,
       method: c.req.method,
-      path: loggedPath(c),
-      status: c.res.status,
+      path: route, // the route TEMPLATE (never raw segments); kept under `path` for existing log consumers
+      status,
       durationMs,
+      // P0: time this request spent waiting for pooled DB connections, and how many it took.
+      dbAcquires: stats.dbAcquires,
+      dbAcquireMs: round1(stats.dbAcquireMs),
+      ...(queueMs === undefined ? {} : { queueMs: round1(queueMs) }),
     });
   };
 }
+
+export interface AccessLogOptions {
+  /** Name of a request-start header the reverse proxy sets (e.g. `x-request-start`), read per request; unset = no
+   *  queue time. Only name a header the proxy always overwrites: a client-supplied value would skew the metric. */
+  requestStartHeader?: () => string | undefined;
+}
+
+const round1 = (ms: number) => Math.round(ms * 10) / 10;
 /**
  * Path for the access log WITHOUT secrets carried in path segments (subscriber/unsubscribe tokens, invite and
  * magic-link tokens, download keys...): the matched route TEMPLATE (`/v1/shop/subscriber/confirm/:token`) when a

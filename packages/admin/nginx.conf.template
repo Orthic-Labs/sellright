@@ -1,6 +1,29 @@
+# P8 (E6): the API upstream is re-resolved through Docker's embedded DNS (NGINX_RESOLVER, default 127.0.0.11) instead
+# of being pinned to the IP seen at start-up, so a recreated api container (new IP) does not leave this proxy
+# talking to a dead address; `resolve` in an upstream needs nginx >= 1.27.3 (this image: 1.31). Keep-alive
+# connections to the API avoid a TCP handshake per proxied request.
+resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+resolver_timeout 5s;
+
+upstream sellright_api {
+    zone sellright_api 64k;
+    server ${API_UPSTREAM_HOSTPORT} resolve;
+    keepalive 16;
+}
+
 server {
     listen 8080;
     server_name _;
+
+    # P8 (C11): explicit limits/timeouts instead of nginx defaults (1m body, 60s everything). 11m = the API's admin
+    # asset-upload cap (10 MiB) plus multipart overhead; the API enforces tighter per-route caps behind this.
+    client_max_body_size 11m;
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    send_timeout 60s;
+    keepalive_timeout 30s;
+    large_client_header_buffers 4 16k;
+    server_tokens off;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -17,14 +40,20 @@ server {
     # Caddy overwrites X-Real-IP at the public edge; this container is only on
     # the private Compose network, so forwarding that value is safe. Never expose
     # this nginx service directly to untrusted clients while using this config.
+    # API_UPSTREAM_HOSTPORT (host:port, default api:3300) replaces the former API_UPSTREAM URL; see the Dockerfile.
     location /v1/ {
         proxy_http_version 1.1;
+        # Upstream keep-alive (E6): clear the hop-by-hop Connection header.
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $http_x_real_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
         proxy_set_header X-Request-ID $request_id;
-        proxy_pass ${API_UPSTREAM};
+        proxy_pass http://sellright_api;
     }
 
     # Uploaded product/media assets live on a shared read-only volume in the

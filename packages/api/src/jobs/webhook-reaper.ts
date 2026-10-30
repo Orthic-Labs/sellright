@@ -21,12 +21,15 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 
-export type ReaperOpts = { apply: boolean; graceMin: number; log?: (m: string) => void };
+export type ReaperOpts = { apply: boolean; graceMin: number; log?: (m: string) => void; batchLimit?: number };
+
+const DEFAULT_REAP_BATCH = 500;
 
 /** One idempotent pass: reset stuck 'processing' webhook rows back to 'pending'. */
 export async function reapStuckWebhooks(opts: ReaperOpts): Promise<{ reset: number }> {
   const { apply, graceMin } = opts;
   const log = opts.log ?? (() => {});
+  const batchLimit = opts.batchLimit && opts.batchLimit > 0 ? Math.floor(opts.batchLimit) : DEFAULT_REAP_BATCH;
   if (!Number.isFinite(graceMin) || graceMin <= 0) throw new Error('graceMin must be a positive number');
   const cutoff = new Date(Date.now() - graceMin * 60_000);
   log(`[webhook-reaper] mode=${apply ? 'APPLY' : 'DRY-RUN'} grace=${graceMin}min cutoff=${cutoff.toISOString()}`);
@@ -45,11 +48,16 @@ export async function reapStuckWebhooks(opts: ReaperOpts): Promise<{ reset: numb
         const [r] = await tx
           .select({ n: sql<number>`count(*)::int` })
           .from(s.webhookDelivery)
-          .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff)));
+          .where(and(eq(s.webhookDelivery.storeId, st.id), eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff)));
         return r?.n ?? 0;
       }
       // APPLY: reset stuck rows back to 'pending' so the scheduler retries.
-      // Parameterized interval — no SQL injection from the env var.
+      // D2 (perf plan P6): bounded, oldest-first, SKIP LOCKED batch per store
+      // per pass, so a large crash backlog is not one long transaction; the
+      // rest is reset on later passes. Not destructive: rows are re-queued,
+      // never deleted. A late finalize from the crashed claim is fenced off by
+      // emit.ts (status + attempts), so the re-claim owns the row.
+      const stuck = and(eq(s.webhookDelivery.storeId, st.id), eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff));
       const due = await tx
         .update(s.webhookDelivery)
         .set({
@@ -58,7 +66,12 @@ export async function reapStuckWebhooks(opts: ReaperOpts): Promise<{ reset: numb
           updatedAt: new Date(),
           lastError: sql`coalesce(${s.webhookDelivery.lastError}, '') || ${` [reaped after ${graceMin}m stuck]`}`,
         })
-        .where(and(eq(s.webhookDelivery.status, 'processing'), lt(s.webhookDelivery.updatedAt, cutoff)))
+        .where(and(stuck, sql`${s.webhookDelivery.id} IN (
+          SELECT id FROM webhook_delivery
+          WHERE store_id = ${st.id} AND status = 'processing' AND updated_at < ${cutoff}
+          ORDER BY updated_at, id
+          LIMIT ${batchLimit}
+          FOR UPDATE SKIP LOCKED)`))
         .returning({ id: s.webhookDelivery.id });
       return due.length;
     });

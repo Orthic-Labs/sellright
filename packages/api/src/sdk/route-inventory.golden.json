@@ -1,5 +1,5 @@
 {
-  "count": 394,
+  "count": 396,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -127,6 +127,7 @@
     "GET /v1/apps/{appKey}/updates/latest",
     "GET /v1/dl/{artifactKey}",
     "GET /v1/health",
+    "GET /v1/internal/metrics",
     "GET /v1/maintenance",
     "GET /v1/openapi.json",
     "GET /v1/readyz",
@@ -163,6 +164,7 @@
     "GET /v1/shop/gift-card/{code}",
     "GET /v1/shop/identity",
     "GET /v1/shop/orders/{code}",
+    "GET /v1/shop/orders/{code}/state",
     "GET /v1/shop/restock-request/cancel/{token}",
     "GET /v1/shop/seo/indexnow-key.txt",
     "GET /v1/shop/seo/jsonld/organization",
@@ -406,6 +408,7 @@
     "GET /v1/admin/order-export/count",
     "GET /v1/admin/payment-reconciliation",
     "GET /v1/dl/{artifactKey}",
+    "GET /v1/internal/metrics",
     "GET /v1/openapi.json",
     "POST /api/licenses/activate",
     "POST /api/licenses/deactivate",

@@ -65,8 +65,8 @@ export async function lockCustomerLoyalty(tx: Tx, storeId: string, customerId: s
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'loyalty:' + storeId + ':' + customerId}, 0))`);
 }
 
-async function customerEntries(tx: Tx, customerId: string) {
-  const [customer] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1);
+async function customerEntries(tx: Tx, customerId: string, known?: { email: string; emailVerified: boolean }) {
+  const customer = known ?? (await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1))[0];
   if (!customer) return [];
   // Credits before debits on a timestamp tie: a debit can never precede the
   // credit it spends (balances never go negative), so this is the true order.
@@ -88,7 +88,21 @@ export interface LoyaltyBalance {
 }
 
 export async function loyaltyBalance(tx: Tx, customerId: string, now = new Date()): Promise<LoyaltyBalance> {
-  const entries = await customerEntries(tx, customerId);
+  const [customer] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1);
+  if (!customer) return { balance: 0, pendingExpiry: 0, available: 0 };
+  // PERF V65: FIFO lot accounting (unpostedExpiredPoints) only needs the ordered rows when some credit lot has ALREADY
+  // reached its expiry. With none, the unposted-expired total is provably 0 whatever the consumption order, so SUM(points)
+  // is the whole answer and no ledger row crosses the wire. Same row filter as customerEntries.
+  const [agg] = await tx
+    .select({ balance: sql<number>`coalesce(sum(${s.loyaltyLedger.points}), 0)::float8`, expired: sql<number>`(count(*) filter (where ${s.loyaltyLedger.points} > 0 and ${s.loyaltyLedger.expiresAt} is not null and ${s.loyaltyLedger.expiresAt} <= ${now.toISOString()}::timestamptz))::int` })
+    .from(s.loyaltyLedger)
+    .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
+    .where(and(eq(s.loyaltyLedger.customerId, customerId), or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer)))));
+  if ((agg?.expired ?? 0) === 0) {
+    const balance = agg?.balance ?? 0;
+    return { balance, pendingExpiry: 0, available: Math.max(0, balance) };
+  }
+  const entries = await customerEntries(tx, customerId, customer);
   const balance = entries.reduce((n, e) => n + e.points, 0);
   const pendingExpiry = Math.min(Math.max(0, balance), unpostedExpiredPoints(entries, now));
   return { balance, pendingExpiry, available: Math.max(0, balance - pendingExpiry) };

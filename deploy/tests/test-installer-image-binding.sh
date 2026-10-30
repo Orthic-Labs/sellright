@@ -38,7 +38,7 @@ if [ "$1" = inspect ]; then
   exit 0
 fi
 if [ "$1" = exec ]; then
-  [ "$2" = "$(printf '%064d' 7)" ] && [ "$3" = tar ] || exit 105
+  [ "$2" = "$(printf '%064d' 7)" ] && [ "$3 $4 $5 $6" = "nice -n 10 tar" ] || exit 105
   printf 'archive-bytes'
   exit 0
 fi
@@ -83,7 +83,7 @@ case "$1" in
     exit 0
     ;;
   exec)
-    case " $* " in *' postgres pg_dump '*) printf 'database-bytes' ;; *) exit 106 ;; esac
+    case " $* " in *' postgres nice -n 10 pg_dump '*) printf 'database-bytes' ;; *) exit 106 ;; esac
     ;;
   config)
     if [ "$RECOVERY_DATA" = 1 ]; then
@@ -243,8 +243,8 @@ update > "$tmp/update.out" 2>&1 || { cat "$tmp/update.out" >&2; fail 'update bin
 grep -Fx 'executed-run verified-digests' "$TRACE" >/dev/null || fail 'migration did not use verified digests'
 grep -Fx 'executed-up verified-digests' "$TRACE" >/dev/null || fail 'update did not use verified digests'
 existing=$(printf '%064d' 7)
-grep -Fx "docker exec $existing tar czf - -C /app/var assets" "$TRACE" >/dev/null || fail 'backup did not use existing API container'
-grep -Fx "docker exec $existing tar czf - -C /app/var downloads" "$TRACE" >/dev/null || fail 'downloads backup did not use existing API container'
+grep -Fx "docker exec $existing nice -n 10 tar czf - -C /app/var assets" "$TRACE" >/dev/null || fail 'backup did not use existing API container'
+grep -Fx "docker exec $existing nice -n 10 tar czf - -C /app/var downloads" "$TRACE" >/dev/null || fail 'downloads backup did not use existing API container'
 awk '/^docker exec / { backup=NR } /^cosign / && !gate { gate=NR } END { exit !(backup && gate && backup < gate) }' "$TRACE" || fail 'backup did not precede verification'
 pass 'registry update backs up existing bytes, then migrates & starts verified digests'
 

@@ -45,6 +45,7 @@ describe('sendEmail SMTP configuration', () => {
     });
 
     expect(createTransport).toHaveBeenCalledWith({
+      dnsTimeout: 10_000, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
       host: 'smtp.gmail.com',
       port: 587,
       secure: false,
@@ -178,9 +179,29 @@ describe('sendEmail explicit SMTP disable', () => {
     expect(mailer.withStore).toHaveBeenCalledTimes(1);
     expect(mailer.resolveField).toHaveBeenCalledTimes(1);
     expect(mailer.createTransport).toHaveBeenCalledWith({
+      dnsTimeout: 10_000, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
       host: 'smtp.store.test', port: 587, secure: false,
       auth: { user: 'store@example.test', pass: 'synthetic-smtp-password' },
     });
     expect(mailer.sendMail).toHaveBeenCalledWith({ ...message, from: 'store@example.test' });
+  });
+});
+
+describe('sendEmail workflow deadline (A2)', () => {
+  it('fails a send that outlives SMTP_SEND_DEADLINE_MS instead of pinning the outbox pass', async () => {
+    vi.useFakeTimers();
+    try {
+      const sendMail = vi.fn(() => new Promise<never>(() => undefined)); // relay never answers
+      vi.doMock('nodemailer', () => ({ default: { createTransport: vi.fn(() => ({ sendMail })) } }));
+      process.env = { NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test', SMTP_FROM: 'fallback@example.test' };
+      const { sendEmail, SMTP_SEND_DEADLINE_MS } = await import('./mailer.js');
+      const pending = sendEmail({ to: 'buyer@example.com', subject: 'R', html: '<p>R</p>', text: 'R' });
+      await vi.advanceTimersByTimeAsync(SMTP_SEND_DEADLINE_MS + 1);
+      const res = await pending;
+      expect(res.delivered).toBe(false);
+      expect(res.reason).toMatch(/smtp_deadline_exceeded/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

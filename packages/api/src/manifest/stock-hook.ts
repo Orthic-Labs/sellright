@@ -57,7 +57,7 @@
  * is silently lost, independent of which process (if any) is still alive.
  */
 import { env } from '../env.js';
-import { publishCatalogManifest } from './catalog.js';
+import { CatalogPurgeError, publishCatalogManifest } from './catalog.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
 import { _resetJobAdmissionForTest, AdmissionStoppedError, jobAdmission } from '../jobs/admission.js';
 import { detachFromPass } from '../db/client.js';
@@ -66,7 +66,8 @@ import { markManifestRegenerationPending, clearManifestRegenerationPending } fro
 import { log, err as logErr } from '../lib/logger.js';
 import { onCatalogCacheChanged } from '../cache/purge-hook.js';
 
-/** 'full' wins over any variant set — see the file header. */
+/** 'full' wins over any scoped set — see the file header. Scoped ids are tagged `v:` (variant) or `p:` (product,
+ *  V60 / #357 content edits) so one trailing rerun can carry both. */
 type RegenScope = 'full' | Set<string>;
 
 interface RegenState {
@@ -110,14 +111,28 @@ function mergeScope(a: RegenScope | null, b: RegenScope): RegenScope {
  * commit.
  */
 export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
-  // Independent of the manifest feature gate below — a deployment with the
-  // catalog manifest disabled must still get Cloudflare cache purges on stock
-  // change. onCatalogCacheChanged() itself no-ops per-store when that store
-  // has no Cloudflare config, so this is always safe to call.
-  onCatalogCacheChanged(storeSlug);
-  if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) return;
+  schedule(storeSlug, variantIds?.length ? new Set(variantIds.map((id) => `v:${id}`)) : 'full', {});
+}
+
+/**
+ * V60 / #357: a product/variant content edit committed (name, description, price, media, status, ...). Schedules
+ * the same immediate, scoped content publication a stock change does, scoped to these products. The edge purge for
+ * the product page then follows the publication (N9) instead of preceding it. Same fire-and-forget contract as
+ * onStockChanged: call after commit, never awaited, never throws.
+ */
+export function onCatalogContentChanged(storeSlug: string, productIds: string[], opts: { productPath?: string } = {}): void {
+  schedule(storeSlug, productIds.length ? new Set(productIds.map((id) => `p:${id}`)) : 'full', opts);
+}
+
+function schedule(storeSlug: string, scope: RegenScope, purgeOpts: { productPath?: string }): void {
+  // N9: with publication configured for this store, the purge runs AFTER the new generation is published
+  // (manifest/catalog.ts). Without it there is no content artifact to wait for, so purge now — a deployment with
+  // the catalog manifest disabled must still get Cloudflare cache purges. Never throws (see purge-hook.ts).
+  if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) {
+    onCatalogCacheChanged(storeSlug, purgeOpts);
+    return;
+  }
   const st = stateFor(storeSlug);
-  const scope: RegenScope = variantIds?.length ? new Set(variantIds) : 'full';
   // #360 H1 / M2: detached from whatever called this (a request, or a job pass that may end — and give its lease
   // back — before this finishes). The durable marker below is one short write on the caller's side of the pools
   // (request pool from a request); the publication itself is admitted background work (jobs pool, capped).
@@ -145,12 +160,14 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
   st.generating = true;
   st.trailing = null;
   try {
-    const variantIds = scope === 'full' ? undefined : [...scope];
+    const tagged = scope === 'full' ? [] : [...scope];
+    const variantIds = scope === 'full' ? undefined : tagged.filter((id) => id.startsWith('v:')).map((id) => id.slice(2));
+    const productIds = scope === 'full' ? undefined : tagged.filter((id) => id.startsWith('p:')).map((id) => id.slice(2));
     // #360 N4: an HTTP request triggered this, but the publication is background work: it goes through the shared
     // job admission (jobs pool, concurrency cap), never the request pool the shopper's request is using.
     const result = await jobAdmission().run('catalog-manifest:stock', () => withLeaderLock(
       'catalog-manifest',
-      () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug, variantIds }),
+      () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug, ...(variantIds?.length ? { variantIds } : {}), ...(productIds?.length ? { productIds } : {}) }),
       storeSlug,
     ));
     if (result) log.info('catalog manifest regenerated on stock change', { storeSlug, products: result.products, scope: scope === 'full' ? 'full' : `${scope.size} product-scoped variant(s)` });
@@ -161,6 +178,9 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
   } catch (e) {
     // Shutting down: the durable marker stays, the next run's drain publishes.
     if (e instanceof AdmissionStoppedError) return;
+    // N9 / F5: published, but the edge purge failed or timed out. The marker stays so the drain pass republishes
+    // and purges again — the retry is persisted, not held in memory.
+    if (e instanceof CatalogPurgeError) { logErr.error('catalog published; edge purge failed — durable retry kept', e, { storeSlug, generation: e.published.generation }); return; }
     logErr.error('stock-triggered catalog manifest regeneration failed', e, { storeSlug });
     // Marker deliberately left in place — catalog-manifest-drain will retry.
   } finally {

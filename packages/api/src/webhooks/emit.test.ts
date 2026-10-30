@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   endCalls: 0,
   unlocked: false,
   leaderReleased: false,
+  localTimeouts: [] as unknown[][],
 }));
 
 vi.mock('pg', async () => {
@@ -94,6 +95,7 @@ vi.mock('../db/client.js', async () => {
         return await fn({
           execute: async (query: SQL) => {
             const statement = dialect.sqlToQuery(query);
+            if (statement.sql.includes("set_config('statement_timeout'")) { h.localTimeouts.push(statement.params); return { rows: [] }; }
             h.statements.push(statement.sql);
             h.claims.push(storeId);
             if (h.failStores.has(storeId)) throw new Error(`claim failed: ${storeId}`);
@@ -109,7 +111,8 @@ vi.mock('../db/client.js', async () => {
               await h.finalizers.get(storeId)?.();
               const row = h.rows.get(storeId)?.find((r) => r.status === 'processing');
               if (!row) throw new Error('No claimed row');
-              expect(dialect.sqlToQuery(condition).params).toEqual([storeId, row.id]);
+              // Claim fence: store, id, still 'processing', and the attempt count this claim set.
+              expect(dialect.sqlToQuery(condition).params).toEqual([storeId, row.id, 'processing', row.attempts]);
               row.status = values.status;
               if (values.nextAttemptAt) row.nextAttemptAt = values.nextAttemptAt.getTime();
               h.finalized.push(row.id);
@@ -124,7 +127,8 @@ vi.mock('../security/outbound-url.js', () => ({ safeOutboundFetch: vi.fn() }));
 
 import { safeOutboundFetch } from '../security/outbound-url.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
-import { deliverWebhooks, normalizeWebhookBatchLimit } from './emit.js';
+import { borrowedWebhookDeliveryPool, deliverWebhooks, normalizeWebhookBatchLimit, setWebhookDeliveryPoolSource, type WebhookDeliveryPool } from './emit.js';
+import { Pool } from 'pg';
 
 function deferred() {
   let resolve!: () => void;
@@ -147,7 +151,7 @@ beforeEach(() => {
   h.configs = []; h.transactionOptions = []; h.enumConfig = undefined;
   h.enumError = undefined; h.connectError = undefined; h.poolError = undefined; h.closeGate = undefined;
   h.expireDuring = undefined; h.connections = 0;
-  h.endCalls = 0; h.unlocked = false; h.leaderReleased = false;
+  h.endCalls = 0; h.unlocked = false; h.leaderReleased = false; h.localTimeouts = [];
   vi.spyOn(performance, 'now').mockImplementation(() => h.now);
   vi.mocked(safeOutboundFetch).mockResolvedValue(new Response(null, { status: 200 }));
 });
@@ -284,5 +288,31 @@ describe('webhook admission & pool errors', () => {
     await expect(deliverWebhooks()).rejects.toThrow('Webhook delivery pass failed');
     expect(logged).toHaveBeenCalledWith('[pg webhook pool error]', error);
     expect(h.endCalls).toBe(1);
+  });
+});
+
+describe('webhook delivery pool reuse (A9)', () => {
+  afterEach(() => { setWebhookDeliveryPoolSource(null); });
+
+  it('borrows an installed shared pool: no new pool, no end(), short timeouts set per transaction', async () => {
+    const shared = new (Pool as unknown as new (c: Record<string, unknown>) => WebhookDeliveryPool & { end(): Promise<void> })({ Client: class { release() {} end() { return Promise.resolve(); } once() {} on() {} } });
+    const ended = vi.spyOn(shared, 'end');
+    h.configs = [];
+    setWebhookDeliveryPoolSource(borrowedWebhookDeliveryPool(shared));
+    h.stores = ['a']; seed('a', 2);
+    expect(await deliverWebhooks({ limit: 2 })).toEqual({ delivered: 2, failed: 0 });
+    expect(h.configs).toEqual([]); // no dedicated pool constructed for the pass
+    expect(ended).not.toHaveBeenCalled();
+    // claim + finalize per delivery (2 rows), plus the empty third claim — each sets statement/lock timeouts locally.
+    expect(h.localTimeouts.length).toBe(h.transactionOptions.length);
+    expect(h.localTimeouts[0]).toEqual(['1000', '250']);
+  });
+
+  it('keeps the dedicated per-pass pool (and its teardown) as the default', async () => {
+    h.stores = ['a']; seed('a', 1);
+    await deliverWebhooks();
+    expect(h.configs).toHaveLength(1);
+    expect(h.endCalls).toBeGreaterThan(0);
+    expect(h.localTimeouts).toEqual([]);
   });
 });

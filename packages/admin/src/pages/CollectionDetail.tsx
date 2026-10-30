@@ -16,7 +16,7 @@ export default function CollectionDetailPage() {
   const { data: col, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<CollectionDetail>(`/collections/${id}`) });
   const search = useQuery({
     queryKey: ['product-search', store?.slug, q],
-    queryFn: () => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, pageSize: '6' })}`),
+    queryFn: ({ signal }) => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, pageSize: '6' })}`, { signal }),
     enabled: q.trim().length > 1,
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });

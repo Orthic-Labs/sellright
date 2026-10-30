@@ -8,6 +8,7 @@
  * parse for the signature to verify.
  */
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { bodyLimit } from 'hono/body-limit';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
@@ -19,6 +20,7 @@ import { recordPaymentAlert } from '../payments/payment-alerts.js';
 import { resolveField } from '../security/settings-resolver.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, orderIdsForStripePayments, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { clientIp, recordWebhookSignatureFailure, webhookSignatureRetryAfter } from '../auth/rate-limit.js';
 import { recordSettlementOperation } from '../payments/settlement/record.js';
 import {
   onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
@@ -98,11 +100,47 @@ async function moneyLockSubjects(storeId: string, event: Stripe.Event): Promise<
   return subjects;
 }
 
+/** Stripe's own default tolerance for constructEvent (seconds); a signature outside it can never verify. */
+const STRIPE_SIGNATURE_TOLERANCE_S = 300;
+/** C9 (P8): Stripe event payloads are small JSON documents; the app-wide 2 MiB cap is far more than this route needs. */
+export const STRIPE_WEBHOOK_BODY_LIMIT_BYTES = 512 * 1024;
+
+/**
+ * C9 / G5 (P8): cheap, secret-free pre-check of the Stripe-Signature header so a malformed or stale header is refused
+ * BEFORE the per-store secret fan-out (one DB read per store and mode). 'absent' and 'invalid' are distinguished so
+ * the route can answer them differently; 'ok' only means the header is well-formed and fresh — the HMAC is verified
+ * afterwards exactly as before.
+ */
+export function precheckStripeSignature(header: string | undefined, nowSeconds: number = Math.floor(Date.now() / 1000)): 'absent' | 'invalid' | 'stale' | 'ok' {
+  if (header === undefined || header.trim() === '') return 'absent';
+  if (header.length > 4096) return 'invalid';
+  let t: number | null = null;
+  let v1 = 0;
+  for (const part of header.split(',')) {
+    const i = part.indexOf('=');
+    if (i <= 0) continue;
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (k === 't') { if (!/^\d{1,12}$/.test(v)) return 'invalid'; t = Number(v); }
+    else if (k === 'v1') { if (!/^[0-9a-f]{64}$/i.test(v)) return 'invalid'; v1++; }
+  }
+  if (t === null || v1 === 0 || v1 > 8) return 'invalid';
+  if (Math.abs(nowSeconds - t) > STRIPE_SIGNATURE_TOLERANCE_S) return 'stale';
+  return 'ok';
+}
+
 export const paymentWebhooks = new OpenAPIHono();
+
+paymentWebhooks.use('/v1/webhooks/stripe', bodyLimit({
+  maxSize: STRIPE_WEBHOOK_BODY_LIMIT_BYTES,
+  onError: (c) => c.json({ error: 'payload too large' }, 413),
+}));
 
 paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   const sig = c.req.header('stripe-signature');
-  if (!sig) return c.json({ error: 'missing signature' }, 400);
+  const shape = precheckStripeSignature(sig);
+  if (shape === 'absent' || !sig) return c.json({ error: 'missing signature' }, 400);
+  if (shape !== 'ok') return c.json({ error: 'bad signature' }, 400);
   const raw = await c.req.text(); // raw body BEFORE json parse — Stripe sig requires it
   let event: Stripe.Event | null = null;
   let verifiedMode: StripeMode | null = null;
@@ -136,7 +174,11 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // table), so listing ids isn't an RLS bypass; each secret read still goes
   // through withStore + resolveField, scoped to that one store. Bounded by
   // the (typically single-digit) number of stores on this install.
+  // G5: an address that keeps presenting well-formed but WRONG signatures is refused before the per-store fan-out.
+  const peer = clientIp(c);
   if (!event) {
+    const blocked = await webhookSignatureRetryAfter('stripe', peer);
+    if (blocked > 0) { c.header('Retry-After', String(blocked)); return c.json({ error: 'bad signature' }, 429); }
     const storeIds = await listAllStoreIds();
     outer: for (const sid of storeIds) {
       for (const mode of ['test', 'live'] as StripeMode[]) {
@@ -157,7 +199,10 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       }
     }
   }
-  if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);
+  if (!event || !verifiedMode) {
+    await recordWebhookSignatureFailure('stripe', peer).catch(() => undefined);
+    return c.json({ error: 'bad signature' }, 400);
+  }
 
   // Resolve the tenant: signed metadata.storeId is the fast-path; the DB
   // anchor goes through resolveStoreForGatewayEvent (the SECURITY DEFINER

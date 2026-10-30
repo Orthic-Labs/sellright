@@ -1,16 +1,36 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { pool, withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { verifySezzleAttempt } from '../payments/gateway-payment.js';
 import { observeImportedSezzlePayment, reconcileSezzleRefunds, resolveSezzleSessionAttempt } from '../payments/sezzle-reconcile.js';
+
+/**
+ * D9 (perf plan P6). `attempts` counts processing attempts already made. The
+ * attempt that would make it MANUAL_AFTER_ATTEMPTS (the 30th) and still leaves
+ * the event pending moves it to visible manual review instead.
+ */
+export const MANUAL_AFTER_ATTEMPTS = 30;
+const EVENT_BATCH_LIMIT = 25;
+/** Retry backoff after `attempts` failed passes: 1, 2, 4, 8 then every 15 minutes. */
+export function gatewayEventRetryDelayMs(attempts: number): number {
+  return attempts <= 0 ? 0 : Math.min(60_000 * 2 ** (attempts - 1), 15 * 60_000);
+}
 
 /** Ingress acknowledges only durable storage. This worker performs authoritative reads. */
 export async function reconcileGatewayEvents() {
   const stores = await pool.query<{ id: string }>('SELECT id FROM store');
   let processed = 0;
   for (const store of stores.rows) {
+    // Due filter BEFORE the limit (D9): a failed event waits out its backoff
+    // (updated_at is stamped on every attempt) instead of being re-verified
+    // against the provider every minute; fresh events (attempts = 0) are due at
+    // once. Stable order: longest-waiting first, id as tiebreak.
     const events = await withStore(store.id, tx => tx.select().from(s.gatewayEvent)
-      .where(eq(s.gatewayEvent.status, 'pending')).orderBy(asc(s.gatewayEvent.updatedAt)).limit(25));
+      .where(and(eq(s.gatewayEvent.status, 'pending'),
+        sql`${s.gatewayEvent.updatedAt} <= now() - least(
+          case when ${s.gatewayEvent.attempts} <= 0 then 0 else 60 * power(2, least(${s.gatewayEvent.attempts}, 10) - 1) end,
+          900) * interval '1 second'`))
+      .orderBy(asc(s.gatewayEvent.updatedAt), asc(s.gatewayEvent.id)).limit(EVENT_BATCH_LIMIT));
     for (const event of events) {
       await withAdvisoryLock('gateway-event:' + event.id, async () => {
         let status = 'pending';
@@ -53,7 +73,7 @@ export async function reconcileGatewayEvents() {
         if (lastError?.startsWith('Ambiguous')) status = 'manual';
         // Keep the durable work visible after repeated failures; operators can
         // retry it. Never silently drop an event when a provider stops retries.
-        if (status === 'pending' && current.attempts >= 29) status = 'manual';
+        if (status === 'pending' && current.attempts + 1 >= MANUAL_AFTER_ATTEMPTS) status = 'manual';
         await withStore(store.id, async tx => {
           await tx.update(s.gatewayEvent).set({
             status, lastError, attempts: current.attempts + 1, updatedAt: new Date(),

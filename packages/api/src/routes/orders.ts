@@ -179,3 +179,61 @@ orders.openapi(
     return c.json(out, 200);
   },
 );
+
+// GET /v1/shop/orders/{code}/state — V29 compact state read for confirmation polling. Additive: the full read above
+// is unchanged. Same scope (receipt token or owning session; otherwise 404) and the same reconcile-before-read
+// fallback for an unpaid order, but it returns only the state facts a poll needs — no lines, addresses, e-mails or
+// payment details — so repeated polls skip the full order projection.
+orders.openapi(
+  createRoute({
+    method: 'get',
+    path: '/v1/shop/orders/{code}/state',
+    summary: 'Compact order state (receipt-token or owner scoped) for confirmation polling',
+    request: { params: z.object({ code: z.string() }), query: z.object({ rt: z.string().optional() }) },
+    responses: {
+      200: {
+        description: 'Order state',
+        content: {
+          'application/json': {
+            schema: z.object({
+              code: z.string(), state: z.string(),
+              status: z.enum(['open', 'completed', 'cancelled', 'archived']),
+              paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
+              fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
+              grandTotal: z.number().int(),
+            }),
+          },
+        },
+      },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const { code } = c.req.valid('param');
+    const { rt } = c.req.valid('query');
+    const token = customerToken(c);
+    const read = () => withStore(st.id, async (tx) => {
+      const [o] = await tx.select({ id: s.order.id, code: s.order.code, state: s.order.state, status: s.order.status, grandTotal: s.order.grandTotal,
+        receiptToken: s.order.receiptToken, customerId: s.order.customerId, metadata: s.order.metadata })
+        .from(s.order).where(and(eq(s.order.code, code), eq(s.order.storeId, st.id))).limit(1);
+      if (!o) return null;
+      let granted = tokensMatch(rt, o.receiptToken);
+      if (!granted && token && o.customerId) granted = customerOwnsOrder(await resolveCustomer(tx, token), o);
+      if (!granted) return null;
+      const facts = await loadOrderStatusFacts(tx, o);
+      return { id: o.id, body: { code: o.code, state: o.state, ...facts, grandTotal: o.grandTotal } };
+    });
+    let out = await read();
+    if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+    // Same D1 fallback as the full read: an unpaid order's tracked Stripe intents are reconciled (throttled per
+    // order, no transaction open, never fatal), then state is re-read live. Settled orders take one transaction.
+    if ((out.body.state === 'PendingPayment' || out.body.state === 'Cancelled') && claimReconcileSlot(st.id, out.id)) {
+      await reconcileStripeOrder(st.id, { orderId: out.id }, { actor: 'shopper:order-read' })
+        .catch((e: unknown) => log.warn('stripe reconcile on order state read failed', { err: e instanceof Error ? e.message : String(e), code }));
+      out = await read();
+      if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+    }
+    return c.json(out.body, 200);
+  },
+);

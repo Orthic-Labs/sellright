@@ -205,3 +205,98 @@ describe('TRUSTED_PROXY_CIDRS (P1a review)', () => {
     expect(pickClientIp(headers({ 'x-real-ip': '198.51.100.44' }), { ...opts, remoteAddr: '10.0.0.5' })).toBe('10.0.0.5');
   });
 });
+
+describe('P8 limiter changes', async () => {
+  const rl = await import('./rate-limit.js');
+  const backend = await import('./rate-limit-backend.js');
+  beforeEach(() => backend._setRateLimitBackendForTest(backend.createMemoryRateLimitBackend()));
+  afterEach(() => backend._setRateLimitBackendForTest(undefined));
+
+  it('G9: IPv6 keys collapse to the /64; IPv4 (and v4-mapped) stay exact; non-IPs pass through', () => {
+    expect(rl.rateLimitIpKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
+    expect(rl.rateLimitIpKey('2001:0db8:0001:0002::1')).toBe('2001:db8:1:2::/64');
+    expect(rl.rateLimitIpKey('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(rl.rateLimitIpKey('::ffff:203.0.113.9')).toBe('203.0.113.9');
+    expect(rl.rateLimitIpKey('203.0.113.9')).toBe('203.0.113.9');
+    expect(rl.rateLimitIpKey('*')).toBe('*');
+    expect(rl.rateLimitIpKey('unknown')).toBe('unknown');
+  });
+
+  it('G9: rotating addresses inside one /64 shares one login budget', async () => {
+    for (let i = 0; i < 8; i++) await rl.recordLoginFailure(`2001:db8:5:6::${i + 1}`, 'v6@x.test');
+    expect(await rl.loginRetryAfter('2001:db8:5:6:ffff::9', 'v6@x.test')).toBeGreaterThan(0);
+    expect(await rl.loginRetryAfter('2001:db8:5:7::1', 'v6@x.test')).toBe(0);
+  });
+
+  it('G7: a network that completed a password-verified sign-in is not locked out by a cross-IP spray', async () => {
+    await rl.clearAdminAuthFailures('198.51.100.200', 'owner@x.test'); // the owner signed in from here earlier
+    for (let i = 0; i < 20; i++) expect(await rl.reserveAdminAuthAttempt(`203.0.113.${i + 1}`, 'owner@x.test')).toBe(0);
+    // account budget spent by the spray: every unknown network is refused…
+    expect(await rl.reserveAdminAuthAttempt('203.0.113.250', 'owner@x.test')).toBeGreaterThan(0);
+    // …but the owner's known network still gets its (ip, account) budget, and only that.
+    for (let i = 0; i < 8; i++) expect(await rl.reserveAdminAuthAttempt('198.51.100.200', 'owner@x.test')).toBe(0);
+    expect(await rl.reserveAdminAuthAttempt('198.51.100.200', 'owner@x.test')).toBeGreaterThan(0);
+  });
+
+  it('G6: one address spraying many e-mails hits the aggregate budget', async () => {
+    for (let i = 0; i < 40; i++) await rl.recordCustomerAuthIpFailure('198.51.100.33');
+    expect(await rl.customerAuthIpRetryAfter('198.51.100.33')).toBeGreaterThan(0);
+    expect(await rl.customerAuthIpRetryAfter('198.51.100.34')).toBe(0);
+  });
+
+  it('G12a: gift-card misses are budgeted per store and address', async () => {
+    for (let i = 0; i < 10; i++) {
+      expect(await rl.giftCardLookupRetryAfter('198.51.100.40', 'store-a')).toBe(0);
+      await rl.recordGiftCardMiss('198.51.100.40', 'store-a');
+    }
+    expect(await rl.giftCardLookupRetryAfter('198.51.100.40', 'store-a')).toBeGreaterThan(0);
+    expect(await rl.giftCardLookupRetryAfter('198.51.100.40', 'store-b')).toBe(0);
+  });
+
+  it('G12e: very long identifiers are keyed by digest, so they still share a budget', async () => {
+    const long = `${'a'.repeat(5000)}@x.test`;
+    for (let i = 0; i < 8; i++) await rl.recordLoginFailure('198.51.100.41', long);
+    expect(await rl.loginRetryAfter('198.51.100.41', long.toUpperCase())).toBeGreaterThan(0);
+  });
+
+  it('G12b: trusted-ingress peer test mirrors pickClientIp', () => {
+    expect(rl.isTrustedIngressPeer({})).toBe(true); // in-process request
+    expect(rl.isTrustedIngressPeer({ env: { incoming: { socket: { remoteAddress: '127.0.0.1' } } } })).toBe(true);
+    expect(rl.isTrustedIngressPeer({ env: { incoming: { socket: { remoteAddress: '::ffff:10.0.0.4' } } } })).toBe(true);
+    expect(rl.isTrustedIngressPeer({ env: { incoming: { socket: { remoteAddress: '203.0.113.7' } } } })).toBe(false);
+  });
+});
+
+describe('fast-deny wrapper (P8 / A6)', async () => {
+  const { createFastDenyRateLimitBackend, createMemoryRateLimitBackend: mem } = await import('./rate-limit-backend.js');
+  it('answers a remembered refusal without asking the shared backend, never caches an allow, and clear() forgets', async () => {
+    const inner = mem();
+    const spy = { consume: vi.spyOn(inner, 'consume'), check: vi.spyOn(inner, 'check') };
+    const b = createFastDenyRateLimitBackend(inner, { maxDenyMs: 5_000 });
+    expect(await b.consume('x', 'k', 60_000, 1)).toBe(0);
+    expect(await b.consume('x', 'k', 60_000, 1)).toBeGreaterThan(0);
+    expect(spy.consume).toHaveBeenCalledTimes(2);
+    expect(await b.consume('x', 'k', 60_000, 1)).toBeGreaterThan(0);
+    expect(await b.check('x', 'k', 60_000, 1)).toBeGreaterThan(0);
+    expect(spy.consume).toHaveBeenCalledTimes(2); // served from the memo
+    expect(spy.check).toHaveBeenCalledTimes(0);
+    await b.clear('x', 'k');
+    expect(await b.consume('x', 'k', 60_000, 1)).toBe(0);
+    expect(spy.consume).toHaveBeenCalledTimes(3);
+  });
+  it('bounds the memo and caps the deny duration', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-30T00:00:00Z'));
+      const inner = mem();
+      const b = createFastDenyRateLimitBackend(inner, { maxEntries: 2, maxDenyMs: 1_000 });
+      for (const key of ['a', 'b', 'c']) { await b.consume('y', key, 3_600_000, 1); await b.consume('y', key, 3_600_000, 1); }
+      const spy = vi.spyOn(inner, 'consume');
+      await b.consume('y', 'a', 3_600_000, 1); // evicted from the memo -> asks the backend
+      expect(spy).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date('2026-10-30T00:00:02Z'));
+      await b.consume('y', 'c', 3_600_000, 1); // memo expired after maxDenyMs -> asks again (still denied there)
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+});

@@ -57,7 +57,7 @@ function MultiplierEditor({ form, setForm }: { form: Form; setForm: (f: Form) =>
   const [q, setQ] = useState('');
   const { data: found } = useQuery({
     queryKey: ['loyalty-product-search', q], enabled: q.trim().length >= 2,
-    queryFn: () => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, status: 'all', page: '1', pageSize: '6' })}`),
+    queryFn: ({ signal }) => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, status: 'all', page: '1', pageSize: '6' })}`, { signal }),
   });
   const { data: known } = useQuery({
     queryKey: ['loyalty-product-names'], enabled: form.productMultipliers.length > 0,

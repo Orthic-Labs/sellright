@@ -13,17 +13,16 @@
  * touched, by construction (see the `lt(processedAt, cutoff)` predicate
  * below) — idempotency correctness for in-window events is unaffected.
  *
- * Mirrors the webhook-reaper.ts pattern: idempotent pass, per-store loop
- * (RLS via withStore), DRY-RUN by default, batched deletes so a large backlog
- * doesn't take one giant table lock. Runs as the OWNER role.
+ * Idempotent pass, DRY-RUN by default, batched deletes so a large backlog
+ * doesn't take one giant table lock. One global pass (the table has no RLS
+ * and no per-store scoping; see D3 below).
  *
  * Usage:
  *   tsx src/jobs/processed-event-reaper.ts                # DRY RUN
  *   RETENTION_DAYS=30 tsx src/jobs/processed-event-reaper.ts --apply
  */
-import { inArray, lt, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
-import * as s from '../db/schema.js';
 
 export type ProcessedEventReaperOpts = {
   apply: boolean;
@@ -33,6 +32,7 @@ export type ProcessedEventReaperOpts = {
 };
 
 const DEFAULT_BATCH_LIMIT = 1000;
+const MAX_BATCHES_PER_RUN = 50;
 
 /** One idempotent pass: delete processed_event rows older than the retention window. */
 export async function reapProcessedEvents(opts: ProcessedEventReaperOpts): Promise<{ deleted: number }> {
@@ -43,42 +43,36 @@ export async function reapProcessedEvents(opts: ProcessedEventReaperOpts): Promi
   const cutoff = new Date(Date.now() - retentionDays * 24 * 3_600_000);
   log(`[processed-event-reaper] mode=${apply ? 'APPLY' : 'DRY-RUN'} retention=${retentionDays}d cutoff=${cutoff.toISOString()}`);
 
-  const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
+  // D3 (perf plan P6): processed_event is an explicitly GLOBAL table (no RLS;
+  // drizzle/0001_rls_policies.sql) keyed by provider event id. The old per-store
+  // loop ran the same unscoped count/delete once per store. One global pass now,
+  // with a per-run batch cap so a large backlog spreads across hourly runs.
+  // Replay protection is unchanged: only rows older than the retention window
+  // are ever touched, and APPLY stays default OFF (scheduler flag).
+  //
+  // Statements still run through withStore so every delete commits inside the
+  // lease-fenced store transaction wrapper (runner protocol: an expired leader
+  // cannot commit). The anchor store only supplies that wrapper; the table has
+  // no RLS, so the predicate alone selects rows, exactly as before.
+  const anchor = (await pool.query<{ id: string }>('SELECT id FROM store ORDER BY id LIMIT 1')).rows[0]?.id;
   let total = 0;
-  for (const st of stores.rows) {
-    let storeDeleted = 0;
-    // Batched loop: each pass deletes at most `batchLimit` rows so a large
-    // backlog never takes one giant table lock. Repeats until a batch comes
-    // back short (nothing left older than cutoff for this store).
-    for (;;) {
-      const n = await withStore(st.id, async (tx) => {
-        if (!apply) {
-          const [r] = await tx
-            .select({ n: sql<number>`count(*)::int` })
-            .from(s.processedEvent)
-            .where(lt(s.processedEvent.processedAt, cutoff));
-          return r?.n ?? 0;
-        }
-        // Claim a batch of ids first, then delete by id — avoids a DELETE
-        // statement with its own ORDER BY/LIMIT (not portable across drizzle
-        // query builders) while still bounding each pass to `batchLimit` rows.
-        const claimed = await tx
-          .select({ id: s.processedEvent.id })
-          .from(s.processedEvent)
-          .where(lt(s.processedEvent.processedAt, cutoff))
-          .limit(batchLimit);
-        if (!claimed.length) return 0;
-        const deleted = await tx
-          .delete(s.processedEvent)
-          .where(inArray(s.processedEvent.id, claimed.map((r) => r.id)))
-          .returning({ id: s.processedEvent.id });
-        return deleted.length;
+  for (let batches = 0; anchor && batches < MAX_BATCHES_PER_RUN; batches++) {
+    if (!apply) {
+      total = await withStore(anchor, async (tx) => {
+        const r = await tx.execute(sql`SELECT count(*)::int AS n FROM processed_event WHERE processed_at < ${cutoff}`);
+        return (r.rows[0] as { n: number } | undefined)?.n ?? 0;
       });
-      storeDeleted += n;
-      if (!apply || n < batchLimit) break; // dry-run never loops; apply stops once a batch comes back short
+      break; // dry-run never loops
     }
-    total += storeDeleted;
-    if (storeDeleted) log(`[processed-event-reaper] ${st.slug}: ${apply ? 'deleted' : 'would delete'} ${storeDeleted}`);
+    const n = await withStore(anchor, async (tx) => {
+      const r = await tx.execute(sql`DELETE FROM processed_event WHERE id IN (
+          SELECT id FROM processed_event WHERE processed_at < ${cutoff}
+          ORDER BY processed_at, id LIMIT ${batchLimit} FOR UPDATE SKIP LOCKED)
+        RETURNING id`);
+      return r.rows.length;
+    });
+    total += n;
+    if (n < batchLimit) break; // apply stops once a batch comes back short
   }
   log(`[processed-event-reaper] done: ${total}${apply ? '' : ' (DRY RUN — --apply to act)'}`);
   return { deleted: total };

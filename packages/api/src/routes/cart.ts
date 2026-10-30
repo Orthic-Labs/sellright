@@ -198,8 +198,13 @@ const LineOut = z.object({
   availableQuantity: z.number().int().nullable(),
 });
 export const CouponCodes = z.array(z.string().min(1).max(255)).max(100);
+/** G4: request input may name at most this many coupon codes. A refinement, so the published OpenAPI shape (maxItems
+ *  100, shared with responses and stored carts) is unchanged; older stored carts above the bound still price. */
+export const MAX_COUPON_CODES_PER_REQUEST = 20;
+export const CouponCodesIn = CouponCodes.refine(codes => codes.length <= MAX_COUPON_CODES_PER_REQUEST,
+  { message: `at most ${MAX_COUPON_CODES_PER_REQUEST} coupon codes per request` });
 export const CouponCodesQuery = z.string().transform((value, ctx) => {
-  try { return CouponCodes.parse(JSON.parse(value)); } catch { ctx.addIssue({ code: 'custom', message: 'couponCodes must be a JSON string array' }); return z.NEVER; }
+  try { return CouponCodesIn.parse(JSON.parse(value)); } catch { ctx.addIssue({ code: 'custom', message: 'couponCodes must be a JSON string array' }); return z.NEVER; }
 }).optional();
 export const EstimateOut = z.object({
   pricingIntent: z.enum(['preview', 'checkout']), couponCodes: CouponCodes, quoteHash: z.string(), shippingMethodCode: z.string().nullable(), pointsDiscount: z.number().int(),
@@ -244,7 +249,7 @@ cart.openapi(
       body: {
         content: {
           'application/json': {
-            schema: z.object({ items: z.array(EstimateItem).min(1).max(MAX_CART_LINES), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }),
+            schema: z.object({ items: z.array(EstimateItem).min(1).max(MAX_CART_LINES), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }),
           },
         },
       },
@@ -557,7 +562,7 @@ function mutationBlocker(row: CartRow | undefined, expectedRevision: number | un
 cart.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/cart', summary: 'Create a cart',
-    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).max(MAX_CART_LINES).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodes.optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).max(MAX_CART_LINES).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -615,7 +620,7 @@ cart.openapi(
 const ExpressQuoteIn = z.object({
   country: z.string().regex(/^[A-Za-z]{2}$/).transform((v) => v.toUpperCase()),
   shippingMethodCode: z.string().min(1).max(255).optional(),
-  couponCodes: CouponCodes.optional(),
+  couponCodes: CouponCodesIn.optional(),
   redeemPoints: z.number().int().min(1).max(1_000_000_000).optional(),
 });
 const ExpressQuoteOut = z.object({
@@ -686,7 +691,7 @@ cart.openapi(createRoute({
 cart.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/cart/{token}/lines', summary: 'Update cart lines',
-    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).max(MAX_CART_LINES), couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
+    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).max(MAX_CART_LINES), couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },

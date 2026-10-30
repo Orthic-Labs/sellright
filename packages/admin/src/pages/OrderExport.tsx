@@ -26,7 +26,7 @@ export default function OrderExport() {
   const [orderCount, setOrderCount] = useState<number | null>(null);
   const [counting, setCounting] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [lastExport, setLastExport] = useState<{ filename: string; orders: number; rows: number } | null>(null);
+  const [lastExport, setLastExport] = useState<{ filename: string; orders: number | null; rows: number | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -180,7 +180,7 @@ export default function OrderExport() {
           {s.statuses.length === 0 && <span className="text-sm text-danger">Select at least one status</span>}
           {s.statuses.length > 0 && noColumns && <span className="text-sm text-danger">Select at least one column</span>}
         </div>
-        {lastExport && <div className="border border-gray-200 rounded-lg p-3.5 mt-3 text-sm text-gray-600">{`Downloaded: ${lastExport.filename} — ${lastExport.orders} orders, ${lastExport.rows} rows`}</div>}
+        {lastExport && <div className="border border-gray-200 rounded-lg p-3.5 mt-3 text-sm text-gray-600">{`Downloaded: ${lastExport.filename}${lastExport.orders !== null && lastExport.rows !== null ? ` — ${lastExport.orders} orders, ${lastExport.rows} rows` : ''}`}</div>}
         {error && <p role="alert" className="text-sm text-danger font-medium mt-3">{error}</p>}
       </div>
     </div>

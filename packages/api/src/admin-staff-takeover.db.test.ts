@@ -18,6 +18,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 
 const sent = vi.hoisted(() => ({ mails: [] as Array<{ to: string; acceptUrl: string }>, deliver: true }));
+// SMTP saves now resolve the host first (#360 G10). Give the attacker host a public address so the requests below still
+// reach the membership lock this file is about, instead of stopping at an unresolvable-host 400.
+vi.mock('node:dns/promises', async (orig) => {
+  const m = await orig<typeof import('node:dns/promises')>();
+  const lookup = (async (host: string, opts?: unknown) =>
+    host === 'smtp.attacker.example' ? [{ address: '93.184.215.14', family: 4 }] : (m.lookup as (h: string, o?: unknown) => unknown)(host, opts)) as typeof m.lookup;
+  return { ...m, default: { ...m, lookup }, lookup };
+});
 vi.mock('./email/dispatch.js', async (orig) => ({
   ...(await orig<typeof import('./email/dispatch.js')>()),
   sendStaffInvite: vi.fn(async (_store: unknown, to: string, data: { acceptUrl: string }) => {

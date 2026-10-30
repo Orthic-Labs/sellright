@@ -14,7 +14,7 @@ const fetchMock = vi.hoisted(() => vi.fn(async (_url: string, init?: RequestInit
 }));
 vi.mock('../security/outbound-url.js', () => ({ safeOutboundFetch: fetchMock }));
 
-import { enrollOnPaidOrder, listmonkSync } from './listmonk-sync.js';
+import { enrollOnPaidOrder, listmonkSync, resetListmonkRetryBackoff } from './listmonk-sync.js';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 
@@ -44,7 +44,7 @@ const subscriberRows = () => withStore(STORE, async (tx) => {
 });
 
 describe.skipIf(!isTestDb)('enrollOnPaidOrder + listmonkSync', () => {
-  beforeEach(wipe);
+  beforeEach(async () => { resetListmonkRetryBackoff(); await wipe(); });
   afterAll(wipe);
 
   it('enrolls a paid-order customer as a confirmed subscriber row, deduped on repeat', async () => {
@@ -184,6 +184,11 @@ describe.skipIf(!isTestDb)('enrollOnPaidOrder + listmonkSync', () => {
     const [lookupUrl] = fetchMock.mock.calls[1]! as unknown as [string];
     expect(new URL(lookupUrl).searchParams.get('query')).toBe("subscribers.email = E'o''brien@x.test'");
     expect((await subscriberRows())[0]!.synced).toBeNull();
+    // D9: the failed row backs off instead of being re-pushed on the very next pass.
+    fetchMock.mockClear();
+    expect(await listmonkSync()).toMatchObject({ synced: 0, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    resetListmonkRetryBackoff(); // backoff elapsed
     expect(await listmonkSync()).toMatchObject({ synced: 1, failed: 0 });
   });
 

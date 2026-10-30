@@ -21,13 +21,14 @@ import type { Server } from 'node:http';
 import { buildHttpApp } from '../app.js';
 import { SELLRIGHT_VERSION } from '../version.js';
 import { closeEnv, envOrigin, extendEnv, initEnv, type Env } from '../env.js';
-import { assertRuntimeRoleUnprivileged, checkConnectionBudget, checkSchedulerLeaseAccess, closePools, initPools, poolsInitialised } from '../db/client.js';
+import { assertConnectionBudget, assertRuntimeRoleUnprivileged, checkConnectionBudget, checkSchedulerLeaseAccess, closePools, initPools, poolsInitialised } from '../db/client.js';
 import * as engineSchema from '../db/schema.js';
 import { closeEngineResources, markEngineClosed } from '../resources.js';
 import { startJobScheduler, type JobScheduler, type PluginJob } from '../jobs/scheduler.js';
 import { resetJobAdmission } from '../jobs/admission.js';
 import { startStoreCacheInvalidationListener, stopStoreCacheInvalidationListener } from '../store-context.js';
 import { log, err as logError, resetLogger } from '../lib/logger.js';
+import { startRuntimeSampler, stopRuntimeSampler } from '../lib/metrics.js';
 import { fingerprint } from './fingerprint.js';
 import { clearAasaOverlays, registerAasaOverlay } from '../routes/well-known.js';
 import { setEngineState } from './engine-state.js';
@@ -89,6 +90,7 @@ function collectSchema(plugins: readonly EnginePlugin[], ctx: EngineContext): vo
 }
 
 async function teardownRuntime(): Promise<void> {
+  stopRuntimeSampler();
   await closeEngineResources();
   await closePools();
   closeEnv();
@@ -119,7 +121,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
     if (options.allowPrivilegedRuntimeRole && env.NODE_ENV !== 'test') {
       throw new EngineSetupError('allowPrivilegedRuntimeRole is a test-only override and is refused unless NODE_ENV=test', 'PRIVILEGE_OVERRIDE');
     }
+    // #360 N7: with PG_CONNECTION_BUDGET_ENFORCE=1, pool maxima over this process's budget refuse to start.
+    try { assertConnectionBudget(env); }
+    catch (e) { throw new EngineSetupError((e as Error).message, 'CONNECTION_BUDGET'); }
     const pool = initPools(env);
+    // P0: event-loop delay/utilization sampler for the private metrics endpoint (stopped at shutdown).
+    startRuntimeSampler();
 
     // ── privilege check (2.6): runtime role must be NOSUPERUSER + NOBYPASSRLS ─
     if (options.allowPrivilegedRuntimeRole) {
@@ -212,7 +219,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
     let shutdownPromise: Promise<void> | null = null;
     const shutdown: EngineApp['shutdown'] = (opts) => {
       shutdownPromise ??= (async () => {
-        const timeoutMs = opts?.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+        const timeoutMs = opts?.timeoutMs ?? env.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
         phase = 'stopping';
         // 1. stop admitting
         admitting = false;
@@ -223,7 +230,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
         // 2 + 3. cancel jobs / timers, and drain HTTP CONCURRENTLY: timers are cleared
         // synchronously inside stop(); only the wait for in-flight job passes overlaps the
         // HTTP drain, so the whole budget is `timeoutMs`, not stop-wait + drain (review F2).
-        const jobWait = Math.min(5_000, Math.floor(timeoutMs / 2));
+        // Half the budget for job passes (#360 A13: a raised SHUTDOWN_TIMEOUT_MS gives a gateway-bound pass more time).
+        const jobWait = Math.floor(timeoutMs / 2);
         const jobsStopped = Promise.all([scheduler?.stop(jobWait), stopStoreCacheInvalidationListener()]);
         step('cancel-jobs');
         const drained = drainHttp(server, timeoutMs);
@@ -240,6 +248,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
         step('close-resources');
         // 4. close the pool
         await closePools();
+        stopRuntimeSampler();
         markEngineClosed(true);
         step('close-pool');
         closeEnv();
@@ -321,7 +330,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
             .catch((e) => logError.error('sealing legacy admin TOTP secrets failed', e));
           phase = 'started';
           if (startOptions.handleSignals) {
-            const timeoutMs = startOptions.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+            // #360 A13: SHUTDOWN_TIMEOUT_MS (default 10 s) is the whole budget; keep it under pm2's kill_timeout.
+            const timeoutMs = startOptions.shutdownTimeoutMs ?? env.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
             let signalled = false;
             const onSignal = (signal: NodeJS.Signals) => {
               if (signalled) { console.warn(`[api] received ${signal} during shutdown — ignoring`); return; }

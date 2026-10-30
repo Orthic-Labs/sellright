@@ -166,3 +166,32 @@ describe('cross-process store cache invalidation (LISTEN/NOTIFY)', () => {
     expect(_cacheSizeForTest().host).toBe(0);
   });
 });
+
+describe('P8 (C7/G2, G12b) host resolution hardening', () => {
+  it('remembers an unknown host briefly, and any invalidation forgets the miss', async () => {
+    expect(await resolveStoreByHost('miss-cache.example')).toBeNull();
+    expect(_cacheSizeForTest().hostMiss).toBeGreaterThan(0);
+    // A hostname added to a store must start resolving right after the settings save's invalidation.
+    await pool.query(`UPDATE store SET config = jsonb_set(coalesce(config, '{}'::jsonb), '{hostnames}', '["damned.example","miss-cache.example"]'::jsonb) WHERE id = $1`, [STORE]);
+    expect(await resolveStoreByHost('miss-cache.example')).toBeNull(); // still the remembered miss
+    invalidateStoreCache(SLUG);
+    expect(_cacheSizeForTest().hostMiss).toBe(0);
+    expect((await resolveStoreByHost('miss-cache.example'))?.id).toBe(STORE);
+  });
+
+  it('concurrent lookups of one unknown host all miss; over-long hosts are refused without a cache slot', async () => {
+    const results = await Promise.all(Array.from({ length: 10 }, () => resolveStoreByHost('burst-miss.example')));
+    expect(results.every((r) => r === null)).toBe(true);
+    const before = _cacheSizeForTest().hostMiss;
+    expect(await resolveStoreByHost(`${'a'.repeat(250)}.example`)).toBeNull();
+    expect(_cacheSizeForTest().hostMiss).toBe(before);
+  });
+
+  it('untrusted ingress: x-store-slug and x-forwarded-host are ignored, Host still routes', async () => {
+    const byHost = await resolveStoreForRequest({ storeSlugHeader: DEFAULT_SLUG, forwardedHost: 'damned-default.example', host: HOST, trustedIngress: false }, true);
+    expect(byHost.id).toBe(STORE);
+    const trusted = await resolveStoreForRequest({ storeSlugHeader: DEFAULT_SLUG, host: HOST, trustedIngress: true }, true);
+    expect(trusted.id).toBe(DEFAULT_STORE_ID);
+  });
+});
+

@@ -1,5 +1,13 @@
 name: sellright
 
+# P8 (E7): bounded container logs. Docker's default json-file driver never rotates, so a chatty or attacked service
+# could fill the disk. Every service below inherits this rotation (5 x 10 MB per container).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 # Production images are pinned, signed GHCR references (see
 # .github/workflows/ci.yml's `release` job and docs/runbooks/production-compose.md).
 # Developers building from source should additionally pass
@@ -10,6 +18,36 @@ services:
   postgres:
     image: postgres:17-bookworm
     restart: unless-stopped
+    logging: *default-logging
+    # P8 (E2/A12): explicit server settings for the generic appliance (the image defaults are sized for a laptop and
+    # leave every timeout off). Sized for the installer's 4 GiB minimum with the memory limit below; raise
+    # shared_buffers/effective_cache_size together with the limit on bigger hosts. Per-role statement/lock/idle
+    # timeouts for the runtime role are set by db-init; these server-wide values are the backstop for every other
+    # session (migrations run as the owner and may legitimately run long, so no server-wide statement_timeout).
+    command:
+      - postgres
+      - -c
+      - max_connections=60
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - idle_in_transaction_session_timeout=60s
+      - -c
+      - tcp_keepalives_idle=60
+      - -c
+      - log_min_duration_statement=2000
+      - -c
+      - log_lock_waits=on
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     environment:
       POSTGRES_DB: sellright
       POSTGRES_USER: sellright
@@ -32,6 +70,7 @@ services:
   db-init:
     image: postgres:17-bookworm
     restart: "no"
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,6 +136,13 @@ services:
   api:
     image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-api:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
+    # P8 (E3): explicit budget so one runaway service cannot take the whole host (and Postgres with it).
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,6 +163,12 @@ services:
       ADMIN_PUBLIC_URL: https://${SELLRIGHT_DOMAIN:?set SELLRIGHT_DOMAIN in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
+      # P8 (E4): catalog manifest wiring. The API publishes generations into the shared `catalog` volume when
+      # CATALOG_MANIFEST_JOBS_ENABLED=1 and CATALOG_DIR is set; the storefront reads the same volume read-only.
+      # Both default off/empty so an install that has not opted in behaves exactly as before.
+      CATALOG_DIR: ${CATALOG_DIR:-}
+      CATALOG_MANIFEST_JOBS_ENABLED: ${CATALOG_MANIFEST_JOBS_ENABLED:-0}
+      STORE_SLUG: ${STORE_SLUG:-${BOOTSTRAP_STORE_SLUG:-}}
       # WS-E: maintenance-mode flag file. Lives on its own named volume (not
       # inside the container's writable layer) so `sellright maintenance on`
       # survives the very container restart the update sequence performs.
@@ -182,6 +234,7 @@ services:
       - assets:/app/var/assets
       - downloads:/app/var/downloads
       - state:/app/var/state
+      - catalog:/app/var/catalog
     secrets:
       - gateway_accounts
     networks: [private]
@@ -199,11 +252,20 @@ services:
   admin:
     image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-admin:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
     depends_on:
       api:
         condition: service_healthy
     environment:
       API_UPSTREAM: http://api:3300
+      # P8 (E6): host:port for the re-resolving keep-alive upstream in nginx.conf.template.
+      API_UPSTREAM_HOSTPORT: api:3300
+      NGINX_RESOLVER: 127.0.0.11
     volumes:
       - assets:/assets:ro
     networks: [private]
@@ -217,6 +279,12 @@ services:
   storefront:
     image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-storefront:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768m
     depends_on:
       api:
         condition: service_healthy
@@ -229,12 +297,26 @@ services:
       # Runtime, optional: comma-separated public hosts of the pinned store allowed to show Google sign-in (only used
       # with a build pinned via VITE_SELLRIGHT_STORE_SLUG + VITE_GOOGLE_CLIENT_ID). Unset = Google sign-in off.
       SELLRIGHT_GOOGLE_SIGNIN_HOSTS: ${SELLRIGHT_GOOGLE_SIGNIN_HOSTS:-}
+      # E4: same directory as the API's CATALOG_DIR (empty = manifest reads off). The snapshot's store slug must match
+      # the image's build-time VITE_SELLRIGHT_STORE_SLUG (the generic image defaults it to "demo").
+      CATALOG_DIR: ${CATALOG_DIR:-}
+    volumes:
+      - catalog:/app/var/catalog:ro
     networks: [private]
 
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
     depends_on:
+      # E1: the storefront site proxies /v1/ to the API directly.
+      api:
+        condition: service_healthy
       admin:
         condition: service_healthy
       storefront:
@@ -257,6 +339,7 @@ volumes:
   assets:
   downloads:
   state:
+  catalog:
   caddy_data:
   caddy_config:
 

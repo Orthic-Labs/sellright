@@ -43,6 +43,45 @@ import { normalizeEmail } from '../auth/email.js';
 const DEFAULT_BATCH_LIMIT = 200;
 
 /**
+ * D9 (perf plan P6): per-row retry backoff. A row whose push fails used to be
+ * re-claimed at the head of the next pass (ORDER BY created_at) every 5
+ * minutes forever, so a persistently failing batch kept consuming the store's
+ * provider budget ahead of fresh rows. Failed rows now back off exponentially
+ * (5m, 10m, 20m … capped at 6h) and are excluded in SQL BEFORE the LIMIT.
+ * In-memory and bounded by design: subscriber has no attempt/next_attempt_at
+ * columns (see migrations_needed for the durable form); losing this map on
+ * restart only means one early retry. Rows aborted by the pass/store deadline
+ * are NOT penalised — that is budget exhaustion, not a row failure.
+ */
+const RETRY_BASE_MS = 5 * 60_000;
+const RETRY_MAX_MS = 6 * 3_600_000;
+const RETRY_TRACK_MAX = 10_000;
+const retryBackoff = new Map<string, { failures: number; nextAt: number }>();
+
+export function listmonkRetryDelayMs(failures: number): number {
+  return Math.min(RETRY_BASE_MS * 2 ** Math.max(0, failures - 1), RETRY_MAX_MS);
+}
+
+/** Test hook. */
+export function resetListmonkRetryBackoff(): void { retryBackoff.clear(); }
+
+function noteFailure(id: string, now: number): void {
+  const failures = (retryBackoff.get(id)?.failures ?? 0) + 1;
+  retryBackoff.delete(id); // re-insert keeps Map order = least recently failed first
+  retryBackoff.set(id, { failures, nextAt: now + listmonkRetryDelayMs(failures) });
+  while (retryBackoff.size > RETRY_TRACK_MAX) retryBackoff.delete(retryBackoff.keys().next().value!);
+}
+
+/** Ids still backing off, as a Postgres uuid[] literal (ids come from the DB's own uuid column). */
+function backingOffLiteral(now: number): string {
+  const ids: string[] = [];
+  for (const [id, state] of retryBackoff) {
+    if (state.nextAt > now) ids.push(id);
+  }
+  return `{${ids.join(',')}}`;
+}
+
+/**
  * Allowlist, not `kind <> 'waitlist'`: a kind added later stays out of the
  * marketing list until someone decides it belongs. `newsletter` = explicit
  * signup, `order` = paid-order enrollment (enrollOnPaidOrder below).
@@ -219,7 +258,8 @@ async function listmonkSyncPass(opts: { limit?: number; log?: (m: string) => voi
             FROM subscriber
             WHERE status = 'confirmed' AND listmonk_synced_at IS NULL
               AND kind IN (${sql.join(LISTMONK_SYNC_KINDS.map((k) => sql`${k}`), sql`, `)})
-            ORDER BY created_at
+              AND id <> ALL(${backingOffLiteral(Date.now())}::uuid[])
+            ORDER BY created_at, id
             LIMIT ${limit}
             FOR UPDATE SKIP LOCKED`,
       );
@@ -249,8 +289,10 @@ async function listmonkSyncPass(opts: { limit?: number; log?: (m: string) => voi
             log(`[listmonk-sync] ${st.slug}: subscriber=${c.id} suppressed: preserving provider ${outcome}`);
           }
           claimedIds.push(c.id);
+          retryBackoff.delete(c.id);
         } catch (e) {
           failed++; storeFailed++;
+          if (!storeSignal.aborted) noteFailure(c.id, Date.now());
           // Log the per-row failure but keep the batch going — one bad email
           // must not block the rest. The row stays unsynced and will be
           // re-claimed next tick; if it persistently fails, ops can see it

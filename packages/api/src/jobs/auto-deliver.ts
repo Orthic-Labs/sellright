@@ -31,8 +31,10 @@
  *     for every claimed row, or neither does. A crash mid-txn rolls back the
  *     lock; the next pass re-claims the same rows cleanly.
  *   - Dry-run (JOBS_AUTO_DELIVER_APPLY=0; applying is the default since #396) takes the same SELECT
- *     path with the same lock — operators still see the count of "would
- *     deliver" per store, but no UPDATE / auditLog fires.
+ *     path WITHOUT the row lock (D10, perf plan P6): it writes nothing, so
+ *     locking order rows only made concurrent fulfil/ship requests wait (or
+ *     a concurrent apply pass skip them) for no benefit. Operators still see
+ *     the count of "would deliver" per store; no UPDATE / auditLog fires.
  */
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -111,9 +113,9 @@ export async function autoDeliverStore(
               (SELECT string_agg(DISTINCT f.carrier, ', ') FROM fulfillment f WHERE f.order_id = o.id AND f.state = 'Shipped') AS carriers
             FROM "order" o
             WHERE ${candidateWhere(storeId, cutoff)}
-            ORDER BY shipped_at
+            ORDER BY shipped_at, o.id
             LIMIT ${limit}
-            FOR UPDATE OF o SKIP LOCKED`,
+            ${apply ? sql`FOR UPDATE OF o SKIP LOCKED` : sql``}`,
       );
       const due = (claimed as unknown as { rows: Array<{ id: string; code: string; shipped_at: Date | string; tracking_codes: string | null; carriers: string | null }> }).rows;
       if (!due.length) return 0;

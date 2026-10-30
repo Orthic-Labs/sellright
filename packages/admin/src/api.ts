@@ -86,10 +86,11 @@ export async function downloadFile(path: string, filename: string): Promise<void
 }
 
 /** Like downloadFile, but the filename and counts come from the response (#381 Order Export: "Downloaded: … — N orders, M rows"). */
-export async function downloadExport(path: string): Promise<{ filename: string; orders: number; rows: number }> {
+// The xlsx export streams, so it sends no counts; the CSV route still does. A missing header is null, not 0.
+export async function downloadExport(path: string): Promise<{ filename: string; orders: number | null; rows: number | null }> {
   // QA preview (VITE_QA_MOCK + ?qa=1 only): report a mocked download instead of fetching.
   const mock = maybeMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
-  if (mock) return mock.data as { filename: string; orders: number; rows: number };
+  if (mock) return mock.data as { filename: string; orders: number | null; rows: number | null };
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
   const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
@@ -104,7 +105,8 @@ export async function downloadExport(path: string): Promise<{ filename: string; 
   const a = document.createElement('a');
   a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  return { filename, orders: Number(res.headers.get('x-export-orders') ?? 0), rows: Number(res.headers.get('x-export-rows') ?? 0) };
+  const count = (name: string) => { const v = res.headers.get(name); return v === null ? null : Number(v); };
+  return { filename, orders: count('x-export-orders'), rows: count('x-export-rows') };
 }
 
 export interface AssetRow { id: string; path: string; url: string; width: number | null; height: number | null; alt: string | null }

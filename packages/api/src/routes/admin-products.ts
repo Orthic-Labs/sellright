@@ -3,6 +3,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
 import { and, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { lockStockRowsInOrder } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -197,7 +198,8 @@ adminProducts.openapi(
     const { id } = c.req.valid('param');
     const { onHand } = c.req.valid('json');
     const ok = await withStore(st.storeId, async (tx) => {
-      const [cur] = await tx.select().from(s.stock).where(eq(s.stock.variantId, id)).limit(1);
+      // Locked read: the movement delta must be computed from the row this write replaces.
+      const [cur] = await lockStockRowsInOrder(tx, st.storeId, [id]);
       if (cur) {
         const delta = onHand - cur.onHand;
         await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
@@ -256,11 +258,14 @@ adminProducts.openapi(
       const missing = ids.filter((id) => !knownIds.has(id));
       if (missing.length) throw new HttpError(404, `variant(s) not found: ${missing.join(', ')}`);
 
-      const existingStock = await tx.select().from(s.stock).where(inArray(s.stock.variantId, ids));
+      // B3/N12: lock every existing stock row of the batch in canonical variant order BEFORE reading or writing
+      // any of them, so this bulk write cannot deadlock against checkout reservations or another bulk write that
+      // names the same variants in a different order, and each movement delta is computed from the locked row.
+      const existingStock = await lockStockRowsInOrder(tx, st.storeId, ids);
       const stockByVariant = new Map(existingStock.map((row) => [row.variantId, row]));
 
       const out: { id: string; onHand: number }[] = [];
-      for (const id of ids) {
+      for (const id of [...ids].sort((x, y) => (x.toLowerCase() < y.toLowerCase() ? -1 : x.toLowerCase() > y.toLowerCase() ? 1 : 0))) {
         const onHand = byId.get(id)!;
         const cur = stockByVariant.get(id);
         if (cur) {
@@ -275,7 +280,8 @@ adminProducts.openapi(
         await emitVariantProductChanged(tx, st.storeId, id);
         out.push({ id, onHand });
       }
-      return out;
+      // Response keeps payload order (writes above ran in canonical order).
+      return ids.map((id) => out.find((row) => row.id === id)!);
     });
 
     // Zero-cache stock rule: regenerate the manifest immediately, after this

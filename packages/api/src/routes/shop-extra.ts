@@ -3,12 +3,12 @@ import { and, desc, eq, inArray, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { priceCart, promotionStackErrorJson, CouponCodes } from './cart.js';
+import { priceCart, promotionStackErrorJson, CouponCodesIn } from './cart.js';
 import { PromotionStackError } from '../money/promotion-stack.js';
 import { customerToken } from '../auth/session.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { freeShippingThreshold, isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
-import { clientIp } from '../auth/rate-limit.js';
+import { clientIp, giftCardLookupRetryAfter, recordGiftCardMiss } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { persistSubscriberSignup } from './shop-extra.signup.js';
@@ -151,17 +151,27 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/gift-card/{code}', summary: 'Check a gift card balance',
-    request: { params: z.object({ code: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) }, 404: { description: 'Not found', content: J(apiErrorSchema()) } },
+    // G12e: gift-card codes are short; an unbounded path parameter only feeds the index lookup and the limiter key.
+    request: { params: z.object({ code: z.string().min(1).max(128) }) },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) },
+      404: { description: 'Not found', content: J(apiErrorSchema()) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
+    },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
+    // G12a (P8): a balance answer is a code-validity oracle. Per (store, address): an hourly lookup ceiling and a much
+    // smaller budget of misses (rate-limit.ts), checked before any database read.
+    const ip = clientIp(c);
+    const retry = await giftCardLookupRetryAfter(ip, st.id);
+    if (retry > 0) { c.header('Retry-After', String(retry)); return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`); }
     const gc = await withStore(st.id, async (tx) => {
       const [g] = await tx.select({ code: s.giftCard.code, balance: s.giftCard.balance, currency: s.giftCard.currency, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
       return g ?? null;
     });
-    if (!gc) return errJson(c, 404, 'GIFT_CARD_NOT_FOUND', 'gift card not found');
+    if (!gc) { await recordGiftCardMiss(ip, st.id); return errJson(c, 404, 'GIFT_CARD_NOT_FOUND', 'gift card not found'); }
     const valid = gc.enabled && gc.balance > 0 && (!gc.expiresAt || gc.expiresAt.getTime() > Date.now());
     return c.json({ code: gc.code, balance: gc.balance, currency: gc.currency, valid }, 200);
   },
@@ -268,7 +278,7 @@ shopExtra.openapi(
 const ShippingQuoteIn = z.object({
   country: z.string().length(2),
   items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
-  couponCode: z.string().optional(), couponCodes: CouponCodes.optional(), redeemPoints: z.number().int().min(1).optional(),
+  couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional(), redeemPoints: z.number().int().min(1).optional(),
 });
 
 // Quote from server-priced items so shipping thresholds include discounts and tax.

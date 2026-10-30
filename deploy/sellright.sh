@@ -73,10 +73,12 @@ backup_existing_api() (
   case "$backup_api_image" in ''|*[!a-z0-9:]*) die "invalid existing API image identity" ;; esac
   printf '%s\n' "$backup_api_image" | grep -Eq '^sha256:[a-f0-9]{64}$' || die "invalid existing API image identity"
   log "Backing up database..."
-  compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump" || die "database backup failed"
+  # P8 (E8): pg_dump runs in the postgres container and tar in the API container — both share the host with live
+  # traffic, so both run at reduced CPU priority (nice is in coreutils in both images).
+  compose exec -T postgres nice -n 10 pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump" || die "database backup failed"
   log "Backing up assets and downloads volumes from existing API..."
-  docker exec "$backup_api_container" tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz" || die "existing API assets backup failed"
-  docker exec "$backup_api_container" tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz" || die "existing API downloads backup failed"
+  docker exec "$backup_api_container" nice -n 10 tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz" || die "existing API assets backup failed"
+  docker exec "$backup_api_container" nice -n 10 tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz" || die "existing API downloads backup failed"
   api_ref="$backup_api_image"
   database_sha=$(sha256sum "${out_dir}/database.dump")
   assets_sha=$(sha256sum "${out_dir}/assets.tar.gz")

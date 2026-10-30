@@ -50,15 +50,23 @@ export async function reserveStockOrThrow(
 ): Promise<boolean> {
   const failed: string[] = [];
   let changed = false;
-  for (const i of items) {
+  // B3/N12: one conditional UPDATE per row, issued in canonical variant order (lowercase uuid text = Postgres uuid
+  // order; stable sort keeps caller order for duplicate SKUs), so concurrent reservations and every other stock
+  // writer (db/locks.ts lockStockRowsInOrder) acquire stock row locks in the same order and cannot deadlock.
+  const physical = items.flatMap((i, index) => {
     const v = bySku.get(i.sku);
-    if (!v || !v.enabled || v.isPreOrder || (v.fulfillmentType ?? 'physical') !== 'physical') continue;
+    return v && v.enabled && !v.isPreOrder && (v.fulfillmentType ?? 'physical') === 'physical' ? [{ i, v, index, key: v.id.toLowerCase() }] : [];
+  }).sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+  const failedAt: number[] = [];
+  for (const { i, v, index } of physical) {
     changed = true;
     const res = await tx.execute(sql`
       UPDATE "stock" SET allocated = allocated + ${i.quantity}
       WHERE variant_id = ${v.id} AND store_id = ${storeId} AND (on_hand - allocated) >= ${i.quantity}`);
-    if (res.rowCount !== 1) failed.push(i.sku);
+    if (res.rowCount !== 1) failedAt.push(index);
   }
+  // Report in caller order, as before.
+  for (const index of failedAt.sort((x, y) => x - y)) failed.push(items[index]!.sku);
   if (failed.length) throw new StockReservationError(failed);
   return changed;
 }

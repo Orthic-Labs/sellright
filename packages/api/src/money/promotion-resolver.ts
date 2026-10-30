@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { currentDiscount, previewAvailable } from '../account-credit/service.js';
@@ -41,12 +41,25 @@ export async function resolvePromotionStack(tx: Tx, input: ResolvePromotionStack
       .where(and(eq(s.customer.storeId, input.storeId), eq(s.customer.id, input.customerId))).limit(1);
     if (!customer) throw new Error('Pricing customer does not match store');
   }
-  // Consistent lock order serializes every payment-candidate promotion before
-  // usage counters are read. Quotes remain read-only & lock-free.
-  const query = tx.select().from(s.promotion).where(eq(s.promotion.storeId, input.storeId)).orderBy(asc(s.promotion.id));
-  const rows = input.mode === 'payment' || input.selectedCreditOnly ? await query.for('update') : await query;
-  const credits = await tx.select({ id: s.accountCredit.id, promotionId: s.accountCredit.promotionId, currency: s.accountCredit.currency }).from(s.accountCredit)
-    .where(eq(s.accountCredit.storeId, input.storeId));
+  // P3a B1/C4: only the commit path (mode 'payment') locks, and it locks only candidate rows: automatic promotions
+  // (no code) plus rows whose code can match a requested code. Quotes — including the public checkout-intent quote
+  // (selectedCreditOnly) — take no promotion row locks; checkout re-resolves under locks before any usage write.
+  // Rows are locked in id order (stable across writers). The SQL filter is a superset of the JS case-insensitive match
+  // below: ASCII codes casefold identically in SQL lower() and JS; any non-ASCII stored code is always loaded and a
+  // non-ASCII request code disables the filter, so collation-dependent lower() can never drop a JS match.
+  const locking = input.mode === 'payment';
+  const asciiOnly = codes.every(code => /^[\x00-\x7F]*$/.test(code));
+  const lowered = [...new Set(codes.flatMap(code => [code.toLowerCase(), code.trim().toLowerCase()]))];
+  const codeFilter = !asciiOnly ? undefined : lowered.length
+    ? or(isNull(s.promotion.code), inArray(sql`lower(${s.promotion.code})`, lowered), sql`${s.promotion.code} ~ '[^\x01-\x7F]'`)
+    : or(isNull(s.promotion.code), sql`${s.promotion.code} ~ '[^\x01-\x7F]'`);
+  const query = tx.select().from(s.promotion).where(and(eq(s.promotion.storeId, input.storeId), codeFilter)).orderBy(asc(s.promotion.id));
+  const rows = locking ? await query.for('update') : await query;
+  const creditPromotionIds = rows.filter(row => row.type === 'account_credit').map(row => row.id);
+  const credits = creditPromotionIds.length
+    ? await tx.select({ id: s.accountCredit.id, promotionId: s.accountCredit.promotionId, currency: s.accountCredit.currency }).from(s.accountCredit)
+      .where(and(eq(s.accountCredit.storeId, input.storeId), inArray(s.accountCredit.promotionId, creditPromotionIds)))
+    : [];
   const creditByPromotion = new Map(credits.map(account => [account.promotionId, account]));
   // Existing credit lookup trims bearer codes. Preserve generic coupon identity
   // exactly; trim only a uniquely identified credit, never an ordinary code.
@@ -75,6 +88,40 @@ export async function resolvePromotionStack(tx: Tx, input: ResolvePromotionStack
       throw new PromotionStackError('CREDIT_AMOUNT_CHANGED', 'Credit no longer matches this checkout');
     }
   }
+  // C4: usage facts for every candidate in at most three set queries (no per-promotion N+1). Same predicates as the
+  // former per-row queries, grouped by promotion_id; read under the same promotion locks in payment mode.
+  const candidateIds = candidates.map(row => row.id);
+  const ownUsageIds = new Set<string>();
+  if (input.orderId && candidateIds.length) {
+    const prior = await tx.selectDistinct({ promotionId: s.promotionUsage.promotionId }).from(s.promotionUsage).where(and(
+      eq(s.promotionUsage.storeId, input.storeId), inArray(s.promotionUsage.promotionId, candidateIds), eq(s.promotionUsage.orderId, input.orderId)));
+    for (const row of prior) ownUsageIds.add(row.promotionId);
+  }
+  const releasedIds = candidates.filter(row => row.usageLimit != null && row.usedCount > 0).map(row => row.id);
+  const releasedByPromotion = new Map<string, number>();
+  if (releasedIds.length) {
+    const cancelled = await tx.select({ promotionId: s.promotionUsage.promotionId, n: count() }).from(s.promotionUsage)
+      .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId)).where(and(
+        eq(s.promotionUsage.storeId, input.storeId), inArray(s.promotionUsage.promotionId, releasedIds), eq(s.order.state, 'Cancelled'),
+        ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
+      )).groupBy(s.promotionUsage.promotionId);
+    for (const row of cancelled) releasedByPromotion.set(row.promotionId, row.n);
+  }
+  // Registered customer: count by customerId. Guest: count by email (order contact or linked customer), not skipped.
+  const email = input.customerEmail?.trim().toLowerCase();
+  const who = input.customerId ? eq(s.promotionUsage.customerId, input.customerId)
+    : email ? or(eq(sql`lower(${s.customer.email})`, email), eq(sql`lower(${s.order.metadata}->'contact'->>'email')`, email)) : undefined;
+  const perCustomerIds = candidates.filter(row => row.perCustomerUsageLimit != null && row.perCustomerUsageLimit !== 0).map(row => row.id);
+  const customerUsedByPromotion = new Map<string, number>();
+  if (who && perCustomerIds.length) {
+    const used = await tx.select({ promotionId: s.promotionUsage.promotionId, n: count() }).from(s.promotionUsage)
+      .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
+      .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId)).where(and(
+        eq(s.promotionUsage.storeId, input.storeId), inArray(s.promotionUsage.promotionId, perCustomerIds), who, ne(s.order.state, 'Cancelled'),
+        ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
+      )).groupBy(s.promotionUsage.promotionId);
+    for (const row of used) customerUsedByPromotion.set(row.promotionId, row.n);
+  }
   const resolved: ResolvedPromotion[] = [];
   for (const [sequence, promotion] of candidates.entries()) {
     let reason: string | undefined;
@@ -82,47 +129,19 @@ export async function resolvePromotionStack(tx: Tx, input: ResolvePromotionStack
     else if (promotion.startsAt && (!Number.isFinite(promotion.startsAt.getTime()) || promotion.startsAt > now)) reason = 'Coupon not started';
     else if (promotion.endsAt && (!Number.isFinite(promotion.endsAt.getTime()) || promotion.endsAt < now)) reason = 'Coupon expired';
     nonnegativeInteger(promotion.usedCount, 'promotion usage');
-    let ownUsage = false;
-    if (input.orderId) {
-      const [prior] = await tx.select({ id: s.promotionUsage.id }).from(s.promotionUsage).where(and(
-        eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id), eq(s.promotionUsage.orderId, input.orderId),
-      )).limit(1);
-      ownUsage = !!prior;
-    }
+    const ownUsage = ownUsageIds.has(promotion.id);
     // the previous platform (coupon-validation.service.ts checkUsageLimits): a limit of 0 means blocked, not unlimited; usage on a
     // Cancelled order does not count. promotion_usage rows of Cancelled orders are discounted from used_count here (under
     // the same promotion FOR UPDATE as the usage insert), so every cancel path frees its use without a counter write.
     if (promotion.usageLimit != null) {
       const limit = nonnegativeInteger(promotion.usageLimit, 'promotion usage limit');
-      let released = 0;
-      if (promotion.usedCount > 0) {
-        const [cancelled] = await tx.select({ n: count() }).from(s.promotionUsage)
-          .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId)).where(and(
-            eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id), eq(s.order.state, 'Cancelled'),
-            ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
-          ));
-        released = cancelled?.n ?? 0;
-      }
+      const released = promotion.usedCount > 0 ? releasedByPromotion.get(promotion.id) ?? 0 : 0;
       if (limit <= Math.max(0, promotion.usedCount - released - (ownUsage ? 1 : 0))) reason = 'Coupon usage limit reached';
     }
     if (promotion.perCustomerUsageLimit != null) {
       const perCustomer = nonnegativeInteger(promotion.perCustomerUsageLimit, 'customer usage limit');
       if (perCustomer === 0) reason = 'Customer coupon usage limit reached';
-      else {
-        // Registered customer: count by customerId. Guest: count by email (order contact or linked customer), not skipped.
-        const email = input.customerEmail?.trim().toLowerCase();
-        const who = input.customerId ? eq(s.promotionUsage.customerId, input.customerId)
-          : email ? or(eq(sql`lower(${s.customer.email})`, email), eq(sql`lower(${s.order.metadata}->'contact'->>'email')`, email)) : undefined;
-        if (who) {
-          const [used] = await tx.select({ n: count() }).from(s.promotionUsage)
-            .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
-            .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId)).where(and(
-              eq(s.promotionUsage.storeId, input.storeId), eq(s.promotionUsage.promotionId, promotion.id), who, ne(s.order.state, 'Cancelled'),
-              ...(input.orderId ? [ne(s.promotionUsage.orderId, input.orderId)] : []),
-            ));
-          if (perCustomer <= (used?.n ?? 0)) reason = 'Customer coupon usage limit reached';
-        }
-      }
+      else if (who && perCustomer <= (customerUsedByPromotion.get(promotion.id) ?? 0)) reason = 'Customer coupon usage limit reached';
     }
     const account = creditByPromotion.get(promotion.id);
     let credit: ResolvedPromotion['credit'];

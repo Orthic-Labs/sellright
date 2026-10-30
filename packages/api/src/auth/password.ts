@@ -161,3 +161,41 @@ export function passwordNeedsRehash(stored: string | null): boolean {
 
 /** Issue #333 review: ONE minimum for every admin password a person chooses (invite accept, staff create, reset, change). */
 export const ADMIN_PASSWORD_MIN = 10;
+
+// ── bounded verification (P8 / G6) ───────────────────────────────────────────
+// Each verification is expensive (Argon2id 19 MiB on the libuv pool; legacy bcrypt on the event loop). A credential
+// flood used to queue them without bound behind every other pool task. Public sign-in paths go through this gate:
+// at most VERIFY_MAX_CONCURRENT run at once per process, at most VERIFY_MAX_QUEUED wait, and anything beyond that is
+// refused immediately ('busy') so the route can answer 503 + Retry-After instead of stalling the whole process.
+// 'busy' is NEVER a wrong password: callers must not record an authentication failure for it.
+const VERIFY_MAX_CONCURRENT = 4;
+const VERIFY_MAX_QUEUED = 64;
+let verifyActive = 0;
+const verifyWaiters: Array<() => void> = [];
+
+function releaseVerifySlot(): void {
+  const next = verifyWaiters.shift();
+  if (next) next(); // hand the slot over; verifyActive is unchanged
+  else verifyActive--;
+}
+
+/** verifyPassword behind a bounded per-process admission gate. Resolves 'busy' (no verification ran) when saturated. */
+export async function verifyPasswordBounded(password: string, stored: string | null): Promise<boolean | 'busy'> {
+  if (!stored) return false;
+  if (verifyActive >= VERIFY_MAX_CONCURRENT) {
+    if (verifyWaiters.length >= VERIFY_MAX_QUEUED) return 'busy';
+    await new Promise<void>((resolve) => verifyWaiters.push(resolve));
+  } else {
+    verifyActive++;
+  }
+  try {
+    return await verifyPassword(password, stored);
+  } finally {
+    releaseVerifySlot();
+  }
+}
+
+/** Test-only: current gate occupancy. */
+export function _passwordVerifyGateForTest(): { active: number; queued: number; maxConcurrent: number; maxQueued: number } {
+  return { active: verifyActive, queued: verifyWaiters.length, maxConcurrent: VERIFY_MAX_CONCURRENT, maxQueued: VERIFY_MAX_QUEUED };
+}

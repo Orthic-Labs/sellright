@@ -29,6 +29,21 @@ import {
 
 export const feeds = new OpenAPIHono();
 
+/**
+ * G3: the feed materializes the whole catalog with live availability joined at response time (never a cached
+ * availability TTL). Its cost scales with catalog size, so builds are bounded per process: one in flight per store,
+ * FEED_MAX_CONCURRENT overall. An over-limit request gets 503 + Retry-After instead of queueing (merchant crawlers
+ * retry). No response or promise is shared between requests — every 200 carries its own live stock read.
+ */
+export const FEED_MAX_CONCURRENT = 2;
+const feedBuilds = new Set<string>();
+export function admitFeedBuild(storeId: string): (() => void) | null {
+  if (feedBuilds.has(storeId) || feedBuilds.size >= FEED_MAX_CONCURRENT) return null;
+  feedBuilds.add(storeId);
+  let released = false;
+  return () => { if (!released) { released = true; feedBuilds.delete(storeId); } };
+}
+
 // `{channel}` with or without a ".csv" suffix.
 const ChannelParam = z.preprocess(
   (v) => (typeof v === 'string' ? v.replace(/\.csv$/i, '') : v),
@@ -148,14 +163,20 @@ feeds.openapi(
       200: { description: 'CSV feed', content: { 'text/csv': { schema: z.string() } } },
       400: { description: 'Unknown channel', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
       404: { description: 'Unknown store', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      503: { description: 'Feed build already in progress; retry later', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const channel = c.req.valid('param').channel;
     const cfg = feedConfigFromStore({ name: st.name, currency: st.currency, config: st.config }, env.STOREFRONT_URL);
-    const rows = await loadFeedRows(st.id);
-    const csv = generateFeed(channel, rows.map((r) => toFeedItem(r, cfg)), cfg);
+    const release = admitFeedBuild(st.id);
+    if (!release) return c.json({ error: 'feed busy' }, 503, { 'retry-after': '30', 'cache-control': 'private, no-store' });
+    let csv: string;
+    try {
+      const rows = await loadFeedRows(st.id);
+      csv = generateFeed(channel, rows.map((r) => toFeedItem(r, cfg)), cfg);
+    } finally { release(); }
     return c.body(csv, 200, {
       'content-type': 'text/csv; charset=utf-8',
       // Live availability: never stored by a browser, proxy or CDN.

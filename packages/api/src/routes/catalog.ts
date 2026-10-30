@@ -163,13 +163,11 @@ catalog.openapi(
           tags: s.product.tags,
           minPrice: minimumPrice(st.config),
           pricingVariant: listingVariant(st.config),
-          image: sql<string | null>`max(${s.asset.path})`,
+          image: s.asset.path,
         })
         .from(s.product)
-        .leftJoin(s.productVariant, eq(s.productVariant.productId, s.product.id))
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
         .where(where)
-        .groupBy(s.product.id)
         .orderBy(asc(s.product.name))
         .limit(limit)
         .offset(offset);
@@ -326,14 +324,14 @@ catalog.openapi(
         .select({
           slug: s.collection.slug,
           name: s.collection.name,
-          products: sql<number>`count(${s.product.id})::int`,
+          // Qualified on purpose: drizzle renders ${s.collection.id} as a bare "id" here, which binds to the subquery's p.id.
+          products: sql<number>`(select count(*)::int from collection_product cp join product p on p.id = cp.product_id
+            where cp.collection_id = "collection"."id" and p.status = 'active' and p.deleted_at is null)`,
         })
         .from(s.collection)
-        .leftJoin(s.collectionProduct, eq(s.collectionProduct.collectionId, s.collection.id))
-        .leftJoin(s.product, and(eq(s.product.id, s.collectionProduct.productId), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
         .where(eq(s.collection.published, true))
-        .groupBy(s.collection.id)
-        .orderBy(asc(s.collection.name)),
+        // PERF C13: hard cap (no contract field change; storefronts render a handful of collections).
+        .orderBy(asc(s.collection.name), asc(s.collection.id)).limit(500),
     );
     return c.json({ items });
   },
@@ -440,7 +438,8 @@ catalog.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/catalog/search', summary: 'Search products',
     request: { query: z.object({
-      term: z.string().min(1).max(120),
+      // PERF C13: one-character terms scan the whole catalog via ILIKE '%x%'; require 2+.
+      term: z.string().min(2).max(120),
       collectionSlug: z.string().max(200).optional(),
       take: z.coerce.number().int().min(1).max(100).default(24),
       skip: z.coerce.number().int().min(0).default(0),
@@ -468,12 +467,11 @@ catalog.openapi(
           tags: s.product.tags,
           minPrice: minimumPrice(st.config),
           pricingVariant: listingVariant(st.config),
-          image: sql<string | null>`max(${s.asset.path})`,
+          image: s.asset.path,
         })
         .from(s.product)
-        .leftJoin(s.productVariant, eq(s.productVariant.productId, s.product.id))
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
-        .where(where).groupBy(s.product.id).orderBy(asc(s.product.name)).limit(take).offset(skip);
+        .where(where).orderBy(asc(s.product.name)).limit(take).offset(skip);
       const totalRows = await tx.select({ total: sql<number>`count(*)::int` }).from(s.product).where(where);
       return { items, total: totalRows[0]?.total ?? 0 };
     });

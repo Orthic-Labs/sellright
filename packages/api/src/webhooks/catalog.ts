@@ -3,14 +3,17 @@ import type { Tx } from '../db/client.js';
 import { afterCommit } from '../db/after-commit.js';
 import * as s from '../db/schema.js';
 import { emitEvent } from './emit.js';
-import { onCatalogCacheChanged } from '../cache/purge-hook.js';
+import { onCatalogContentChanged } from '../manifest/stock-hook.js';
 import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 /**
  * Runs inside the catalog mutation transaction, including soft deletion.
- * Enqueues the webhook event atomically with the mutation, then fires the
- * cache-purge hook for this product's PDP + shop/sitemaps only after commit.
- * Rolled-back mutations discard the purge alongside the event.
+ * Enqueues the webhook event atomically with the mutation. After commit it
+ * schedules a scoped content publication for this product (V60 / #357: an
+ * edit used to purge without regenerating the snapshot); the purge of this
+ * product's page + shop/sitemaps follows that publication (N9), or runs at
+ * once where this deployment publishes no catalog. Rolled-back mutations
+ * discard both alongside the event.
  */
 export async function emitProductChanged(tx: Tx, storeId: string, productId: string): Promise<void> {
   const [product] = await tx.select({ id: s.product.id, slug: s.product.slug, storeSlug: s.store.slug, storeName: s.store.name, storeConfig: s.store.config })
@@ -19,7 +22,7 @@ export async function emitProductChanged(tx: Tx, storeId: string, productId: str
   if (product) {
     await emitEvent(tx, storeId, 'catalog.product_changed', { storeId, productId: product.id, slug: product.slug });
     afterCommit(tx, () => {
-      onCatalogCacheChanged(product.storeSlug, { productPath: productPath(seoConfigFromStore({ name: product.storeName, config: product.storeConfig }), product.slug) });
+      onCatalogContentChanged(product.storeSlug, [product.id], { productPath: productPath(seoConfigFromStore({ name: product.storeName, config: product.storeConfig }), product.slug) });
     });
   }
 }

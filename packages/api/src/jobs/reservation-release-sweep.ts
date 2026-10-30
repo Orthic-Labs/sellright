@@ -19,6 +19,57 @@ export interface ReservationSweepOpts {
 
 export interface ReservationSweepResult { orders: number; released: number; deferred: number; skipped: number; errors: number }
 
+/**
+ * D8: per-store rotation cursor (order_id keyset). Orders the sweep cannot
+ * settle yet (provider work not quiescent) keep their marker; with a plain
+ * LIMIT they re-occupied the window every pass and starved everything behind
+ * them. Each pass resumes after the last order it examined and wraps around, so
+ * every candidate is examined within ceil(candidates / batchLimit) passes.
+ * In-memory on purpose: losing it on restart just restarts the rotation.
+ */
+const sweepCursor = new Map<string, string>();
+
+/** Test hook. */
+export function resetReservationSweepCursor(): void { sweepCursor.clear(); }
+
+/**
+ * Candidate orders in stable order_id order, resuming after the store's cursor.
+ * Only rows this sweep can act on qualify (same outcome as the per-order
+ * checks under the lock, which remain authoritative):
+ *  - held + release requested (R4), or
+ *  - consumed + release requested on a Refunded order (R5 retry);
+ *    consumed rows of any other order are a no-op for this sweep.
+ *  - imported orders awaiting financial reconciliation are skipped under the
+ *    lock anyway (metadata.vendure.financialReconciliationV1), so they are
+ *    excluded here instead of permanently holding window slots.
+ */
+async function sweepCandidates(storeId: string, batchLimit: number): Promise<string[]> {
+  const page = (after: string | null) => withStore(storeId, (tx) => tx.execute(sql`
+    SELECT r.order_id AS id
+      FROM order_reservation r
+      JOIN "order" o ON o.id = r.order_id AND o.store_id = r.store_id
+     WHERE r.store_id = ${storeId} AND r.release_requested_at IS NOT NULL
+       AND (r.state = 'held' OR (r.state = 'consumed' AND o.state = 'Refunded'))
+       AND NOT coalesce(jsonb_typeof(o.metadata->'vendure') = 'object' AND (o.metadata->'vendure') ? 'financialReconciliationV1', false)
+       AND (${after}::uuid IS NULL OR r.order_id > ${after}::uuid)
+     GROUP BY r.order_id
+     ORDER BY r.order_id
+     LIMIT ${batchLimit}`)).then((r) => (r as unknown as { rows: Array<{ id: string }> }).rows.map((row) => row.id));
+  const after = sweepCursor.get(storeId) ?? null;
+  let ids = await page(after);
+  if (after && ids.length < batchLimit) {
+    // Wrap around: fill the rest of the window from the start, without repeats.
+    const seen = new Set(ids);
+    for (const id of await page(null)) {
+      if (ids.length >= batchLimit || seen.has(id)) break;
+      ids = [...ids, id];
+    }
+  }
+  if (ids.length) sweepCursor.set(storeId, ids[ids.length - 1]!);
+  else sweepCursor.delete(storeId);
+  return ids;
+}
+
 export async function reservationReleaseSweep(opts: ReservationSweepOpts = {}): Promise<ReservationSweepResult> {
   const log = opts.log ?? (() => {});
   const batchLimit = opts.batchLimit && opts.batchLimit > 0 ? Math.floor(opts.batchLimit) : 100;
@@ -27,11 +78,7 @@ export async function reservationReleaseSweep(opts: ReservationSweepOpts = {}): 
   for (const st of stores.rows) {
     // No transaction is open while the discovery flag is evaluated.
     const stripeDiscover = await stripeDiscoverable(st.id, st.config);
-    const candidates = await withStore(st.id, (tx) => tx.execute(sql`
-      SELECT DISTINCT order_id AS id FROM order_reservation
-       WHERE store_id = ${st.id} AND state IN ('held', 'consumed') AND release_requested_at IS NOT NULL
-       LIMIT ${batchLimit}`));
-    const ids = (candidates as unknown as { rows: Array<{ id: string }> }).rows.map((r) => r.id);
+    const ids = await sweepCandidates(st.id, batchLimit);
     for (const orderId of ids) {
       try {
         const out = await withLockedSet(st.id, { kind: 'order', orderId }, async (tx, held) => {

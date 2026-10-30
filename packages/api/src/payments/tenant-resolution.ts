@@ -8,6 +8,7 @@
 import { onEngineClose } from '../resources.js';
 import { Pool } from 'pg';
 import { env } from '../env.js';
+import { attachPoolMetrics, poolMax } from '../db/client.js';
 
 export type GatewayProviderName = 'stripe' | 'nmi' | 'sezzle';
 
@@ -43,7 +44,7 @@ function tenantPool(): Pool {
   const p = new Pool({
     connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL,
     application_name: `${env.PGAPPNAME}-tenant-resolution`,
-    max: 2,
+    max: poolMax('tenantResolution'), // its share of the per-process connection budget (#360 N7)
     idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
     connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
     allowExitOnIdle: true,
@@ -52,8 +53,10 @@ function tenantPool(): Pool {
     console.error('[pg tenant-resolution pool error]', err);
   });
   tenantPoolInstance = p;
+  const detachMetrics = attachPoolMetrics('tenantResolution', p); // P0: gauges, acquire/hold latency, timeouts
   onEngineClose('tenant-resolution-pool', async () => {
     tenantPoolInstance = undefined;
+    detachMetrics();
     await p.end();
   });
   return p;

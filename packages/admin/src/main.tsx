@@ -1,8 +1,4 @@
-import { StrictMode, lazy, useEffect, useState } from 'react';
-import EnrollSecondFactor from './pages/EnrollSecondFactor';
-import ReviewPasskeys from './pages/ReviewPasskeys';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
+import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,10 +21,14 @@ if ((import.meta as any).env?.MODE === 'qa') {
 import Layout from './components/Layout';
 import { AppErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
-import Setup from './pages/Setup';
-import AcceptInvite from './pages/AcceptInvite';
+const Setup = lazy(() => import('./pages/Setup'));
+const AcceptInvite = lazy(() => import('./pages/AcceptInvite'));
 
 // Route pages load on first visit, not in the first bundle (#362): signed-out screens and the shell stay eager.
+const EnrollSecondFactor = lazy(() => import('./pages/EnrollSecondFactor'));
+const ReviewPasskeys = lazy(() => import('./pages/ReviewPasskeys'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Orders = lazy(() => import('./pages/Orders'));
@@ -207,7 +207,10 @@ createRoot(document.getElementById('root')!).render(
                 a section boundary surfaces here so the user still sees the
                 chrome (header, nav) and a Reload button instead of a blank tab. */}
             <AppErrorBoundary>
-              <App />
+              {/* V47: first-run / enrolment screens are lazy chunks; Suspense covers the ones outside Layout. */}
+              <Suspense fallback={<div className="h-full grid place-items-center"><Loading label="Loading" /></div>}>
+                <App />
+              </Suspense>
             </AppErrorBoundary>
           </ToastProvider>
         </BrowserRouter>

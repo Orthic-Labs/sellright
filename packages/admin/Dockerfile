@@ -15,7 +15,11 @@ RUN pnpm build
 
 FROM nginx:1.31-alpine AS runtime
 
+# P8 (E6): the template proxies to an `upstream` block (re-resolved, keep-alive), which takes host:port rather than a
+# URL. API_UPSTREAM is kept only for compatibility with older compose files and is no longer read by the template.
 ENV API_UPSTREAM=http://api:3300
+ENV API_UPSTREAM_HOSTPORT=api:3300
+ENV NGINX_RESOLVER=127.0.0.11
 
 COPY --from=build /src/dist /usr/share/nginx/html
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template

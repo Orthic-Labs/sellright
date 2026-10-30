@@ -58,6 +58,8 @@ export interface RecoveryOptions {
 }
 
 const MAX_BACKOFF_MS = 6 * 3_600_000;
+/** Attempts examined per store per pass (after due filtering, D7). */
+export const RECOVERY_BATCH_LIMIT = 50;
 export function recoveryBackoffMs(tries: number, baseMin: number): number {
   return Math.min(baseMin * 60_000 * 2 ** Math.max(0, tries - 1), MAX_BACKOFF_MS);
 }
@@ -246,7 +248,16 @@ export async function recoverGatewayAttempts(opts: RecoveryOptions): Promise<{ c
       inArray(s.paymentAttempt.status, ['processing', 'unknown', 'pending']),
       lt(s.paymentAttempt.createdAt, cutoff),
       sql`coalesce((${s.paymentAttempt.context}->'recovery'->>'manual')::boolean, false) = false`,
-    )).orderBy(asc(s.paymentAttempt.createdAt)).limit(50));
+      // D7: due filtering BEFORE the limit. nextAt is always written by
+      // toISOString() (fixed-width UTC), so a text comparison orders it exactly
+      // and a malformed value can never abort the query with a cast error.
+      // Backing-off rows no longer occupy the 50-row window.
+      sql`coalesce(${s.paymentAttempt.context}->'recovery'->>'nextAt', '') <= ${now.toISOString()}`,
+    )).orderBy(
+      // Stable, fair order: never-tried and longest-due first, then age, then id.
+      sql`coalesce(${s.paymentAttempt.context}->'recovery'->>'nextAt', '')`,
+      asc(s.paymentAttempt.createdAt), asc(s.paymentAttempt.id),
+    ).limit(RECOVERY_BATCH_LIMIT));
     for (const attempt of rows) {
       if (!recoveryDue(attempt, now)) continue;
       totals.checked++;

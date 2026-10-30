@@ -6,7 +6,7 @@
  */
 import { createHmac } from 'node:crypto';
 import { and, eq, lte, sql } from 'drizzle-orm';
-import { Client, Pool, type ClientConfig, type PoolConfig, type QueryConfig } from 'pg';
+import { Client, Pool, type ClientConfig, type PoolClient, type PoolConfig, type QueryConfig, type QueryResultRow } from 'pg';
 import { currentLeaseSignal, runStoreTransaction, type Tx } from '../db/client.js';
 import { getEnv } from '../env.js';
 import * as s from '../db/schema.js';
@@ -23,6 +23,20 @@ export async function emitEvent(tx: Tx, storeId: string, topic: string, payload:
   const matched = endpoints.filter((e) => e.topics.includes('*') || e.topics.includes(topic));
   if (!matched.length) return;
   await tx.insert(s.webhookDelivery).values(matched.map((e) => ({ storeId, endpointId: e.id, topic, payload: payload as object })));
+}
+
+/** Batch form of emitEvent for jobs that emit one topic many times in one
+ *  transaction (V64: cart maintenance): one endpoint lookup + one INSERT for
+ *  the whole batch instead of 2 round trips per event. Same reserved-topic
+ *  and payload guards as emitEvent, applied to every payload. */
+export async function emitEvents(tx: Tx, storeId: string, topic: string, payloads: readonly unknown[]): Promise<void> {
+  if (!payloads.length) return;
+  assertNotReservedTopic(`webhook topic ${topic}`, topic, false);
+  for (const payload of payloads) assertNotReserved(`webhook topic ${topic}`, payload, false);
+  const endpoints = await tx.select({ id: s.webhookEndpoint.id, topics: s.webhookEndpoint.topics }).from(s.webhookEndpoint).where(and(eq(s.webhookEndpoint.storeId, storeId), eq(s.webhookEndpoint.enabled, true)));
+  const matched = endpoints.filter((e) => e.topics.includes('*') || e.topics.includes(topic));
+  if (!matched.length) return;
+  await tx.insert(s.webhookDelivery).values(payloads.flatMap((payload) => matched.map((e) => ({ storeId, endpointId: e.id, topic, payload: payload as object }))));
 }
 
 /** Canary-only delivery: exactly one endpoint, addressed by id, never fan-out.
@@ -107,9 +121,15 @@ async function finalizeWebhookDelivery(
   d: ClaimedDelivery,
   outcome: { ok: true } | { ok: false; error: unknown },
 ): Promise<'delivered' | 'retry' | 'dead'> {
+  // Claim fence (runner protocol): only the claim that is still current may
+  // finalize. If the reaper reset this row and another pass re-claimed it, the
+  // row is no longer 'processing' at this attempt count and this write is a
+  // no-op instead of overwriting the newer claim's state.
+  const fence = and(eq(s.webhookDelivery.storeId, storeId), eq(s.webhookDelivery.id, d.id),
+    eq(s.webhookDelivery.status, 'processing'), eq(s.webhookDelivery.attempts, d.attempts));
   return storeTransaction(storeId, async (tx) => {
     if (outcome.ok) {
-      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(and(eq(s.webhookDelivery.storeId, storeId), eq(s.webhookDelivery.id, d.id)));
+      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(fence);
       return 'delivered';
     }
     // `d.attempts` is the post-claim value (incremented at claim time); use it
@@ -124,28 +144,52 @@ async function finalizeWebhookDelivery(
       claimedAt: null,
       firstFailedAt: sql`coalesce(${s.webhookDelivery.firstFailedAt}, now())`,
       updatedAt: new Date(),
-    }).where(and(eq(s.webhookDelivery.storeId, storeId), eq(s.webhookDelivery.id, d.id)));
+    }).where(fence);
     return giveUp ? 'dead' : 'retry';
   });
 }
 
-/** Deliver due pending webhooks across all stores (scheduler-driven).
- * Two FIFO workers hold at most one attempt per store, through finalization.
- * Admission stops after 40s; accepted work & physical connection cleanup drain
- * before returning to the scheduler's unchanged global leader-lock owner. */
-export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ delivered: number; failed: number }> {
-  const deadline = performance.now() + ADMISSION_WINDOW_MS;
-  const log = opts.log ?? (() => {});
-  const limit = normalizeWebhookBatchLimit(opts.limit);
-  const failures: unknown[] = [];
+/** Short per-connection limits every delivery connection runs under (A9: survive any reuse). */
+export const WEBHOOK_DELIVERY_TIMEOUTS = { connectionTimeoutMillis: 1_000, statement_timeout: 1_000, lock_timeout: 250 } as const;
+
+/** The pool surface the delivery pass needs. */
+export interface WebhookDeliveryPool {
+  connect(): Promise<PoolClient>;
+  query<R extends QueryResultRow>(config: QueryConfig): Promise<{ rows: R[] }>;
+}
+
+/** One pass's view of its connection source. */
+export interface WebhookDeliveryPoolLease {
+  pool: WebhookDeliveryPool;
+  /** True when the pool's own config does not enforce WEBHOOK_DELIVERY_TIMEOUTS, so each transaction sets them locally. */
+  localTimeouts: boolean;
+  /** Settles once every connection this lease opened is closed (dedicated) or returned (borrowed); never rejects. */
+  teardown(): Promise<PromiseSettledResult<unknown>[]>;
+}
+
+/**
+ * A9 (perf plan P6): where delivery connections come from. `onError` receives
+ * client/pool errors; any reported error fails the pass (unchanged semantics).
+ * The default is the dedicated per-pass pool below. Lane L4's budgeted job pool
+ * can be installed with setWebhookDeliveryPoolSource(borrowedWebhookDeliveryPool(pool))
+ * so the pass stops opening two connections outside the main pool budget.
+ */
+export type WebhookDeliveryPoolSource = (onError: (error: Error) => void) => WebhookDeliveryPoolLease;
+
+/**
+ * Default source (unchanged behavior): a max-2 pool for this pass only, short
+ * timeouts in its config, and teardown that drains pool.end() AND every
+ * constructed client's physical close, so leader ownership covers those closes.
+ */
+export const dedicatedWebhookDeliveryPool: WebhookDeliveryPoolSource = (onError) => {
   const closedClients: Promise<void>[] = [];
   const observeClientError = (error: Error) => {
-    failures.push(error);
     console.error('[pg webhook client error]', error);
+    onError(error);
   };
   // pg-pool can remove an errored client before its socket closes (including
   // failed enumeration/connect). Track every constructed client's end event,
-  // not just pool.end(), so leader ownership covers those closes as well.
+  // not just pool.end().
   class DeliveryClient extends Client {
     constructor(config?: ClientConfig) {
       super(config);
@@ -154,23 +198,61 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
     }
   }
   const env = getEnv();
-  const deliveryPool = new Pool({
+  const pool = new Pool({
     connectionString: env.DATABASE_URL,
     application_name: `${env.PGAPPNAME}-webhooks`,
     max: 2,
-    connectionTimeoutMillis: 1_000,
-    statement_timeout: 1_000,
-    lock_timeout: 250,
+    ...WEBHOOK_DELIVERY_TIMEOUTS,
     pipeline: false,
     Client: DeliveryClient,
   } as PoolConfig & { Client: typeof Client; pipeline: boolean });
-  deliveryPool.on('error', (error) => {
-    failures.push(error);
+  pool.on('error', (error) => {
     console.error('[pg webhook pool error]', error);
+    onError(error);
   });
+  return {
+    pool: pool as unknown as WebhookDeliveryPool,
+    localTimeouts: false,
+    teardown: () => Promise.allSettled([pool.end(), ...closedClients]),
+  };
+};
+
+/**
+ * Reuse an existing (budgeted, long-lived) pool. Connections are borrowed per
+ * transaction and returned by runStoreTransaction; a timed-out transaction still
+ * ends its client. Never ends the shared pool. The short statement/lock
+ * timeouts are applied with SET LOCAL inside every delivery transaction; the
+ * connect timeout is the shared pool's own. At most two connections are held
+ * at once (two workers, one transaction each).
+ */
+export function borrowedWebhookDeliveryPool(shared: WebhookDeliveryPool): WebhookDeliveryPoolSource {
+  return () => ({ pool: shared, localTimeouts: true, teardown: async () => [] });
+}
+
+let poolSource: WebhookDeliveryPoolSource = dedicatedWebhookDeliveryPool;
+/** Install the delivery pool source (null restores the dedicated per-pass default). */
+export function setWebhookDeliveryPoolSource(source: WebhookDeliveryPoolSource | null): void {
+  poolSource = source ?? dedicatedWebhookDeliveryPool;
+}
+
+/** Deliver due pending webhooks across all stores (scheduler-driven).
+ * Two FIFO workers hold at most one attempt per store, through finalization.
+ * Admission stops after 40s; accepted work & connection teardown drain
+ * before returning to the scheduler's unchanged global leader-lock owner. */
+export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) => void; poolSource?: WebhookDeliveryPoolSource } = {}): Promise<{ delivered: number; failed: number }> {
+  const deadline = performance.now() + ADMISSION_WINDOW_MS;
+  const log = opts.log ?? (() => {});
+  const limit = normalizeWebhookBatchLimit(opts.limit);
+  const failures: unknown[] = [];
+  const lease = (opts.poolSource ?? poolSource)((error) => { failures.push(error); });
+  const deliveryPool = lease.pool;
+  const localTimeouts = sql`SELECT set_config('statement_timeout', ${String(WEBHOOK_DELIVERY_TIMEOUTS.statement_timeout)}, true),
+                                   set_config('lock_timeout', ${String(WEBHOOK_DELIVERY_TIMEOUTS.lock_timeout)}, true)`;
   const storeTransaction: StoreTransaction = async (storeId, fn) => {
     const client = await deliveryPool.connect();
-    return runStoreTransaction(client, storeId, fn, undefined, { timeoutMs: TRANSACTION_TIMEOUT_MS });
+    return runStoreTransaction(client, storeId, lease.localTimeouts
+      ? async (tx) => { await tx.execute(localTimeouts); return fn(tx); }
+      : fn, undefined, { timeoutMs: TRANSACTION_TIMEOUT_MS });
   };
   let delivered = 0;
   let failed = 0;
@@ -231,7 +313,7 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
   } catch (error) {
     failures.push(error);
   } finally {
-    const cleanup = await Promise.allSettled([deliveryPool.end(), ...closedClients]);
+    const cleanup = await lease.teardown();
     for (const result of cleanup) if (result.status === 'rejected') failures.push(result.reason);
   }
   if (failures.length) throw new AggregateError(failures, 'Webhook delivery pass failed');

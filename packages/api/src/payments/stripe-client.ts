@@ -18,6 +18,23 @@ export const STRIPE_API_VERSION = '2026-08-26.dahlia';
 // the SDK's declared type. This is the only cast; it changes no runtime value.
 type SdkApiVersion = NonNullable<NonNullable<ConstructorParameters<typeof Stripe>[1]>['apiVersion']>;
 
+/**
+ * A7/C1 explicit gateway deadlines (the SDK default is an 80s per-attempt timeout with 2 network retries, ~250s worst
+ * case). Per attempt: 20s. One network retry: the SDK resends a POST with the same Idempotency-Key (ours when given,
+ * else its own), so a retry after a lost response returns the original object instead of a second effect. Total
+ * worst case = attempts x timeout + SDK max backoff (5s) per retry. A timeout surfaces as an error whose provider
+ * outcome is unknown; callers already treat that as Pending/unknown and reconcile (refunds: stripe.ts refundPayment;
+ * intents: client-side confirmation + webhook), never as a definite failure that permits a fresh charge.
+ */
+export const STRIPE_REQUEST_TIMEOUT_MS = 20_000;
+export const STRIPE_MAX_NETWORK_RETRIES = 1;
+const STRIPE_SDK_MAX_RETRY_DELAY_MS = 5_000;
+export const STRIPE_TOTAL_DEADLINE_MS = (STRIPE_MAX_NETWORK_RETRIES + 1) * STRIPE_REQUEST_TIMEOUT_MS + STRIPE_MAX_NETWORK_RETRIES * STRIPE_SDK_MAX_RETRY_DELAY_MS;
+
 export function newStripeClient(secretKey: string): Stripe {
-  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION as string as SdkApiVersion });
+  return new Stripe(secretKey, {
+    apiVersion: STRIPE_API_VERSION as string as SdkApiVersion,
+    timeout: STRIPE_REQUEST_TIMEOUT_MS,
+    maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES,
+  });
 }

@@ -1040,13 +1040,30 @@ export async function liveEditSettlement(tx: Tx, storeId: string, st: Settlement
   if (st.type !== 'refund_now' || !st.refundId) return st;
   const [r] = await tx.select({ state: s.refund.state }).from(s.refund)
     .where(and(eq(s.refund.storeId, storeId), eq(s.refund.id, st.refundId))).limit(1);
-  if (!r) return st;
-  if (st.phase && st.status === 'reconciliation_required') return { ...st, refundState: r.state };
-  const status = r.state === 'Settled' ? 'settled' : r.state === 'Failed' ? 'failed' : 'pending';
-  if (status === st.status && r.state === st.refundState) return st;
+  return applyLiveRefundState(st, r?.state);
+}
+
+/** Pure projection of a refund row's state onto a stored settlement (shared by the single and batched readers). */
+export function applyLiveRefundState(st: SettlementOutcome, refundState: string | undefined): SettlementOutcome {
+  if (refundState === undefined) return st;
+  if (st.phase && st.status === 'reconciliation_required') return { ...st, refundState: refundState as never };
+  const status = refundState === 'Settled' ? 'settled' : refundState === 'Failed' ? 'failed' : 'pending';
+  if (status === st.status && refundState === st.refundState) return st;
   const { message: _m, ...rest } = st;
-  return { ...rest, refundState: r.state, status,
-    ...(status === 'failed' ? { message: 'the gateway declined the refund — retry it from the order edit, or leave it as credit' } : {}) };
+  return { ...rest, refundState: refundState as never, status,
+    ...(status === 'failed' ? { message: 'the gateway declined the refund — retry it from the order edit, or leave it as credit' } : {}) } as SettlementOutcome;
+}
+
+/** PERF V51: one refund-state query for a whole edit history instead of one per row. Same result as per-row liveEditSettlement. */
+async function liveEditSettlements(tx: Tx, storeId: string, list: Array<SettlementOutcome | null | undefined>): Promise<Array<SettlementOutcome | null | undefined>> {
+  const ids = [...new Set(list.flatMap((st) => (st && st.type === 'refund_now' && st.refundId ? [st.refundId] : [])))];
+  const states = new Map<string, string>();
+  if (ids.length) {
+    const rows = await tx.select({ id: s.refund.id, state: s.refund.state }).from(s.refund)
+      .where(and(eq(s.refund.storeId, storeId), inArray(s.refund.id, ids)));
+    for (const r of rows) states.set(r.id, r.state);
+  }
+  return list.map((st) => (!st || st.type !== 'refund_now' || !st.refundId ? st : applyLiveRefundState(st, states.get(st.refundId))));
 }
 
 /** A connection can fail after the refund reservation committed. Link that
@@ -1615,6 +1632,7 @@ export async function loadEditContext(storeId: string, code: string) {
     const protectedPricing = await pricingEditProtected(tx, storeId, o);
     const couponCodes = await loadOrderCouponCodes(tx, o);
     const pending = history.find(edit => isPendingEditStage(edit.settlement));
+    const liveSettlements = await liveEditSettlements(tx, storeId, history.map((h) => (h.settlement ? (h.settlement as SettlementOutcome) : null)));
     const items = !importedFinancialReconciliationRequired(o.metadata) && EDITABLE_STATES.has(o.state) && !protectedPricing && !sourceAdmission.planRefusal && !pending;
     const address = o.state !== 'Cancelled' && !sourceAdmission.addressRefusal && !pending;
     return {
@@ -1627,7 +1645,7 @@ export async function loadEditContext(storeId: string, code: string) {
       shippingMethods: methods.map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) })),
       amountDue, shippingAddress: readAddress(o.shippingAddress), billingAddress: readAddress(o.billingAddress), hasCustomer: !!o.customerId,
       importedHistory: await loadImportedOrderHistory(tx, storeId, o.id, lines),
-      history: await Promise.all(history.map(async (h) => ({ id: h.id, actor: h.actor, reason: h.reason, balance: h.balance, settlement: h.settlement ? await liveEditSettlement(tx, storeId, h.settlement as SettlementOutcome) : h.settlement, createdAt: h.createdAt.toISOString(), grandTotalBefore: (h.before as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null, grandTotalAfter: (h.after as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null }))),
+      history: history.map((h, i) => ({ id: h.id, actor: h.actor, reason: h.reason, balance: h.balance, settlement: liveSettlements[i] ?? h.settlement, createdAt: h.createdAt.toISOString(), grandTotalBefore: (h.before as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null, grandTotalAfter: (h.after as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null })),
     };
   });
 }

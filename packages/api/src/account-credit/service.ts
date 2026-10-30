@@ -142,7 +142,9 @@ export async function issue(tx: Tx, input: { storeId: string; email: string; amo
   // No account row exists yet. This store-scoped issuance-only advisory prevents
   // duplicate promotion creation and case-insensitive code collisions on retries.
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`account-credit-issue:${input.storeId}`}, 0))`);
-  const [store] = await tx.select().from(s.store).where(eq(s.store.id, input.storeId)).for('update');
+  // B4: issuance never changes store keys; NO KEY UPDATE keeps store-level exclusion against other store writers but
+  // does not block FK key-share checks of concurrent order/cart/promotion inserts that reference this store.
+  const [store] = await tx.select().from(s.store).where(eq(s.store.id, input.storeId)).for('no key update');
   if (!store) throw new AccountCreditError('missing', 'Credit store missing');
   const currency = input.currency ?? store.currency;
   required(currency, 3, 'Currency');

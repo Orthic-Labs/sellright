@@ -166,6 +166,24 @@ async function lockRows(
   }
 }
 
+/**
+ * B3/N12 stock lock protocol: every writer that changes more than one `stock` row locks the rows it will modify FIRST,
+ * in canonical order (ascending variant_id = lowercase-uuid text order = Postgres uuid order), one statement per row,
+ * before reading or modifying them. Sorting the input of an `UPDATE … FROM unnest()` does not prove row-lock order;
+ * one locking statement per sorted id does. FOR NO KEY UPDATE matches the lock a later non-key UPDATE takes (no
+ * upgrade) and leaves FK key-share checks unblocked. Returns the locked rows (current values) in lock order; ids with
+ * no stock row in this store are skipped.
+ */
+export async function lockStockRowsInOrder(tx: Tx, storeId: string, variantIds: readonly string[]): Promise<Array<{ variantId: string; onHand: number; allocated: number }>> {
+  const out: Array<{ variantId: string; onHand: number; allocated: number }> = [];
+  for (const id of [...new Set(variantIds.map(canonical))].sort()) {
+    const r = await tx.execute(sql`SELECT variant_id, on_hand, allocated FROM ${s.stock} WHERE variant_id = ${id} AND store_id = ${storeId} FOR NO KEY UPDATE`);
+    const row = r.rows[0] as { variant_id: string; on_hand: number; allocated: number } | undefined;
+    if (row) out.push({ variantId: row.variant_id, onHand: Number(row.on_hand), allocated: Number(row.allocated) });
+  }
+  return out;
+}
+
 /** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. True when `e` or any error on its `cause` chain (5 levels) carries one of `codes`; outer wrappers may have their own code. */
 export function hasPgCode(e: unknown, codes: readonly string[]): boolean {
   for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {

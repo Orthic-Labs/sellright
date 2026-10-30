@@ -127,14 +127,25 @@ function ProductDetailEditor({ id }: { id: string }) {
           throw e;
         }
       }
-      for (const vp of plan.variants) {
+      // V44: independent variants save with bounded concurrency (4) instead of strictly one after another; a variant's
+      // own PATCH + stock stay ordered. Every variant that succeeded is committed; the first failure is reported after the rest settle.
+      let firstError: Error | null = null;
+      let next = 0;
+      const worker = async () => {
+        while (next < plan.variants.length && !firstError) {
+          const vp = plan.variants[next++]!;
+          try {
+            if (Object.keys(vp.patch).length) await api.patch(`/variants/${vp.id}`, vp.patch);
+            if (vp.onHand !== undefined) await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand });
+          } catch (e) { firstError ??= new Error(`${vp.sku}: ${(e as Error).message}`); continue; }
+          commit(vp.keys, snap);
+        }
+      };
+      if (plan.variants.length) {
         guardIdentity();
-        try {
-          if (Object.keys(vp.patch).length) await api.patch(`/variants/${vp.id}`, vp.patch);
-          if (vp.onHand !== undefined) await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand });
-        } catch (e) { throw new Error(`${vp.sku}: ${(e as Error).message}`); }
-        commit(vp.keys, snap);
+        await Promise.all(Array.from({ length: Math.min(4, plan.variants.length) }, worker));
       }
+      if (firstError) throw firstError;
       guardIdentity();
       const fresh = await api.get<ProductDetail>(`/products/${id}`);
       if (!isCurrent()) { void qc.invalidateQueries({ queryKey: key, refetchType: 'none' }); return; }

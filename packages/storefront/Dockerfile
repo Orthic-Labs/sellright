@@ -61,7 +61,11 @@ COPY --from=build --chown=node:node /workspace/packages/storefront/server ./serv
 USER node
 EXPOSE 4100
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4100)+'/').then(r=>{if(!r.ok&&r.status!==404)process.exit(1)}).catch(()=>process.exit(1))"
+# P8 (E5/E9): liveness only. The old probe rendered `/` through SSR, which calls the API — so an API hiccup (or a
+# slow first render) marked the storefront unhealthy and held Caddy's start, and any 404 still counted as healthy.
+# The process accepting connections on its port is what Compose needs to order start-up; store/API readiness is
+# the API's own healthcheck. No Node process per probe: bash /dev/tcp + coreutils timeout.
+HEALTHCHECK --interval=30s --timeout=4s --start-period=15s --retries=3 \
+  CMD ["bash", "-c", "timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/${PORT:-4100}'"]
 
 CMD ["node", "server/entry.express.js"]

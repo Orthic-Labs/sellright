@@ -79,11 +79,12 @@ export async function mutateStoreConfig(
       .select({ slug: s.store.slug, config: s.store.config })
       .from(s.store)
       .where(eq(s.store.id, storeId))
-      .for('update')
+      .for('no key update')
       .limit(1);
     const prev = (row?.config as Record<string, unknown> | null) ?? {};
     const v = mutate(prev);
-    await tx.update(s.store).set({ config: v }).where(eq(s.store.id, storeId));
+    // PERF V54: a mutation that leaves the blob byte-identical (same key order) skips the whole-row rewrite; the audit row and hooks still run.
+    if (JSON.stringify(v) !== JSON.stringify(prev)) await tx.update(s.store).set({ config: v }).where(eq(s.store.id, storeId));
     if (audit) {
       await tx.insert(s.auditLog).values({
         storeId,
@@ -169,7 +170,7 @@ adminSettings.openapi(
         .select({ name: s.store.name, currency: s.store.currency, taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable })
         .from(s.store)
         .where(eq(s.store.id, st.storeId))
-        .for('update')
+        .for('no key update')
         .limit(1);
       if (!before) throw new HttpError(404, 'store not found');
       // A hostnames-only PATCH touches no `store` column — skip both the

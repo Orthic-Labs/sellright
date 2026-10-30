@@ -6,6 +6,7 @@ import * as schema from './schema.js';
 import { getEnv, type Env } from '../env.js';
 import { beginAfterCommit, discardAfterCommit, flushAfterCommit } from './after-commit.js';
 import { log, err as logErr } from '../lib/logger.js';
+import { instrumentPool, isPoolTimeoutError } from '../lib/metrics.js';
 
 // ---------------------------------------------------------------------------
 // Pools are created by `initPools(env)` (createApp, plugin 2.1) — importing this
@@ -30,7 +31,7 @@ import { log, err as logErr } from '../lib/logger.js';
 // The store-cache LISTEN session is a dedicated pg.Client (store-context.ts),
 // outside every pool.
 // ---------------------------------------------------------------------------
-interface Pools { pool: Pool; jobsPool: Pool; locksPool: Pool; advisoryLockPool: Pool; db: Db; jobsDb: Db; gauge?: NodeJS.Timeout }
+interface Pools { pool: Pool; jobsPool: Pool; locksPool: Pool; advisoryLockPool: Pool; db: Db; jobsDb: Db; gauge?: NodeJS.Timeout; detachMetrics: Array<() => void> }
 let pools: Pools | undefined;
 let poolsClosed = false;
 
@@ -85,7 +86,10 @@ export function initPools(e: Env = getEnv()): Pool {
   const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION, query_timeout: JOBS_QUERY_TIMEOUT_MS });
   const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true, query_timeout: LOCKS_QUERY_TIMEOUT_MS });
   const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, advisoryPoolMax(e), { allowExitOnIdle: true, options: advisorySession(e) });
-  pools = { pool, jobsPool, locksPool, advisoryLockPool, db: drizzle(pool, drizzleOpts), jobsDb: drizzle(jobsPool, drizzleOpts) };
+  // P0: acquisition latency, hold time and timeout/cancel counters per pool (lib/metrics.ts), under the same names
+  // poolGauges() and connectionBudget() use.
+  const detachMetrics = [instrumentPool('requests', pool), instrumentPool('jobs', jobsPool), instrumentPool('locks', locksPool), instrumentPool('advisory', advisoryLockPool)];
+  pools = { pool, jobsPool, locksPool, advisoryLockPool, db: drizzle(pool, drizzleOpts), jobsDb: drizzle(jobsPool, drizzleOpts), detachMetrics };
   poolsClosed = false;
   if (e.NODE_ENV !== 'test') {
     // Saturation is logged before it turns into connect timeouts: a line every 30 s while any pool has waiters or
@@ -129,6 +133,7 @@ export async function closePools(): Promise<void> {
   poolsClosed = true;
   if (!p) return;
   clearInterval(p.gauge);
+  for (const detach of p.detachMetrics) detach();
   await Promise.allSettled([p.pool.end(), p.jobsPool.end(), p.locksPool.end(), p.advisoryLockPool.end()]);
 }
 
@@ -141,14 +146,48 @@ export function _resetPoolsForTest(): void {
 
 const advisoryPoolMax = (e: Env) => Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4)));
 
-/** #360 N7: the most connections one API process can open, by consumer. The tenant resolver
- *  (payments/tenant-resolution.ts) and the per-pass webhook pool (webhooks/emit.ts) are fixed at 2 each. */
-export function connectionBudget(e: Env = getEnv()): { total: number; parts: Record<string, number> } {
-  const parts = {
+/** #360 N7: the fixed-size consumers outside initPools(). Their constructors take `max` from HERE (poolMax), so
+ *  the budget below and the pools actually opened cannot drift apart:
+ *    tenantResolution  payments/tenant-resolution.ts (lazy, process lifetime)
+ *    webhookPass       webhooks/emit.ts (one pool per delivery pass, ended after it)
+ *    listener          store-context.ts (dedicated LISTEN pg.Client) */
+export const FIXED_POOL_MAX = { tenantResolution: 2, webhookPass: 2, listener: 1 } as const;
+export type BudgetedPool = 'requests' | 'jobs' | 'locks' | 'advisory' | keyof typeof FIXED_POOL_MAX;
+
+/** #360 N7: the most connections one API process can open, by consumer. */
+export function connectionBudget(e: Env = getEnv()): { total: number; parts: Record<BudgetedPool, number> } {
+  const parts: Record<BudgetedPool, number> = {
     requests: e.PGPOOL_MAX, jobs: e.PGJOBS_POOL_MAX, locks: e.PGLOCKS_POOL_MAX, advisory: advisoryPoolMax(e),
-    tenantResolution: 2, webhookPass: 2, listener: 1,
+    ...FIXED_POOL_MAX,
   };
   return { total: Object.values(parts).reduce((a, b) => a + b, 0), parts };
+}
+
+/** The `max` a budgeted pool must be constructed with (its share of connectionBudget()). */
+export function poolMax(name: BudgetedPool, e: Env = getEnv()): number {
+  return connectionBudget(e).parts[name];
+}
+
+/** Attach a pool created outside initPools() to the P0 metrics (lib/metrics.ts) under its budget name; returns the
+ *  detach function to call when the pool is ended. A per-pass pool attaches each instance under the same name. */
+export function attachPoolMetrics(name: BudgetedPool, p: Pool): () => void {
+  return instrumentPool(name, p);
+}
+
+export class ConnectionBudgetError extends Error {
+  constructor(readonly total: number, readonly budget: number, readonly parts: Record<string, number>) {
+    super(`this process can open ${total} database connections, more than PG_CONNECTION_BUDGET=${budget} (${Object.entries(parts).map(([k, v]) => `${k} ${v}`).join(', ')}); lower the pool sizes or raise the budget`);
+    this.name = 'ConnectionBudgetError';
+  }
+}
+
+/** #360 N7 (createApp, before any pool opens): with PG_CONNECTION_BUDGET_ENFORCE=1 a configuration whose pool maxima
+ *  exceed PG_CONNECTION_BUDGET refuses to start, instead of only logging a warning at boot (checkConnectionBudget). */
+export function assertConnectionBudget(e: Env = getEnv()): void {
+  if (e.PG_CONNECTION_BUDGET_ENFORCE !== '1') return;
+  if (!e.PG_CONNECTION_BUDGET) throw new Error('PG_CONNECTION_BUDGET_ENFORCE=1 needs PG_CONNECTION_BUDGET (this process\'s share of the cluster\'s connections)');
+  const { total, parts } = connectionBudget(e);
+  if (total > e.PG_CONNECTION_BUDGET) throw new ConnectionBudgetError(total, e.PG_CONNECTION_BUDGET, parts);
 }
 
 /** Boot check (createApp, best-effort): log this process's connection maximum and warn when it exceeds
@@ -244,12 +283,7 @@ async function assertLeasesHeld(client: PoolClient, fences: readonly LeaseFence[
  *  connect that timed out, or the server refusing with too_many_connections (53300). Maps to 503 (app.ts) and to
  *  "skipped: pool busy" in the scheduler. */
 export function isPoolTimeout(err: unknown): boolean {
-  for (let e: unknown = err, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
-    if (e instanceof Error && (e.message.includes('timeout exceeded when trying to connect')
-      || e.message.includes('Connection terminated due to connection timeout'))) return true;
-    if ((e as { code?: unknown }).code === '53300') return true; // too_many_connections: the server's own limit
-  }
-  return false;
+  return isPoolTimeoutError(err);
 }
 
 /** Forward every operation to a lazily-resolved target (see `pool` / `unsafeUnscopedDb`). */

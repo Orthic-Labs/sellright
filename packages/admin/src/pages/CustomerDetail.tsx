@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, BadgeCheck, Pencil } from 'lucide-react';
@@ -26,6 +26,13 @@ export default function CustomerDetailPage() {
     queryKey: ['customer-subs', store?.slug, id],
     queryFn: () => api.get<{ items: { id: string; status: string; priceId: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean }[] }>(`/subscriptions?customerId=${id}`),
   });
+  // V50: loyalty + verification are children that only mount after the customer loads; start their reads now (same keys
+  // and fetchers as the components, so they find them in the cache) instead of after the customer round-trip.
+  useEffect(() => {
+    if (!id) return;
+    void qc.prefetchQuery({ queryKey: ['customer-loyalty', store?.slug, id], queryFn: () => api.get(`/customers/${id}/loyalty`) });
+    void qc.prefetchQuery({ queryKey: ['customer-verification', store?.slug, id], queryFn: () => api.get(`/customers/${id}/verification`) });
+  }, [qc, store?.slug, id]);
   const [edit, setEdit] = useState<{ firstName: string; lastName: string; phone: string; tags: string; tagsLoaded: string | null } | null>(null);
   const save = useMutation({
     // Tags are only sent when the field was loaded from the API AND edited; an untouched (or never-loaded) field must not

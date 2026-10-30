@@ -5,9 +5,10 @@ import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
 
-vi.mock('../cache/purge-hook.js', () => ({ onCatalogCacheChanged: vi.fn() }));
+// V60 / #357: a product edit schedules a scoped content publication; its purge follows publication (stock-hook.ts).
+vi.mock('../manifest/stock-hook.js', () => ({ onCatalogContentChanged: vi.fn() }));
 
-import { onCatalogCacheChanged } from '../cache/purge-hook.js';
+import { onCatalogContentChanged as onCatalogCacheChanged } from '../manifest/stock-hook.js';
 import { emitProductChanged, emitVariantProductChanged } from './catalog.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'catalog.db.test.ts');
@@ -59,7 +60,7 @@ describe('catalog cache purge transaction boundary', () => {
       expect(onCatalogCacheChanged).not.toHaveBeenCalled();
     });
 
-    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, { productPath: '/shop/catalog-product/' });
+    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/shop/catalog-product/' });
     await withStore(STORE, async (tx) => {
       expect(await deliveries(tx)).toEqual([{ topic: 'catalog.product_changed', payload }]);
       const [product] = await tx.select({ name: s.product.name }).from(s.product).where(eq(s.product.id, PRODUCT));
@@ -93,7 +94,7 @@ describe('catalog cache purge transaction boundary', () => {
       expect(onCatalogCacheChanged).not.toHaveBeenCalled();
     });
 
-    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, { productPath: '/products/catalog-product/' });
+    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/products/catalog-product/' });
     expect(await withStore(STORE, deliveries)).toEqual([{ topic: 'catalog.product_changed', payload }]);
   });
 });

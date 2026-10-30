@@ -38,6 +38,7 @@ type ExportRow = {
   payment_method: string | null; shipping_method_name: string | null; shipping_method_code: string | null; coupon: string | null;
   ship_name: string | null; ship_line1: string | null; ship_line2: string | null; ship_city: string | null;
   ship_region: string | null; ship_postal: string | null; ship_country: string | null; ship_phone: string | null;
+  _k_date: string; _k_line: string | null;
   line_sku: string | null; line_name: string | null; line_product: string | null; line_qty: number | null; line_unit: number | null; line_total: number | null; line_discount: number | null;
 };
 
@@ -159,8 +160,18 @@ export function exportConditions(f: ExportFilters): SQL[] {
   return c;
 }
 
-export async function fetchExportRows(storeId: string, f: ExportFilters, mode: ExportMode): Promise<ExportRow[]> {
-  const where = sql.join(exportConditions(f), sql` and `);
+/** Keyset position of the last exported row: (effective date text, order code, line id). Text keeps microsecond precision. */
+type ExportAfter = { date: string; code: string; line: string | null };
+
+async function queryExportRows(storeId: string, f: ExportFilters, mode: ExportMode, limit: number, after?: ExportAfter): Promise<ExportRow[]> {
+  const conds = exportConditions(f);
+  if (after) {
+    const d = sql`coalesce("order"."placed_at", "order"."created_at")`;
+    conds.push(mode === 'line' && after.line !== null
+      ? sql`(${d} < ${after.date}::timestamptz or (${d} = ${after.date}::timestamptz and ("order"."code" > ${after.code} or ("order"."code" = ${after.code} and ol.id > ${after.line}::uuid))))`
+      : sql`(${d} < ${after.date}::timestamptz or (${d} = ${after.date}::timestamptz and "order"."code" > ${after.code}))`);
+  }
+  const where = sql.join(conds, sql` and `);
   const lineSelect = mode === 'line'
     ? sql`ol.variant_sku as line_sku, ol.variant_name as line_name, ol.product_name as line_product, ol.quantity as line_qty, ol.unit_price as line_unit, ol.line_total as line_total, ol.line_discount as line_discount`
     : sql`null::text as line_sku, null::text as line_name, null::text as line_product, null::int as line_qty, null::int as line_unit, null::int as line_total, null::int as line_discount`;
@@ -186,6 +197,7 @@ export async function fetchExportRows(storeId: string, f: ExportFilters, mode: E
         "order"."shipping_address"->>'line2' as ship_line2, "order"."shipping_address"->>'city' as ship_city,
         "order"."shipping_address"->>'province' as ship_region, "order"."shipping_address"->>'postalCode' as ship_postal,
         "order"."shipping_address"->>'country' as ship_country, "order"."shipping_address"->>'phone' as ship_phone,
+        coalesce("order"."placed_at", "order"."created_at")::text as _k_date, ${mode === 'line' ? sql`ol.id::text` : sql`null::text`} as _k_line,
         ${lineSelect}
       from "order"
       left join customer cust on cust.id = "order"."customer_id"
@@ -193,9 +205,31 @@ export async function fetchExportRows(storeId: string, f: ExportFilters, mode: E
       ${lineJoin}
       where ${where}
       order by coalesce("order"."placed_at", "order"."created_at") desc, "order"."code"${lineOrder}
-      limit ${EXPORT_ROW_CAP}`);
+      limit ${limit}`);
     return (r as unknown as { rows: ExportRow[] }).rows;
   });
+}
+
+export function fetchExportRows(storeId: string, f: ExportFilters, mode: ExportMode): Promise<ExportRow[]> {
+  return queryExportRows(storeId, f, mode, EXPORT_ROW_CAP);
+}
+
+/** PERF C8: yields the same rows/order as fetchExportRows (same cap) in short, independent keyset-paged transactions,
+ *  so memory stays at one chunk and no DB connection is held while a slow client downloads. Not one snapshot: a row
+ *  edited between chunks may reflect its newer state (the export is a point-in-time report, not a ledger). */
+export async function* iterateExportRows(storeId: string, f: ExportFilters, mode: ExportMode, chunkSize = 2000): AsyncGenerator<ExportRow[]> {
+  let remaining = EXPORT_ROW_CAP;
+  let after: ExportAfter | undefined;
+  while (remaining > 0) {
+    const want = Math.min(chunkSize, remaining);
+    const rows = await queryExportRows(storeId, f, mode, want, after);
+    if (!rows.length) return;
+    yield rows;
+    remaining -= rows.length;
+    if (rows.length < want) return;
+    const last = rows[rows.length - 1]!;
+    after = { date: last._k_date, code: last.code, line: last._k_line };
+  }
 }
 
 /** Spreadsheet formula-injection guard for free-text string cells. */

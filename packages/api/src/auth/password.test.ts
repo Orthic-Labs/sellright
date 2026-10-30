@@ -39,3 +39,22 @@ describe('password hashing', () => {
     expect(passwordNeedsRehash(legacy)).toBe(true);
   });
 });
+
+describe('verifyPasswordBounded (P8 / G6)', async () => {
+  const { verifyPasswordBounded, _passwordVerifyGateForTest } = await import('./password.js');
+  it('verifies like verifyPassword and releases its slot', async () => {
+    const hash = await hashPassword('bounded secret');
+    expect(await verifyPasswordBounded('bounded secret', hash)).toBe(true);
+    expect(await verifyPasswordBounded('wrong', hash)).toBe(false);
+    expect(await verifyPasswordBounded('x', null)).toBe(false);
+    expect(_passwordVerifyGateForTest()).toMatchObject({ active: 0, queued: 0 });
+  });
+  it('refuses with busy (never false) once the bounded queue is full, then drains', async () => {
+    const hash = await hashPassword('flood');
+    const { maxConcurrent, maxQueued } = _passwordVerifyGateForTest();
+    const results = await Promise.all(Array.from({ length: maxConcurrent + maxQueued + 5 }, () => verifyPasswordBounded('flood', hash)));
+    expect(results.filter((r) => r === 'busy')).toHaveLength(5);
+    expect(results.filter((r) => r === true)).toHaveLength(maxConcurrent + maxQueued);
+    expect(_passwordVerifyGateForTest()).toMatchObject({ active: 0, queued: 0 });
+  }, 60_000);
+});

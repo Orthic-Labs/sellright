@@ -5,14 +5,14 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/password.js';
+import { hashPassword, passwordNeedsRehash, verifyPasswordBounded } from '../auth/password.js';
 import { customerToken, resolveLegacySession, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
 import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity } from '../auth/google.js';
 import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
 import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, legacyCustomerToken, clearReadableLegacyToken, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
-import { checkEmailRetryAfter, clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { checkEmailRetryAfter, clientIp, customerAuthIpRetryAfter, loginRetryAfter, recordCustomerAuthIpFailure, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -86,7 +86,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/register',
     summary: 'Register a customer account',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string().min(8), firstName: z.string().optional(), lastName: z.string().optional(), turnstileToken: z.string().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().max(254).email(), password: z.string().min(8).max(1024), firstName: z.string().max(100).optional(), lastName: z.string().max(100).optional(), turnstileToken: z.string().max(2048).optional() }) } } } },
     responses: {
       200: { description: 'Registered', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -102,7 +102,7 @@ auth.openapi(
     // bucket (NOT per-account — an attacker could lock a real customer out).
     const regIp = clientIp(c);
     const regBucket = `register:${regIp}:${email}`;
-    const regRetry = await loginRetryAfter(regIp, regBucket);
+    const regRetry = Math.max(await customerAuthIpRetryAfter(regIp), await loginRetryAfter(regIp, regBucket));
     if (regRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${regRetry}s`);
     // PAR-06: server-side Turnstile when the store config carries a secret.
     if (!(await turnstileOk(st.config, turnstileToken, regIp))) {
@@ -126,7 +126,7 @@ auth.openapi(
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
       return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName };
     });
-    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return errJson(c, 409, 'EMAIL_TAKEN', 'email already registered'); }
+    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); await recordCustomerAuthIpFailure(regIp); return errJson(c, 409, 'EMAIL_TAKEN', 'email already registered'); }
     await clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: { id: out.id, email, title: null, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
@@ -139,12 +139,13 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/login',
     summary: 'Log in',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional(), rememberMe: z.boolean().default(true) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().max(254).email(), password: z.string().max(1024), turnstileToken: z.string().max(2048).optional(), rememberMe: z.boolean().default(true) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
       403: { description: 'Bot check failed or email not verified', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.literal('not_verified').optional() }) } } },
       429: { description: 'Too many attempts', content: { 'application/json': { schema: apiErrorSchema() } } },
+      503: { description: 'Sign-in temporarily saturated; retry', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -152,28 +153,51 @@ auth.openapi(
     const { email: rawEmail, password, turnstileToken, rememberMe } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = await loginRetryAfter(ip, email);
+    // G6: the per-address aggregate first (a spray over many e-mails), then the (ip, e-mail) pair.
+    const retry = Math.max(await customerAuthIpRetryAfter(ip), await loginRetryAfter(ip, email));
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
       await recordLoginFailure(ip, email);
+      await recordCustomerAuthIpFailure(ip);
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
+    // C6 (P8): the expensive password verification (and any rehash) runs OUTSIDE the transaction, so a slow hash never
+    // holds the customer row lock or a pooled connection. The transaction below then locks the row and accepts the
+    // login only if the stored hash is still the exact one that was verified — a password reset / change that commits
+    // in between makes this login fail instead of resurrecting the old password.
+    const candidate = await withStore(st.id, async (tx) => {
+      const [row] = await tx.select({ id: s.customer.id, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      return row ?? null;
+    });
+    const verified = candidate ? await verifyPasswordBounded(password, candidate.passwordHash) : false;
+    if (verified === 'busy') {
+      c.header('Retry-After', '2');
+      return errJson(c, 503, 'BUSY', 'sign-in is busy — try again in a moment');
+    }
+    if (!candidate || !verified || !candidate.passwordHash) {
+      await recordLoginFailure(ip, email);
+      await recordCustomerAuthIpFailure(ip);
+      return errJson(c, 401, 'INVALID_CREDENTIALS', 'invalid email or password');
+    }
+    const verifiedHash = candidate.passwordHash;
+    // Keep the native password format on the current Argon2id work factor. This upgrades SellRight's pre-Argon2
+    // scrypt hashes and future lower-cost Argon2 hashes only after the supplied password has been verified.
+    let rehashTo: string | undefined;
+    if (passwordNeedsRehash(verifiedHash)) {
+      try { rehashTo = await hashPassword(password); } catch { /* retried on the next sign-in */ }
+    }
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; ttlMs: number; customer: z.infer<typeof CustomerOut> }> => {
-      // Serialize credential verification, rehash & session creation with password
-      // reset & email change, which lock this customer first.
-      // A change that wins the lock is rechecked by this email-scoped read;
-      // a login that wins commits its session before reset can revoke it.
-      const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, title: s.customer.title, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
-      if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
+      // Serialize the credential recheck, rehash & session creation with password reset & email change, which lock
+      // this customer first. A change that wins the lock is caught by the email-scoped read + hash comparison; a
+      // login that wins commits its session before the reset can revoke it.
+      const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, title: s.customer.title, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(and(eq(s.customer.id, candidate.id), eq(s.customer.email, email))).limit(1).for('update');
+      if (!cust || cust.passwordHash !== verifiedHash) return { ok: false };
 
-      // Keep the native password format on the current Argon2id work factor.
-      // This upgrades SellRight's pre-Argon2 scrypt hashes and future lower-cost
-      // Argon2 hashes only after the supplied password has been verified.
-      if (passwordNeedsRehash(cust.passwordHash)) {
+      if (rehashTo) {
         // 0108: an in-place rehash keeps the customer's passkeys — the transaction-local flag tells the
         // customer_security_epoch trigger not to bump the epoch for this representation change (design §4).
         await tx.execute(sql`SELECT set_config('app.passkey_rehash', '1', true)`);
-        await tx.update(s.customer).set({ passwordHash: await hashPassword(password), updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
+        await tx.update(s.customer).set({ passwordHash: rehashTo, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
       }
 
       // SEC: the password matched, but the account was never proven to own its
@@ -186,7 +210,8 @@ auth.openapi(
       const token = await createSession(tx, st.id, cust.id, policy);
       return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
-    if (out.ok === false) { await recordLoginFailure(ip, email); return errJson(c, 401, 'INVALID_CREDENTIALS', 'invalid email or password'); }
+    // The credential changed between verification and the lock: refuse, but this is not a guess — no failure recorded.
+    if (out.ok === false) return errJson(c, 401, 'INVALID_CREDENTIALS', 'invalid email or password');
     if (out.ok === 'not_verified') {
       // A correct password DOES clear the login-failure counter here — this is
       // a legitimate credential, just an unverified account — so a real user
@@ -213,7 +238,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/resend-verification',
     summary: 'Resend the email verification link',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().max(254).email(), turnstileToken: z.string().max(2048).optional() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -341,7 +366,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/google',
     summary: 'Sign in with Google',
-    request: { body: { content: { 'application/json': { schema: z.object({ credential: z.string().min(20) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ credential: z.string().min(20).max(16384) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       202: { description: 'Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
@@ -504,7 +529,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/apple',
     summary: 'Sign in with Apple',
-    request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20).max(16384) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
@@ -575,7 +600,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/magic-link/request',
     summary: 'Request a passwordless sign-in link',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), turnstileToken: z.string().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().max(254).email(), turnstileToken: z.string().max(2048).optional() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -625,7 +650,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/magic-link/consume',
     summary: 'Exchange a magic-link token for a session',
-    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20).max(512) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       409: { description: 'Invalid/expired/used or not enabled', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -692,7 +717,7 @@ auth.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/auth/check-email',
     summary: 'Check if an email is already registered (rate-limited)',
-    request: { query: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional(), honeypot: z.string().max(1024).optional() }) },
+    request: { query: z.object({ email: z.string().max(254).email(), turnstileToken: z.string().max(2048).optional(), honeypot: z.string().max(1024).optional() }) },
     responses: {
       // needsPasswordSetup: the account exists but has no password (imported
       // from another platform) — the storefront offers "set your password"

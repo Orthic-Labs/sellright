@@ -35,3 +35,19 @@ describe('isAllowedOriginHost', () => {
     expect(isAllowedOriginHost('localhost', ['localhost'], false)).toBe(true);
   });
 });
+
+describe('parseShopCorsOrigin (P8 / G12c)', async () => {
+  const { parseShopCorsOrigin } = await import('./cors-origins.js');
+  it('production: https on the default port only, bare origins only', () => {
+    expect(parseShopCorsOrigin('https://Shop.Example', false)).toBe('shop.example');
+    expect(parseShopCorsOrigin('http://shop.example', false)).toBeNull();
+    expect(parseShopCorsOrigin('https://shop.example:8443', false)).toBeNull();
+    expect(parseShopCorsOrigin('https://shop.example/path', false)).toBeNull();
+    expect(parseShopCorsOrigin('null', false)).toBeNull();
+    expect(parseShopCorsOrigin('not a url', false)).toBeNull();
+  });
+  it('non-production also allows http and dev ports', () => {
+    expect(parseShopCorsOrigin('http://localhost:5173', true)).toBe('localhost');
+    expect(parseShopCorsOrigin('ftp://shop.example', true)).toBeNull();
+  });
+});

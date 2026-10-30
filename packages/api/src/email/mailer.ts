@@ -36,6 +36,39 @@ let forbiddenSenderDomainsCache: ReturnType<typeof parseSenderDomainList> | unde
 const forbiddenSenderDomains = (): ReturnType<typeof parseSenderDomainList> =>
   (forbiddenSenderDomainsCache ??= parseSenderDomainList(env.FORBIDDEN_SENDER_DOMAINS));
 
+/**
+ * A2 (perf plan P6): explicit SMTP workflow deadlines. nodemailer's defaults are
+ * 2 min to connect, 30 s for the greeting and 10 min of socket inactivity, so one
+ * stalled relay could hold an email-outbox pass (and its job slot) for minutes.
+ * These bound every phase; SMTP_SEND_DEADLINE_MS bounds the whole send (DNS +
+ * connect + TLS + AUTH + DATA) even if a phase timer never fires. A deadline hit
+ * is an UNKNOWN outcome (the relay may have accepted the DATA): it is reported as
+ * a failed delivery so the outbox's own backoff/dead-letter applies. SMTP cannot be
+ * made exactly-once by a timeout; a rare duplicate is preferred to a pinned worker.
+ */
+export const SMTP_TIMEOUTS = {
+  dnsTimeout: 10_000,
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 20_000,
+} as const;
+export const SMTP_SEND_DEADLINE_MS = 45_000;
+
+/** Resolve `send` or fail after `ms`; the late promise is observed so it can't surface as an unhandled rejection. */
+async function withSendDeadline<T>(send: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`smtp_deadline_exceeded after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  send.catch(() => undefined);
+  try {
+    return await Promise.race([send, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 let cachedGlobal: Transporter | null = null;
 function globalTransport(): Transporter | null {
   if (!smtpEnabled()) return null;
@@ -45,6 +78,7 @@ function globalTransport(): Transporter | null {
     port: env.SMTP_PORT,
     secure: env.SMTP_PORT === 465,
     auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+    ...SMTP_TIMEOUTS,
   });
   return cachedGlobal;
 }
@@ -85,6 +119,7 @@ async function resolveTransport(storeId?: string): Promise<{ tx: Transporter; fr
       tx: nodemailer.createTransport({
         host: cfg.host, port: cfg.port, secure: cfg.secure,
         auth: cfg.user ? { user: cfg.user, pass: credential.value } : undefined,
+        ...SMTP_TIMEOUTS,
       }),
       from: cfg.from,
     };
@@ -115,7 +150,7 @@ export async function sendEmail(input: SendEmailInput, storeId?: string): Promis
   try {
     // `from` last: a caller passing `from: undefined` (key present) must not
     // blank the resolved sender — the spread order here previously let it win.
-    await tx.sendMail({ ...input, from });
+    await withSendDeadline(tx.sendMail({ ...input, from }), SMTP_SEND_DEADLINE_MS);
     return { delivered: true };
   } catch (e) {
     logErr.error('email error', e, { to: input.to, subject: input.subject });

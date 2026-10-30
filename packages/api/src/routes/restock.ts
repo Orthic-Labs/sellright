@@ -231,6 +231,10 @@ async function processRestockTx(
   storeId: string,
   variantId: string,
   store: { name: string; currency: string; config?: unknown },
+  /** D5: max rows claimed per lane in this transaction (sweep path). When either
+   *  lane fills its cap the variant is re-queued as a fresh restock_event, so the
+   *  rest of a large waitlist drains in later, equally small transactions. */
+  cap?: number,
 ): Promise<number> {
   // Guard: only notify when the variant is actually available right now.
   // Makes this safe to invoke on any stock write — an OOS→OOS or
@@ -252,11 +256,21 @@ async function processRestockTx(
   const storefront = appValue(env.STOREFRONT_URL_BY_APP, info.app_key) ?? env.STOREFRONT_URL;
   const fromEmail = appValue(env.EMAIL_FROM_BY_APP, info.app_key) ?? env.SMTP_FROM;
 
-  const claimed = await tx.execute(
-    sql`UPDATE restock_request
-        SET status = 'notified', notified_at = now(), updated_at = now()
-        WHERE variant_id = ${variantId} AND store_id = ${storeId} AND status = 'pending'
-        RETURNING email, product_name, variant_name, product_slug, token`,
+  const claimed = await tx.execute(cap
+    ? sql`UPDATE restock_request
+          SET status = 'notified', notified_at = now(), updated_at = now()
+          WHERE id IN (
+            SELECT id FROM restock_request
+            WHERE variant_id = ${variantId} AND store_id = ${storeId} AND status = 'pending'
+            ORDER BY created_at, id
+            LIMIT ${cap}
+            FOR UPDATE SKIP LOCKED
+          ) AND status = 'pending'
+          RETURNING email, product_name, variant_name, product_slug, token`
+    : sql`UPDATE restock_request
+          SET status = 'notified', notified_at = now(), updated_at = now()
+          WHERE variant_id = ${variantId} AND store_id = ${storeId} AND status = 'pending'
+          RETURNING email, product_name, variant_name, product_slug, token`,
   );
   const ctx = { name: store.name, currency: store.currency, storefrontUrl: storefront, fromEmail };
   for (const row of claimed.rows as Array<{ email: string; product_name: string; variant_name: string; product_slug: string; token: string }>) {
@@ -280,11 +294,21 @@ async function processRestockTx(
   // notification and makes re-sending structurally impossible; a later
   // re-signup goes through the normal re-consent path.
   const topic = `restock:${variantId}`;
-  const claimedSubs = await tx.execute(
-    sql`UPDATE subscriber
-        SET status = 'unsubscribed', unsubscribed_at = now(), updated_at = now()
-        WHERE store_id = ${storeId} AND kind = 'waitlist' AND topic = ${topic} AND status = 'confirmed'
-        RETURNING id, email, signup_group`,
+  const claimedSubs = await tx.execute(cap
+    ? sql`UPDATE subscriber
+          SET status = 'unsubscribed', unsubscribed_at = now(), updated_at = now()
+          WHERE id IN (
+            SELECT id FROM subscriber
+            WHERE store_id = ${storeId} AND kind = 'waitlist' AND topic = ${topic} AND status = 'confirmed'
+            ORDER BY created_at, id
+            LIMIT ${cap}
+            FOR UPDATE SKIP LOCKED
+          ) AND status = 'confirmed'
+          RETURNING id, email, signup_group`
+    : sql`UPDATE subscriber
+          SET status = 'unsubscribed', unsubscribed_at = now(), updated_at = now()
+          WHERE store_id = ${storeId} AND kind = 'waitlist' AND topic = ${topic} AND status = 'confirmed'
+          RETURNING id, email, signup_group`,
   );
   const subRows = claimedSubs.rows as Array<{ id: string; email: string; signup_group: string | null }>;
   // Imported product-level signups expand to one row per variant topic, all
@@ -331,6 +355,17 @@ async function processRestockTx(
     subsNotified++;
   }
 
+  // D5: a lane that filled its cap may have more rows waiting — re-queue the
+  // variant (same partial-unique key the stock trigger uses; the event this
+  // transaction claimed is already processed, so there is no conflict unless the
+  // trigger queued a fresh one meanwhile, which serves the same purpose).
+  if (cap && (claimed.rows.length >= cap || subRows.length >= cap)) {
+    await tx.execute(
+      sql`INSERT INTO restock_event (store_id, variant_id) VALUES (${storeId}, ${variantId})
+          ON CONFLICT (variant_id) WHERE processed_at IS NULL DO NOTHING`,
+    );
+  }
+
   return claimed.rows.length + subsNotified;
 }
 
@@ -351,39 +386,55 @@ export async function notifyRestock(storeId: string, variantId: string): Promise
   return n;
 }
 
+/** D5: events claimed per transaction, and rows claimed per lane per variant. */
+export const RESTOCK_EVENTS_PER_TX = 20;
+export const RESTOCK_ROWS_PER_VARIANT = 200;
+
 /**
- * Drain the restock_event queue written by the `stock` trigger. Per store:
- * claim pending events and process each variant inside the same transaction,
- * so a crash mid-sweep rolls back both the claim and the email enqueues —
- * nothing is half-applied. Returns {events, notified} for the scheduler log.
+ * Drain the restock_event queue written by the `stock` trigger. Per store, in
+ * small transactions (D5, perf plan P6): each claims at most
+ * RESTOCK_EVENTS_PER_TX pending events and processes those variants inside the
+ * same transaction, so a crash rolls back both the claim and its email
+ * enqueues — nothing is half-applied — while no transaction spans the whole
+ * `limit` of variants and their waitlists. A variant with more than
+ * RESTOCK_ROWS_PER_VARIANT waiting rows per lane is re-queued and continues in
+ * a later transaction. Returns {events, notified} for the scheduler log.
  */
-export async function sweepRestockEvents(opts: { limit?: number } = {}): Promise<{ events: number; notified: number }> {
+export async function sweepRestockEvents(opts: { limit?: number; perTx?: number; perVariant?: number } = {}): Promise<{ events: number; notified: number }> {
   const limit = Math.min(Math.max(1, opts.limit ?? 200), 1000);
+  const perTx = Math.max(1, Math.floor(opts.perTx ?? RESTOCK_EVENTS_PER_TX));
+  const perVariant = Math.max(1, Math.floor(opts.perVariant ?? RESTOCK_ROWS_PER_VARIANT));
   const stores = await pool.query<{ id: string; name: string; currency: string; config: unknown }>('SELECT id, name, currency, config FROM store');
   let events = 0;
   let notified = 0;
   for (const st of stores.rows) {
-    const res = await withStore(st.id, async (tx) => {
-      const claimed = await tx.execute(
-        sql`UPDATE restock_event SET processed_at = now()
-            WHERE id IN (
-              SELECT id FROM restock_event
-              WHERE processed_at IS NULL
-              ORDER BY created_at
-              LIMIT ${limit}
-              FOR UPDATE SKIP LOCKED
-            )
-            RETURNING variant_id`,
-      );
-      const variantIds = [...new Set((claimed.rows as Array<{ variant_id: string }>).map((r) => r.variant_id))];
-      let n = 0;
-      for (const variantId of variantIds) {
-        n += await processRestockTx(tx, st.id, variantId, st);
-      }
-      return { events: claimed.rows.length, notified: n };
-    });
-    events += res.events;
-    notified += res.notified;
+    let storeEvents = 0;
+    while (storeEvents < limit) {
+      const take = Math.min(perTx, limit - storeEvents);
+      const res = await withStore(st.id, async (tx) => {
+        const claimed = await tx.execute(
+          sql`UPDATE restock_event SET processed_at = now()
+              WHERE id IN (
+                SELECT id FROM restock_event
+                WHERE processed_at IS NULL
+                ORDER BY created_at, id
+                LIMIT ${take}
+                FOR UPDATE SKIP LOCKED
+              )
+              RETURNING variant_id`,
+        );
+        const variantIds = [...new Set((claimed.rows as Array<{ variant_id: string }>).map((r) => r.variant_id))];
+        let n = 0;
+        for (const variantId of variantIds) {
+          n += await processRestockTx(tx, st.id, variantId, st, perVariant);
+        }
+        return { events: claimed.rows.length, notified: n };
+      });
+      storeEvents += res.events;
+      notified += res.notified;
+      if (res.events < take) break; // queue drained for this store
+    }
+    events += storeEvents;
   }
   if (events > 0) log.info('restock sweep', { events, notified });
   return { events, notified };
