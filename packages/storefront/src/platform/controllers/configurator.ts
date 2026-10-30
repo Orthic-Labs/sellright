@@ -2,7 +2,7 @@
 // live stock read (stock-read.ts), the purchase state and the add. Every action goes through `dispatch` (callbacks.ts): validated
 // against this store, applied in call order, a result rebuilt from its fixed schema. A forged or out-of-range call returns `invalid`
 // (or `not-eligible` for an add) with no state change and no request.
-import { $, useContext, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, untrack, useContext, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
@@ -40,6 +40,22 @@ export const ADD_RESULTS: DispatchResults<AddResult> = {
  */
 export type ConfiguratorLoaderValue = BrandProductDetail | ConfiguratorDetail | HomeSpotlightDetail | null;
 
+/**
+ * Reads a loader outside a render (a document-event or bfcache handler). After resume a route loader's value can still be loading in
+ * the browser, and reading `.value` then throws the loading promise: unhandled in an event handler, it surfaced as
+ * "Uncaught (in promise) Promise" and the automatic stock read never ran. Wait for it and read again (the router's `whenReady`).
+ */
+export async function whenLoaded<T>(read: () => T): Promise<T> {
+	for (;;) {
+		try {
+			return untrack(read);
+		} catch (error) {
+			if (!(error instanceof Promise)) throw error;
+			await error.catch(() => {});
+		}
+	}
+}
+
 export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>, mode: ConfiguratorMode) {
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
@@ -59,8 +75,8 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	});
 
 	/** The view's automatic read (direct load: qidle; SPA navigation: the task below). One per view, whichever fires first. */
-	const load = $(() => {
-		const source = sourceOf(loader.value, mode);
+	const load = $(async () => {
+		const source = await whenLoaded(() => sourceOf(loader.value, mode));
 		const started = requestLoad(ctl, source.products.map((p) => p.slug), fetchProductStock);
 		if (started && mode === 'product') {
 			const p = source.products[0];
@@ -95,7 +111,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	// The automatic read's document event: the PDP follows pdp.stockRefreshTrigger, the shop and the home spotlight stay on qidle.
 	useStockTrigger(mode === 'product' ? 'pdp' : 'shop', load);
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
-	const reread = $(() => { void readStock(ctl, sourceOf(loader.value, mode).products.map((p) => p.slug), fetchProductStock); });
+	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(loader.value, mode))).products.map((p) => p.slug), fetchProductStock); });
 	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
 	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
 
