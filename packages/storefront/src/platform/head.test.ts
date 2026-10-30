@@ -213,14 +213,14 @@ describe('analytics: CSP and the GTM loader', () => {
 		expect(analyticsCsp(null)).toBeUndefined();
 		const csp = analyticsCsp({ provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied' })!;
 		expect(csp.script).toEqual(['https://*.googletagmanager.com']);
-		expect(csp.connect).toEqual(['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com']);
+		expect(csp.connect).toEqual(['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', 'https://*.google.com', 'https://*.g.doubleclick.net']);
 		expect(buildCsp({ nonce: 'n', analytics: csp })).not.toContain('unsafe-eval');
 	});
 
 	it('adds the OpenAI pixel origins only when the brand opts in', () => {
 		const csp = analyticsCsp({ provider: 'gtm', containerId: 'GTM-ABC123', consent: 'implied', adPlatforms: ['openai'] })!;
 		expect(csp.script).toEqual(['https://*.googletagmanager.com', 'https://bzrcdn.openai.com']);
-		expect(csp.connect).toEqual(['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', 'https://bzr.openai.com', 'https://bzrcdn.openai.com']);
+		expect(csp.connect).toEqual(['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', 'https://*.google.com', 'https://*.g.doubleclick.net', 'https://bzr.openai.com', 'https://bzrcdn.openai.com']);
 		const policy = buildCsp({ nonce: 'n', analytics: csp });
 		expect(policy).not.toContain('unsafe-eval');
 		expect(policy.split('; ').find((d) => d.startsWith('script-src'))).not.toContain('unsafe-inline');

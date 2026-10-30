@@ -13,13 +13,17 @@ export interface AnalyticsCsp {
  */
 export const OPENAI_PIXEL_CSP = { script: ['https://bzrcdn.openai.com'], connect: ['https://bzr.openai.com', 'https://bzrcdn.openai.com'] } as const;
 
-/** CSP additions for the declared analytics (Google's GTM CSP guide, checked 2026-10-12) and any opted-in ad platform. No `unsafe-eval`. */
+/**
+ * CSP additions for the declared analytics and any opted-in ad platform. No `unsafe-eval`. GA4 hosts from Google's tag CSP guide
+ * (developers.google.com/tag-platform/security/guides/csp, checked 2026-10-30), limited to the ones the stores call: with Google signals
+ * on, g/collect also goes to analytics.google.com, www.google.com and stats.g.doubleclick.net (all blocked live on Damned, #407).
+ */
 export function analyticsCsp(analytics: BrandHeadSpec['analytics'] | undefined): AnalyticsCsp | undefined {
 	if (!analytics) return undefined;
 	const openai = analytics.adPlatforms?.includes('openai') ?? false;
 	return {
 		script: ['https://*.googletagmanager.com', ...(openai ? OPENAI_PIXEL_CSP.script : [])],
-		connect: ['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', ...(openai ? OPENAI_PIXEL_CSP.connect : [])],
+		connect: ['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com', 'https://*.google.com', 'https://*.g.doubleclick.net', ...(openai ? OPENAI_PIXEL_CSP.connect : [])],
 	};
 }
 
