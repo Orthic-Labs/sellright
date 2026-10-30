@@ -135,6 +135,15 @@ const listenHost=demoBindHost(process.env.DEMO_BIND_HOST);
 // host or containers on the same private bridge, never from the internet;
 // real public traffic always arrives with Host: demo.sellright.cc, which
 // nginx sets explicitly regardless of what address it dialed).
+// Rate-limit key: the visitor's real address. nginx (loopback or the docker bridge) sends X-Real-IP, restored from
+// CF-Connecting-IP for Cloudflare ranges only; any other peer is keyed on its own socket address. Before this, every public
+// request shared nginx's address and one busy client could 429 the whole demo.
+const LOCAL_PROXY=/^(::ffff:)?(127\.|172\.(1[6-9]|2\d|3[01])\.)/;
+function visitorKey(req){
+  const peer=req.socket.remoteAddress??'unknown';
+  const real=String(req.headers['x-real-ip']??'').trim();
+  return LOCAL_PROXY.test(peer)&&/^[0-9a-fA-F:.]{3,45}$/.test(real)?real:peer;
+}
 const server=createServer(async(req,res)=>{
   res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Referrer-Policy','same-origin');
@@ -144,7 +153,7 @@ const server=createServer(async(req,res)=>{
     const url=new URL(req.url??'/','http://'+req.headers.host);
     if(!allowedDemoHost(url.hostname,listenHost))return json(403,{error:'Unknown demo host'});
     const method=req.method??'GET';const mutation=!['GET','HEAD'].includes(method);
-    const key=req.socket.remoteAddress??'unknown';const minute=Math.floor(Date.now()/60000);
+    const key=visitorKey(req);const minute=Math.floor(Date.now()/60000);
     if(traffic.size>2000)traffic.clear();
     const previous=traffic.get(key);const hits=previous?.minute===minute?previous.hits+1:1;
     traffic.set(key,{minute,hits});
