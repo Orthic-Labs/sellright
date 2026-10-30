@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { postalLookupPatch } from './address-form-utils';
+import { countryChangeClearPatch, postalLookupPatch } from './address-form-utils';
 
 const base = {
 	current: { city: '', province: '' },
@@ -34,5 +34,21 @@ describe('postalLookupPatch', () => {
 	it('skips empty or missing result values', () => {
 		expect(postalLookupPatch({ ...base, result: { city: '', province: 'NV' } })).toEqual({ province: 'NV' });
 		expect(postalLookupPatch({ ...base, result: {} })).toEqual({});
+	});
+});
+
+describe('countryChangeClearPatch', () => {
+	it('blanks city and state the lookup filled (IN 110001 then GB must not keep Central Delhi / Delhi)', () => {
+		const current = { city: 'Central Delhi', province: 'Delhi' };
+		expect(countryChangeClearPatch({ current, autofilled: { ...current } })).toEqual({ city: '', province: '' });
+	});
+
+	it('keeps values the shopper typed or changed after the lookup', () => {
+		expect(countryChangeClearPatch({ current: { city: 'Leeds', province: '' }, autofilled: {} })).toEqual({});
+		expect(countryChangeClearPatch({ current: { city: 'New Delhi', province: 'Delhi' }, autofilled: { city: 'Central Delhi', province: 'Delhi' } })).toEqual({ province: '' });
+	});
+
+	it('does nothing to empty fields', () => {
+		expect(countryChangeClearPatch({ current: { city: '', province: '' }, autofilled: { city: 'Reno' } })).toEqual({});
 	});
 });

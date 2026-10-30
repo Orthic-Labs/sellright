@@ -13,6 +13,7 @@ import {
  ValidationErrors,
  isShippingAddressFieldsValid,
  normalizeShippingAddress,
+ countryChangeClearPatch,
  postalLookupPatch,
  validateAddressField,
 } from './address-form-utils';
@@ -57,6 +58,8 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	// Fields the shopper has typed into themselves: a postal lookup must never replace those.
 	const userEdited = useStore<Record<string, boolean>>({});
 	const postalLookupSeq = useSignal(0);
+	// What the last postal lookup wrote, so a country change can blank exactly those values and nothing typed.
+	const autofilled = useStore<Partial<Record<'city' | 'province', string>>>({});
 
 	// Not run-once: the qwikloader re-dispatches `qinit` to any element that re-acquires the listener after boot, so
 	// this fires again when the payment panel re-renders after PLACE ORDER. guestRestorePatch only ever fills empty
@@ -287,6 +290,25 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 			if (el && el.value !== patch[field]) el.value = patch[field]!;
 			if (touchedFields.value.has(field)) validateField$(field, patch[field]!, localCountryCode.value || 'US');
 		}
+		Object.assign(autofilled, patch);
+		localFormData.value = { ...localFormData.value, ...patch };
+		scheduleSync$();
+	});
+
+	const clearAutofilled$ = $(() => {
+		const live = (field: 'city' | 'province') => {
+			const el = document.getElementById(field) as HTMLInputElement | null;
+			return el ? el.value : localFormData.value[field];
+		};
+		const patch = countryChangeClearPatch({ current: { city: live('city'), province: live('province') }, autofilled });
+		delete autofilled.city;
+		delete autofilled.province;
+		const fields = Object.keys(patch) as Array<'city' | 'province'>;
+		if (fields.length === 0) return;
+		for (const field of fields) {
+			const el = document.getElementById(field) as HTMLInputElement | null;
+			if (el) el.value = '';
+		}
 		localFormData.value = { ...localFormData.value, ...patch };
 		scheduleSync$();
 	});
@@ -328,8 +350,9 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 								countries={appState.availableCountries}
 								class={getSelectClasses()}
 								disabled={isReviewMode}
-								onChange$={$((value: string) => {
+								onChange$={$(async (value: string) => {
 									handleInputChange$('countryCode', value);
+									await clearAutofilled$();
 									if (localFormData.value.postalCode) {
 										runPostalLookup$(localFormData.value.postalCode, value);
 									}
