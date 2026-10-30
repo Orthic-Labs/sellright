@@ -33,9 +33,11 @@ describe('lookupPostal', () => {
 		expect(await lookupPostal('IN', '999999', { zipDb, fetch: reply(200, [{ Status: 'Error', PostOffice: null }]) })).toBeNull();
 	});
 
-	it('other countries: zippopotam.us, numeric state abbreviation falls back to the name', async () => {
+	it('other countries: zippopotam.us, the full region name, never a code like FR "A8" or PT "15"', async () => {
 		const fetch = reply(200, { places: [{ 'place name': 'Setúbal', state: 'Setúbal', 'state abbreviation': '15' }] });
 		expect(await lookupPostal('PT', '2900-001', { zipDb, fetch })).toEqual({ city: 'Setúbal', province: 'Setúbal' });
+		const fr = reply(200, { places: [{ 'place name': 'Paris 01 Louvre', state: 'Île-de-France', 'state abbreviation': 'A8' }] });
+		expect(await lookupPostal('FR', '75001', { zipDb, fetch: fr })).toEqual({ city: 'Paris 01 Louvre', province: 'Île-de-France' });
 	});
 
 	it('failures are silent: 404, network error, timeout, bad JSON shape -> null', async () => {

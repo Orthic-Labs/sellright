@@ -67,9 +67,9 @@ export async function lookupPostal(
 		const data = (await get(`https://api.zippopotam.us/${cc.toLowerCase()}/${encodeURIComponent(code)}`)) as { places?: Array<{ 'place name'?: string; state?: string; 'state abbreviation'?: string }> } | null;
 		const first = data?.places?.[0];
 		if (!first) return null;
-		// Prefer the 2-letter abbreviation; fall back to the full name when it is numeric or missing (PT returns "15").
+		// The full region name: abbreviations are often internal codes a shopper can't read (FR "A8", PT "15").
 		const abbr = clean(first['state abbreviation']);
-		const province = abbr && !/^\d+$/.test(abbr) ? abbr : clean(first.state) || abbr;
+		const province = clean(first.state) || (/^[A-Z]{2,3}$/.test(abbr) ? abbr : '');
 		const city = clean(first['place name']);
 		return city || province ? { city, province } : null;
 	} catch {
