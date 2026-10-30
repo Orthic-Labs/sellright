@@ -172,6 +172,17 @@ export class CartService {
     this.quoteContext = { ...context };
     this.snapshotSeq++;
   }
+  /** Query + resulting cart revision of the last completed live GET. Lets the checkout skip a pricing read identical to the
+   *  one that just finished (the entry read is the same query); never used to skip a required live check. */
+  private static lastLiveRead: { key: string; revision: number } | null = null;
+  private static liveReadKey(token: string): string {
+    return JSON.stringify([token, { ...this.couponQuery(), shipCountry: this.quoteCountry() }]);
+  }
+  /** True when the last completed live read used exactly the current query and the cart has not changed since. */
+  static currentQuoteAlreadyRead(): boolean {
+    const token = this.readTokenCookie();
+    return !!token && !!this.lastLiveRead && this.lastLiveRead.key === this.liveReadKey(token) && this.lastLiveRead.revision === this.cart.revision;
+  }
   private static quoteCountry(): string {
     return this.quoteContext.shipCountry ?? CountryPreferenceService.getCountry();
   }
@@ -715,7 +726,9 @@ export class CartService {
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
+      const key = this.liveReadKey(token);
       const dropped = this.install(data, token) ?? [];
+      this.lastLiveRead = { key, revision: this.cart.revision };
       return { cart: this.cart, dropped };
     } catch (e) {
       throw this.classify(e, token);
@@ -733,7 +746,9 @@ export class CartService {
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
+      const key = this.liveReadKey(token);
       const dropped = this.install(data, token) ?? [];
+      this.lastLiveRead = { key, revision: this.cart.revision };
       return { cart: this.cart, dropped };
     } catch (e) {
       // Without the lock a cookie must never be cleared: report the missing cart, keep the token.

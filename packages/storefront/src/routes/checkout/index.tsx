@@ -165,12 +165,13 @@ const CheckoutContent = component$(() => {
   });
 
   useTask$(async ({ track, cleanup }) => {
-    const shipping = track(() => JSON.stringify(appState.shippingAddress));
-    const billing = track(() => JSON.stringify(appState.billingAddress));
+    // Only what the pricing read sends (shipCountry, method, points): address edits that do not change the country, and billing
+    // edits, change nothing the API prices on, so they must not start another identical read.
+    const country = track(() => appState.shippingAddress?.countryCode ?? '');
     const method = track(() => shippingMethod.value?.code);
     const points = track(() => redeemPoints.value);
     const shippingPending = track(() => shippingQuotePending.value);
-    const context = JSON.stringify([shipping, billing, method, points]);
+    const context = JSON.stringify([country, method, points]);
     // Replacing an equal address/method object must not erase pending consent or start another quote read.
     const step = pricingReadStep({ context, recorded: quoteFormContext.value, shippingPending });
     if (step === 'same') return;
@@ -186,6 +187,8 @@ const CheckoutContent = component$(() => {
     let cancelled = false;
     cleanup(() => { cancelled = true; });
     if (!CartService.token()) return;
+    // The read that just finished (e.g. the checkout-entry read) already used this exact query on this cart revision.
+    if (CartService.currentQuoteAlreadyRead()) return;
     try {
       await CartService.refresh();
       if (cancelled) return;

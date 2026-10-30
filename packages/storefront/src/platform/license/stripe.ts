@@ -1,4 +1,5 @@
-import { loadStripe, type Stripe } from '@stripe/stripe-js';
+import type { Stripe } from '@stripe/stripe-js';
+import { loadStripe } from '@stripe/stripe-js/pure';
 import { getShopConfig } from './api';
 
 // Lazy Stripe.js: the publishable key of the store's active mode comes from GET /v1/shop/config at runtime (no build env).

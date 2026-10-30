@@ -1,5 +1,6 @@
 import { component$, useSignal, useVisibleTask$, type QRL } from '@qwik.dev/core';
-import { loadStripe, type StripeElements, type StripeExpressCheckoutElement } from '@stripe/stripe-js';
+import type { StripeElements, StripeExpressCheckoutElement } from '@stripe/stripe-js';
+import { loadStripe } from '@stripe/stripe-js/pure';
 import { getExpressQuote } from '~/providers/shop/checkout/checkout';
 import { afterLoadIdleOrInteraction } from '~/utils/load-trigger';
 import {

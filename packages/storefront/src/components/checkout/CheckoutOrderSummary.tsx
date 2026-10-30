@@ -43,7 +43,8 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             <div class="flex flex-col gap-1">
               <span class="text-[11px] font-heading font-normal tracking-[0.08em] uppercase text-[rgba(253,250,246,0.42)]">Your Order</span>
               <span class="text-[26px] font-medium text-[#FDFAF6] tabular-nums leading-none">
-                {props.formattedTotal.value ?? ''}
+                {/* While loading, hold the total's line height so the summary does not grow when it arrives (CLS). */}
+                {props.formattedTotal.value || (props.pageLoading.value ? <span class="inline-block animate-pulse" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" /> : '')}
               </span>
             </div>
             <button
@@ -65,9 +66,11 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         <div class="rounded-lg mt-4 mb-3">
           <div class="px-4 py-3 sm:py-4">
             {props.pageLoading.value ? (
+              // One placeholder per line the cart mirror already knows (at least one), each as tall as a loaded line (152px at
+              // phone width), so the loaded summary does not move the form below it (it shifted 121px, CLS 0.125).
               <div class="space-y-4">
-                {[1, 2].map((i) => (
-                  <div key={i} class="flex gap-3 animate-pulse">
+                {Array.from({ length: Math.max(1, props.localCart.cart.lines?.length ?? 0) }, (_, i) => i).map((i) => (
+                  <div key={i} class="flex gap-3 animate-pulse" style="min-height:152px;">
                     <div style="width:56px;height:56px;border-radius:6px;background:rgba(253,250,246,0.08);flex-shrink:0;" />
                     <div class="flex-1" style="min-width:0;">
                       <div style="height:12px;width:70%;border-radius:4px;background:rgba(253,250,246,0.1);margin-bottom:8px;" />
@@ -101,7 +104,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         )}
         <div class="px-4 pb-4 pt-2">
           {props.pageLoading.value ? (
-            <div class="animate-pulse space-y-3" style="padding-top:4px;">
+            <div class="animate-pulse space-y-3" style="padding-top:4px;min-height:146px;">
               <div class="flex justify-between">
                 <div style="height:10px;width:60px;border-radius:4px;background:rgba(253,250,246,0.08);" />
                 <div style="height:10px;width:48px;border-radius:4px;background:rgba(253,250,246,0.08);" />
