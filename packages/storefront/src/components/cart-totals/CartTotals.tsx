@@ -4,10 +4,13 @@ import { useCart, applyCoupon, removeCoupon, COUPON_MAX_LENGTH, type CartContext
 import { formatPrice } from '~/utils';
 import { TrashIcon, Alert } from '~/platform/gateway';
 import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
+import type { Cart } from '~/sellright/types/cart';
 
 export default component$<{
 	readonly?: boolean;
 	localCart?: CartContextState;
+	/** Display-only cart whose amounts to show instead (checkout's server-read summary, L11). Coupon actions still use the context. */
+	displayCart?: Cart;
 	/** 'rows' = dark sidebar inline rows, 'default' = original style */
 	promoPlacement?: 'rows' | 'default';
 	promoExpandedSignal?: Signal<boolean>;
@@ -17,7 +20,7 @@ export default component$<{
 	 * country entered) — renders a placeholder instead of a guessed number.
 	 */
 	serverShippingCents?: Signal<number | null> | undefined;
-}>(({ readonly = false, localCart, promoPlacement = 'default', promoExpandedSignal, serverShippingCents }) => {
+}>(({ readonly = false, localCart, displayCart, promoPlacement = 'default', promoExpandedSignal, serverShippingCents }) => {
 	const cartState = useCart();
 	const couponCodeSignal = useSignal('');
 	const errorSignal = useSignal('');
@@ -26,7 +29,7 @@ export default component$<{
 	// `localCart` is the same CartContextId singleton as `cartState` in
 	// practice (a caller passing it down is just avoiding a second context
 	// read) — kept as a prop for callers that already thread it through.
-	const cart = useComputed$(() => (localCart ?? cartState).cart);
+	const cart = useComputed$(() => displayCart ?? (localCart ?? cartState).cart);
 
 	const coupons = useComputed$(() => cart.value.coupons ?? []);
 	const subtotal = useComputed$(() => cart.value.subtotal || 0);

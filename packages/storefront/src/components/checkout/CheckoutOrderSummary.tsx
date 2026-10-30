@@ -4,12 +4,18 @@ import CartTotals from '~/components/cart-totals/CartTotals';
 import { LoyaltyRedemptionView, platformAction } from '~/platform/gateway';
 import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
+import type { Cart } from '~/sellright/types/cart';
+import { formatCents } from '~/hooks/checkout-total';
+import { checkoutSummarySource, hasMixedPreOrder } from '~/routes/checkout/summary-cart';
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
   hasMixedPreOrder: { value: boolean };
   localCart: any;
   pageLoading: Signal<boolean>;
+  /** L11: display-only server read of the cart (routes/checkout/summary-cart.ts), shown until the client's entry read lands. */
+  serverCart: ReadonlySignal<Cart | null>;
+  entryReadDone: Signal<boolean>;
   promoExpanded: Signal<boolean>;
   shippingCents: Signal<number | null>;
   /** The loyalty offer projection (platform/controllers/loyalty.ts): null for a guest, a program that is off, or until the account is read. */
@@ -34,7 +40,19 @@ const CheckoutLoyalty = component$<{
   return <LoyaltyRedemptionView {...view} onRedeemToggle$={platformAction('loyalty.redeem-toggle', props.onRedeemToggle$)} />;
 });
 
-export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => (
+export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => {
+  const serverCart = props.serverCart.value;
+  // L11: which cart the summary shows (see checkoutSummarySource): the server read only before the client's entry read lands.
+  const source = checkoutSummarySource({
+    pageLoading: props.pageLoading.value,
+    entryReadDone: props.entryReadDone.value,
+    client: { status: props.localCart.cart.status, lineCount: props.localCart.cart.lines?.length ?? 0 },
+    hasServerCart: !!serverCart,
+  });
+  const shownCart: Cart | undefined = source === 'server' && serverCart ? serverCart : undefined;
+  const formattedTotal = shownCart ? (shownCart.grandTotal > 0 ? formatCents(shownCart.grandTotal) : null) : props.formattedTotal.value;
+  const mixedPreOrder = shownCart ? hasMixedPreOrder(shownCart.lines) : props.hasMixedPreOrder.value;
+  return (
   <div class="checkout-left order-2 lg:order-1 mb-8 lg:mb-0 lg:basis-[42%]">
     <div class="sticky top-4">
       <div class="bg-transparent rounded-none sm:rounded-xl overflow-hidden">
@@ -44,7 +62,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
               <span class="text-[11px] font-heading font-normal tracking-[0.08em] uppercase text-[rgba(253,250,246,0.42)]">Your Order</span>
               <span class="text-[26px] font-medium text-[#FDFAF6] tabular-nums leading-none">
                 {/* While loading, hold the total's line height so the summary does not grow when it arrives (CLS). */}
-                {props.formattedTotal.value || (props.pageLoading.value ? <span class="inline-block animate-pulse" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" /> : '')}
+                {formattedTotal || (props.pageLoading.value ? <span class="inline-block animate-pulse" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" /> : '')}
               </span>
             </div>
             <button
@@ -65,7 +83,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         </div>
         <div class="rounded-lg mt-4 mb-3">
           <div class="px-4 py-3 sm:py-4">
-            {props.pageLoading.value ? (
+            {source === 'skeleton' ? (
               // One placeholder per line the cart mirror already knows (at least one), each as tall as a loaded line (152px at
               // phone width), so the loaded summary does not move the form below it (it shifted 121px, CLS 0.125).
               <div class="space-y-4">
@@ -81,11 +99,11 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
                 ))}
               </div>
             ) : (
-              <CartContents />
+              <CartContents cart={shownCart} />
             )}
           </div>
         </div>
-        {props.hasMixedPreOrder.value && (
+        {mixedPreOrder && (
           <div class="bg-amber-50/10 border border-amber-200/20 rounded-lg mx-4 mb-4 p-4">
             <div class="flex items-start">
               <div class="flex-shrink-0">
@@ -103,7 +121,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
           </div>
         )}
         <div class="px-4 pb-4 pt-2">
-          {props.pageLoading.value ? (
+          {source === 'skeleton' ? (
             <div class="animate-pulse space-y-3" style="padding-top:4px;min-height:146px;">
               <div class="flex justify-between">
                 <div style="height:10px;width:60px;border-radius:4px;background:rgba(253,250,246,0.08);" />
@@ -121,6 +139,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
           ) : (
             <CartTotals
               localCart={props.localCart}
+              displayCart={shownCart}
               promoPlacement="rows"
               promoExpandedSignal={props.promoExpanded}
               serverShippingCents={props.shippingCents}
@@ -131,4 +150,5 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
       </div>
     </div>
   </div>
-));
+);
+});

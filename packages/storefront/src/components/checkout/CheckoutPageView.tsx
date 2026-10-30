@@ -13,6 +13,7 @@ import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
 import type { PayableOrder } from './payable-order';
 import type { ShopConfig } from '~/sellright/types/checkout';
+import type { Cart } from '~/sellright/types/cart';
 import type { CheckoutPhase, PaymentMethod, ResumeView } from '~/hooks/useCheckout';
 import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
@@ -46,6 +47,10 @@ interface CheckoutPageViewProps {
   onResumeRetry$: QRL<() => void>;
   onStartNewCart$: QRL<() => void>;
   pageLoading: Signal<boolean>;
+  /** L11: the route loader's display-only server read of the cart (null = none); see routes/checkout/summary-cart.ts. */
+  serverCart: ReadonlySignal<Cart | null>;
+  /** L11: the client's checkout-entry live read has landed. */
+  entryReadDone: Signal<boolean>;
   paymentInit: PaymentInitState;
   paymentMethod: Signal<PaymentMethod>;
   promoExpanded: Signal<boolean>;
@@ -118,6 +123,8 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
               hasMixedPreOrder={props.hasMixedPreOrder}
               localCart={props.localCart}
               pageLoading={props.pageLoading}
+              serverCart={props.serverCart}
+              entryReadDone={props.entryReadDone}
               promoExpanded={props.promoExpanded}
               loyalty={props.loyalty}
               onRedeemToggle$={props.onRedeemToggle$}

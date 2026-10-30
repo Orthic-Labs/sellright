@@ -8,7 +8,7 @@ import { formatPrice } from '~/utils';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
-import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
+import { isLineAvailable, remainingQuantity, type Cart } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
 import { FreeShippingProgressView, QuantityDropdown, TrashIcon, hasView, platformAction } from '~/platform/gateway';
 import { projectQuantityOptions } from '~/platform/controllers/project';
@@ -28,17 +28,21 @@ const handleProductLinkClick = $((productSlug: string, featuredAssetPreview?: st
 	});
 });
 
-export default component$(() => {
+export default component$<{
+	/** Display-only cart to render instead of the context's (checkout's server-read summary, L11). Actions still use the context. */
+	cart?: Cart;
+}>((props) => {
 
 	const location = useLocation();
 	const appState = useContext(APP_STATE);
 	const cartState = useCart();
+	const shown = props.cart ?? cartState.cart;
 	const currentOrderLineSignal = useSignal<{ id: string; value: number }>();
 	const isCheckoutView = isCheckoutPage(location.url.toString());
 	// A converted cart is an order, not a cart: its lines are read-only.
-	const isConverted = cartState.cart.status === 'converted';
+	const isConverted = shown.status === 'converted';
 	const isInEditableUrl = !isCheckoutView && !isConverted;
-	const currencyCode = cartState.cart.currency || 'USD';
+	const currencyCode = shown.currency || 'USD';
 
 	const productNameCache = useSignal<Record<string, string>>({});
 	const expandedDropdowns = useSignal<Set<string>>(new Set());
@@ -132,7 +136,7 @@ export default component$(() => {
 		<div class="flow-root w-full">
 			<ul class={`divide-y w-full ${isCheckoutView ? 'divide-[rgba(var(--color-accent-rgb),0.25)]' : 'divide-[rgba(17,17,17,0.08)]'}`}>
 				{/* Render native cart lines (the server-owned cart) */}
-				{cartState.cart.lines.map((line) => {
+				{shown.lines.map((line) => {
 					// The server names the product a line belongs to (productName/productSlug); the line's own name is the variant.
 					const productSlug = line.productSlug || line.slug || '';
 					const productName = line.productName ||
@@ -253,11 +257,11 @@ export default component$(() => {
 			{(hasView('cart.free-shipping-progress') || !isCheckoutView) && (
 				<FreeShippingProgressView
 					currencyCode={currencyCode}
-					subtotalCents={cartState.cart.subtotal}
-					lineCount={cartState.cart.lines.length}
+					subtotalCents={shown.subtotal}
+					lineCount={shown.lines.length}
 					isCheckoutView={isCheckoutView}
 					countryCode={shippingCountry(appState.shippingAddress.countryCode)}
-					discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+					discountedSubtotalCents={discountedSubtotalCents(shown.subtotal, shown.discountTotal)}
 					freeShipping={appState.freeShipping ?? null}
 				/>
 			)}

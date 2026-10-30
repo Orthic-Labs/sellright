@@ -34,7 +34,8 @@ import {
   type ServerCart,
 } from '~/sellright/types/cart';
 
-const TOKEN_COOKIE = 'sr_cart';
+/** The cart token cookie (also read server-side by the checkout route's display-only summary read, L11). */
+export const TOKEN_COOKIE = 'sr_cart';
 /** Pre-native cart key, read exactly once for a lossless one-time migration. */
 export const LEGACY_CART_KEY = 'vendure_local_cart';
 const LEGACY_CLAIM_KEY = 'sr_legacy_cart_claim';

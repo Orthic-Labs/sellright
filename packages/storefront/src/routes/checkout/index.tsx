@@ -1,5 +1,5 @@
 import { $, component$, useContext, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
-import { useNavigate } from '@qwik.dev/router';
+import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
@@ -9,7 +9,9 @@ import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { track } from '~/sellright/analytics';
 import { useCart, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
-import { CartService } from '~/services/CartService';
+import { CartService, TOKEN_COOKIE } from '~/services/CartService';
+import { sellright } from '~/sellright/client';
+import { readCheckoutServerCart, serverCartShipCountry } from './summary-cart';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
@@ -34,6 +36,21 @@ import { applyPaymentInitError, applyPaymentProcessingChange } from '~/component
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
+/**
+ * L11: the order summary at first paint. One extra live server-side read of the request's cart (checkout quote), per
+ * document request, never cached (no cacheKey) and bounded by SERVER_CART_TIMEOUT_MS; null on any failure. Display only:
+ * see ./summary-cart.ts. A client loader fetch (SPA navigation, `@loaderId` set) skips it: the client's entry read is then
+ * the only read, exactly as before. Serialized into the (private, no-store) document so a client read never re-fetches it.
+ */
+export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) => {
+  if (sharedMap.has('@loaderId')) return null;
+  return readCheckoutServerCart(
+    (path, init) => sellright().GET(path, init),
+    cookie.get(TOKEN_COOKIE)?.value,
+    serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value),
+  );
+}, { serializationStrategy: 'always' });
+
 interface CheckoutState {
   loading: boolean;
   error: string | null;
@@ -43,6 +60,9 @@ const CheckoutContent = component$(() => {
   const navigate = useNavigate();
   const appState = useContext(APP_STATE);
   const localCart = useCart();
+  const serverCart = useCheckoutServerCart();
+  // L11: the LOCKED checkout-entry live read has landed (the summary then shows the client cart, not the server read).
+  const entryReadDone = useSignal(false);
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
@@ -411,6 +431,7 @@ const CheckoutContent = component$(() => {
     }
     const read = await refreshCartLive(localCart);
     if (!current()) return;
+    entryReadDone.value = true;
     const decision = decideCheckoutEntry({
       status: localCart.cart.status,
       readFailed: read === 'failed',
@@ -883,6 +904,8 @@ const CheckoutContent = component$(() => {
       onResumeRetry$={onResumeRetry$}
       onStartNewCart$={onStartNewCart$}
       pageLoading={pageLoading}
+      serverCart={serverCart}
+      entryReadDone={entryReadDone}
       paymentInit={paymentInit}
       paymentMethod={paymentMethod}
       promoExpanded={promoExpanded}
