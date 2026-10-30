@@ -227,7 +227,7 @@ export function createEdgeHtmlMiddleware(opts: { enabled: boolean; sha256Base64:
 		const write = res.write.bind(res);
 		const end = res.end.bind(res);
 		const toBuffer = (chunk: unknown, enc?: unknown): Buffer =>
-			Buffer.isBuffer(chunk) ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(String(chunk), typeof enc === 'string' ? (enc as BufferEncoding) : 'utf8');
+			Buffer.isBuffer(chunk) ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(String(chunk), typeof enc === 'string' && Buffer.isEncoding(enc) ? enc : 'utf8');
 		const release = (reason: string) => {
 			passthrough = true;
 			res.removeHeader(EDGE_VETO_HEADER);

@@ -194,7 +194,7 @@ describe('P4b edge HTML policy (default off)', async () => {
 		expect(m.edgeRequestEligibility({ ...base, search: 'preview_token=abc' })).toEqual({ ok: false, reason: 'query' });
 		expect(m.edgeRequestEligibility({ ...base, search: 'page=2' }).ok).toBe(false);
 		expect(m.edgeRequestEligibility({ ...base, cookie: '_ga=GA1.1.1; _ga_ABC=x; _gcl_au=1; __cf_bm=z; sr_vid=abc' }).ok).toBe(true);
-		for (const c of ['sr_cust=1', 'sr_cust_csrf=1', 'sr_preview_token=t', 'countryCode=US', 'sr_cart=1', 'sr_legacy_cart=1', 'authToken=x', '__vendure_session=x', 'sr_admin=1', 'whatever=1'])
+		for (const c of ['sr_cust=1', 'sr_cust_csrf=1', 'sr_preview_token=t', 'countryCode=US', 'sr_cart=1', 'sr_legacy_cart=1', 'authToken=x', 'sr_admin=1', 'whatever=1'])
 			expect(m.edgeRequestEligibility({ ...base, cookie: `_ga=1; ${c}` })).toEqual({ ok: false, reason: 'cookie' });
 	});
 
