@@ -25,6 +25,8 @@
           "wordmark": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "string", "maxLength": 40 } },
           "domain": { "$ref": "#/definitions/host" },
           "collection": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 80 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "ogImage": { "type": "string", "pattern": "^https://[^\\s\"<>]+$", "maxLength": 300 },
           "tokens": {
             "type": "object",
             "propertyNames": { "pattern": "^--[a-z][a-z0-9-]{0,40}$" },

@@ -89,6 +89,10 @@ export interface HostVariantSpec {
 	domain: string;
 	/** The catalog collection the variant sells from. Default: the key. */
 	collection?: string;
+	/** Meta/og description of the variant's public pages. Default: a line built from the name. */
+	description?: string;
+	/** Absolute https URL of the share image (PNG/JPEG: social cards ignore SVG). Default: none. */
+	ogImage?: string;
 	/** CSS custom properties set on the variant root, in declaration order. */
 	tokens: Record<string, string>;
 }

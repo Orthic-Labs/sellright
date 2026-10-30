@@ -3,6 +3,7 @@ import { routeLoader$, type DocumentHead } from '@qwik.dev/router';
 import { loadCatalog, type PricedProduct } from '../../catalog';
 import { PricingGrid } from '../../PricingGrid';
 import { useHostVariant } from '../layout';
+import { licensePageHead } from '../../variant';
 
 /** The variant's license catalog, from its collection (Host -> variant -> collection). */
 export const useCatalog = routeLoader$<PricedProduct[]>(async ({ resolveValue }) => loadCatalog((await resolveValue(useHostVariant)).collection));
@@ -19,4 +20,7 @@ export default component$(() => {
 	);
 });
 
-export const head: DocumentHead = ({ resolveValue }) => ({ title: `${resolveValue(useHostVariant).name} — pricing & licenses` });
+export const head: DocumentHead = ({ resolveValue, url }) => {
+	const v = resolveValue(useHostVariant);
+	return licensePageHead(v, `${v.name} — pricing & licenses`, url);
+};

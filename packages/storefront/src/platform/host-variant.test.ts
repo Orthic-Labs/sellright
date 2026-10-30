@@ -33,10 +33,10 @@ describe('host variants', () => {
 
 	it('projects a plain variant: the style keeps the declared token order, defaults fill wordmark and collection', () => {
 		expect(resolveHostVariant('store.beta.app', DATA)).toEqual({
-			key: 'beta', name: 'Beta', wordmark: ['Be', 'ta'], domain: 'beta.app', collection: 'beta-col',
+			key: 'beta', name: 'Beta', wordmark: ['Be', 'ta'], domain: 'beta.app', collection: 'beta-col', description: null, ogImage: null,
 			style: '--accent:#DF3400;--bg:#F7F3EC;--font-display:Tanker;',
 		});
-		expect(resolveHostVariant('alpha.test', DATA)).toEqual({ key: 'alpha', name: 'Alpha', wordmark: ['Alpha', ''], domain: 'alpha.test', collection: 'alpha', style: '' });
+		expect(resolveHostVariant('alpha.test', DATA)).toEqual({ key: 'alpha', name: 'Alpha', wordmark: ['Alpha', ''], domain: 'alpha.test', collection: 'alpha', description: null, ogImage: null, style: '' });
 		expect(variantStyle({})).toBe('');
 	});
 

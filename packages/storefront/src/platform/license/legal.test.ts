@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BrandLicense } from '~/platform/brand-data';
 import { checkoutLegalContract, confirmationLegalLinks, isCheckoutPaused, legalLinks, sellerLine, supportEmailFor } from './legal';
 import { commerceFlowFrom, routesDirFor } from './flow';
-import { fallbackVariant, fmtMoney } from './variant';
+import { fallbackVariant, fmtMoney, licensePageHead } from './variant';
 
 const CONTRACT = { acceptanceVersion: 'a-v1', agreementStatement: 'I agree.', documents: [{ role: 'eula' as const, id: 'x', version: '1.0', sha256: 'a'.repeat(64), url: 'https://a.test/legal/eula/', treatment: 'agree' as const }] };
 const DATA: BrandLicense = {
@@ -53,5 +53,21 @@ describe('license flow build constants', () => {
 		expect(fmtMoney(2900)).toBe('$29');
 		expect(fmtMoney(2950)).toBe('$29.50');
 		expect(fallbackVariant()).toMatchObject({ key: 'store', style: '' });
+	});
+});
+
+describe('licensePageHead', () => {
+	const url = new URL('https://store.example.app/pricing/?x=1');
+	it('emits description, og and twitter tags; og:image only when declared', () => {
+		const v = { ...fallbackVariant(), name: 'Sample' };
+		const head = licensePageHead(v, 'Sample — buy a license', url);
+		const by = (k: string) => head.meta?.find((m) => (m as { name?: string; property?: string }).name === k || (m as { property?: string }).property === k)?.content;
+		expect(by('description')).toBe('Buy a Sample license. Secure checkout; your license key is delivered instantly after payment.');
+		expect(by('og:url')).toBe('https://store.example.app/pricing/');
+		expect(by('og:image')).toBeUndefined();
+		expect(by('twitter:card')).toBe('summary');
+		const withImage = licensePageHead({ ...v, description: 'Own words.', ogImage: 'https://example.app/og.png' }, 'T', url);
+		expect(withImage.meta?.find((m) => (m as { property?: string }).property === 'og:image')?.content).toBe('https://example.app/og.png');
+		expect(withImage.meta?.find((m) => (m as { name?: string }).name === 'description')?.content).toBe('Own words.');
 	});
 });

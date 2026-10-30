@@ -9,6 +9,8 @@ export interface HostVariant {
 	wordmark: [string, string];
 	domain: string;
 	collection: string;
+	description: string | null;
+	ogImage: string | null;
 	/** `--name:value;` for every token, in declaration order: the inline style of the variant root. */
 	style: string;
 }
@@ -33,6 +35,8 @@ function project(spec: HostVariantSpec): HostVariant {
 		wordmark: spec.wordmark ? [spec.wordmark[0], spec.wordmark[1]] : [spec.name, ''],
 		domain: spec.domain,
 		collection: spec.collection ?? spec.key,
+		description: spec.description ?? null,
+		ogImage: spec.ogImage ?? null,
 		style: variantStyle(spec.tokens),
 	};
 }
