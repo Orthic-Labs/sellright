@@ -25,24 +25,37 @@ import type { CatalogListItem } from '~/sellright/types/catalog';
 // stock constant), `deferred`. The grid paints from it in SSR, unfiltered by stock; the browser reads the same manifest snapshot on load
 // through `readShopCatalog` (no-store) and the values (price, availability, the in-stock filter) apply only then. LOCKED layer 2 is
 // otherwise unchanged (manifest on load, the in-stock toggle is the live API hit).
-export const useCatalogLoader = routeLoader$(async ({ error }) => {
+export const useCatalogLoader = routeLoader$(async () => {
  // Brand views PR2: a branded shop reads its listing through useConfiguratorDetail (one generation with the detail products).
  if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false, deferred: false };
- if (shellRender()) {
-  // A failed structure read keeps the previous shell (reserved grid, the browser read fills it): the page still works.
-  const parsed = await loadBrowseCatalog().catch(() => null);
-  return { totalItems: parsed?.totalItems ?? 0, products: parsed ? parsed.products.map(shellShopItem) : [], fallback: false, deferred: true };
- }
- try {
-  // DP-6 (#425): /shop/ is dynamic and its listing is rendered from LIVE stock per request: the catalog list endpoint computes
-  // inStock from stock on_hand/allocated on every call (the same source as /stock), never the manifest snapshot. A failed read is a
-  // 503 (fail closed), never a stale listing.
-  const parsed = await liveBrowseCatalog();
-  return { ...parsed, fallback: false, deferred: false };
- } catch {
-  throw error(503, 'Catalog temporarily unavailable');
- }
+ return shopListing(shellRender(), liveBrowseCatalog, loadBrowseCatalog);
 }, { serializationStrategy: 'always' });
+
+/** The shop listing for one render (exported for tests).
+ *  - shell render: structure only (#412), `deferred` (the browser's read fills values).
+ *  - DP-6 (#425), the normal /shop/ render: the LIVE catalog per request; the list endpoint computes inStock from stock
+ *    on_hand/allocated on every call (the same source as /stock), never the manifest snapshot.
+ *  - a failed live read fails closed on stock only, never takes the page down: the listing renders as the pending shell
+ *    (structure, no price, no availability, nothing purchasable) and `deferred`, so the parse-time stock/catalog read fills it. */
+export async function shopListing(
+ shell: boolean,
+ live: () => Promise<{ totalItems: number; products: CatalogListItem[] }>,
+ structure: () => Promise<{ totalItems: number; products: CatalogListItem[] }>,
+): Promise<{ totalItems: number; products: CatalogListItem[]; fallback: boolean; deferred: boolean }> {
+ const pending = async () => {
+  // A failed structure read keeps the reserved grid (the browser read fills it): the page still works.
+  const parsed = await structure().catch(() => null);
+  return { totalItems: parsed?.totalItems ?? 0, products: parsed ? parsed.products.map(shellShopItem) : [], fallback: false, deferred: true };
+ };
+ if (shell) return pending();
+ try {
+  const parsed = await live();
+  return { ...parsed, fallback: false, deferred: false };
+ } catch (e) {
+  console.error('[shop] live catalog read failed; rendering the pending listing:', e instanceof Error ? e.message : e);
+  return pending();
+ }
+}
 
 /** A shop listing item for the shell (#412): structure only, as an explicit projection (no unknown field can carry a value through),
  *  then redacted (no price, the fail-closed stock constant, never shown as Sold Out while pending). */
