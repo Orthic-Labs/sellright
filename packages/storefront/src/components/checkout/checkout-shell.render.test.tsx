@@ -1,5 +1,6 @@
 // ADR-0001 #412: the /checkout/ shell (SHELL_CACHE=1) paints its form in SSR beside the reserved, cart-free order summary; with the
-// switch off (no marker) the page renders exactly as before: the form's loading skeleton, and the L11 server read when there is one.
+// switch off (no marker) the summary is unchanged (its skeleton, or the L11 server read when there is one) and, since lane A (LCP), the
+// form paints from SSR there too instead of a loading skeleton.
 import { $, component$, useContextProvider, useSignal, useStore } from '@qwik.dev/core';
 import { QwikRouterMockProvider } from '@qwik.dev/router';
 import { ssrRenderToDom } from '@qwik.dev/core/testing';
@@ -114,10 +115,10 @@ describe('/checkout/ shell (#412)', () => {
 		expect(priceFree(page)).toEqual([]);
 	});
 
-	it('switch off, no server read: the form keeps its loading skeleton and the summary its reserved skeleton (unchanged)', async () => {
+	it('switch off, no server read: the form paints in SSR (no skeleton); the summary keeps its reserved skeleton', async () => {
 		const document = await render(null);
-		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeFalsy();
-		expect(document.querySelector('.checkout-form .animate-pulse')).toBeTruthy();
+		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeTruthy();
+		expect(document.querySelector('.checkout-form .mb-3 > .animate-pulse')).toBeFalsy();
 		expect(document.querySelector('.checkout-left')!.innerHTML).toContain('min-height:152px');
 	});
 
@@ -126,7 +127,7 @@ describe('/checkout/ shell (#412)', () => {
 		const summary = document.querySelector('.checkout-left')!.innerHTML;
 		expect(summary).toContain('Server Widget');
 		expect(summary).toContain('45.67');
-		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeFalsy();
+		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeTruthy();
 	});
 
 	it('#412 shell: the live entry read fills the summary as soon as it lands, in the same row boxes, thumbnail at high priority', async () => {
@@ -149,4 +150,31 @@ describe('/checkout/ shell (#412)', () => {
 		expect(img.getAttribute('fetchpriority')).toBeNull();
 		expect(img.getAttribute('decoding')).toBe('async');
 	});
+
+	// Lane A (LCP 20-24 s): the heading and the form's fields are in the SSR markup AND nothing hides them until JS, hydration or a live read.
+	for (const [name, server] of [['switch off, no server read', null], ['switch off, L11 server read', serverRead], ['shell', CHECKOUT_SHELL]] as const) {
+		it(`${name}: the heading and the form fields paint from SSR, with no hidden/opacity-0 wrapper`, async () => {
+			const document = await render(server);
+			const heading = [...document.querySelectorAll('.checkout-form h3')].find((h) => h.textContent?.includes('Shipping Details'));
+			expect(heading).toBeTruthy();
+			const email = document.querySelector(`.checkout-form ${FORM_FIELD}`)!;
+			expect(email).toBeTruthy();
+			expect(document.querySelector('.checkout-form [data-testid="payment-locked"] h2')).toBeTruthy();
+			for (const el of [heading!, email]) expect(hiddenAncestors(el)).toEqual([]);
+		});
+	}
 });
+
+/** Every ancestor (and the element) that would keep it from painting: a hiding class or an inline hiding style. */
+function hiddenAncestors(el: Element): string[] {
+	const found: string[] = [];
+	for (let n: Element | null = el; n; n = n.parentElement) {
+		const cls = ` ${n.getAttribute('class') ?? ''} `;
+		const style = (n.getAttribute('style') ?? '').replace(/\s+/g, '');
+		if (/ (hidden|invisible|opacity-0|sr-only) /.test(cls)) found.push(`${n.tagName}.${cls.trim()}`);
+		if (/display:none|visibility:hidden|opacity:0(?![.\d])|content-visibility:hidden/.test(style)) found.push(`${n.tagName}[style=${style}]`);
+		if (n.hasAttribute('hidden')) found.push(`${n.tagName}[hidden]`);
+	}
+	return found;
+}
+

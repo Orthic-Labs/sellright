@@ -22,3 +22,11 @@ describe('checkout mobile spacing (#404)', () => {
 		expect(CHECKOUT_STYLES.indexOf(rule)).toBeGreaterThan(CHECKOUT_STYLES.indexOf('@media (max-width:767px)'));
 	});
 });
+
+describe('checkout sticky CTA (CLS)', () => {
+	it('the total column keeps a fixed minimum width so PLACE ORDER does not narrow when the total arrives', () => {
+		const css = mobile();
+		expect(css).toMatch(/\.sticky-cta-total\{\s*flex:0 0 auto;\s*min-width:96px;/);
+		expect(css).toContain('.sticky-cta-total-amount{white-space:nowrap}');
+	});
+});

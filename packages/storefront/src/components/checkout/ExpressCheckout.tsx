@@ -2,7 +2,7 @@ import { component$, useSignal, useVisibleTask$, type QRL } from '@qwik.dev/core
 import type { StripeElements, StripeExpressCheckoutElement } from '@stripe/stripe-js';
 import { loadStripe } from '@stripe/stripe-js/pure';
 import { getExpressQuote } from '~/providers/shop/checkout/checkout';
-import { afterLoadIdleOrInteraction } from '~/utils/load-trigger';
+import { afterInteraction, afterLoadIdleOrInteraction } from '~/utils/load-trigger';
 import {
 	expressElementOptions,
 	expressMethods,
@@ -51,8 +51,17 @@ export interface ExpressCheckoutProps {
 	continueHint?: boolean;
 	/** Reports whether this device has an express method (fires once the element is ready, false on a load error). */
 	onAvailability$?: QRL<(available: boolean) => void>;
+	/** When Stripe.js may load: 'idle' (default: load + idle, or first interaction) or 'interaction' (first interaction only; PDP). */
+	loadOn?: 'idle' | 'interaction';
 	testId?: string;
+	/** Checkout (CLS): while the row may still appear, hold its height (hidden) so the buttons arriving after load + idle push
+	 *  nothing below them. Released (collapsed) once the gateway reports no express method, fails to load, or no quote exists. */
+	reserve?: boolean;
 }
+
+/** The checkout express row's height while reserved (its 16px bottom margin is kept as when visible): the label (16.5px line +
+ *  8px gap), one wallet row at the gateway's default 44px (+ its iframe's few px) and the "Or continue" hint (8px + 18px line). */
+export const EXPRESS_RESERVE_HEIGHT = '96px';
 
 export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 	const hostRef = useSignal<HTMLElement>();
@@ -63,6 +72,8 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 	// #400: the wallet iframe has painted (non-zero height). Stripe reports `ready` before its iframe has grown, and showing
 	// the label then left it above an empty gap until the buttons appeared.
 	const painted = useSignal(false);
+	// The row is known not to appear on this device/cart (no method, a load error, no quote): a reservation is released.
+	const unavailable = useSignal(false);
 	const elementsRef = useSignal<unknown>(null);
 	// The quote for the page's destination (what the button opens with) and the one the open sheet shows.
 	const baseQuote = useSignal<WalletQuote | null>(null);
@@ -103,6 +114,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		}
 		if (stale) return;
 		quoted.value = !!baseQuote.value;
+		unavailable.value = !baseQuote.value;
 		const elements = elementsRef.value as StripeElements | null;
 		if (elements && baseQuote.value && !sheetOpen.value) elements.update({ amount: baseQuote.value.grandTotal });
 	});
@@ -129,7 +141,7 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		try {
 			// P7/V15: Stripe.js is not part of the critical load — it loads once the page has loaded and gone idle, or on the
 			// shopper's first interaction. The element stays hidden until `ready`, as before.
-			await afterLoadIdleOrInteraction();
+			await (props.loadOn === 'interaction' ? afterInteraction() : afterLoadIdleOrInteraction());
 			if (disposed) return;
 			const stripe = await loadStripe(key);
 			if (disposed || !stripe) return;
@@ -144,11 +156,13 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 				if (disposed) return;
 				walletAvailable.value = hasExpressMethod(ev.availablePaymentMethods);
 				methods.value = expressMethods(ev.availablePaymentMethods);
+				if (!walletAvailable.value) unavailable.value = true;
 				void props.onAvailability$?.(walletAvailable.value);
 			});
 			ece.on('loaderror', () => {
 				if (disposed) return;
 				walletAvailable.value = false;
+				unavailable.value = true;
 				void props.onAvailability$?.(false);
 			});
 			ece.on('click', (ev) => {
@@ -219,18 +233,23 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 		} catch (e) {
 			console.warn('[Checkout] express checkout failed to load:', e);
 			walletAvailable.value = false;
+			unavailable.value = true;
 			void props.onAvailability$?.(false);
 		}
 	});
 
 	const visible = !!props.cartToken && walletAvailable.value && quoted.value && painted.value;
+	const reserved = !visible && !!props.reserve && !unavailable.value;
 	return (
 		// Kept mounted (not display:none) while hidden so the gateway can still report wallet availability. While visible,
 		// data-express-methods names the offered methods (e.g. "link" alone), so a brand can lay a lone button out beside
 		// its ADD TO CART instead of under it (#347).
 		<div class="checkout-express" data-testid={props.testId ?? 'checkout-express'} aria-hidden={!visible}
 			data-express-methods={visible ? methods.value.join(' ') : undefined}
-			style={visible ? { marginBottom: props.continueHint ? '16px' : '0' } : { visibility: 'hidden', height: '0', overflow: 'hidden', pointerEvents: 'none' }}>
+			data-express-reserved={reserved ? 'true' : undefined}
+			style={visible ? { marginBottom: props.continueHint ? '16px' : '0' }
+				: reserved ? { visibility: 'hidden', height: EXPRESS_RESERVE_HEIGHT, marginBottom: props.continueHint ? '16px' : '0', overflow: 'hidden', pointerEvents: 'none' }
+				: { visibility: 'hidden', height: '0', overflow: 'hidden', pointerEvents: 'none' }}>
 			{props.label && <p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.7;margin:0 0 8px;">{props.label}</p>}
 			<div ref={hostRef} />
 			{props.continueHint && <p style="text-align:center;font-size:12px;opacity:0.6;margin-top:8px;">Or continue below to pay another way</p>}

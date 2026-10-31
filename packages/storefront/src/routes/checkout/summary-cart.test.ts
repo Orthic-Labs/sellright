@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerCart } from '~/sellright/types/cart';
-import { checkoutSummarySource, hasMixedPreOrder, readCheckoutServerCart, serverCartShipCountry, toDisplayCart } from './summary-cart';
+import { checkoutSummarySource, hasMixedPreOrder, readCheckoutServerCart, serverCartShipCountry, showsEmptyCart, toDisplayCart } from './summary-cart';
 
 const route = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8');
 
@@ -149,5 +149,24 @@ describe('checkout route wiring', () => {
     expect(route).not.toContain('fetchSessionCustomer');
     // The shell's qinit starts (or joins) the document-start entry read; it never defers to a later one.
     expect(route).toContain('startCheckoutEntryBoot(location.pathname)');
+  });
+});
+
+describe('showsEmptyCart (LCP: the empty view paints from SSR when there is no cart cookie)', () => {
+  it('before the entry read: only without a cart cookie', () => {
+    expect(showsEmptyCart({ isCartEmpty: true, pageLoading: true, noCartCookie: true })).toBe(true);
+    expect(showsEmptyCart({ isCartEmpty: true, pageLoading: true, noCartCookie: false })).toBe(false);
+    expect(showsEmptyCart({ isCartEmpty: true, pageLoading: true })).toBe(false);
+  });
+  it('the entry read decides: lines it finds show the form, an empty cart shows the empty view', () => {
+    expect(showsEmptyCart({ isCartEmpty: false, pageLoading: true, noCartCookie: true })).toBe(false);
+    expect(showsEmptyCart({ isCartEmpty: false, pageLoading: false, noCartCookie: true })).toBe(false);
+    expect(showsEmptyCart({ isCartEmpty: true, pageLoading: false, noCartCookie: false })).toBe(true);
+  });
+  it('the cookie loader is per document only: never on a client loader fetch or the cacheable shell', () => {
+    const loader = route.slice(route.indexOf('export const useCheckoutNoCartCookie'), route.indexOf('/** The checkout views whose entry'));
+    expect(loader).toContain("if (sharedMap.has('@loaderId') || shellRender()) return false;");
+    expect(loader).toContain('return !cookie.get(TOKEN_COOKIE)?.value;');
+    expect(loader).not.toMatch(/cacheKey|eTag/);
   });
 });

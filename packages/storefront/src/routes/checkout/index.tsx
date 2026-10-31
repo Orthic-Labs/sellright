@@ -58,6 +58,17 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) 
   return cart;
 }, { serializationStrategy: 'always' });
 
+/**
+ * LCP: a document request with no cart cookie has no cart the server could read, so the page paints the empty-cart view from SSR
+ * instead of the form and repainting it seconds later (Lighthouse: LCP 24 s, the empty view's heading). Display only: the LOCKED
+ * checkout-entry live read still runs and decides (a cart it finds, e.g. a legacy local cart, replaces this view with the form).
+ * False when unknown: a client loader fetch (SPA navigation) and the ADR-0001 cacheable shell (no per-visitor value in it).
+ */
+export const useCheckoutNoCartCookie = routeLoader$(({ cookie, sharedMap }) => {
+  if (sharedMap.has('@loaderId') || shellRender()) return false;
+  return !cookie.get(TOKEN_COOKIE)?.value;
+});
+
 /** The checkout views whose entry has started (the shell's document-ready start and the visible task never both run it). A WeakSet
  *  keyed by the view's own store: it holds no cart data and nothing outlives the view. */
 const enteredViews = new WeakSet<object>();
@@ -105,6 +116,7 @@ const CheckoutContent = component$(() => {
   const appState = useContext(APP_STATE);
   const localCart = useCart();
   const serverCart = useCheckoutServerCart();
+  const noCartCookie = useCheckoutNoCartCookie();
   // L11: the LOCKED checkout-entry live read has landed (the summary then shows the client cart, not the server read).
   const entryReadDone = useSignal(false);
   const hasMixedPreOrder = useHasMixedPreOrder();
@@ -987,6 +999,7 @@ const CheckoutContent = component$(() => {
       onResumeRetry$={onResumeRetry$}
       onStartNewCart$={onStartNewCart$}
       pageLoading={pageLoading}
+      noCartCookie={noCartCookie.value}
       serverCart={serverCart}
       entryReadDone={entryReadDone}
       paymentInit={paymentInit}

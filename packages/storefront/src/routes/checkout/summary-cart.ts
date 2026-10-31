@@ -133,3 +133,12 @@ export function isCheckoutShell(value: unknown): value is CheckoutShellMarker {
 export function displayServerCart(value: ServerCartValue | undefined): Cart | null {
   return value && !isCheckoutShell(value) ? value : null;
 }
+
+/**
+ * The empty-cart view instead of the form: after the LOCKED entry read, whenever the cart is empty; before it, only when the
+ * document request carried no cart cookie (no cart the server could know of), so that view paints from SSR (LCP). The entry
+ * read still runs and replaces it with the form when it finds lines.
+ */
+export function showsEmptyCart(input: { isCartEmpty: boolean; pageLoading: boolean; noCartCookie?: boolean }): boolean {
+  return input.isCartEmpty && (!input.pageLoading || !!input.noCartCookie);
+}

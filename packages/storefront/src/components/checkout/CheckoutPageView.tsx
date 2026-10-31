@@ -13,7 +13,7 @@ import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
 import type { PayableOrder } from './payable-order';
 import type { ShopConfig } from '~/sellright/types/checkout';
-import type { ServerCartValue } from '~/routes/checkout/summary-cart';
+import { showsEmptyCart, type ServerCartValue } from '~/routes/checkout/summary-cart';
 import type { CheckoutPhase, PaymentMethod, ResumeView } from '~/hooks/useCheckout';
 import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
@@ -47,6 +47,8 @@ interface CheckoutPageViewProps {
   onResumeRetry$: QRL<() => void>;
   onStartNewCart$: QRL<() => void>;
   pageLoading: Signal<boolean>;
+  /** The document request carried no cart cookie (useCheckoutNoCartCookie): the empty view paints from SSR; the entry read still decides. */
+  noCartCookie?: boolean;
   /** L11: the route loader's display-only server read of the cart (null = none), or the ADR-0001 shell marker; see routes/checkout/summary-cart.ts. */
   serverCart: ReadonlySignal<ServerCartValue>;
   /** L11: the client's checkout-entry live read has landed. */
@@ -103,7 +105,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
         stripeConfirmTrigger={props.stripeConfirmTrigger}
         stripePublishableKey={props.stripePublishableKey}
       />
-    ) : !props.pageLoading.value && props.isCartEmpty.value ? (
+    ) : showsEmptyCart({ isCartEmpty: props.isCartEmpty.value, pageLoading: props.pageLoading.value, noCartCookie: props.noCartCookie }) ? (
       // A refused order (409 / pre-submit read) drops the sold-out line and empties the cart: say why instead of a bare empty state.
       <CheckoutEmptyCart message={props.localCart.notice || props.state.error} />
     ) : (
@@ -134,6 +136,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
               {/* Express row + pay-later messaging: below the order summary, inside the form column's gutter (#338). */}
               <div q:slot="lead">
                 <ExpressCheckout
+                  reserve={props.pageLoading.value || !!props.expressCheckout.value}
                   gateway={props.expressCheckout.value}
                   cartToken={props.expressCheckout.value?.cartToken ?? null}
                   continueHint

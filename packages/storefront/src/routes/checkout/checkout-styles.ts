@@ -58,10 +58,14 @@ export const CHECKOUT_STYLES = `
     gap:12px;
     box-shadow:0 -4px 20px rgba(0,0,0,0.06);
   }
+  /* CLS: the total arrives with the live read (a dash, then the formatted total); a fixed-width column keeps PLACE ORDER (flex:1) from
+     narrowing and moving when it does. */
   .sticky-cta-total{
-    flex-shrink:0;
+    flex:0 0 auto;
+    min-width:96px;
     text-align:left;
   }
+  .sticky-cta-total-amount{white-space:nowrap}
   .sticky-cta-total-label{
     font-size:10px;
     letter-spacing:0.1em;
