@@ -41,6 +41,17 @@ This gives SellRight two layers of tenant isolation:
 
 The verification gate includes `db:assert-rls`, `db:assert-hand-written`, and `assert:shop-isolation` so new store-scoped tables, drift on hand-written migrations, and public shop routes cannot silently bypass the model.
 
+## Storefront Route Cache Policy
+
+Decided in one place, `packages/storefront/src/config/route-cache-policy.ts` (ADR-0001, `docs/adr/ADR-0001-edge-cached-shell.md`). Every route is one of three classes: `shell` (`/`, `/shop/`, product pages including the brand `productPath`, `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, `/privacy`, `/terms`, `/returns`, `/press`, `/checkout/` exact), `data` (Qwik `q-loader`/`q-data`/`qaction`/`qfunc` and `/v1/*`) or `dynamic` (everything else, including checkout steps, account, sign-in, search, preview requests, non-GET requests, shell paths with any query key other than ad-click tracking, and every unclassified path).
+
+`SHELL_CACHE` (process env, default off) gates the shared cache; `SHELL_CACHE_TTL` sets the edge lifetime (default 300 s). Off, every document is `private, no-store` with a per-request CSP nonce. On, the express entry:
+
+1. strips `Cookie`, `Authorization`, `cf-ipcountry`, `x-preview-token` and `x-qwik-nonce` from a `shell` GET before any context or loader sees it (I-2), and renders it without a nonce and with the bare path (tracking query removed, I-3);
+2. buffers the finished body, adds the sha256 of every executable inline script to `script-src` (no nonce, no `'unsafe-inline'`), and marks it `public, max-age=0, s-maxage=<TTL>` only when the status is 200, the body is HTML, there is no `Set-Cookie` and no layout veto (`x-sr-edge-veto`: identity fallback, maintenance on or unknown, authenticated, preview). Anything else stays `private, no-store` (I-6).
+
+Qwik stamps a random per-render container id (`q:instance`, repeated in two inline scripts), so two renders of one shell differ in those bytes; each stored body carries the CSP computed from its own bytes. `deploy/edge-conformance.mjs <baseUrl> --expect-shell on|off` checks each class's `Cache-Control` and `cf-cache-status` against a live host (read-only GETs).
+
 ## API Surface
 
 SellRight is REST-first, not GraphQL-first.

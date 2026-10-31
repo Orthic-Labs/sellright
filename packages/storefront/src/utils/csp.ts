@@ -33,8 +33,12 @@ export const IP_LOOKUP_ORIGIN = 'https://ipapi.co';
 export const SHEERID_ORIGIN = 'https://services.sheerid.com';
 
 export interface CspOptions {
-	/** Per-request nonce for inline scripts. */
-	nonce: string;
+	/**
+	 * Per-request nonce for inline scripts. Omitted (undefined) only for an ADR-0001 `shell` render: that body may be shared, so
+	 * script-src carries no nonce and the express layer adds the sha256 of every executable inline script at response end
+	 * (`withScriptHashes`). Never 'unsafe-inline' for scripts, never a shared nonce.
+	 */
+	nonce: string | undefined;
 	/** SellRight API origin (connect-src), when it is not same-origin. */
 	apiOrigin?: string;
 	/** Turnstile site key; any non-blank value enables the Turnstile origin. */
@@ -65,7 +69,7 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 		`default-src 'self'`,
 		// Collect.js (NMI) injects its own stylesheet from its host and, for Apple Pay, applepay.cdn-apple.com/jsapi
 		// (both verified in the live secure.nmi.com/token/Collect.js, 2026-10-26).
-		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
+		withSources(`script-src 'self'${nonce ? ` 'nonce-${nonce}'` : ''} https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
 		withSources(`style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com`, google?.style),
 		`img-src 'self' data: https:`,
 		// #400/#377: Apple Pay's button stylesheet (Collect.js / Stripe wallets) loads its font from applepay.cdn-apple.com.
@@ -80,4 +84,49 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 		`frame-ancestors 'none'`,
 		`upgrade-insecure-requests`,
 	].join('; ');
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-0001 item 4: CSP by hash for a shell render (no nonce). The express layer renders a shell request without a nonce, buffers
+// the finished body and allows exactly the inline scripts in THAT body by sha256. Pure: `sha256Base64` is injected so this module
+// stays free of node:crypto.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Inline script types that are data, never executed (Qwik state/vnode, JSON-LD). Import maps and modules ARE policed. */
+const DATA_SCRIPT_TYPE = /^(application\/(ld\+)?json|qwik\/[a-z-]+|text\/qwik[a-z-]*)$/i;
+
+/** The exact text of every inline script the browser would police under script-src. External (src) and data scripts excluded. */
+export function executableInlineScripts(html: string): string[] {
+	const out: string[] = [];
+	for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+		const attrs = m[1] ?? '';
+		if (/\ssrc\s*=/i.test(` ${attrs}`)) continue;
+		const type = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+		const t = (type?.[1] ?? type?.[2] ?? type?.[3] ?? '').trim();
+		if (t && DATA_SCRIPT_TYPE.test(t)) continue;
+		out.push(m[2] ?? '');
+	}
+	return out;
+}
+
+/** `'sha256-…'` sources for every distinct executable inline script in `html`, in document order. */
+export function inlineScriptHashSources(html: string, sha256Base64: (text: string) => string): string[] {
+	return [...new Set(executableInlineScripts(html).map((s) => `'sha256-${sha256Base64(s)}'`))];
+}
+
+/**
+ * The policy with every nonce source removed from script-src and the given hash sources added right after `'self'`. Throws when
+ * the policy has no script-src or script-src allows 'unsafe-inline' (a hash policy must never fall back to either).
+ */
+export function withScriptHashes(csp: string, hashSources: readonly string[]): string {
+	const parts = csp.split(/;\s*/);
+	const i = parts.findIndex((d) => /^script-src\s/.test(d));
+	if (i < 0) throw new Error('CSP has no script-src');
+	if (/'unsafe-inline'/.test(parts[i]!)) throw new Error("script-src allows 'unsafe-inline'");
+	const tokens = parts[i]!.split(/\s+/).filter((t) => !/^'nonce-/.test(t));
+	const at = tokens.indexOf("'self'") >= 0 ? tokens.indexOf("'self'") + 1 : 1;
+	tokens.splice(at, 0, ...hashSources);
+	parts[i] = tokens.join(' ');
+	return parts.join('; ');
 }

@@ -54,19 +54,11 @@ describe('getRouteCacheProfile', () => {
 		}
 	});
 
-	it('keeps the x-route-class diagnostic classification', () => {
-		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/search', '/collections/new']) {
-			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('stock_bearing');
-		}
-		for (const pathname of ['/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout', '/checkout/confirmation/ABC', '/account/orders']) {
+	it('labels x-route-class with the ADR-0001 class (diagnostic only; the header stays no-store)', () => {
+		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about', '/checkout'])
+			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('shell');
+		for (const pathname of ['/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('dynamic');
-		}
-		for (const pathname of ['/contact', '/contact/', '/terms', '/blog', '/about', '/nope/nope', '/admin-api/anything']) {
-			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('document');
-		}
-		// Prefix matching is deliberately loose: a path that merely starts with a stock prefix is treated as stock-bearing.
-		// The class is only a diagnostic label; every class answers no-store.
-		expect(getRouteCacheProfile('/shop-api/anything').routeClass).toBe('stock_bearing');
 	});
 
 	it('exposes a policy version string for the x-cache-policy-version header', () => {
@@ -78,7 +70,7 @@ describe('resolveRouteCacheProfile', () => {
 	it('makes loader data (q-loader-{id}.{hash}.json) private no-store under any page path', () => {
 		for (const pathname of ['/', '/shop', '/shop/', '/shop/some-knife/', '/contact/', '/blog', '/products/x', '/unknown/']) {
 			const profile = resolveRouteCacheProfile(pathname, flags('@isQLoader'));
-			expect(profile.routeClass, pathname).toBe('dynamic');
+			expect(profile.routeClass, pathname).toBe('data');
 			expect(profile.responseCacheControl, pathname).toBe(NO_STORE_CACHE_CONTROL);
 			expectNoStore(profile.responseCacheControl, pathname);
 		}
@@ -168,137 +160,295 @@ describe('hashed build assets', () => {
 	});
 });
 
-describe('P4b edge HTML policy (default off)', async () => {
-	const { createHash } = await import('node:crypto');
+describe('ADR-0001 route classes', async () => {
 	const m = await import('./route-cache-policy');
+	const q = (s = '') => new URLSearchParams(s);
+	const TABLE: Array<[string, string, 'products' | 'shop', 'shell' | 'dynamic' | 'data']> = [
+		['/', '', 'products', 'shell'],
+		['/shop', '', 'products', 'shell'],
+		['/shop/', '', 'products', 'shell'],
+		['/products/some-knife/', '', 'products', 'shell'],
+		['/products/some-knife', '', 'products', 'shell'],
+		['/collections/new/', '', 'products', 'shell'],
+		['/blog', '', 'products', 'shell'],
+		['/blog/', '', 'products', 'shell'],
+		['/blog/a-post/', '', 'products', 'shell'],
+		['/about/', '', 'products', 'shell'],
+		['/contact/', '', 'products', 'shell'],
+		['/privacy/', '', 'products', 'shell'],
+		['/terms/', '', 'products', 'shell'],
+		['/returns/', '', 'products', 'shell'],
+		['/press/', '', 'products', 'shell'],
+		['/checkout/', '', 'products', 'shell'],
+		['/checkout', '', 'products', 'shell'],
+		// brand productPath /shop/:slug/
+		['/shop/long-coat/', '', 'shop', 'shell'],
+		['/shop/long-coat/', '', 'products', 'dynamic'],
+		['/shop/a/b/', '', 'shop', 'dynamic'],
+		// dynamic
+		['/checkout/payment/', '', 'products', 'dynamic'],
+		['/checkout/cart-link/', '', 'products', 'dynamic'],
+		['/checkout/some-alias/', '', 'products', 'dynamic'],
+		['/checkout/confirmation/ABC/', '', 'products', 'dynamic'],
+		['/account/', '', 'products', 'dynamic'],
+		['/account/orders/', '', 'products', 'dynamic'],
+		['/sign-in/', '', 'products', 'dynamic'],
+		['/search/', '', 'products', 'dynamic'],
+		['/search', 'q=knife', 'products', 'dynamic'],
+		['/track-order/', '', 'products', 'dynamic'],
+		['/verify/', '', 'products', 'dynamic'],
+		['/verify-email-address-change/', '', 'products', 'dynamic'],
+		['/forgot-password/', '', 'products', 'dynamic'],
+		['/password-reset/', '', 'products', 'dynamic'],
+		['/api/country/', '', 'products', 'dynamic'],
+		['/cache/', '', 'products', 'dynamic'],
+		['/cache-admin/purge/', '', 'products', 'dynamic'],
+		['/collections/', '', 'products', 'dynamic'],
+		['/blog/a/b/', '', 'products', 'dynamic'],
+		['/aboutx/', '', 'products', 'dynamic'],
+		['/slow-fashion/', '', 'products', 'dynamic'],
+		['/definitely/not/a/route/', '', 'products', 'dynamic'],
+		['/affiliate/', '', 'products', 'dynamic'],
+		// preview
+		['/', 'preview_token=abc', 'products', 'dynamic'],
+		['/products/x/', 'preview_token=abc', 'products', 'dynamic'],
+		// I-3: query that could change output
+		['/collections/new/', 'page=2', 'products', 'dynamic'],
+		['/shop/', 'q=knife', 'products', 'dynamic'],
+		['/shop/', 'style=long', 'products', 'dynamic'],
+		['/products/x/', 'size=m', 'products', 'dynamic'],
+		['/', 'trackOrder=true', 'products', 'dynamic'],
+		// tracking-only query keeps shell
+		['/products/x/', 'utm_source=a&gclid=1&fbclid=2', 'products', 'shell'],
+		// data
+		['/products/x/q-loader-abc.123.json', '', 'products', 'data'],
+		['/q-data.json', '', 'products', 'data'],
+		['/', 'qaction=abc', 'products', 'data'],
+		['/shop/', 'qfunc=abc', 'products', 'data'],
+		['/v1/shop/me', '', 'products', 'data'],
+	];
+
+	it('classifies the route table', () => {
+		for (const [path, search, prefix, want] of TABLE) expect(m.routeClassFor(path, q(search), prefix), `${prefix} ${path}?${search}`).toBe(want);
+	});
+
+	it('routeClass uses the build productPath (default /products/)', () => {
+		expect(m.routeClass('/products/x/', q())).toBe('shell');
+		expect(m.routeClass('/nowhere/', q())).toBe('dynamic');
+	});
+
+	it('a whole request: only GET is shell; a preview cookie is a preview; data stays data', () => {
+		const r = (o: Partial<{ method: string; pathname: string; search: string; cookie: string }>) =>
+			m.requestRouteClass({ method: 'GET', pathname: '/', search: '', cookie: undefined, ...o });
+		expect(r({})).toBe('shell');
+		expect(r({ method: 'HEAD' })).toBe('dynamic');
+		expect(r({ method: 'POST' })).toBe('dynamic');
+		expect(r({ method: 'POST', search: 'qaction=x' })).toBe('data');
+		expect(r({ cookie: '_ga=1; sr_preview_token=t' })).toBe('dynamic');
+		expect(r({ cookie: 'sr_cust=abc; countryCode=US' })).toBe('shell');
+	});
+
+	it('switch and TTL: off unless SHELL_CACHE=1; TTL 300 unless a positive integer', () => {
+		expect(m.shellCacheEnabled({})).toBe(false);
+		expect(m.shellCacheEnabled({ SHELL_CACHE: 'true' })).toBe(false);
+		expect(m.shellCacheEnabled({ SHELL_CACHE: '1' })).toBe(true);
+		expect(m.shellTtlSeconds({})).toBe(300);
+		expect(m.shellTtlSeconds({ SHELL_CACHE_TTL: '3600' })).toBe(3600);
+		for (const bad of ['0', '-5', 'abc', '1.5', '']) expect(m.shellTtlSeconds({ SHELL_CACHE_TTL: bad }), bad).toBe(300);
+		expect(m.shellCacheControl(300)).toBe('public, max-age=0, s-maxage=300');
+		expect(m.shellCacheControl(300)).not.toMatch(/stale/);
+	});
+});
+
+describe('ADR-0001 I-6 verdict (pure)', async () => {
+	const m = await import('./route-cache-policy');
+	const ok = { routeClass: 'shell' as const, anonymous: true, enabled: true, status: 200, contentType: 'text/html; charset=utf-8', setCookie: undefined, veto: undefined };
+	it('only an all-clear shell response is cacheable', () => {
+		expect(m.shellResponseCacheControl(ok, 300)).toBe('public, max-age=0, s-maxage=300');
+		const cases: Array<[string, Record<string, unknown>]> = [
+			['disabled', { enabled: false }],
+			['dynamic class', { routeClass: 'dynamic' }],
+			['data class', { routeClass: 'data' }],
+			['signed-in context', { anonymous: false }],
+			['error render', { status: 500 }],
+			['catalog 503', { status: 503 }],
+			['unpublished (404)', { status: 404 }],
+			['redirect', { status: 301 }],
+			['non-html', { contentType: 'application/json' }],
+			['Set-Cookie', { setCookie: ['a=b'] }],
+			['maintenance', { veto: 'maintenance' }],
+			['maintenance unknown', { veto: 'maintenance-unknown' }],
+			['identity fallback', { veto: 'identity-fallback' }],
+			['authenticated', { veto: 'authenticated' }],
+			['preview', { veto: 'preview' }],
+		];
+		for (const [name, patch] of cases) expect(m.shellResponseCacheControl({ ...ok, ...patch } as never, 300), name).toBe(m.NO_STORE_CACHE_CONTROL);
+	});
+});
+
+describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
+	const { createHash } = await import('node:crypto');
+	const express = (await import('express')).default;
+	const m = await import('./route-cache-policy');
+	const { buildCsp } = await import('../utils/csp');
 	const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('base64');
-	const base = { method: 'GET', pathname: '/blog/', search: '', cookie: undefined as string | undefined, enabled: true };
 
-	it('is off unless SELLRIGHT_EDGE_HTML_CACHE=1', () => {
-		expect(m.edgeHtmlCacheEnabled({})).toBe(false);
-		expect(m.edgeHtmlCacheEnabled({ SELLRIGHT_EDGE_HTML_CACHE: 'true' })).toBe(false);
-		expect(m.edgeHtmlCacheEnabled({ SELLRIGHT_EDGE_HTML_CACHE: '1' })).toBe(true);
-		expect(m.edgeRequestEligibility({ ...base, enabled: false })).toEqual({ ok: false, reason: 'disabled' });
+	type Render = { status?: number; veto?: string; setCookie?: boolean };
+	/** Mirrors entry.express.tsx order: request strip -> CSP/nonce -> no-store default -> response-end check -> renderer. */
+	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>) => {
+		const app = express();
+		app.use(m.createShellRequestMiddleware({ enabled }) as never);
+		app.use((req, res, next) => {
+			const nonce = m.isShellRender(res) ? undefined : `N${Math.random().toString(36).slice(2)}`;
+			if (nonce) req.headers['x-qwik-nonce'] = nonce; else delete req.headers['x-qwik-nonce'];
+			res.setHeader('Content-Security-Policy', buildCsp({ nonce }));
+			next();
+		});
+		app.use((_req, res, next) => { res.setHeader('Cache-Control', m.NO_STORE_CACHE_CONTROL); next(); });
+		app.use(m.createShellCacheMiddleware({ enabled, ttlSeconds: 300, sha256Base64: sha }) as never);
+		app.use(m.shellRenderUrl as never);
+		// Fake Qwik: output depends on every per-visitor input a real loader could read, and serialises the URL like the router.
+		app.use((req, res) => {
+			const cookie = String(req.headers.cookie ?? '');
+			const nonce = req.headers['x-qwik-nonce'];
+			const na = nonce ? ` nonce="${nonce}"` : '';
+			const signedIn = /(^|; )sr_cust=/.test(cookie);
+			res.statusCode = render.status ?? 200;
+			res.setHeader('Content-Type', 'text/html; charset=utf-8');
+			if (render.setCookie || /(^|; )authToken=/.test(cookie)) res.setHeader('Set-Cookie', ['sr_legacy_cart=1; Path=/']);
+			if (render.veto) res.setHeader(m.EDGE_VETO_HEADER, render.veto);
+			if (signedIn) res.setHeader(m.EDGE_VETO_HEADER, 'authenticated');
+			const body = `<html q:render="ssr"><head><script${na}>window.qwikevents=[]</script><script type="application/ld+json">{}</script></head>`
+				+ `<body><header>${signedIn ? 'Hi Jane' : 'Sign in'}</header><p data-co="${req.headers['cf-ipcountry'] ?? ''}" data-auth="${req.headers.authorization ?? ''}">${req.originalUrl}</p>`
+				+ `<script type="qwik/json">{}</script><script id="qwikloader"${na}>(()=>{})()</script></body></html>`;
+			const size = Math.ceil(body.length / 3);
+			let i = 0;
+			const step = () => { if (i >= body.length) { res.end(); return; } const part = body.slice(i, i + size); i += size; res.write(part, () => step()); };
+			step();
+		});
+		const server = await new Promise<import('node:http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+		try {
+			const { port } = server.address() as import('node:net').AddressInfo;
+			await run(async (path, headers = {}) => { const r = await fetch(`http://127.0.0.1:${port}${path}`, { headers, redirect: 'manual' }); return { r, text: await r.text() }; });
+		} finally { await new Promise((resolve) => server.close(resolve)); }
+	};
+
+	const SHELL = ['/', '/shop/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/', '/checkout/'];
+	const SIGNED_IN = { cookie: 'sr_cust=abc; sr_cust_csrf=x; countryCode=DE; sr_preview_tokenx=1; authToken=t', authorization: 'Bearer secret', 'cf-ipcountry': 'DE', 'x-qwik-nonce': 'attacker' };
+
+	it('SHELL_CACHE on: a signed-in request to every shell route gets the byte-identical body of an anonymous one, cacheable, no Set-Cookie', async () => {
+		await serve(true, {}, async (get) => {
+			for (const path of SHELL) {
+				const anon = await get(path);
+				const signed = await get(path, SIGNED_IN);
+				expect(signed.text, path).toBe(anon.text);
+				expect(signed.text, path).not.toMatch(/Hi Jane|nonce=|DE|Bearer|attacker/);
+				for (const res of [anon, signed]) {
+					expect(res.r.headers.get('cache-control'), path).toBe('public, max-age=0, s-maxage=300');
+					expect(res.r.headers.get('set-cookie'), path).toBeNull();
+					expect(res.r.headers.get(m.EDGE_VETO_HEADER), path).toBeNull();
+					expect(res.r.headers.get('x-sr-edge'), path).toBe('cacheable');
+				}
+				expect(signed.r.headers.get('content-security-policy')).toBe(anon.r.headers.get('content-security-policy'));
+			}
+		});
 	});
 
-	it('admits only stock-free content documents', () => {
-		for (const p of ['/blog', '/blog/', '/blog/a-post/', '/about/', '/press', '/privacy/', '/returns/', '/contact/']) expect(m.edgeRequestEligibility({ ...base, pathname: p }).ok, p).toBe(true);
-		for (const p of ['/', '/shop/', '/shop/x/', '/products/x/', '/collections/x/', '/search/', '/checkout/', '/account/', '/blog/a/b/', '/blog/q-loader-abc.1.json', '/aboutx/'])
-			expect(m.edgeRequestEligibility({ ...base, pathname: p }).ok, p).toBe(false);
-		expect(m.edgeRequestEligibility({ ...base, method: 'POST' }).ok).toBe(false);
-		expect(m.edgeRequestEligibility({ ...base, method: 'HEAD' }).ok).toBe(false);
+	it('SHELL_CACHE on: a tracking-only query renders the same bytes as the bare path (I-3)', async () => {
+		await serve(true, {}, async (get) => {
+			const bare = await get('/products/x/');
+			const tracked = await get('/products/x/?utm_source=a&gclid=1', SIGNED_IN);
+			expect(tracked.text).toBe(bare.text);
+			expect(tracked.r.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=300');
+		});
 	});
 
-	it('refuses any non-tracking query (preview tokens, pagination) and any session/cart/preview/country/unknown cookie', () => {
-		expect(m.edgeRequestEligibility({ ...base, search: 'utm_source=x&gclid=1&fbclid=2' }).ok).toBe(true);
-		expect(m.edgeRequestEligibility({ ...base, search: 'preview_token=abc' })).toEqual({ ok: false, reason: 'query' });
-		expect(m.edgeRequestEligibility({ ...base, search: 'page=2' }).ok).toBe(false);
-		expect(m.edgeRequestEligibility({ ...base, cookie: '_ga=GA1.1.1; _ga_ABC=x; _gcl_au=1; __cf_bm=z; sr_vid=abc' }).ok).toBe(true);
-		for (const c of ['sr_cust=1', 'sr_cust_csrf=1', 'sr_preview_token=t', 'countryCode=US', 'sr_cart=1', 'sr_legacy_cart=1', 'authToken=x', 'sr_admin=1', 'whatever=1'])
-			expect(m.edgeRequestEligibility({ ...base, cookie: `_ga=1; ${c}` })).toEqual({ ok: false, reason: 'cookie' });
+	it('SHELL_CACHE on: the cacheable CSP is nonce-free and hashes exactly the executable inline scripts', async () => {
+		await serve(true, {}, async (get) => {
+			const { r } = await get('/');
+			const csp = r.headers.get('content-security-policy')!;
+			const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src '))!;
+			expect(scriptSrc).not.toMatch(/nonce-|unsafe-inline|strict-dynamic/);
+			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' https://js.stripe.com`)).toBe(true);
+			expect(scriptSrc.match(/sha256-/g)).toHaveLength(2);
+		});
 	});
 
-	it('promotes only a clean 200 HTML response', () => {
-		const ok = { status: 200, contentType: 'text/html; charset=utf-8', setCookie: undefined, veto: undefined, bytes: 10 };
-		expect(m.edgeResponseEligibility(ok).ok).toBe(true);
-		expect(m.edgeResponseEligibility({ ...ok, status: 404 }).ok).toBe(false);
-		expect(m.edgeResponseEligibility({ ...ok, status: 301 }).ok).toBe(false);
-		expect(m.edgeResponseEligibility({ ...ok, contentType: 'application/json' }).ok).toBe(false);
-		expect(m.edgeResponseEligibility({ ...ok, setCookie: ['a=b'] }).ok).toBe(false);
-		expect(m.edgeResponseEligibility({ ...ok, veto: 'identity-fallback' })).toEqual({ ok: false, reason: 'veto:identity-fallback' });
-		expect(m.edgeResponseEligibility({ ...ok, bytes: m.EDGE_MAX_BODY_BYTES + 1 }).ok).toBe(false);
-		expect(m.EDGE_HTML_CACHE_CONTROL).toMatch(/^public, max-age=0, s-maxage=\d+/);
-		expect(m.EDGE_HTML_CACHE_CONTROL).not.toMatch(/stale-if-error/);
+	for (const [name, render, reason] of [
+		['an error render', { status: 500 }, 'status:500'],
+		['an unpublished render (404 coming soon)', { status: 404 }, 'status:404'],
+		['a maintenance render', { veto: 'maintenance' }, 'veto:maintenance'],
+		['an identity-fallback render', { veto: 'identity-fallback' }, 'veto:identity-fallback'],
+		['a Set-Cookie response', { setCookie: true }, 'set-cookie'],
+	] as const) {
+		it(`SHELL_CACHE on: ${name} on a shell path is private no-store, with a hash CSP (no nonce in the body)`, async () => {
+			await serve(true, render, async (get) => {
+				for (const path of ['/', '/products/x/', '/blog/']) {
+					const { r, text } = await get(path);
+					expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+					expect(r.headers.get('x-sr-edge'), path).toBe(`bypass:${reason}`);
+					expect(r.headers.get(m.EDGE_VETO_HEADER), path).toBeNull();
+					expect(r.headers.get('content-security-policy')).toContain(`'sha256-${sha('window.qwikevents=[]')}'`);
+					expect(text).not.toMatch(/nonce=/);
+				}
+			});
+		});
+	}
+
+	it('SHELL_CACHE on: preview (query or cookie), dynamic routes and non-tracking queries keep cookies, the nonce and no-store', async () => {
+		await serve(true, {}, async (get) => {
+			for (const [path, headers] of [
+				['/?preview_token=abc', {}],
+				['/products/x/', { cookie: 'sr_preview_token=abc' }],
+				['/account/', { cookie: 'sr_cust=abc' }],
+				['/search?q=x', {}],
+				['/collections/new/?page=2', {}],
+			] as Array<[string, Record<string, string>]>) {
+				const { r, text } = await get(path, headers);
+				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+				expect(r.headers.get('content-security-policy'), path).toMatch(/'nonce-N/);
+				expect(text, path).toMatch(/nonce="N/);
+				if (headers.cookie?.includes('sr_cust')) expect(text).toContain('Hi Jane');
+			}
+		});
 	});
 
-	it('replaces the nonce with hashes of exactly the executable inline scripts', () => {
-		const loader = 'window.qwikevents=1;';
-		const gtm = "(function(){var c=document.currentScript;})();";
-		const html = `<html><head><script nonce="N1">${gtm}</script><script type="application/ld+json">{"@type":"Product"}</script>`
-			+ `<script src="/build/q-1.js" nonce="N1"></script></head><body><script type="qwik/json">{}</script><script type="qwik/vnode">x</script>`
-			+ `<script id="qwikloader" type="module" async nonce="N1">${loader}</script><script type='module'>${loader}</script></body></html>`;
-		expect(m.executableInlineScripts(html)).toEqual([gtm, loader, loader]);
-		const csp = "default-src 'self'; script-src 'self' 'nonce-N1abc+/=' https://js.stripe.com; style-src 'self' 'unsafe-inline'";
-		const out = m.cspWithScriptHashes(csp, html, sha)!;
-		expect(out).not.toMatch(/nonce-/);
-		expect(out).toContain(`script-src 'self' 'sha256-${sha(gtm)}' 'sha256-${sha(loader)}' https://js.stripe.com;`);
-		expect(out.match(/sha256-/g)).toHaveLength(2);
-		expect(m.cspWithScriptHashes("script-src 'self'", html, sha)).toBeNull();
-		expect(m.cspWithScriptHashes("script-src 'self' 'nonce-a'", '<p>no scripts</p>', sha)).toBe("script-src 'self'");
+	it('SHELL_CACHE off: every document is private no-store with the per-request nonce, request untouched, no diagnostic header', async () => {
+		await serve(false, {}, async (get) => {
+			for (const path of [...SHELL, '/account/', '/search?q=x', '/?preview_token=a', '/nope/']) {
+				const { r, text } = await get(path, SIGNED_IN);
+				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+				expect(r.headers.get('content-security-policy'), path).toMatch(/'nonce-N[a-z0-9]+'/);
+				expect(r.headers.get('content-security-policy'), path).not.toMatch(/sha256-/);
+				expect(r.headers.get('x-sr-edge'), path).toBeNull();
+				expect(text, path).toContain('Hi Jane');
+				expect(text, path).toContain('data-co="DE"');
+			}
+		});
 	});
+});
 
-	it('the express layer wires the middleware after the no-store default and before the router', async () => {
+describe('ADR-0001 wiring in entry.express.tsx', () => {
+	it('strips before the CSP/cookie contexts, checks after the no-store default and before the router; switch read from env', async () => {
 		const { readFileSync } = await import('node:fs');
 		const { join } = await import('node:path');
 		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
+		const strip = src.indexOf('app.use(createShellRequestMiddleware(');
+		const nonce = src.indexOf("randomBytes(16).toString('base64')");
+		const cookieCtx = src.indexOf('sellrightRequestCookie.run(');
 		const failClosed = src.indexOf("res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL)");
-		const edge = src.indexOf('app.use(createEdgeHtmlMiddleware(');
-		expect(edge).toBeGreaterThan(failClosed);
-		expect(edge).toBeLessThan(src.indexOf('app.use(router)'));
-		expect(src).toMatch(/enabled: edgeHtmlCacheEnabled\(process\.env\)/);
-	});
-
-	describe('middleware over a real HTTP response (Qwik-like writer)', async () => {
-		const express = (await import('express')).default;
-		const serve = async (opts: { enabled?: boolean; status?: number; setCookie?: boolean; veto?: string; body?: string; chunks?: number }) => {
-			const app = express();
-			let seenCountry: unknown = 'unset';
-			app.use((_req, res, next) => { res.setHeader('Content-Security-Policy', "script-src 'self' 'nonce-REQ1'"); res.setHeader('Cache-Control', m.NO_STORE_CACHE_CONTROL); next(); });
-			app.use(m.createEdgeHtmlMiddleware({ enabled: opts.enabled ?? true, sha256Base64: sha }) as never);
-			app.use((req, res) => {
-				seenCountry = req.headers['cf-ipcountry'];
-				res.statusCode = opts.status ?? 200;
-				res.setHeader('Content-Type', 'text/html; charset=utf-8');
-				if (opts.setCookie) res.setHeader('Set-Cookie', ['a=b']);
-				if (opts.veto) res.setHeader(m.EDGE_VETO_HEADER, opts.veto);
-				const body = opts.body ?? '<html><script nonce="REQ1">go()</script></html>';
-				const n = opts.chunks ?? 2;
-				const size = Math.ceil(body.length / n);
-				let i = 0;
-				const next = () => {
-					if (i >= body.length) { res.end(); return; }
-					const part = body.slice(i, i + size); i += size;
-					res.write(part, () => next());
-				};
-				next();
-			});
-			const server = await new Promise<import('node:http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
-			try {
-				const { port } = server.address() as import('node:net').AddressInfo;
-				const r = await fetch(`http://127.0.0.1:${port}/blog/post/`, { headers: { 'cf-ipcountry': 'DE', cookie: '_ga=1' } });
-				return { r, text: await r.text(), seenCountry };
-			} finally { await new Promise((resolve) => server.close(resolve)); }
-		};
-
-		it('promotes an eligible page: public edge header, hashed CSP, no nonce, no country, no veto header, body intact', async () => {
-			const { r, text, seenCountry } = await serve({});
-			expect(text).toBe('<html><script nonce="REQ1">go()</script></html>');
-			expect(r.headers.get('cache-control')).toBe(m.EDGE_HTML_CACHE_CONTROL);
-			expect(r.headers.get('content-security-policy')).toBe(`script-src 'self' 'sha256-${sha('go()')}'`);
-			expect(r.headers.get('x-sr-edge')).toBe('eligible');
-			expect(seenCountry).toBeUndefined();
-		});
-
-		for (const [name, opts, reason] of [
-			['a vetoed render', { veto: 'identity-fallback' }, 'veto:identity-fallback'],
-			['a Set-Cookie response', { setCookie: true }, 'set-cookie'],
-			['a 404', { status: 404 }, 'status'],
-			['an oversize body', { body: `<p>${'x'.repeat(2 * 1024 * 1024 + 10)}</p>`, chunks: 4 }, 'size'],
-		] as const) {
-			it(`leaves ${name} no-store with the nonce CSP`, async () => {
-				const { r } = await serve(opts);
-				expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
-				expect(r.headers.get('content-security-policy')).toContain("'nonce-REQ1'");
-				expect(r.headers.get('x-sr-edge')).toBe(`bypass:${reason}`);
-				expect(r.headers.get(m.EDGE_VETO_HEADER)).toBeNull();
-			});
-		}
-
-		it('is inert when the flag is off', async () => {
-			const { r, seenCountry } = await serve({ enabled: false });
-			expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
-			expect(r.headers.get('x-sr-edge')).toBeNull();
-			expect(seenCountry).toBe('DE');
-		});
+		const check = src.indexOf('app.use(createShellCacheMiddleware(');
+		const router = src.indexOf('app.use(router)');
+		expect(strip).toBeGreaterThan(-1);
+		expect(strip).toBeLessThan(nonce);
+		expect(strip).toBeLessThan(cookieCtx);
+		expect(check).toBeGreaterThan(failClosed);
+		expect(check).toBeLessThan(router);
+		const url = src.indexOf('app.use(shellRenderUrl)');
+		expect(url).toBeGreaterThan(src.indexOf('app.use(createCanonicalUrlMiddleware('));
+		expect(url).toBeLessThan(router);
+		expect(src).toMatch(/const SHELL_CACHE_ON = shellCacheEnabled\(\);/);
+		expect(src).toMatch(/ttlSeconds: shellTtlSeconds\(\)/);
+		expect(src).not.toMatch(/SELLRIGHT_EDGE_HTML_CACHE|createEdgeHtmlMiddleware/);
 	});
 });

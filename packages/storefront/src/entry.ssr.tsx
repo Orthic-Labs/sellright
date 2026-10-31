@@ -38,7 +38,8 @@ interface ExtendedRenderOptions extends RenderToStreamOptions {
 
 export default function (opts: ExtendedRenderOptions) {
 	const nonce = opts.serverData?.requestHeaders?.['x-qwik-nonce'];
-	// #375: the visitor's country from Cloudflare, for the GTM loader's first-visit user data (HTML is never edge-cached).
+	// #375: the visitor's country from Cloudflare, for the GTM loader's first-visit user data. A shell render (ADR-0001, may be
+	// edge-cached) never sees cf-ipcountry or a nonce: the express layer strips both, so country and nonce are undefined there.
 	const country = ipCountry(opts.serverData?.requestHeaders?.['cf-ipcountry']);
 
 	return renderToStream(<Root nonce={nonce} country={country} />, {

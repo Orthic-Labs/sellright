@@ -247,3 +247,32 @@ describe('buildCsp — #400 Damned checkout violations', () => {
 		expect(directive(buildCsp({ nonce: 'n' }), 'connect-src').split(' ')).not.toContain('data:');
 	});
 });
+
+describe('ADR-0001 hash CSP for shell renders', async () => {
+	const { createHash } = await import('node:crypto');
+	const { executableInlineScripts, inlineScriptHashSources, withScriptHashes } = await import('./csp');
+	const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('base64');
+
+	it('buildCsp without a nonce has no nonce source and never unsafe-inline for scripts; with one it is unchanged', () => {
+		const none = directive(buildCsp({ nonce: undefined }), 'script-src');
+		expect(none).toBe("script-src 'self' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+	});
+
+	it('finds exactly the executable inline scripts (not src, JSON-LD or Qwik data)', () => {
+		const loader = 'window.qwikevents=1;';
+		const gtm = '(function(){var c=document.currentScript;})();';
+		const html = `<script nonce="N1">${gtm}</script><script type="application/ld+json">{}</script><script src="/build/q-1.js"></script>`
+			+ `<script type="qwik/json">{}</script><script type="qwik/vnode">x</script><script id="qwikloader" type="module" async>${loader}</script><script type='module'>${loader}</script>`;
+		expect(executableInlineScripts(html)).toEqual([gtm, loader, loader]);
+		expect(inlineScriptHashSources(html, sha)).toEqual([`'sha256-${sha(gtm)}'`, `'sha256-${sha(loader)}'`]);
+	});
+
+	it('withScriptHashes drops any nonce, inserts hashes after self, and refuses unsafe-inline or a missing script-src', () => {
+		const csp = "default-src 'self'; script-src 'self' 'nonce-x+/=' https://js.stripe.com; style-src 'self' 'unsafe-inline'";
+		expect(withScriptHashes(csp, ["'sha256-A'", "'sha256-B'"])).toBe("default-src 'self'; script-src 'self' 'sha256-A' 'sha256-B' https://js.stripe.com; style-src 'self' 'unsafe-inline'");
+		expect(withScriptHashes(csp, [])).toBe("default-src 'self'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'");
+		expect(() => withScriptHashes("script-src 'self' 'unsafe-inline'", [])).toThrow();
+		expect(() => withScriptHashes("default-src 'self'", [])).toThrow();
+	});
+});
