@@ -7,6 +7,7 @@ import {
 	getOptionGroups,
 	isActivePreOrder,
 	isPaintedSoldOut,
+	optionAriaLabel,
 	paintStockHint,
 	isPreOrderPresented,
 	isSelectionOutOfStock,
@@ -400,5 +401,17 @@ describe('ADR-0001 shell (valuesPending): availability not known yet', () => {
 		expect(paintStockHint(false, false)).toBe(false);
 		expect(paintStockHint(false, true)).toBe(true);
 		expect(isPaintedSoldOut(unchecked, paintStockHint(false, null), false)).toBe(true);
+	});
+});
+
+describe('optionAriaLabel: no sold-out announcement before the live stock read', () => {
+	it('before the read (cached shell / SSR, fail-closed stock) the label is the variant name only, whatever the shell stock says', () => {
+		expect(optionAriaLabel('Titanium', false, false, false)).toBeUndefined();
+		expect(optionAriaLabel('Titanium', true, true, false)).toBeUndefined();
+	});
+	it('after the read the real reason is announced', () => {
+		expect(optionAriaLabel('Titanium', false, true, true)).toBe('Titanium, sold out');
+		expect(optionAriaLabel('Titanium', true, false, true)).toBe('Titanium, unavailable with your other choice');
+		expect(optionAriaLabel('Titanium', true, true, true)).toBeUndefined();
 	});
 });

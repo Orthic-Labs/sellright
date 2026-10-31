@@ -3,7 +3,7 @@ import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionPriceFor, priceDeltaLabel, swatchColor } from './product-options';
+import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionAriaLabel, optionPriceFor, priceDeltaLabel, swatchColor } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
@@ -272,7 +272,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                           <button key={val}
                             class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -293,7 +293,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                           <button key={val}
                             class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -326,7 +326,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                           <button key={val}
                             class={`sr-pill${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
