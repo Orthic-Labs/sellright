@@ -69,3 +69,36 @@ export async function purgeCloudflareUrls(storeSlug: string, urls: string[]): Pr
   }
   return allOk;
 }
+
+/** Cloudflare purge-by-hostname accepts at most 100 hosts per call on every plan (docs: "Max operations per request"). */
+export const CF_PURGE_MAX_HOSTS = 100;
+
+/**
+ * Purge every cached object for the given hostnames in a store's zone (`{ hosts }` body: available on all plans, and
+ * scoped to the host, unlike purge_everything which would also drop other tenants on a shared zone). Same contract as
+ * purgeCloudflareUrls: never throws; false on no config / rejection / network error. Rate limit on Free is 5 requests
+ * per minute per account (shared with other non-URL purges), so callers must not loop on it.
+ */
+export async function purgeCloudflareHosts(storeSlug: string, hosts: string[]): Promise<boolean> {
+  const list = [...new Set(hosts.filter(Boolean))].slice(0, CF_PURGE_MAX_HOSTS);
+  if (!list.length) return false;
+  const cfg = resolveCloudflareConfig(storeSlug);
+  if (!cfg) return false;
+  try {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfg.zoneId}/purge_cache`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${cfg.apiToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ hosts: list }),
+    });
+    const body = (await res.json().catch(() => null)) as { success?: boolean; errors?: unknown } | null;
+    if (!res.ok || body?.success === false) {
+      logErr.error('cloudflare host purge rejected', new Error(`HTTP ${res.status}`), { storeSlug, hostCount: list.length, errors: body?.errors });
+      return false;
+    }
+    log.info('cloudflare host purged', { storeSlug, hostCount: list.length });
+    return true;
+  } catch (e) {
+    logErr.error('cloudflare host purge request failed', e, { storeSlug, hostCount: list.length });
+    return false;
+  }
+}

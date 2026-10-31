@@ -12,7 +12,7 @@ const { envMock, logInfo, errError } = vi.hoisted(() => ({
 vi.mock('../env.js', () => ({ env: envMock }));
 vi.mock('../lib/logger.js', () => ({ log: { info: (...a: unknown[]) => logInfo(...a) }, err: { error: (...a: unknown[]) => errError(...a) } }));
 
-import { resolveCloudflareConfig, purgeCloudflareUrls } from './cloudflare-purge.js';
+import { resolveCloudflareConfig, purgeCloudflareUrls, purgeCloudflareHosts } from './cloudflare-purge.js';
 
 const fetchMock = vi.fn();
 
@@ -105,5 +105,24 @@ describe('purgeCloudflareUrls', () => {
     fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED'));
     await expect(purgeCloudflareUrls('acme', ['https://acme.example.com/'])).resolves.toBe(false);
     expect(errError).toHaveBeenCalled();
+  });
+});
+
+describe('purgeCloudflareHosts', () => {
+  it('posts { hosts } once and reports success', async () => {
+    envMock.CLOUDFLARE_ZONE_ID = 'z'; envMock.CLOUDFLARE_API_TOKEN = 't';
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true }) });
+    await expect(purgeCloudflareHosts('acme', ['a.example.com', 'a.example.com'])).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ hosts: ['a.example.com'] });
+  });
+  it('is false (and never throws) on rejection, network error or missing config', async () => {
+    await expect(purgeCloudflareHosts('acme', ['a.example.com'])).resolves.toBe(false);
+    envMock.CLOUDFLARE_ZONE_ID = 'z'; envMock.CLOUDFLARE_API_TOKEN = 't';
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 429, json: async () => ({ success: false, errors: [] }) });
+    await expect(purgeCloudflareHosts('acme', ['a.example.com'])).resolves.toBe(false);
+    fetchMock.mockRejectedValueOnce(new Error('net'));
+    await expect(purgeCloudflareHosts('acme', ['a.example.com'])).resolves.toBe(false);
+    expect(errError).toHaveBeenCalledTimes(2);
   });
 });

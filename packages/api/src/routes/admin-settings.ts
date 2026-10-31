@@ -7,6 +7,7 @@ import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
+import { onStoreShellConfigChanged } from '../cache/purge-hook.js';
 import { appleServicesId } from '../auth/apple.js';
 import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
@@ -71,7 +72,7 @@ export async function mutateStoreConfig(
   audit?: SettingsAudit,
   hooks?: { before?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void>; after?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void> },
 ): Promise<Record<string, unknown>> {
-  const { slug, next } = await withStore(storeId, async (tx) => {
+  const { slug, next, prev } = await withStore(storeId, async (tx) => {
     // Optional same-transaction hooks: `before` runs ahead of the config read (e.g. a re-authorization under a lock),
     // `after` alongside the write (e.g. a credential that must commit atomically with the config).
     if (hooks?.before) await hooks.before(tx);
@@ -96,10 +97,22 @@ export async function mutateStoreConfig(
       });
     }
     if (hooks?.after) await hooks.after(tx);
-    return { slug: row!.slug, next: v };
+    return { slug: row!.slug, next: v, prev };
   });
   await broadcastStoreCacheInvalidation(slug);
+  // ADR-0001 item 5 / I-4: after commit, a change to any config key the shell or its CSP can render purges the host.
+  if (shellConfigChanged(prev, next)) onStoreShellConfigChanged(slug);
   return next;
+}
+
+/** Config keys that never reach a shell render or its CSP. Everything else fails closed: a change purges the host. */
+const NON_SHELL_CONFIG_KEYS = new Set(['previewTokenHash', 'notifications', 'email', 'security', 'checklist', 'orderNumbering']);
+export function shellConfigChanged(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+    if (NON_SHELL_CONFIG_KEYS.has(k)) continue;
+    if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) return true;
+  }
+  return false;
 }
 
 // ── store details + tax ──────────────────────────────────────────────────────
@@ -208,6 +221,8 @@ adminSettings.openapi(
       });
     }
     await broadcastStoreCacheInvalidation(st.slug);
+    // Name/currency/tax flags render into the shell (header, JSON-LD, price format); hostnames/storefrontUrl are handled by mutateStoreConfig.
+    if (Object.keys(b).length > 0) onStoreShellConfigChanged(st.slug);
     return c.json({ ok: true }, 200);
   }),
 );

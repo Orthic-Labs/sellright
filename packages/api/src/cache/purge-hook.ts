@@ -1,14 +1,13 @@
 /**
- * Cache-invalidation trigger for catalog/stock changes, hooked in alongside
- * manifest/stock-hook.ts's onStockChanged() at every call site that mutates a
- * product, variant, or stock row. Zero debounce — same LOCKED policy as the
+ * Cache-invalidation trigger for catalog CONTENT changes (ADR-0001: stock commits no longer purge HTML; the shell
+ * holds no stock and price is a live value). Called from manifest/stock-hook.ts's onCatalogContentChanged() only. Zero debounce — same LOCKED policy as the
  * stock manifest: no coalescing window, fire on every commit. Fire-and-
  * forget: never await this from a request handler (see purgeCloudflareUrls
  * for why it can never throw either).
  */
 import { env } from '../env.js';
 import { appValue } from '../email/dispatch.js';
-import { purgeCloudflareUrls, resolveCloudflareConfig } from './cloudflare-purge.js';
+import { purgeCloudflareHosts, purgeCloudflareUrls, resolveCloudflareConfig } from './cloudflare-purge.js';
 import { err as logErr } from '../lib/logger.js';
 
 function storefrontOrigin(storeSlug: string): string | null {
@@ -49,7 +48,7 @@ export function onCatalogCacheChanged(storeSlug: string, opts: { productPath?: s
   try {
     const urls = standardPurgeUrls(storeSlug, opts);
     if (!urls) return; // no configured origin for this store — nothing to purge against
-    void purgeCloudflareUrls(storeSlug, urls);
+    firePurge('product-content', storeSlug, { urls });
   } catch (e) {
     logErr.error('cache purge hook failed to resolve/queue', e, { storeSlug });
   }
@@ -92,13 +91,13 @@ export async function purgeAfterPublish(storeSlug: string, productPaths: readonl
 
 /**
  * P4b purge-on-publish for blog content (not part of the catalog generation, so there is nothing to publish first: the
- * blog row commit IS the publication). Purges the blog index, each changed post (old and new slug on a rename) and the
- * blog sitemap. Call after the blog mutation commits; fire-and-forget, never throws.
+ * blog row commit IS the publication). Purges the home page (it lists recent posts), the blog index, each changed post (old and new slug on a rename)
+ * and the sitemaps (ADR-0001 item 5). Call after the blog mutation commits; fire-and-forget, never throws.
  */
 export function blogPurgeUrls(storeSlug: string, postSlugs: readonly string[]): string[] | null {
   const base = storefrontOrigin(storeSlug);
   if (!base) return null;
-  const urls = [`${base}/blog/`, `${base}/sitemap-blog.xml`, `${base}/sitemap.xml`];
+  const urls = [`${base}/`, `${base}/blog/`, `${base}/sitemap-blog.xml`, `${base}/sitemap.xml`];
   for (const slug of new Set(postSlugs)) if (slug) urls.push(`${base}/blog/${encodeURIComponent(slug)}/`);
   return urls;
 }
@@ -106,8 +105,113 @@ export function blogPurgeUrls(storeSlug: string, postSlugs: readonly string[]): 
 export function onBlogContentChanged(storeSlug: string, postSlugs: readonly string[]): void {
   try {
     const urls = blogPurgeUrls(storeSlug, postSlugs);
-    if (urls) void purgeCloudflareUrls(storeSlug, urls);
+    if (urls) firePurge('blog-content', storeSlug, { urls });
   } catch (e) {
     logErr.error('blog cache purge hook failed to resolve/queue', e, { storeSlug });
   }
+}
+
+// ── ADR-0001 item 5: reliable purge triggers ────────────────────────────────────────────────────────────────────
+// Cloudflare purge limits, from https://developers.cloudflare.com/cache/how-to/purge-cache/ (fetched 2026-10-31):
+//   by URL: 100 URLs per request on Free/Pro/Business (500 Enterprise); 800 URLs/s Free, 1500/s Pro+Business.
+//   by hostname/tag/prefix/everything: 100 operations per request; Free 5 requests/min (bucket 25), Pro 5/s, Business 10/s.
+// cloudflare-purge.ts keeps its older, safer 30-URL batch. Past PURGE_URL_FALLBACK_THRESHOLD URLs a trigger stops
+// enumerating and purges the whole host in ONE request (one call against the 5/min Free budget instead of many).
+export const PURGE_URL_FALLBACK_THRESHOLD = 100;
+export const PURGE_ATTEMPT_TIMEOUT_MS = 5_000;
+export const PURGE_MAX_ATTEMPTS = 3;
+export const PURGE_BACKOFF_BASE_MS = 1_000; // 1s, then 4s (x4 each retry)
+
+export type PurgeEvent = 'blog-content' | 'collection' | 'store-config' | 'maintenance' | 'product-content' | 'manual';
+export type PurgeSpec = { urls: string[] } | { everything: true };
+export type PurgeResult = 'purged' | 'skipped' | 'failed';
+
+let retryPolicy = { attemptTimeoutMs: PURGE_ATTEMPT_TIMEOUT_MS, maxAttempts: PURGE_MAX_ATTEMPTS, backoffBaseMs: PURGE_BACKOFF_BASE_MS };
+/** Test-only: shrink the timeout/backoff. Pass nothing to restore the defaults. */
+export function _setPurgeRetryPolicyForTest(p?: Partial<typeof retryPolicy>): void {
+  retryPolicy = { attemptTimeoutMs: PURGE_ATTEMPT_TIMEOUT_MS, maxAttempts: PURGE_MAX_ATTEMPTS, backoffBaseMs: PURGE_BACKOFF_BASE_MS, ...p };
+}
+
+/** Pure planning step (exported for the K-3 tests): which request shape a trigger uses. */
+export function planPurge(spec: PurgeSpec): { mode: 'urls'; urls: string[] } | { mode: 'host'; reason: 'everything' | 'over-threshold' } {
+  if ('everything' in spec) return { mode: 'host', reason: 'everything' };
+  const urls = [...new Set(spec.urls)];
+  return urls.length > PURGE_URL_FALLBACK_THRESHOLD ? { mode: 'host', reason: 'over-threshold' } : { mode: 'urls', urls };
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
+
+/**
+ * Run one purge with a per-attempt timeout and retry with exponential backoff. Call only AFTER the triggering
+ * transaction committed. Never throws. After the last failed attempt it logs ONE structured error line carrying
+ * `alert: 'cache_purge_failed'` plus event/store/mode/counts, which the log alerting keys on (QS-7). 'skipped' (no
+ * storefront origin or no Cloudflare config) is not a failure.
+ */
+export async function runPurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec): Promise<PurgeResult> {
+  let plan: ReturnType<typeof planPurge>;
+  let base: string | null;
+  try {
+    base = storefrontOrigin(storeSlug);
+    if (!base || !resolveCloudflareConfig(storeSlug)) return 'skipped';
+    plan = planPurge(spec);
+  } catch (e) {
+    logErr.error('cache purge failed to resolve', e, { alert: 'cache_purge_failed', event, storeSlug, phase: 'resolve' });
+    return 'failed';
+  }
+  const hostname = new URL(base).hostname;
+  const attemptOnce = (): Promise<boolean | 'timeout'> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), retryPolicy.attemptTimeoutMs); timer.unref?.(); });
+    const call = plan.mode === 'urls' ? purgeCloudflareUrls(storeSlug, plan.urls) : purgeCloudflareHosts(storeSlug, [hostname]);
+    return Promise.race([call, deadline]).finally(() => { if (timer) clearTimeout(timer); });
+  };
+  let last = 'rejected';
+  for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt++) {
+    try {
+      const out = await attemptOnce();
+      if (out === true) return 'purged';
+      last = out === 'timeout' ? 'timeout' : 'rejected';
+    } catch (e) { last = e instanceof Error ? e.message : 'error'; }
+    if (attempt < retryPolicy.maxAttempts) await sleep(retryPolicy.backoffBaseMs * 4 ** (attempt - 1));
+  }
+  logErr.error('cache purge failed after retries', new Error(`purge ${last}`), {
+    alert: 'cache_purge_failed', event, storeSlug, host: hostname, mode: plan.mode,
+    urlCount: plan.mode === 'urls' ? plan.urls.length : undefined, reason: plan.mode === 'host' ? plan.reason : undefined,
+    attempts: retryPolicy.maxAttempts, last,
+  });
+  return 'failed';
+}
+
+/** Fire-and-forget wrapper for request handlers. Never throws, never rejects. */
+export function firePurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec): void {
+  void runPurge(event, storeSlug, spec).catch((e) => logErr.error('cache purge crashed', e, { alert: 'cache_purge_failed', event, storeSlug }));
+}
+
+/** Collection page + shop listing (+ collection sitemaps) for the changed collections. Null: no storefront origin. */
+export function collectionPurgeUrls(storeSlug: string, collectionSlugs: readonly string[]): string[] | null {
+  const base = storefrontOrigin(storeSlug);
+  if (!base) return null;
+  const urls = [`${base}/shop/`, `${base}/sitemap-collections.xml`, `${base}/sitemap.xml`];
+  for (const slug of new Set(collectionSlugs)) if (slug) urls.push(`${base}/collections/${encodeURIComponent(slug)}/`);
+  return urls;
+}
+
+/** Collection create/update/delete/membership change, called after commit. */
+export function onCollectionChanged(storeSlug: string, collectionSlugs: readonly string[]): void {
+  try {
+    const urls = collectionPurgeUrls(storeSlug, collectionSlugs);
+    if (urls) firePurge('collection', storeSlug, { urls });
+  } catch (e) {
+    logErr.error('collection cache purge hook failed to resolve/queue', e, { alert: 'cache_purge_failed', event: 'collection', storeSlug });
+  }
+}
+
+/** Theme, store identity, name/logo, sign-in providers, head/analytics config or anything else the shell or its CSP renders: purge the whole host. */
+export function onStoreShellConfigChanged(storeSlug: string): void {
+  firePurge('store-config', storeSlug, { everything: true });
+}
+
+/** Maintenance toggled (awaitable: the CLI process exits right after). Purges the whole host. */
+export function purgeHostForMaintenance(storeSlug: string): Promise<PurgeResult> {
+  return runPurge('maintenance', storeSlug, { everything: true });
 }

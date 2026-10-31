@@ -5,9 +5,11 @@
  * privileged process; it just writes/reads the flag file on the volume the
  * api process itself checks (see maintenance.ts).
  */
+import { env } from '../env.js';
+import { purgeHostForMaintenance } from '../cache/purge-hook.js';
 import { isMaintenanceOn, maintenanceInfo, setMaintenance } from '../maintenance.js';
 
-function main(): void {
+async function main(): Promise<void> {
   const cmd = process.argv[2];
   switch (cmd) {
     case 'on':
@@ -28,7 +30,10 @@ function main(): void {
   // Sanity echo so a caller parsing stdout can also just check the exit code.
   if (cmd === 'on' || cmd === 'off') {
     process.exitCode = isMaintenanceOn() === (cmd === 'on') ? 0 : 1;
+    // ADR-0001 QS-6: the flag file is written, so purge every cached page for the host. Awaited because this process
+    // exits right after; bounded + retried + alert-logged inside runPurge, never throws and never changes the exit code.
+    if (env.STORE_SLUG) console.log(`maintenance: edge purge ${await purgeHostForMaintenance(env.STORE_SLUG)}`);
   }
 }
 
-main();
+void main();

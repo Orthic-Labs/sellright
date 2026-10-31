@@ -21,6 +21,7 @@ import { submitIndexNowUrls } from '../seo/indexnow.js';
 import { listBlogSitemapEntries, listCollectionSitemapEntries, listProductSitemapEntries } from '../seo/queries.js';
 import { allSitemapUrls, buildSitemapPreview, sitemapPurgeUrls, type SitemapInputs } from '../seo/sitemap-preview.js';
 import { purgeCloudflareUrls, resolveCloudflareConfig } from '../cache/cloudflare-purge.js';
+import { onStoreShellConfigChanged } from '../cache/purge-hook.js';
 
 export const adminSeo = new OpenAPIHono();
 
@@ -28,7 +29,7 @@ export const adminSeo = new OpenAPIHono();
  *  mutateStoreConfig, scoped to the `seo` sub-object so an admin editing SEO
  *  settings can't clobber concurrent writes to `payments`/`pricing`/etc. */
 async function mutateSeoConfig(storeId: string, actor: string, mutate: (seo: Record<string, unknown>) => Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { slug, nextSeo } = await withStore(storeId, async (tx) => {
+  const { slug, nextSeo, prevSeo } = await withStore(storeId, async (tx) => {
     const [row] = await tx.select({ slug: s.store.slug, config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('no key update').limit(1);
     const prevConfig = (row?.config as Record<string, unknown> | null) ?? {};
     const prevSeo = (prevConfig.seo as Record<string, unknown> | undefined) ?? {};
@@ -40,9 +41,11 @@ async function mutateSeoConfig(storeId: string, actor: string, mutate: (seo: Rec
     // is a public verification token by design — IndexNow publishes it at a
     // world-readable URL), so the full before/after is safe to log.
     await tx.insert(s.auditLog).values({ storeId, actor, entity: 'store', entityId: storeId, action: 'seo_config_updated', fromState: JSON.stringify(prevSeo), toState: JSON.stringify(nextSeo) });
-    return { slug: row!.slug, nextSeo };
+    return { slug: row!.slug, nextSeo, prevSeo };
   });
   await broadcastStoreCacheInvalidation(slug);
+  // ADR-0001 I-4: organization/canonical/JSON-LD inputs render into the shell; purge the host when they changed (after commit).
+  if (JSON.stringify(nextSeo) !== JSON.stringify(prevSeo)) onStoreShellConfigChanged(slug);
   return nextSeo;
 }
 

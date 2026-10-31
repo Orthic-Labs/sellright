@@ -22,7 +22,7 @@ const { envMock, publishSpy, logInfo, errError, markPending, clearPending, leade
     CATALOG_DIR: '/tmp/stock-hook-test' as string | undefined,
     STORE_SLUG: 'demo-store' as string | undefined,
   },
-  publishSpy: vi.fn(async (_args: { outDir: string; storeSlug: string; variantIds?: string[] }) => ({ generation: 'g', products: 1 })),
+  publishSpy: vi.fn(async (_args: { outDir: string; storeSlug: string; variantIds?: string[]; purge?: boolean }) => ({ generation: 'g', products: 1 })),
   markPending: vi.fn(async () => ({ token: 'exact-db-token', requiresFull: false })),
   clearPending: vi.fn(async () => {}),
   leader: vi.fn(async (_job: string, fn: () => unknown) => fn()),
@@ -127,7 +127,7 @@ describe('onStockChanged — zero-cache manifest signal', () => {
   it('regenerates immediately for the configured store — no debounce/delay', async () => {
     onStockChanged('demo-store');
     await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
-    expect(publishSpy).toHaveBeenCalledWith({ outDir: '/tmp/stock-hook-test', storeSlug: 'demo-store' });
+    expect(publishSpy).toHaveBeenCalledWith({ outDir: '/tmp/stock-hook-test', storeSlug: 'demo-store', purge: false });
   });
 
   it('collapses any number of concurrent triggers into at most one trailing rerun (never zero, never one-per-trigger)', async () => {
@@ -175,7 +175,7 @@ describe('onStockChanged — zero-cache manifest signal', () => {
     it('passes variantIds through when the trigger names specific variants', async () => {
       onStockChanged('demo-store', ['v1', 'v2']);
       await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
-      expect(publishSpy).toHaveBeenCalledWith({ outDir: '/tmp/stock-hook-test', storeSlug: 'demo-store', variantIds: ['v1', 'v2'] });
+      expect(publishSpy).toHaveBeenCalledWith({ outDir: '/tmp/stock-hook-test', storeSlug: 'demo-store', variantIds: ['v1', 'v2'], purge: false });
     });
 
     it('omitting variantIds means a full regen (variantIds undefined)', async () => {
@@ -282,6 +282,30 @@ describe('V60 / N9 — content triggers and purge ordering', () => {
     onStockChanged('demo-store', ['v1']);
     await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
     expect(purgeHook.onCatalogCacheChanged).not.toHaveBeenCalled();
+  });
+
+  it('ADR-0001: a stock commit publishes the manifest with purge:false (no HTML purge), in every configuration', async () => {
+    onStockChanged('demo-store', ['v1']);
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    expect(publishSpy.mock.calls[0]![0]).toMatchObject({ purge: false });
+    expect(publishSpy.mock.calls[0]![0].variantIds).toEqual(['v1']);
+    // unpublished deployment/other store: stock never calls the HTML purge either
+    onStockChanged('other-store', ['v9']);
+    onStockChanged('other-store');
+    expect(purgeHook.onCatalogCacheChanged).not.toHaveBeenCalled();
+  });
+
+  it('ADR-0001: a content edit batched behind a stock run still purges (trailing purge flag), stock-only trailing does not', async () => {
+    let release!: () => void;
+    publishSpy.mockImplementationOnce(() => new Promise((r) => { release = () => r({ generation: 'g', products: 1 }); }));
+    onStockChanged('demo-store', ['v1']);
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    onCatalogContentChanged('demo-store', ['p1']);
+    await vi.waitFor(() => expect(markPending).toHaveBeenCalledTimes(2));
+    release();
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(2));
+    expect(publishSpy.mock.calls[0]![0]).toMatchObject({ purge: false });
+    expect(publishSpy.mock.calls[1]![0].purge).toBeUndefined();
   });
 
   it('purges at once where this deployment publishes no catalog', () => {
