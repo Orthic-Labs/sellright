@@ -112,43 +112,50 @@ describe('user data (#375)', () => {
 		beforeEach(async () => { localStorage.clear(); head_ = await import('~/platform/head-analytics'); });
 		const settle = () => new Promise((r) => setTimeout(r, 20));
 
-		const interactionRun = (readyState: string) => {
+		it('#360/#425: gtm.js is inserted on the first interaction or right after the load event (no 4 s timer); the dataLayer is filled at once', () => {
 			const { GTM_LOADER_SOURCE } = head_;
 			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
 			const d = {
-				readyState, currentScript: { getAttribute: (k: string) => (k === 'data-gtm-id' ? 'GTM-TEST' : null), nonce: '' },
+				readyState: 'loading', currentScript: { getAttribute: (k: string) => (k === 'data-gtm-id' ? 'GTM-TEST' : null), nonce: '' },
 				getElementsByTagName: () => [{ parentNode: { insertBefore: (j: unknown) => { inserted.push(j); } } }],
 				createElement: () => ({ setAttribute: () => undefined }), cookie: '',
 			};
-			const timers: Array<{ cb: () => void; ms: number }> = []; const idle: Array<() => void> = [];
+			const timers: Array<{ cb: () => void; ms: number }> = [];
 			const w = { localStorage, crypto: globalThis.crypto, location: { protocol: 'https:' }, dataLayer: [] as DL,
 				addEventListener: (e: string, cb: () => void) => { (handlers[e] ??= []).push(cb); },
-				requestIdleCallback: (cb: () => void) => { idle.push(cb); } };
-			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, (cb: () => void, ms: number) => { timers.push({ cb, ms }); return 0; });
-			return { inserted, handlers, timers, idle, w };
-		};
-
-		it('#425 (b): gtm.js waits for the first interaction only: not the load event, an idle period or a timer; the dataLayer is filled at once', () => {
-			for (const readyState of ['loading', 'complete']) {
-				const { inserted, handlers, timers, idle, w } = interactionRun(readyState);
-				expect(w.dataLayer[w.dataLayer.length - 1]).toMatchObject({ event: 'gtm.js' });
-				expect(handlers.load).toBeUndefined();
-				handlers.load?.forEach((cb) => cb());
-				timers.forEach((x) => x.cb());
-				idle.forEach((cb) => cb());
-				expect(inserted).toHaveLength(0);
-				for (const e of ['pointerdown', 'keydown', 'touchstart', 'scroll']) expect(handlers[e]).toHaveLength(1);
-			}
+				setTimeout: (cb: () => void, ms: number) => { timers.push({ cb, ms }); return 0; } };
+			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, w.setTimeout);
+			expect(w.dataLayer[w.dataLayer.length - 1]).toMatchObject({ event: 'gtm.js' });
+			expect(inserted).toHaveLength(0);
+			handlers.load!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(0);
+			expect(timers.some((x) => x.ms === 4000)).toBe(false);
+			const t = timers.find((x) => x.ms === 0);
+			expect(t).toBeDefined();
+			t!.cb();
+			expect(inserted).toHaveLength(1);
+			handlers.pointerdown!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
 		});
 
-		it('#360: each interaction type inserts gtm.js exactly once', () => {
-			for (const e of ['pointerdown', 'keydown', 'touchstart', 'scroll']) {
-				const { inserted, handlers } = interactionRun('complete');
-				handlers[e]!.forEach((cb) => cb());
-				expect(inserted).toHaveLength(1);
-				for (const other of ['pointerdown', 'keydown', 'touchstart', 'scroll']) handlers[other]!.forEach((cb) => cb());
-				expect(inserted).toHaveLength(1);
-			}
+		it('#360: the first interaction inserts gtm.js before the after-load insert; the later one adds nothing', () => {
+			const { GTM_LOADER_SOURCE } = head_;
+			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
+			const d = {
+				readyState: 'complete', currentScript: { getAttribute: (k: string) => (k === 'data-gtm-id' ? 'GTM-TEST' : null), nonce: '' },
+				getElementsByTagName: () => [{ parentNode: { insertBefore: (j: unknown) => { inserted.push(j); } } }],
+				createElement: () => ({ setAttribute: () => undefined }), cookie: '',
+			};
+			const timers: Array<{ cb: () => void; ms: number }> = [];
+			const w = { localStorage, crypto: globalThis.crypto, location: { protocol: 'https:' }, dataLayer: [] as DL,
+				addEventListener: (e: string, cb: () => void) => { (handlers[e] ??= []).push(cb); } };
+			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, (cb: () => void, ms: number) => { timers.push({ cb, ms }); return 0; });
+			expect(inserted).toHaveLength(0);
+			for (const e of ['pointerdown', 'keydown', 'touchstart', 'scroll']) expect(handlers[e]).toHaveLength(1);
+			handlers.scroll!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
+			timers.forEach((x) => x.cb());
+			expect(inserted).toHaveLength(1);
 		});
 
 		it('pushes the stored user data before gtm.js', async () => {

@@ -76,45 +76,16 @@ export function startConversion(): void {
 	onAnalyticsEvent((event) => {
 		const w = window as unknown as { dataLayer?: unknown[]; google_tag_manager?: unknown };
 		const eventId = event.name === 'purchase' ? `purchase_${event.orderCode}` : newEventId(event.name);
-		const pageLocation = location.origin + location.pathname;
-		const first = conversionPayload(event, eventId, pageLocation, undefined, false);
+		const ga = document.cookie.match(/(?:^|; )_ga=([^;]*)/)?.[1]?.split('.').slice(-2).join('.');
+		const { dataLayer, beacon } = conversionPayload(event, eventId, location.origin + location.pathname, ga && /^\d+\.\d+$/.test(ga) ? ga : undefined, !!w.google_tag_manager);
 		w.dataLayer = w.dataLayer || [];
 		w.dataLayer.push({ ecommerce: null });
-		w.dataLayer.push(first.dataLayer);
-		if (!first.beacon) return;
-		// #425: GTM starts only on the shopper's first interaction (head-analytics.ts), and it replays every dataLayer entry pushed before it.
-		// The sink's Measurement Protocol copy is therefore decided when that is known: none once GTM runs, the copy if the page is left
-		// without GTM ever running (no interaction, or the tag blocked). Never both, so the event is counted once.
-		void gtmDelivers(window).then((sent) => {
-			const ga = document.cookie.match(/(?:^|; )_ga=([^;]*)/)?.[1]?.split('.').slice(-2).join('.');
-			const { beacon } = conversionPayload(event, eventId, pageLocation, ga && /^\d+\.\d+$/.test(ga) ? ga : undefined, sent);
-			if (!beacon) return;
-			const body = JSON.stringify(beacon);
-			const queued = typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(SINK_PATH, new Blob([body], { type: 'application/json' }));
-			if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true, priority: 'low' }).catch(() => undefined);
-		});
+		w.dataLayer.push(dataLayer);
+		if (!beacon) return;
+		const body = JSON.stringify(beacon);
+		const queued = typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(SINK_PATH, new Blob([body], { type: 'application/json' }));
+		if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true, priority: 'low' }).catch(() => undefined);
 	});
-}
-
-/**
- * #425: resolves true as soon as GTM runs on this page (`google_tag_manager`), false when the page is left (pagehide) without it.
- * Polls cheaply (GTM sets no event of its own the page could listen to). One shared watcher per page, however many events wait.
- */
-let delivery: Promise<boolean> | undefined;
-export function gtmDelivers(win: Window, stepMs = 500): Promise<boolean> {
-	const w = win as unknown as { google_tag_manager?: unknown };
-	if (w.google_tag_manager) return Promise.resolve(true);
-	return (delivery ??= new Promise<boolean>((resolve) => {
-		const done = (sent: boolean) => {
-			clearInterval(timer);
-			win.removeEventListener('pagehide', onHide);
-			delivery = undefined;
-			resolve(sent);
-		};
-		const onHide = () => done(!!w.google_tag_manager);
-		const timer = setInterval(() => { if (w.google_tag_manager) done(true); }, stepMs);
-		win.addEventListener('pagehide', onHide);
-	}));
 }
 
 /** The order facts the purchase conversion needs (the confirmation page's live order read). */
