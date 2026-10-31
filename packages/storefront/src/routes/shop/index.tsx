@@ -171,6 +171,8 @@ const BaseShopPage = component$(() => {
  const displayData = getDisplayProducts();
  const displayProducts = displayData.products;
  const displayCount = displayData.count;
+ const gridPending = listingPending && !searchTerm.value && shellProducts.length > 0;
+ const showGrid = gridPending || (!(listingPending && !searchTerm.value) && !(isSearching.value && displayProducts.length === 0) && displayProducts.length > 0);
 
  return (
   <div class="bg-[var(--color-parchment)] min-h-screen">
@@ -247,8 +249,35 @@ const BaseShopPage = component$(() => {
 
    {/* ── PRODUCT GRID ── */}
    <div class="max-w-[1920px] mx-auto">
-    {listingPending && !searchTerm.value && shellProducts.length > 0 ? (
-     shellGrid(shellProducts)
+    {showGrid ? (
+     /* #425: ONE keyed grid for the pending shell and the live listing, so the browser's read updates the shell's cards in place
+        (same nodes): a separate shell grid was replaced wholesale, and its re-created titles became a late LCP (~1.1 s). */
+     <div
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
+      style={{ contain: 'layout' }}
+      data-listing-pending={gridPending ? '' : undefined}
+     >
+      {(gridPending ? shellProducts : displayProducts).map((item, index) => (
+       <ProductCard
+        key={item.slug}
+        href={productPath(item.slug)}
+        image={item.image}
+        name={item.name}
+        slug={item.slug}
+        /* pending shell card: placeholder price, neither Sold Out nor in stock (ADR-0001 #412) */
+        price={gridPending ? null : item.pricingVariant?.price ?? item.minPrice}
+        pending={gridPending}
+        pricePending={gridPending}
+        maxPrice={!gridPending && SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
+        inStock={gridPending ? undefined : item.inStock}
+        priority={index === 0}
+        eager={index > 0 && index < 4}
+        salePrice={gridPending ? null : item.pricingVariant?.salePrice ?? null}
+        preOrderPrice={gridPending ? null : item.pricingVariant?.preOrderPrice ?? null}
+        isPreOrder={!gridPending && !!item.pricingVariant?.isPreOrder}
+       />
+      ))}
+     </div>
     ) : listingPending && !searchTerm.value ? (
      /* ADR-0001: the shell's listing space (two rows at every breakpoint) until the browser's manifest read lands */
      <div
@@ -302,64 +331,11 @@ const BaseShopPage = component$(() => {
        Clear filters
       </button>
      </div>
-    ) : (
-     <div
-      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
-      style={{ contain: 'layout' }}
-     >
-      {displayProducts.map((item, index) => (
-       <ProductCard
-        key={item.slug}
-        href={productPath(item.slug)}
-        image={item.image}
-        name={item.name}
-        slug={item.slug}
-        price={item.pricingVariant?.price ?? item.minPrice}
-        maxPrice={SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
-        inStock={item.inStock}
-        priority={index === 0}
-        eager={index > 0 && index < 4}
-        salePrice={item.pricingVariant?.salePrice ?? null}
-        preOrderPrice={item.pricingVariant?.preOrderPrice ?? null}
-        isPreOrder={!!item.pricingVariant?.isPreOrder}
-       />
-      ))}
-     </div>
-    )}
+    ) : null}
    </div>
 
   </div>
  );
 });
-
-/**
- * ADR-0001 #412: the shell's grid from the cached structure (names, images, links). No price, no availability and no stock filtering
- * until the browser's manifest read lands (pending cards: placeholder price, neither Sold Out nor in stock). Defined after the page so
- * the page's own JSX keeps its keys (the switch-off render is unchanged byte for byte).
- */
-function shellGrid(products: CatalogListItem[]) {
- return (
-  <div
-   class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
-   style={{ contain: 'layout' }}
-   data-listing-pending=""
-  >
-   {products.map((item, index) => (
-    <ProductCard
-     key={item.slug}
-     href={productPath(item.slug)}
-     image={item.image}
-     name={item.name}
-     slug={item.slug}
-     price={null}
-     pending
-     pricePending
-     priority={index === 0}
-     eager={index > 0 && index < 4}
-    />
-   ))}
-  </div>
- );
-}
 
 export default hasView('route.shop') ? BrandShopMount : BaseShopPage;
