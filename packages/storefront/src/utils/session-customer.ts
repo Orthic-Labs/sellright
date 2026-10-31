@@ -23,7 +23,41 @@ const isCustomer = (value: unknown): value is SessionCustomer => {
 		&& typeof c.firstName === 'string' && typeof c.lastName === 'string';
 };
 
-export async function fetchSessionCustomer(fetchImpl: typeof fetch = fetch): Promise<SessionResult> {
+/**
+ * #412: this page's session read. Object holder so the minifier cannot fold it. `latest` is the most recent read for the current
+ * page (the root layout starts one on every load and client navigation), so a page asking "who is signed in" takes that answer
+ * instead of a second GET /api/session/. `early` is a read such a page had to start itself because the layout's had not begun
+ * yet; the layout's next read joins it once instead of sending its own. Nothing outlives the page.
+ */
+const pageRead: { latest?: Promise<SessionResult>; early?: Promise<SessionResult> } = {};
+
+/** A fresh `no-store` read of the session (the layout's per page). An explicit `fetchImpl` always reads on its own. */
+export function fetchSessionCustomer(fetchImpl?: typeof fetch): Promise<SessionResult> {
+	if (fetchImpl) return readSessionCustomer(fetchImpl);
+	const early = pageRead.early;
+	pageRead.early = undefined;
+	if (early) return early;
+	const read = readSessionCustomer(fetch);
+	pageRead.latest = read;
+	return read;
+}
+
+/** The session read for the current page (in flight or settled); starts it when the layout has not yet. */
+export function pageSessionCustomer(): Promise<SessionResult> {
+	if (pageRead.latest) return pageRead.latest;
+	const read = readSessionCustomer(fetch);
+	pageRead.latest = read;
+	pageRead.early = read;
+	return read;
+}
+
+/** Test seam: forget the page's reads. */
+export function resetPageSessionForTest(): void {
+	pageRead.latest = undefined;
+	pageRead.early = undefined;
+}
+
+async function readSessionCustomer(fetchImpl: typeof fetch): Promise<SessionResult> {
 	try {
 		const response = await fetchImpl(SESSION_ENDPOINT, { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'application/json' } });
 		if (!response.ok) return { status: 'unknown' };

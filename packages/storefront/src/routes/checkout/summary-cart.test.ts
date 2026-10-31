@@ -103,6 +103,11 @@ describe('checkoutSummarySource', () => {
     expect(checkoutSummarySource({ pageLoading: true, entryReadDone: true, client: empty, hasServerCart: true })).toBe('skeleton');
     expect(checkoutSummarySource({ pageLoading: true, entryReadDone: true, client: { status: 'converted', lineCount: 2 }, hasServerCart: true })).toBe('skeleton');
   });
+  it('#412 shell: the live entry read fills the summary as soon as it lands; nothing else ever does', () => {
+    expect(checkoutSummarySource({ pageLoading: true, entryReadDone: false, client: empty, hasServerCart: false, shell: true })).toBe('skeleton');
+    expect(checkoutSummarySource({ pageLoading: true, entryReadDone: false, client: active, hasServerCart: false, shell: true })).toBe('client');
+    expect(checkoutSummarySource({ pageLoading: true, entryReadDone: false, client: { status: 'converted', lineCount: 2 }, hasServerCart: false, shell: true })).toBe('skeleton');
+  });
 });
 
 describe('hasMixedPreOrder', () => {
@@ -127,5 +132,22 @@ describe('checkout route wiring', () => {
     expect(route).toMatch(/const read = await refreshCartLive\(localCart\);\n\s*if \(!current\(\)\) return;\n\s*entryReadDone\.value = true;/);
     expect(route).toContain("if (localCart.cart.pricingIntent !== 'checkout') {");
     expect(route).toMatch(/refreshStock: \(\) => refreshCartStock\(localCart\)/);
+  });
+  it('#412: one cart GET and one session GET at entry, and no network read holds back the summary\'s re-render', () => {
+    // The pricing task leaves the read to the entry until it lands (the entry re-reads when the inputs moved meanwhile).
+    const pricing = route.slice(route.indexOf("CartService.setQuoteContext({ pricingIntent: 'checkout'"), route.indexOf('useVisibleTask$(({ cleanup })'));
+    expect(pricing.indexOf('if (!untrack(() => entryReadDone.value)) return;')).toBeGreaterThan(-1);
+    expect(pricing.indexOf('if (!untrack(() => entryReadDone.value)) return;')).toBeLessThan(pricing.indexOf('CartService.refresh()'));
+    expect(pricing).toMatch(/void \(async \(\) => \{\n\s*try \{\n\s*await CartService\.refresh\(\);/);
+    // The shipping quote is not awaited by its task either.
+    expect(route).toMatch(/void \(async \(\) => \{\n\s*try \{\n[^\n]*\n\s*const quote = await getShippingQuote/);
+    // The entry read's own shipping quote is taken first; the POST runs only without one.
+    expect(route.indexOf('CartService.takeShippingQuote(countryCode)')).toBeGreaterThan(-1);
+    expect(route.indexOf('CartService.takeShippingQuote(countryCode)')).toBeLessThan(route.indexOf('await getShippingQuote'));
+    // Identity: the layout's session read for this page, never a second GET /api/session/.
+    expect(route).toContain('await pageSessionCustomer()');
+    expect(route).not.toContain('fetchSessionCustomer');
+    // The shell's qinit starts (or joins) the document-start entry read; it never defers to a later one.
+    expect(route).toContain('startCheckoutEntryBoot(location.pathname)');
   });
 });

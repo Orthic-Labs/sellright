@@ -9,7 +9,8 @@ import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { resolvePromotionStack } from '../money/promotion-resolver.js';
 import { canonicalCouponCodes, PromotionStackError } from '../money/promotion-stack.js';
-import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
+import { freeShippingThreshold, isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
+import { calculateOrderTotals } from '../money/totals.js';
 import { loyaltyBalance } from '../loyalty/ledger.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
@@ -587,22 +588,93 @@ cart.openapi(
   },
 );
 
+/** The shipping quote shape of POST /v1/shop/shipping-methods (and of the cart read's opt-in `shippingQuote`). */
+export const ShippingQuoteOut = z.object({
+  methods: z.array(z.object({ code: z.string(), name: z.string(), rate: z.number().int(), price: z.number().int() })),
+  // The nearest free-shipping tier for this destination (null when already free or none is reachable), so storefronts never
+  // carry thresholds of their own.
+  freeShipping: z.object({ threshold: z.number().int(), remaining: z.number().int() }).nullable(),
+});
+export type ShippingQuote = z.infer<typeof ShippingQuoteOut>;
+
+/**
+ * The shipping quote for `items` to `country`: the one rule POST /v1/shop/shipping-methods and the cart read's opt-in
+ * `includeShippingMethods` share. The items are priced server-side (checkout intent, coupons, tax) so eligibility and the
+ * free-shipping tier see discounts and tax; an unavailable line has no quote. Read-only. A PromotionStackError propagates.
+ */
+export async function quoteShippingMethods(tx: Tx, st: StoreCtx, items: Array<{ sku: string; quantity: number }>,
+  opts: { country: string; couponCode?: string; couponCodes?: string[]; token?: string | null }): Promise<ShippingQuote> {
+  // Checkout tests shipping eligibility before planning points redemption.
+  const quote = await priceCart(tx, st, items, { shipCountry: opts.country, couponCode: opts.couponCode, couponCodes: opts.couponCodes, pricingIntent: 'checkout', token: opts.token });
+  if (quote.unavailable.length) return { methods: [], freeShipping: null };
+  const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+  const ctx = { country: opts.country, subtotal: quote.subtotal, discountedSubtotalWithTax: quote.grandTotal };
+  const freeShipping = freeShippingThreshold(methods.map(m => m.calculator), ctx);
+  return { freeShipping, methods: methods.filter(method => isMethodEligible(method.calculator, ctx)).map(method => {
+    const calc = method.calculator as ShippingCalculator;
+    const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
+      taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
+      shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
+    return { code: method.code, name: method.name, rate: shippingRate(calc), price: total.grandTotal };
+  }) };
+}
+
+/** The method a quoted cart is priced with: the requested one while it is eligible, else the storefront's default — the
+ *  cheapest rate, the first of equal rates in quote order. Undefined when nothing is eligible. */
+export function selectShippingMethod(methods: ReadonlyArray<{ code: string; rate: number }>, requested?: string): string | undefined {
+  if (!methods.length) return undefined;
+  if (requested && methods.some((m) => m.code === requested)) return requested;
+  return methods.reduce((a, b) => (b.rate < a.rate ? b : a)).code;
+}
+
+/** The cart read's opt-in quote: the POST /v1/shop/shipping-methods quote for this cart's own lines and coupons, to `country`.
+ *  Null (the cart is still returned, without it) when the country is not a 2-letter code — the POST's own validation — or the
+ *  quote's credit plan is refused: the storefront then quotes through the POST, which reports that error as before. */
+async function cartShippingQuote(tx: Tx, st: StoreCtx, row: CartRow, couponCode: string | string[] | undefined, token: string | null | undefined,
+  country: string | undefined): Promise<(ShippingQuote & { country: string }) | null> {
+  if (!country || country.length !== 2) return null;
+  const shipTo = country.toUpperCase();
+  const items = await boundedCartItems(tx, row);
+  if (!items.length) return { country: shipTo, methods: [], freeShipping: null };
+  const couponCodes = Array.isArray(couponCode) ? couponCode : couponCode !== undefined ? [couponCode] : row.couponCodes;
+  try {
+    return { country: shipTo, ...await quoteShippingMethods(tx, st, items.map((i) => ({ sku: i.sku, quantity: i.quantity })), { country: shipTo, couponCodes, token }) };
+  } catch (error) {
+    if (error instanceof PromotionStackError) return null;
+    throw error;
+  }
+}
+
+const CartWithShippingOut = CartOut.extend({
+  /** Present only when the read asked for it (`includeShippingMethods=1`) with a 2-letter `shipCountry`: the eligible methods
+   *  and free-shipping tier for this cart and country, exactly as POST /v1/shop/shipping-methods quotes them. The cart is then
+   *  priced with `shippingMethodCode`: the requested method while eligible, else the cheapest. */
+  shippingQuote: ShippingQuoteOut.extend({ country: z.string() }).optional(),
+});
+
 // GET /v1/shop/cart/{token} — fetch a cart, server-repriced.
 cart.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/cart/{token}', summary: 'Get a cart',
-    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), couponCodes: CouponCodesQuery, pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.coerce.number().int().min(1).optional(), shipCountry: z.string().optional() }) },
-    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 409: { description: 'Cart exceeds line budget', content: { 'application/json': { schema: CartTooLargeOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
+    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), couponCodes: CouponCodesQuery, pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.coerce.number().int().min(1).optional(), shipCountry: z.string().optional(),
+      // Opt-in (#412): also quote the shipping methods for this cart to `shipCountry`, and price the cart with the selected one.
+      includeShippingMethods: z.enum(['0', '1']).optional() }) },
+    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartWithShippingOut } } }, 409: { description: 'Cart exceeds line budget', content: { 'application/json': { schema: CartTooLargeOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
-    const { couponCode, couponCodes, shipCountry, shippingMethodCode, redeemPoints, pricingIntent } = c.req.valid('query');
+    const { couponCode, couponCodes, shipCountry, shippingMethodCode, redeemPoints, pricingIntent, includeShippingMethods } = c.req.valid('query');
     const authTok = customerToken(c);
-    const out = await withStore(st.id, async (tx) => {
+    const out = await withStore(st.id, async (tx): Promise<z.infer<typeof CartWithShippingOut> | null> => {
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
-      return cartResponse(tx, st, row, couponCodes ?? couponCode, authTok, shipCountry, { shippingMethodCode, redeemPoints, pricingIntent });
+      const codes = couponCodes ?? couponCode;
+      const quote = includeShippingMethods === '1' ? await cartShippingQuote(tx, st, row, codes, authTok, shipCountry) : null;
+      // No eligible method keeps the plain read's behaviour (the requested code, if any, prices as before).
+      const method = (quote && selectShippingMethod(quote.methods, shippingMethodCode)) ?? shippingMethodCode;
+      const priced = await cartResponse(tx, st, row, codes, authTok, shipCountry, { shippingMethodCode: method, redeemPoints, pricingIntent });
+      return quote ? { ...priced, shippingQuote: quote } : priced;
     });
     if (!out) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     return c.json(out, 200);

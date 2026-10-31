@@ -86,7 +86,9 @@ export const RESPONSIVE_CONFIGS = {
   // 512/819/1024 = small/medium/large real widths of a 4:5 photo; a 375px slot at 2x (750px) now gets medium, not large.
   productMain: {
     widths: [512, 819, 1024],
-    sizes: '(max-width: 768px) 100vw, 1024px'
+    // #360: phones (2x and 3x DPR at 375-390px) get medium, not large: 70vw x DPR stays under the medium descriptor (819w). The
+    // 3x large AVIF was 200-470KB on Damned against the 150KB image budget; medium is visually indistinguishable at phone size.
+    sizes: '(max-width: 768px) 70vw, 1024px'
   },
   // Product card images: 512 = small, 819 = medium (real widths of a 4:5 photo; card slot is object-cover 3:4, ~1.07x zoom)
   productCard: {

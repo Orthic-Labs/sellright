@@ -15,3 +15,13 @@ export const pricingReadStep = (s: { context: string; recorded: string; shipping
 	if (s.context === s.recorded) return 'same';
 	return s.shippingPending ? 'wait' : 'read';
 };
+
+/**
+ * The shipping method the checkout submits from a quote: the cheapest eligible (the first of equal rates), so the displayed rate
+ * and the submitted method are the same server-priced choice. #412: a quote that came with the cart read names the method the
+ * server priced that cart with (`pricedWith`, the same rule); that one is kept while it is in the quote. Null when none is eligible.
+ */
+export const chooseShippingMethod = <M extends { code: string; rate: number }>(methods: readonly M[], pricedWith?: string | null): M | null => {
+	if (!methods.length) return null;
+	return methods.find((m) => !!pricedWith && m.code === pricedWith) ?? methods.reduce((a, b) => (b.rate < a.rate ? b : a));
+};

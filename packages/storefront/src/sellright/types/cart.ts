@@ -68,11 +68,16 @@ import type { Live } from './live';
 
 type CartLinesEndpoint = paths['/v1/shop/cart/{token}/lines']['patch'];
 type CreateCartEndpoint = paths['/v1/shop/cart']['post'];
+type CartReadEndpoint = paths['/v1/shop/cart/{token}']['get'];
 
 /** The cart exactly as every cart endpoint returns it (create / get / patch
  *  lines / patch email / merge all share this shape). */
 export type ServerCart = CreateCartEndpoint['responses'][200]['content']['application/json'];
 export type ServerCartLine = ServerCart['lines'][number];
+
+/** #412: the shipping quote a cart read returns when it asks for one (`includeShippingMethods=1`): the eligible methods and the
+ *  free-shipping tier for the cart and `country`, as POST /v1/shop/shipping-methods quotes them. Never part of the cart mirror. */
+export type CartShippingQuote = NonNullable<CartReadEndpoint['responses'][200]['content']['application/json']['shippingQuote']>;
 
 /** The `{ sku, quantity }` pair every cart-mutating request body carries. */
 export type CartLineInput = NonNullable<CartLinesEndpoint['requestBody']>['content']['application/json']['lines'][number];

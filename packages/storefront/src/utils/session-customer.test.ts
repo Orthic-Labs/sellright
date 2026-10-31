@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CUSTOMER_NOT_DEFINED_ID } from '~/constants';
-import { SESSION_ENDPOINT, anonymousCustomer, fetchSessionCustomer, nextCustomer } from './session-customer';
+import { SESSION_ENDPOINT, anonymousCustomer, fetchSessionCustomer, nextCustomer, pageSessionCustomer, resetPageSessionForTest } from './session-customer';
 
 const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 const ada = { id: 'c1', firstName: 'Ada', lastName: 'L', emailAddress: 'ada@example.com' };
@@ -36,5 +36,32 @@ describe('nextCustomer (what the layout writes into appState.customer)', () => {
 		expect(nextCustomer(ada, { status: 'anonymous' })).toEqual(anonymousCustomer());
 		expect(nextCustomer(anonymousCustomer(), { status: 'anonymous' })).toBeNull();
 		expect(nextCustomer(ada, { status: 'unknown' })).toBeNull();
+	});
+});
+
+describe('#412: one GET /api/session/ per page load', () => {
+	afterEach(() => { vi.unstubAllGlobals(); resetPageSessionForTest(); });
+	const stub = () => { const f = reply(200, { customer: ada }); vi.stubGlobal('fetch', f); return f; };
+
+	it('the checkout takes the layout\'s read for this page (in flight or settled) instead of sending its own', async () => {
+		const f = stub();
+		const layout = fetchSessionCustomer();
+		expect(await pageSessionCustomer()).toEqual({ status: 'signed-in', customer: ada });
+		await layout;
+		expect(await pageSessionCustomer()).toEqual({ status: 'signed-in', customer: ada });
+		expect(f).toHaveBeenCalledTimes(1);
+	});
+
+	it('the checkout asked first: the layout joins that read once, then reads fresh on the next page', async () => {
+		const f = stub();
+		const checkout = pageSessionCustomer();
+		const layout = fetchSessionCustomer();
+		expect(layout).toBe(checkout);
+		await layout;
+		expect(f).toHaveBeenCalledTimes(1);
+		await fetchSessionCustomer(); // a client navigation: always a new read
+		expect(f).toHaveBeenCalledTimes(2);
+		await pageSessionCustomer(); // ... which the page then takes
+		expect(f).toHaveBeenCalledTimes(2);
 	});
 });

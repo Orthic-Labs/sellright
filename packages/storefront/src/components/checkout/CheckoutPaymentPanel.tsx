@@ -1,7 +1,8 @@
-import { $, component$, Slot, useComputed$, useContext, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, untrack, useComputed$, useContext, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { billingDefaultValues } from './payment-element-options';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
+import { isCheckoutShell, type ServerCartValue } from '~/routes/checkout/summary-cart';
 import { PaymentLock } from './LockedPaymentBox';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -31,6 +32,8 @@ interface CheckoutPaymentPanelProps {
 	onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
 	onPlaceOrder$: QRL<() => void>;
 	pageLoading: Signal<boolean>;
+	/** The checkout loader's value (passed through by CheckoutPageView): the ADR-0001 shell marker paints the form while loading (#412). */
+	serverCart?: ReadonlySignal<ServerCartValue>;
 	paymentInit: PaymentInitState;
 	paymentMethod: Signal<PaymentMethod>;
 	shopConfig: Signal<ShopConfig | null>;
@@ -118,7 +121,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 				</div>
 			</div>
 			<div class="mb-3">
-				{props.pageLoading.value ? (
+				{/* ADR-0001 #412: the cacheable shell paints the form at once (it holds no per-visitor value; the entry reads fill
+				    the country and a signed-in customer). With the switch off the loading skeleton is unchanged. */}
+				{props.pageLoading.value && !untrack(() => isCheckoutShell(props.serverCart?.value)) ? (
 					<div class="animate-pulse" style="padding-top:8px;">
 						<div style="height:14px;width:140px;border-radius:4px;background:rgba(100,85,65,0.1);margin-bottom:20px;" />
 						<div class="flex gap-3" style="margin-bottom:14px;">

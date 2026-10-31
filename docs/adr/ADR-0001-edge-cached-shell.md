@@ -1,6 +1,6 @@
 # ADR-0001: Cache every storefront HTML shell at the edge; fetch only live values
 
-- Status: **accepted** (Adrian, 2026-10-31; relayed by the Ads chat). Realization: not started.
+- Status: **accepted** (Adrian, 2026-10-31; relayed by the Ads chat). Realization: **live** 2026-10-31 on rightsites store.*, Damned and Rotten (see Realization).
 - Owner: SellRight core (storefront + API). Decision authority: Adrian.
 - Supersedes: storefront cache policy 2026-10-11.1 (commits 98f465f5, bf56ffff) and the blog/content-only edge cache added in #408 wave 1 (`SELLRIGHT_EDGE_HTML_CACHE`).
 - Related: #360 (P4b, P7), #408, `~/sites/CLAUDE.md` Stock Architecture (LOCKED).
@@ -12,6 +12,7 @@ Adrian, 2026-10-30: "actually even for checkout. the html, should be cached, sho
 - **DP-1** Price is a **live value**, not in the cached shell. It renders into space reserved in the shell (no layout shift). JSON-LD `offers` is filled by the client after the live read; the merchant feed (`no-store`) stays the crawl source.
 - **DP-2** PDP JSON-LD availability is never in the shell; filled by the client.
 - **DP-3** Account pages are out of scope (they redirect on a cookie).
+- **DP-5** (2026-10-31, by measurement) `/checkout/` is `dynamic`. Its LCP is the visitor's order summary: uncached, the server renders it from the cart cookie (~0.4 s at m375); a cached shell must fetch it in the browser after hydration (~4.1-4.2 s at m375 even with one entry read). Adrian's 2026-10-30 rule "all pages except checkout cached" stands.
 - **DP-4** Stock rules are unchanged. The LOCKED doc only records that the shop's manifest read moves from SSR to the browser, still uncached (owner edits that doc).
 
 ## Invariants
@@ -27,8 +28,8 @@ Adrian, 2026-10-30: "actually even for checkout. the html, should be cached, sho
 
 | Class | Routes | Header (only when I-6 holds) |
 |---|---|---|
-| `shell` | `/`, `/shop/`, `/products/*` (and the brand product path), `/collections/*`, `/blog*`, `/about`, `/contact`, legal pages, `/checkout/` (exact) | `public, max-age=0, s-maxage=<TTL>` (no stale-while-revalidate) |
-| `dynamic` | `/checkout/payment/`, `/checkout/cart-link/`, `/checkout/<alias>/`, `/checkout/confirmation/*`, `/account*`, `/sign-in`, `/search`, `/track-order`, `/verify*`, password routes, `/api/*`, `/cache*`, preview requests, every unclassified path | `private, no-store` |
+| `shell` | `/`, `/shop/`, `/products/*` (and the brand product path), `/collections/*`, `/blog*`, `/about`, `/contact`, legal pages (`/checkout/` is excluded per store with `SHELL_CACHE_EXCLUDE`, DP-5) | `public, max-age=0, s-maxage=<TTL>` (no stale-while-revalidate) |
+| `dynamic` | `/checkout/` (DP-5), `/checkout/payment/`, `/checkout/cart-link/`, `/checkout/<alias>/`, `/checkout/confirmation/*`, `/account*`, `/sign-in`, `/search`, `/track-order`, `/verify*`, password routes, `/api/*`, `/cache*`, preview requests, every unclassified path | `private, no-store` |
 | `data` | Qwik loader/action data, `/v1/*` | `private, no-store` |
 
 The origin's `Cache-Control` is the single authority; Cloudflare rules are eligibility only.
@@ -71,3 +72,11 @@ Kill criteria (any → switch off + purge-all for the host): privacy canary, CSP
 - **K-4** Whether Cloudflare stores `Set-Cookie` responses under the current rule (moot if I-6 holds).
 
 Council round 1 (2026-10-30) was degraded (3 of 6 seats); its findings were applied as advice. Security-ops and user-outcome angles are not yet reviewed.
+
+## Realization (2026-10-31)
+
+- Storefront: SellRight 2e0c7a3a (S1-S3, license-flow prices live, shell PDP stock "not known yet", per-request `shellRender()`, `SHELL_CACHE_EXCLUDE`, shop/checkout shells, checkout entry = one live read). API: S4 purge hooks + multi-host/zone fan-out (`STOREFRONT_HOSTS_BY_STORE`, `CLOUDFLARE_ZONE_ID_BY_HOST`).
+- Switch (TTL 300): rightsites store.* all shell routes; Damned and Rotten all shell routes except `/checkout/`. Rotten PDP stock refresh moved to `qinit` (Adrian, 2026-10-31).
+- Verification: `deploy/edge-conformance.mjs --allow --exclude --save-dir` (value/stock/identity scan, Cloudflare email-obfuscation and JS-detection normalised); origin proof signed == anonymous 10/10 per route; Rotten OOS check 9/9 with the switch on; purge timing admin edit -> edge: Rotten 466 ms, rightsites 418 ms.
+- Measured (bench.mjs, m375 throttled, before -> after): home Damned 604 -> 316-344 ms, Rotten 584 -> 340-348 ms; shop Damned 456 -> 392 ms, Rotten 888 -> 728-772 ms; cached-page TTFB at origin ~10 ms (from far regions, Ads' laptop: HIT ~0.33-0.37 s vs MISS 1.0-1.2 s). Checkout: DP-5.
+- Cloudflare JavaScript detections inject an inline script that the nonce-free shell CSP blocks (accepted, Ads 2026-10-31).

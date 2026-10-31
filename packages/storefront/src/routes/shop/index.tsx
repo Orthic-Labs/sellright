@@ -160,6 +160,12 @@ const BaseShopPage = component$(() => {
   }
  });
 
+ // ADR-0001 #412: the shell's structure while the listing read is pending (never filtered or ordered by the redacted stock constant):
+ // the category filter and the brand's merchandising order only. Empty with the switch off (the listing is never pending then).
+ const shellProducts: CatalogListItem[] = listingPending
+  ? [...filterCategoryProducts(catalog.value.products || [], shopCategoryFilters, facetIds.value)].sort((a, b) => listingRank(a.slug) - listingRank(b.slug))
+  : [];
+
  const displayData = getDisplayProducts();
  const displayProducts = displayData.products;
  const displayCount = displayData.count;
@@ -239,7 +245,9 @@ const BaseShopPage = component$(() => {
 
    {/* ── PRODUCT GRID ── */}
    <div class="max-w-[1920px] mx-auto">
-    {listingPending && !searchTerm.value ? (
+    {listingPending && !searchTerm.value && shellProducts.length > 0 ? (
+     shellGrid(shellProducts)
+    ) : listingPending && !searchTerm.value ? (
      /* ADR-0001: the shell's listing space (two rows at every breakpoint) until the browser's manifest read lands */
      <div
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
@@ -320,5 +328,34 @@ const BaseShopPage = component$(() => {
   </div>
  );
 });
+
+/**
+ * ADR-0001 #412: the shell's grid from the cached structure (names, images, links). No price, no availability and no stock filtering
+ * until the browser's manifest read lands (pending cards: placeholder price, neither Sold Out nor in stock). Defined after the page so
+ * the page's own JSX keeps its keys (the switch-off render is unchanged byte for byte).
+ */
+function shellGrid(products: CatalogListItem[]) {
+ return (
+  <div
+   class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
+   style={{ contain: 'layout' }}
+   data-listing-pending=""
+  >
+   {products.map((item, index) => (
+    <ProductCard
+     key={item.slug}
+     href={productPath(item.slug)}
+     image={item.image}
+     name={item.name}
+     slug={item.slug}
+     price={null}
+     pending
+     pricePending
+     priority={index < 6}
+    />
+   ))}
+  </div>
+ );
+}
 
 export default hasView('route.shop') ? BrandShopMount : BaseShopPage;

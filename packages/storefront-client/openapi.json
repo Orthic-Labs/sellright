@@ -2282,6 +2282,18 @@
             "required": false,
             "name": "shipCountry",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "includeShippingMethods",
+            "in": "query"
           }
         ],
         "responses": {
@@ -2484,6 +2496,61 @@
                     },
                     "revision": {
                       "type": "integer"
+                    },
+                    "shippingQuote": {
+                      "type": "object",
+                      "properties": {
+                        "methods": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "rate": {
+                                "type": "integer"
+                              },
+                              "price": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "name",
+                              "rate",
+                              "price"
+                            ]
+                          }
+                        },
+                        "freeShipping": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "threshold": {
+                              "type": "integer"
+                            },
+                            "remaining": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "threshold",
+                            "remaining"
+                          ]
+                        },
+                        "country": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "methods",
+                        "freeShipping",
+                        "country"
+                      ]
                     }
                   },
                   "required": [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pricingReadStep } from './checkout-pricing';
+import { chooseShippingMethod, pricingReadStep } from './checkout-pricing';
 
 describe('pricingReadStep (V27: one checkout pricing read per state change)', () => {
 	it('does nothing when the inputs equal the last recorded read', () => {
@@ -35,5 +35,23 @@ describe('pricingReadStep (V27: one checkout pricing read per state change)', ()
 
 	it('a later address change with no shipping re-quote reads at once', () => {
 		expect(pricingReadStep({ context: 'US|addr2|m', recorded: 'US|addr1|m', shippingPending: false })).toBe('read');
+	});
+});
+
+describe('chooseShippingMethod (#412)', () => {
+	const methods = [{ code: 'express', rate: 1500 }, { code: 'std', rate: 500 }, { code: 'eco', rate: 500 }];
+
+	it('the POST quote: the cheapest eligible, the first of equal rates (unchanged)', () => {
+		expect(chooseShippingMethod(methods)?.code).toBe('std');
+		expect(chooseShippingMethod(methods, null)?.code).toBe('std');
+	});
+
+	it("the cart read's quote: keeps the method the server priced the cart with while it is quoted", () => {
+		expect(chooseShippingMethod(methods, 'express')?.code).toBe('express');
+		expect(chooseShippingMethod(methods, 'pickup')?.code).toBe('std');
+	});
+
+	it('nothing eligible: no method', () => {
+		expect(chooseShippingMethod([], 'std')).toBeNull();
 	});
 });
