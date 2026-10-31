@@ -43,7 +43,7 @@ The verification gate includes `db:assert-rls`, `db:assert-hand-written`, and `a
 
 ## Storefront Route Cache Policy
 
-Decided in one place, `packages/storefront/src/config/route-cache-policy.ts` (ADR-0001, `docs/adr/ADR-0001-edge-cached-shell.md`). Every route is one of three classes: `shell` (`/`, `/shop/`, product pages including the brand `productPath`, `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, `/privacy`, `/terms`, `/returns`, `/press`, `/checkout/` exact), `data` (Qwik `q-loader`/`q-data`/`qaction`/`qfunc` and `/v1/*`) or `dynamic` (everything else, including checkout steps, account, sign-in, search, preview requests, non-GET requests, shell paths with any query key other than ad-click tracking, and every unclassified path).
+Decided in one place, `packages/storefront/src/config/route-cache-policy.ts` (ADR-0001, `docs/adr/ADR-0001-edge-cached-shell.md`). Every route is one of three classes: `shell` (`/`, `/shop/`, product pages including the brand `productPath`, `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, `/privacy`, `/terms`, `/returns`, `/press`), `data` (Qwik `q-loader`/`q-data`/`qaction`/`qfunc` and `/v1/*`) or `dynamic` (everything else, including `/checkout/` (DP-5) and its steps, account, sign-in, search, preview requests, non-GET requests, shell paths with any query key other than ad-click tracking, and every unclassified path).
 
 `SHELL_CACHE` (process env, default off) gates the shared cache; `SHELL_CACHE_TTL` sets the edge lifetime (default 300 s). Off, every document is `private, no-store` with a per-request CSP nonce. On, the express entry:
 

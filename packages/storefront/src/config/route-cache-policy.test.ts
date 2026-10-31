@@ -55,9 +55,9 @@ describe('getRouteCacheProfile', () => {
 	});
 
 	it('labels x-route-class with the ADR-0001 class (diagnostic only; the header stays no-store)', () => {
-		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about', '/checkout'])
+		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('shell');
-		for (const pathname of ['/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
+		for (const pathname of ['/checkout', '/checkout/', '/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('dynamic');
 	});
 
@@ -179,13 +179,14 @@ describe('ADR-0001 route classes', async () => {
 		['/terms/', '', 'products', 'shell'],
 		['/returns/', '', 'products', 'shell'],
 		['/press/', '', 'products', 'shell'],
-		['/checkout/', '', 'products', 'shell'],
-		['/checkout', '', 'products', 'shell'],
 		// brand productPath /shop/:slug/
 		['/shop/long-coat/', '', 'shop', 'shell'],
 		['/shop/long-coat/', '', 'products', 'dynamic'],
 		['/shop/a/b/', '', 'shop', 'dynamic'],
 		// dynamic
+		['/checkout/', '', 'products', 'dynamic'],
+		['/checkout', '', 'products', 'dynamic'],
+		['/checkout/', '', 'shop', 'dynamic'],
 		['/checkout/payment/', '', 'products', 'dynamic'],
 		['/checkout/cart-link/', '', 'products', 'dynamic'],
 		['/checkout/some-alias/', '', 'products', 'dynamic'],
@@ -296,9 +297,11 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 	type Render = { status?: number; veto?: string; setCookie?: boolean };
 	/** Mirrors entry.express.tsx order: request strip -> CSP/nonce -> no-store default -> response-end check -> renderer. */
 	const { shellRenderContext } = await import('../platform/shell-render-context.server');
-	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>, exclude: string[] = []) => {
+	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>, exclude: string[] = [], reinjectIdentity = false) => {
 		const app = express();
 		app.use(m.createShellRequestMiddleware({ enabled, exclude }) as never);
+		// Simulates a broken strip: an identity header reaches the render on a marked shell request.
+		if (reinjectIdentity) app.use((req, _res, next) => { req.headers.cookie = 'sr_cust=leak'; next(); });
 		app.use((_req, res, next) => shellRenderContext.run(m.isShellRender(res), next));
 		app.use((req, res, next) => {
 			const nonce = m.isShellRender(res) ? undefined : `N${Math.random().toString(36).slice(2)}`;
@@ -335,7 +338,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		} finally { await new Promise((resolve) => server.close(resolve)); }
 	};
 
-	const SHELL = ['/', '/shop/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/', '/checkout/'];
+	const SHELL = ['/', '/shop/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
 	const SIGNED_IN = { cookie: 'sr_cust=abc; sr_cust_csrf=x; countryCode=DE; sr_preview_tokenx=1; authToken=t', authorization: 'Bearer secret', 'cf-ipcountry': 'DE', 'x-qwik-nonce': 'attacker' };
 
 	it('SHELL_CACHE on: a signed-in request to every shell route gets the byte-identical body of an anonymous one, cacheable, no Set-Cookie', async () => {
@@ -420,28 +423,79 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		const capture = async (enabled: boolean) => {
 			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string }> = {};
 			await serve(enabled, {}, async (get) => {
-				for (const path of ['/checkout/', '/shop/']) {
+				for (const path of ['/contact/', '/shop/']) {
 					const { r, text } = await get(path, SIGNED_IN);
 					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text) };
 				}
-			}, enabled ? ['/checkout/', '/shop'] : []);
+			}, enabled ? ['/contact/', '/shop'] : []);
 			return out;
 		};
 		const off = await capture(false);
 		const excluded = await capture(true);
-		for (const path of ['/checkout/', '/shop/']) {
+		for (const path of ['/contact/', '/shop/']) {
 			expect(excluded[path], path).toEqual(off[path]);
 			expect(excluded[path]!.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
 			expect(excluded[path]!.text, path).toContain('Hi Jane');
 			expect(excluded[path]!.text, path).toContain('data-redact="false"');
 		}
 		await serve(true, {}, async (get) => {
-			const { r } = await get('/checkout/');
+			const { r } = await get('/contact/');
 			expect(r.headers.get('x-sr-edge')).toBe('bypass:excluded');
 			const home = await get('/');
 			expect(home.r.headers.get('cache-control')).toMatch(/^public, max-age=0, s-maxage=300$/);
 			expect(home.text).toContain('data-redact="true"');
-		}, ['/checkout/', '/shop']);
+		}, ['/contact/', '/shop']);
+	});
+
+	it('SHELL_CACHE on: checkout is dynamic in code (no SHELL_CACHE_EXCLUDE): nonce, cookies kept, no-store (DP-5)', async () => {
+		await serve(true, {}, async (get) => {
+			for (const path of ['/checkout/', '/checkout']) {
+				const { r, text } = await get(path, SIGNED_IN);
+				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+				expect(r.headers.get('x-sr-edge'), path).toBe('bypass:class:dynamic');
+				expect(text, path).toContain('Hi Jane');
+			}
+		}, []);
+	});
+
+	it('I-6 behaviour: a maintenance render (renderer veto) is private no-store, never public', async () => {
+		await serve(true, { veto: 'maintenance' }, async (get) => {
+			const { r } = await get('/');
+			expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(r.headers.get('cache-control')).not.toMatch(/public|s-maxage/);
+			expect(r.headers.get('x-sr-edge')).toBe('bypass:veto:maintenance');
+		});
+	});
+
+	for (const [status, veto] of [[503, 'unpublished'], [404, 'unpublished'], [500, 'fallback'], [200, 'unpublished'], [200, 'fallback'], [500, undefined]] as const) {
+		it(`I-6 behaviour: render status ${status} with veto ${veto ?? 'none'} is no-store`, async () => {
+			await serve(true, { status, veto }, async (get) => {
+				for (const path of ['/', '/products/x/']) {
+					const { r } = await get(path);
+					expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+					expect(r.headers.get('x-sr-edge'), path).toMatch(/^bypass:/);
+				}
+			});
+		});
+	}
+
+	it('I-6 behaviour: a request whose identity was not stripped is no-store (not-anonymous), even with a clean 200 render', async () => {
+		await serve(true, {}, async (get) => {
+			const { r } = await get('/');
+			expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(r.headers.get('x-sr-edge')).toBe('bypass:not-anonymous');
+		}, [], true);
+	});
+
+	it('I-6 behaviour: the request middleware marks anonymity from the headers left after the strip', () => {
+		const run = (headers: Record<string, string>) => {
+			const res = { locals: {} as Record<string, unknown>, setHeader() {} };
+			m.createShellRequestMiddleware({ enabled: true })({ method: 'GET', path: '/', originalUrl: '/', headers: { ...headers } } as never, res as never, () => {});
+			return res.locals;
+		};
+		expect(run({ cookie: 'a=1' })).toMatchObject({ srShellRender: true, srShellAnonymous: true });
+		expect(run({})).toMatchObject({ srShellRender: true, srShellAnonymous: true });
+		expect(run({ cookie: 'x' }).srShellRender).toBe(true);
 	});
 
 	it('SHELL_CACHE_EXCLUDE parses a comma list of exact paths (trailing slash optional, junk ignored)', () => {

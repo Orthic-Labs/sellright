@@ -3,10 +3,10 @@
  *
  * Route classes (ADR "Route classes"):
  *   shell   — `/`, `/shop/`, product pages (`/products/*`, and `/shop/<slug>/` when routes.json productPath is `/shop/:slug/`),
- *             `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, legal pages, `/checkout/` (exact).
+ *             `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, legal pages.
  *             The HTML is free of per-visitor data, stock and price (live values are read by the browser), so it MAY be stored
  *             at the edge — but only when SHELL_CACHE=1 and the finished response passes I-6 (below).
- *   dynamic — every other path (checkout steps, account, sign-in, search, track-order, verify, password routes, /api, /cache*),
+ *   dynamic — every other path (`/checkout/` itself (DP-5: its LCP is the visitor's order summary) and its steps, account, sign-in, search, track-order, verify, password routes, /api, /cache*),
  *             any non-GET request, any preview request (preview_token query or sr_preview_token cookie), any shell path with a
  *             query other than ad-click tracking parameters (I-3), and every unclassified path (I-5 fail closed).
  *   data    — Qwik loader/action/server$ data (`q-loader-*.json`, `q-data.json`, `?qaction=`, `?qfunc=`) and `/v1/*`.
@@ -35,7 +35,7 @@ export interface RouteCacheProfile {
 	responseCacheControl: string;
 }
 
-export const CACHE_POLICY_VERSION = '2026-10-31.1';
+export const CACHE_POLICY_VERSION = '2026-10-31.2';
 
 // ─── switch ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ export const shellCacheControl = (ttlSeconds: number): string => `public, max-ag
 // ─── route classes ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Exact shell paths, matched with or without the trailing slash. */
-const SHELL_EXACT = ['/', '/shop', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog', '/checkout'];
+const SHELL_EXACT = ['/', '/shop', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog'];
 const ONE_SEGMENT = '[^/]+';
 const DATA_PATH = /(^|\/)q-(loader|data|action)[^/]*\.json$/i;
 const DATA_QUERY = ['qaction', 'qfunc', 'qloaders', 'qdata'];
@@ -198,6 +198,9 @@ type ShellRes = {
 };
 
 const SHELL_LOCAL = 'srShellRender';
+const SHELL_ANON_LOCAL = 'srShellAnonymous';
+
+const identityHeadersPresent = (headers: Record<string, unknown>): boolean => SHELL_STRIPPED_REQUEST_HEADERS.some((h) => headers[h] !== undefined);
 
 /** True when this response is an anonymous shell render (no nonce; hash CSP and the I-6 check at response end). */
 export const isShellRender = (res: { locals?: Record<string, unknown> }): boolean => res.locals?.[SHELL_LOCAL] === true;
@@ -226,6 +229,8 @@ export function createShellRequestMiddleware(opts: { enabled: boolean; exclude?:
 		}
 		for (const h of SHELL_STRIPPED_REQUEST_HEADERS) delete req.headers[h];
 		res.locals[SHELL_LOCAL] = true;
+		// I-6 fact: anonymous only if nothing identity-bearing survived the strip.
+		res.locals[SHELL_ANON_LOCAL] = !identityHeadersPresent(req.headers);
 		next();
 	};
 }
@@ -253,7 +258,7 @@ export function shellRenderUrl(req: { url: string; originalUrl: string }, res: {
  * no-store default and before the router.
  */
 export function createShellCacheMiddleware(opts: { enabled: boolean; ttlSeconds: number; sha256Base64: (text: string) => string }) {
-	return (_req: ShellReq, res: ShellRes, next: () => void): void => {
+	return (req: ShellReq, res: ShellRes, next: () => void): void => {
 		if (!opts.enabled || !isShellRender(res)) return next();
 		const chunks: Buffer[] = [];
 		const end = res.end.bind(res);
@@ -271,7 +276,7 @@ export function createShellCacheMiddleware(opts: { enabled: boolean; ttlSeconds:
 			if (chunk !== undefined && chunk !== null) chunks.push(toBuffer(chunk, enc));
 			const body = Buffer.concat(chunks.splice(0));
 			const facts: ShellResponseFacts = {
-				routeClass: 'shell', anonymous: true, enabled: opts.enabled, status: res.statusCode,
+				routeClass: 'shell', anonymous: res.locals[SHELL_ANON_LOCAL] === true && !identityHeadersPresent(req.headers), enabled: opts.enabled, status: res.statusCode,
 				contentType: res.getHeader('content-type') as string | undefined, setCookie: res.getHeader('set-cookie'), veto: res.getHeader(EDGE_VETO_HEADER),
 			};
 			const verdict = shellResponseVerdict(facts);
