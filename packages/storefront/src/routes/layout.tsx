@@ -3,6 +3,7 @@ import {
 	$,
 	Slot,
 	component$,
+	useComputed$,
 	useContextProvider,
 	useOn,
 	useOnDocument,
@@ -178,6 +179,11 @@ export default component$(() => {
 
 	const identityData = useStoreIdentityLoader();
 	const maintenanceData = useMaintenanceLoader();
+	// #427: read through a computed, not in this render body. This component re-renders whenever the cart or menu opens
+	// (state.showCart / showMenu); a loader value read in the body is re-requested from the server on each client re-render
+	// (the loader keeps the router default on purpose, see above), which made opening the cart wait on a /q-loader request
+	// (776 ms from the US origin). The computed re-runs only when the loader itself updates, i.e. on navigation.
+	const inMaintenance = useComputed$(() => maintenanceData.value.maintenance);
 
 	const state = useStore<AppState>({
 		showCart: false,
@@ -295,7 +301,7 @@ export default component$(() => {
 
 	// Maintenance takes priority over the publish gate: a store mid-update is a
 	// temporary outage regardless of whether it's published yet.
-	if (maintenanceData.value.maintenance) {
+	if (inMaintenance.value) {
 		return <MaintenanceScreen storeName={identityData.value.identity.storeName} />;
 	}
 
