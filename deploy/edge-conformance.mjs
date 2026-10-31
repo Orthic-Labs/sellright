@@ -50,7 +50,8 @@ const withoutInstance = (body) => {
 		.replace(/\/cdn-cgi\/l\/email-protection#[0-9a-f]+/g, '/cdn-cgi/l/email-protection#CF')
 		.replace(/data-cfemail="[0-9a-f]+"/g, 'data-cfemail="CF"')
 		// Cloudflare JavaScript detections (bot management) inject a per-response ray id and token.
-		.replace(/__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+'\}/g, '__CF$cv$params={CF}');
+		.replace(/__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+'\}/g, '__CF$cv$params={CF}')
+		.replace(/\/cdn-cgi\/challenge-platform\/scripts\/jsd\/main\.js\?ray=[0-9a-f]+/g, '/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=CF');
 };
 
 // DP-1/I-1: a shell body carries no price and no stock. Flags currency amounts in markup or state and non-zero value fields in
