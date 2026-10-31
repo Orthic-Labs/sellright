@@ -315,7 +315,8 @@ const BaseShopPage = component$(() => {
         price={item.pricingVariant?.price ?? item.minPrice}
         maxPrice={SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
         inStock={item.inStock}
-        priority={index < 6}
+        priority={index === 0}
+        eager={index > 0 && index < 4}
         salePrice={item.pricingVariant?.salePrice ?? null}
         preOrderPrice={item.pricingVariant?.preOrderPrice ?? null}
         isPreOrder={!!item.pricingVariant?.isPreOrder}
@@ -351,7 +352,8 @@ function shellGrid(products: CatalogListItem[]) {
      price={null}
      pending
      pricePending
-     priority={index < 6}
+     priority={index === 0}
+     eager={index > 0 && index < 4}
     />
    ))}
   </div>

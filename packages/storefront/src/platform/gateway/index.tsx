@@ -176,6 +176,7 @@ export const ProductCard = /*#__PURE__*/ gate('ProductCard', RawProductCard, {
 		pending: opt(bool),
 		pricePending: opt(bool),
 		priority: opt(bool),
+		eager: opt(bool),
 		skeleton: opt(bool),
 		/** The product link (platform/product-path.ts); the card's own default is the /products/ path. */
 		href: opt(str),
