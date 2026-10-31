@@ -559,7 +559,7 @@ test('15 every document is private no-store with no CDN cache header, including 
 		if (res.status() < 400) expect(h['x-cache-policy-version'], path).toBeTruthy();
 	}
 	const stock = await request.get('/');
-	expect(stock.headers()['x-route-class']).toBe('stock_bearing');
+	expect(stock.headers()['x-route-class']).toBe('shell'); // ADR-0001 route classes (policy 2026-10-31.1)
 });
 
 // ── 15b. client-navigation data requests: private, no-store, one header, no CDN header, no Cache-Tag ─────────

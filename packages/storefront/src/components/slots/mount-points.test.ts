@@ -25,7 +25,7 @@ const MOUNTS: Record<SlotName, Mount> = {
 	'cart.free-shipping-progress': { file: 'components/cart-contents/CartContents.tsx', handle: 'FreeShippingProgressView', keeps: /<FreeShippingProgressView\n/ },
 	'checkout.loyalty-redemption': { file: 'components/checkout/CheckoutOrderSummary.tsx', handle: 'LoyaltyRedemptionView', keeps: /<LoyaltyRedemptionView \{\.\.\.view\} onRedeemToggle\$=\{platformAction\('loyalty\.redeem-toggle', props\.onRedeemToggle\$\)\} \/>/ },
 	'payment.badges': { file: 'components/footer/footer.tsx', handle: 'PaymentBadgesView', keeps: /\{hasPaymentBadges && <PaymentBadgesView placement="footer" \/>\}/ },
-	'pdp.payment-widget': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'PaymentWidgetView', keeps: /\{hasPaymentWidget && <PaymentWidgetView priceCents=\{widgetPriceCents\} \/>\}/ },
+	'pdp.payment-widget': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'PaymentWidgetView', keeps: /\{hasPaymentWidget && \(pricePending \? \([\s\S]*?\) : <PaymentWidgetView priceCents=\{widgetPriceCents\} \/>\)\}/ },
 	'pdp.guarantee-modal': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'GuaranteeModalView', keeps: /\{hasGuaranteeModal && <GuaranteeModalView / },
 	'pdp.waitlist': { file: 'routes/products/[...slug]/ProductPageView.tsx', handle: 'WaitlistView', keeps: /const waitlistAvailable = hasWaitlist && [^\n]+;[\s\S]*\{waitlistAvailable && \(\s*<div id="sr-pdp-waitlist">\s*<WaitlistView / },
 	'account.order-card': { file: 'routes/account/orders/index.tsx', handle: 'OrderCardView', keeps: /if \(hasOrderCard\) return <OrderCardView[^>]*\/>;\n\s*return \(\n\s*<a/ },

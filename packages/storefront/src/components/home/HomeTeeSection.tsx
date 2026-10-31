@@ -30,11 +30,13 @@ interface HomeTeeSectionProps {
    * section shows only generic, truthful copy and links to /shop. */
   product?: FeaturedProduct | null;
   variant?: FeaturedVariant | null;
+  /** ADR-0001 DP-1: the price is not read yet; its space is held (Price `pending`). */
+  pricePending?: boolean;
   /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
   href?: string;
 }
 
-export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, variant, href: productHref }) => {
+export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, variant, href: productHref, pricePending }) => {
   const body = product?.description ? stripHtml(product.description).trim() : 'Thoughtfully made. Built to last. Every item in the shop gets the same attention to detail.';
   const href = product ? (productHref ?? `/products/${product.slug}`) : '/shop';
   return (
@@ -68,6 +70,7 @@ export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, varian
                     preOrderPrice={variant.customFields?.preOrderPrice}
                     isPreOrder={variant.customFields?.isPreOrder}
                     forcedClass="tee-price"
+                    pending={pricePending === true}
                   />
                 </div>
               )}

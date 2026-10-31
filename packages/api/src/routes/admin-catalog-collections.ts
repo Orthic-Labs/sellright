@@ -3,6 +3,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
+import { onCollectionChanged } from '../cache/purge-hook.js';
 import { smartCollectionProducts, uniqueSlug } from './admin-catalog-utils.js';
 
 export function registerCollectionRoutes(adminCatalog: any) {
@@ -40,6 +41,7 @@ export function registerCollectionRoutes(adminCatalog: any) {
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'collection', entityId: col!.id, action: 'create', data: { name: body.name } });
         return { id: col!.id, slug };
       });
+      onCollectionChanged(st.slug, [out.slug]); // after commit
       return c.json(out, 200);
     }),
   );
@@ -84,12 +86,13 @@ export function registerCollectionRoutes(adminCatalog: any) {
       const { id } = c.req.valid('param');
       const patch = c.req.valid('json');
       const ok = await withStore(st.storeId, async (tx) => {
-        const [col] = await tx.select({ id: s.collection.id }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
-        if (!col) return false;
+        const [col] = await tx.select({ id: s.collection.id, slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
+        if (!col) return null;
         await tx.update(s.collection).set(patch).where(eq(s.collection.id, id));
-        return true;
+        return col.slug;
       });
-      if (!ok) throw new HttpError(404, 'collection not found');
+      if (ok === null) throw new HttpError(404, 'collection not found');
+      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ id }, 200);
     }),
   );
@@ -105,14 +108,15 @@ export function registerCollectionRoutes(adminCatalog: any) {
       const st = requireStore(admin, c); requireWrite(st);
       const { id } = c.req.valid('param');
       const ok = await withStore(st.storeId, async (tx) => {
-        const [col] = await tx.select({ id: s.collection.id }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
-        if (!col) return false;
+        const [col] = await tx.select({ id: s.collection.id, slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
+        if (!col) return null;
         await tx.delete(s.collectionProduct).where(eq(s.collectionProduct.collectionId, id));
         await tx.delete(s.collection).where(eq(s.collection.id, id));
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'collection', entityId: id, action: 'delete' });
-        return true;
+        return col.slug;
       });
-      if (!ok) throw new HttpError(404, 'collection not found');
+      if (ok === null) throw new HttpError(404, 'collection not found');
+      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ id }, 200);
     }),
   );
@@ -129,13 +133,14 @@ export function registerCollectionRoutes(adminCatalog: any) {
       const { id } = c.req.valid('param');
       const { productId } = c.req.valid('json');
       const ok = await withStore(st.storeId, async (tx) => {
-        const [col] = await tx.select({ id: s.collection.id }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
+        const [col] = await tx.select({ id: s.collection.id, slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
         const [p] = await tx.select({ id: s.product.id }).from(s.product).where(eq(s.product.id, productId)).limit(1);
-        if (!col || !p) return false;
+        if (!col || !p) return null;
         await tx.insert(s.collectionProduct).values({ storeId: st.storeId, collectionId: id, productId }).onConflictDoNothing();
-        return true;
+        return col.slug;
       });
-      if (!ok) throw new HttpError(404, 'collection or product not found');
+      if (ok === null) throw new HttpError(404, 'collection or product not found');
+      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ ok: true }, 200);
     }),
   );
@@ -150,9 +155,12 @@ export function registerCollectionRoutes(adminCatalog: any) {
       const { admin } = await requireAdmin(c);
       const st = requireStore(admin, c); requireWrite(st);
       const { id, productId } = c.req.valid('param');
-      await withStore(st.storeId, async (tx) => {
+      const slug = await withStore(st.storeId, async (tx) => {
+        const [col] = await tx.select({ slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
         await tx.delete(s.collectionProduct).where(and(eq(s.collectionProduct.collectionId, id), eq(s.collectionProduct.productId, productId)));
+        return col?.slug ?? null;
       });
+      if (slug !== null) onCollectionChanged(st.slug, [slug]); // after commit
       return c.json({ ok: true }, 200);
     }),
   );

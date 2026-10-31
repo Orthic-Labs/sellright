@@ -72,6 +72,8 @@ type RegenScope = 'full' | Set<string>;
 
 interface RegenState {
   generating: boolean;
+  /** ADR-0001: true when any trigger in the trailing batch was a content edit (needs an HTML purge). */
+  trailingPurge: boolean;
   /** Accumulated scope for triggers that arrived WHILE a run was in flight. */
   trailing: RegenScope | null;
 }
@@ -81,7 +83,7 @@ const states = new Map<string, RegenState>();
 function stateFor(storeSlug: string): RegenState {
   let st = states.get(storeSlug);
   if (!st) {
-    st = { generating: false, trailing: null };
+    st = { generating: false, trailing: null, trailingPurge: false };
     states.set(storeSlug, st);
   }
   return st;
@@ -111,7 +113,8 @@ function mergeScope(a: RegenScope | null, b: RegenScope): RegenScope {
  * commit.
  */
 export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
-  schedule(storeSlug, variantIds?.length ? new Set(variantIds.map((id) => `v:${id}`)) : 'full', {});
+  // ADR-0001 item 5: a stock commit publishes the manifest file but purges NO HTML (the shell holds no stock).
+  schedule(storeSlug, variantIds?.length ? new Set(variantIds.map((id) => `v:${id}`)) : 'full', {}, false);
 }
 
 /**
@@ -121,25 +124,25 @@ export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
  * onStockChanged: call after commit, never awaited, never throws.
  */
 export function onCatalogContentChanged(storeSlug: string, productIds: string[], opts: { productPath?: string } = {}): void {
-  schedule(storeSlug, productIds.length ? new Set(productIds.map((id) => `p:${id}`)) : 'full', opts);
+  schedule(storeSlug, productIds.length ? new Set(productIds.map((id) => `p:${id}`)) : 'full', opts, true);
 }
 
-function schedule(storeSlug: string, scope: RegenScope, purgeOpts: { productPath?: string }): void {
+function schedule(storeSlug: string, scope: RegenScope, purgeOpts: { productPath?: string }, purgeHtml: boolean): void {
   // N9: with publication configured for this store, the purge runs AFTER the new generation is published
   // (manifest/catalog.ts). Without it there is no content artifact to wait for, so purge now — a deployment with
   // the catalog manifest disabled must still get Cloudflare cache purges. Never throws (see purge-hook.ts).
   if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) {
-    onCatalogCacheChanged(storeSlug, purgeOpts);
+    if (purgeHtml) onCatalogCacheChanged(storeSlug, purgeOpts);
     return;
   }
   const st = stateFor(storeSlug);
   // #360 H1 / M2: detached from whatever called this (a request, or a job pass that may end — and give its lease
   // back — before this finishes). The durable marker below is one short write on the caller's side of the pools
   // (request pool from a request); the publication itself is admitted background work (jobs pool, capped).
-  void detachFromPass(() => enqueue(storeSlug, st, scope));
+  void detachFromPass(() => enqueue(storeSlug, st, scope, purgeHtml));
 }
 
-async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope): Promise<void> {
+async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope, purgeHtml: boolean): Promise<void> {
   try {
     const store = await resolveStore(storeSlug);
     // Every trigger is durable before joining an in-process batch. A later
@@ -148,17 +151,19 @@ async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope): Pr
     const coveredScope: RegenScope = pending?.requiresFull ? 'full' : scope;
     if (st.generating) {
       st.trailing = mergeScope(st.trailing, coveredScope);
+      st.trailingPurge ||= purgeHtml;
       return;
     }
-    await run(storeSlug, store.id, pending?.token ?? null, st, coveredScope);
+    await run(storeSlug, store.id, pending?.token ?? null, st, coveredScope, purgeHtml);
   } catch (e) {
     logErr.error('stock-triggered catalog manifest bookkeeping failed', e, { storeSlug });
   }
 }
 
-async function run(storeSlug: string, storeId: string, token: string | null, st: RegenState, scope: RegenScope): Promise<void> {
+async function run(storeSlug: string, storeId: string, token: string | null, st: RegenState, scope: RegenScope, purgeHtml: boolean): Promise<void> {
   st.generating = true;
   st.trailing = null;
+  st.trailingPurge = false;
   try {
     const tagged = scope === 'full' ? [] : [...scope];
     const variantIds = scope === 'full' ? undefined : tagged.filter((id) => id.startsWith('v:')).map((id) => id.slice(2));
@@ -167,7 +172,7 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
     // job admission (jobs pool, concurrency cap), never the request pool the shopper's request is using.
     const result = await jobAdmission().run('catalog-manifest:stock', () => withLeaderLock(
       'catalog-manifest',
-      () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug, ...(variantIds?.length ? { variantIds } : {}), ...(productIds?.length ? { productIds } : {}) }),
+      () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug, ...(variantIds?.length ? { variantIds } : {}), ...(productIds?.length ? { productIds } : {}), ...(purgeHtml ? {} : { purge: false }) }),
       storeSlug,
     ));
     if (result) log.info('catalog manifest regenerated on stock change', { storeSlug, products: result.products, scope: scope === 'full' ? 'full' : `${scope.size} product-scoped variant(s)` });
@@ -187,8 +192,10 @@ async function run(storeSlug: string, storeId: string, token: string | null, st:
     st.generating = false;
     if (st.trailing !== null) {
       const next = st.trailing;
+      const nextPurge = st.trailingPurge;
       st.trailing = null;
-      void enqueue(storeSlug, st, next);
+      st.trailingPurge = false;
+      void enqueue(storeSlug, st, next, nextPurge);
     }
   }
 }

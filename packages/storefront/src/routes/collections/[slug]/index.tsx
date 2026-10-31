@@ -7,8 +7,10 @@
 // (bypassing the retired legacy-shaped collections provider
 // adapter, which is out of scope for this conversion and has no other
 // consumers after this route stops using it).
-import { component$ } from '@qwik.dev/core';
-import { Link, routeLoader$ } from '@qwik.dev/router';
+import { $, component$, useComputed$ } from '@qwik.dev/core';
+import { Link, routeLoader$, server$, useLocation } from '@qwik.dev/router';
+import { noStore, shellRender } from '~/platform/shell-render';
+import { cardState, redactListItem, useLiveRead, valuesBySlug, withCardValues, type CardValues } from '~/platform/live-values';
 import { ProductCard } from '~/platform/gateway';
 import { fetchCollectionDetail } from '~/sellright/catalog';
 import { createSEOHead } from '~/utils/seo';
@@ -29,11 +31,27 @@ export const useCollectionLoader = routeLoader$(async ({ params, status, query }
     status(404);
     return null;
   }
-  return collection;
+  // ADR-0001 §2-§3: the shell's cards carry no price and no stock (fail-closed constant, shown as "not known yet"); the browser reads
+  // them on load (readCollectionValues, no-store).
+  return shellRender() ? { ...collection, products: collection.products.map(redactListItem), valuesPending: true } : { ...collection, valuesPending: false };
 }, { search: ['page'] });
+
+/** ADR-0001: the collection page's live card values (price, inStock) by slug, from the same API read, per request, no-store. */
+export const readCollectionValues = server$(async function (slug: string, page: number): Promise<Record<string, CardValues> | null> {
+  noStore(this);
+  if (typeof slug !== 'string' || !Number.isInteger(page) || page < 1) return null;
+  const collection = await fetchCollectionDetail(slug, { page, pageSize: COLLECTION_PAGE_SIZE });
+  return collection ? valuesBySlug(collection.products) : null;
+});
 
 export default component$(() => {
   const collection = useCollectionLoader();
+  const location = useLocation();
+  const liveKey = useComputed$(() => (collection.value?.valuesPending ? location.url.pathname + location.url.search : null));
+  const live = useLiveRead<Record<string, CardValues>>(
+    $(() => (collection.value ? readCollectionValues(collection.value.slug, collection.value.page) : Promise.resolve(null))),
+    liveKey,
+  );
 
   if (!collection.value) {
     return (
@@ -48,6 +66,10 @@ export default component$(() => {
   }
 
   const c = collection.value;
+  const deferred = !!c.valuesPending;
+  const cards = cardState(live.status, deferred);
+  // A failed read is fail closed (no price, out of stock); a landed one applies per slug.
+  const products = deferred && live.status !== 'idle' && live.status !== 'loading' ? c.products.map((p) => withCardValues(p, live.value ?? {})) : c.products;
 
   return (
     <div class="max-w-6xl mx-auto px-6 py-12">
@@ -63,7 +85,7 @@ export default component$(() => {
         // width instead of rendering them as empty background-colored cells
         // when a collection has fewer products than the usual column count.
         <div class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-px bg-[var(--color-card-border)] border border-[var(--color-card-border)]">
-          {c.products.map((p, index) => (
+          {products.map((p, index) => (
             <ProductCard
               key={p.slug}
               href={productPath(p.slug)}
@@ -72,6 +94,8 @@ export default component$(() => {
               slug={p.slug}
               price={p.pricingVariant?.price ?? p.minPrice}
               inStock={p.inStock}
+              pending={cards.pending}
+              pricePending={cards.pricePending}
               priority={index < 6}
               salePrice={p.pricingVariant?.salePrice ?? null}
               preOrderPrice={p.pricingVariant?.preOrderPrice ?? null}

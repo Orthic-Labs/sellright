@@ -1,9 +1,12 @@
 // Brand views PR2 §6, §10: the branded product page. `BrandProductMount` is a switch with no hooks of its own beyond the loader read:
 // a missing product renders `ProductMissingView` (no controller, no stock read, no view_item; the loader already set the 404 status),
 // a found one mounts the configurator.
-import { component$, useComputed$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, component$, useComputed$, type ReadonlySignal } from '@qwik.dev/core';
+import { useLiveRead } from '~/platform/live-values';
+import { hasPendingValues } from './configurator-model';
+import { useJsonLdOffersFill } from './jsonld-offers';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { useBrandProductDetail } from '~/platform/product-detail';
+import { readBrandProductDetail, useBrandProductDetail, type BrandProductDetail } from '~/platform/product-detail';
 import { ProductMissingView, ProductView, platformAction } from '~/platform/gateway';
 import type { ProductFoundData, PublicIdentity } from '~/platform/views';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
@@ -18,7 +21,15 @@ export const ProductMissingMount = component$(() => {
 export const ProductFoundMount = component$(() => {
 	const identity = useStoreIdentityLoader();
 	const detail = useBrandProductDetail();
-	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'product');
+	// ADR-0001: a shell detail (prices pending) is read again in the browser on load, no-store; the configurator sells from it once it lands.
+	const liveKey = useComputed$(() => {
+		const d = detail.value;
+		return d && d.state === 'found' && hasPendingValues(d, 'product') ? d.product.slug : null;
+	});
+	const live = useLiveRead<BrandProductDetail>($(() => readBrandProductDetail(liveKey.value ?? '')), liveKey);
+	const initial = detail.value;
+	useJsonLdOffersFill(initial && initial.state === 'found' ? initial.product.slug : '', !!initial && hasPendingValues(initial, 'product'));
+	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'product', live);
 	// Built in the render body, field by field (no nested computed: see useConfigurator `project`).
 	const d = detail.value;
 	const v = c.project();

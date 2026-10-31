@@ -153,3 +153,23 @@ export const reconcileSelection = (ctl: ConfiguratorCtl, source: ConfiguratorSou
 	const model = focused(ctl, source);
 	if (model) ctl.selected = keepSelection(model, ctl.selected);
 };
+
+/** The products of a loader value, as a key (slug order). */
+const slugsOf = (value: unknown, mode: ConfiguratorMode): string => sourceOf(value, mode).products.map((p) => p.slug).join(',');
+
+/** ADR-0001: does the loader value carry the shell's redacted prices (SHELL_CACHE=1)? Then the browser reads the live value. */
+export const hasPendingValues = (value: unknown, mode: ConfiguratorMode): boolean => {
+	if (value && typeof value === 'object' && (value as { valuesPending?: unknown }).valuesPending === true) return true;
+	const s = sourceOf(value, mode);
+	return [...s.products, ...s.siblings].some((p) => p.pricePending === true);
+};
+
+/**
+ * The value the configurator sells from: the browser's live read of the same view when it has landed and names the same products as
+ * the loader value (a read of an earlier view never applies), else the loader value. Pure.
+ */
+export function pickLiveSource<T>(loaderValue: T, liveValue: T | null | undefined, mode: ConfiguratorMode): T {
+	if (liveValue === null || liveValue === undefined) return loaderValue;
+	if (!hasPendingValues(loaderValue, mode)) return loaderValue;
+	return slugsOf(liveValue, mode) === slugsOf(loaderValue, mode) ? liveValue : loaderValue;
+}

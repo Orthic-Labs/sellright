@@ -14,7 +14,7 @@ import { ADD_RESULT } from '~/platform/gateway/actions';
 import type { ActionResult, AddResult } from '~/platform/views';
 import { ACTION_RESULTS, dispatch, type DispatchResults } from './callbacks';
 import { addResultFrom, effectivePriceOf, enrichmentFor } from './product-model';
-import { INVALID, OK, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorMode, type ConfiguratorView } from './configurator-model';
+import { INVALID, OK, pickLiveSource, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorMode, type ConfiguratorView } from './configurator-model';
 
 export type { ConfiguratorCtl, ConfiguratorSource, ConfiguratorView } from './configurator-model';
 import { abortStockRead, initialStockCtl, readStock, requestLoad, retryFailed, startNewView } from './stock-read';
@@ -56,11 +56,16 @@ export async function whenLoaded<T>(read: () => T): Promise<T> {
 	}
 }
 
-export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>, mode: ConfiguratorMode) {
+/**
+ * `live` (ADR-0001): the mount's browser read of the same loader value with its live prices (platform/live-values.ts useLiveRead). The
+ * configurator sells from it once it has landed for the same products (`pickLiveSource`); until then the loader's shell value (prices
+ * pending). Absent or empty: the loader value, as before.
+ */
+export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>, mode: ConfiguratorMode, live?: { value: ConfiguratorLoaderValue | null }) {
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
 	const location = useLocation();
-	const first = sourceOf(loader.value, mode);
+	const first = sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode);
 	const start = initialFocus(first, location.url.searchParams);
 	const ctl = useStore<ConfiguratorCtl>({
 		disposed: false,
@@ -76,7 +81,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 
 	/** The view's automatic read (direct load: qidle; SPA navigation: the task below). One per view, whichever fires first. */
 	const load = $(async () => {
-		const source = await whenLoaded(() => sourceOf(loader.value, mode));
+		const source = await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode));
 		const started = requestLoad(ctl, source.products.map((p) => p.slug), fetchProductStock);
 		if (started && mode === 'product') {
 			const p = source.products[0];
@@ -111,21 +116,21 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	// The automatic read's document event: the PDP follows pdp.stockRefreshTrigger, the shop and the home spotlight stay on qidle.
 	useStockTrigger(mode === 'product' ? 'pdp' : 'shop', load);
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
-	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(loader.value, mode))).products.map((p) => p.slug), fetchProductStock); });
+	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode))).products.map((p) => p.slug), fetchProductStock); });
 	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
 	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
 
 	/** The projection for this render (the mount calls it in its render body: a computed read inside another computed lost its
 	 *  captures in the production build, Qwik 2 rc). It reads the store, the loader and the cart mirror, so a change re-renders. */
-	const project = (): ConfiguratorView => seal(projectConfigurator(ctl, sourceOf(loader.value, mode), cart.cart.lines)) as ConfiguratorView;
+	const project = (): ConfiguratorView => seal(projectConfigurator(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), cart.cart.lines)) as ConfiguratorView;
 
-	const onProductSelect$ = $((key: string) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectProduct(ctl, sourceOf(loader.value, mode), key)));
-	const onOptionSelect$ = $((group: string, value: string | null) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectOption(ctl, sourceOf(loader.value, mode), group, value)));
-	const onQuantityChange$ = $((quantity: number) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => changeQuantity(ctl, sourceOf(loader.value, mode), cart.cart.lines, quantity)));
-	const onConsentChange$ = $((accepted: boolean) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => changeConsent(ctl, sourceOf(loader.value, mode), cart.cart.lines, accepted)));
+	const onProductSelect$ = $((key: string) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectProduct(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), key)));
+	const onOptionSelect$ = $((group: string, value: string | null) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectOption(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), group, value)));
+	const onQuantityChange$ = $((quantity: number) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => changeQuantity(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), cart.cart.lines, quantity)));
+	const onConsentChange$ = $((accepted: boolean) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => changeConsent(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), cart.cart.lines, accepted)));
 	const onRetryStock$ = $(() =>
 		dispatch<ActionResult>(ctl, 'stock', ACTION_RESULTS, () => {
-			const model = focused(ctl, sourceOf(loader.value, mode));
+			const model = focused(ctl, sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode));
 			if (!model || ctl.stock[model.slug]?.status !== 'error') return INVALID;
 			void retryFailed(ctl, fetchProductStock);
 			return OK;
@@ -133,7 +138,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	);
 	const onAddToCart$ = $(() =>
 		dispatch<AddResult>(ctl, 'add', ADD_RESULTS, async () => {
-			const source = sourceOf(loader.value, mode);
+			const source = sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode);
 			const model = focused(ctl, source);
 			const now = projectConfigurator(ctl, source, cart.cart.lines);
 			const variant = model ? model.variants.find((v) => v.sku === now.selection.variantSku) ?? null : null;

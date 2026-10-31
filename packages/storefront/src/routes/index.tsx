@@ -1,7 +1,8 @@
 // Homepage - Refined editorial design
-import { component$, useStyles$, useSignal, useContext, $ } from '@qwik.dev/core';
+import { component$, useStyles$, useSignal, useContext, useComputed$, $ } from '@qwik.dev/core';
 import type { JsonLdSchema } from '~/types/seo.types';
-import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead } from '~/platform/home';
+import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead, readHomeValues } from '~/platform/home';
+import { cardState, useLiveRead } from '~/platform/live-values';
 import { APP_STATE } from '~/constants';
 import type { CartLineEnrichment } from '~/sellright/types/cart';
 import { useCart, addToCart } from '~/contexts/CartContext';
@@ -32,11 +33,25 @@ const BaseHomePage = component$(() => {
   const appState = useContext(APP_STATE);
   const cart = useCart();
   const identity = useStoreIdentityLoader();
-  const preorderProduct = usePreorderProduct();
-  const featureProduct = useFeatureProduct();
-  const featuredProducts = useFeaturedProducts();
+  const preorderLoader = usePreorderProduct();
+  const featureLoader = useFeatureProduct();
+  const featuredLoader = useFeaturedProducts();
   const homeCollections = useHomeCollections();
   const isAddingToCart = useSignal(false);
+
+  // ADR-0001 §2-§3: with SHELL_CACHE=1 the loaders carry no price or stock; the page reads them in the browser on load (no-store) and
+  // renders them into the space the shell reserved. Off: no read, the loader values as before.
+  const valuesKey = useComputed$(() =>
+    featuredLoader.value.valuesPending || preorderLoader.value?.valuesPending || featureLoader.value?.valuesPending ? 'home' : null,
+  );
+  const live = useLiveRead($(() => readHomeValues()), valuesKey);
+  const pending = valuesKey.value !== null;
+  const ready = pending && live.status === 'ready' && !!live.value;
+  const preorderProduct = { value: ready ? live.value!.preorder : preorderLoader.value };
+  const featureProduct = { value: ready ? live.value!.feature : featureLoader.value };
+  const featuredProducts = { value: ready ? live.value!.featured : featuredLoader.value.items };
+  const tileState = cardState(live.status, pending);
+  const pricePending = pending && !ready;
 
   const spotlightVariant = preorderProduct.value
     ? preorderProduct.value.variants.find((v: any) => v.stockLevel !== 'OUT_OF_STOCK') || preorderProduct.value.variants[0]
@@ -55,7 +70,7 @@ const BaseHomePage = component$(() => {
   const { email: nlEmail, honeypot: nlHoneypot, state: nlState, error: nlError, token: nlToken, handleSubmit: handleNewsletterSubmit } = useNewsletterForm();
 
   const handlePreorderAddToCart = $(async () => {
-    const product = preorderProduct.value;
+    const product = (valuesKey.value !== null && live.status === 'ready' && live.value ? live.value.preorder : null) ?? preorderLoader.value;
     if (!product || isAddingToCart.value) return;
 
     isAddingToCart.value = true;
@@ -111,7 +126,7 @@ const BaseHomePage = component$(() => {
                 <h2 class="po-title reveal visible" data-reveal>{preorderProduct.value.name}</h2>
                 {spotlightVariant && (
                   <div class="po-price-wrap">
-                    <Price {...projectPrice(spotlightVariant)} forcedClass="po-price" />
+                    <Price {...projectPrice(spotlightVariant)} forcedClass="po-price" pending={pricePending} />
                   </div>
                 )}
                 {spotlightBody && (
@@ -150,7 +165,7 @@ const BaseHomePage = component$(() => {
         </section>
       )}
 
-      <HomeTeeSection product={projectFeatureProduct(featureProduct.value)} variant={projectFeatureVariant(featureVariant)} href={featureProduct.value ? productPath(featureProduct.value.slug) : undefined} />
+      <HomeTeeSection product={projectFeatureProduct(featureProduct.value)} variant={projectFeatureVariant(featureVariant)} pricePending={pricePending} href={featureProduct.value ? productPath(featureProduct.value.slug) : undefined} />
 
       {/* ════════ Shop the collection — live catalog grid ════════ */}
       {featuredProducts.value.length > 0 && (
@@ -169,6 +184,8 @@ const BaseHomePage = component$(() => {
                 slug={tile.slug}
                 price={tile.price}
                 inStock={tile.inStock}
+                pending={tileState.pending}
+                pricePending={tileState.pricePending}
                 priority={i < 4}
               />
             ))}

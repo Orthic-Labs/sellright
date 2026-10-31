@@ -1,6 +1,7 @@
 // A13: shop platform code moved verbatim from src/routes/shop/index.tsx (catalog loader) and src/routes/shop/seo.ts
 // (head, onStaticGenerate). The shop route re-exports all three.
-import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
+import { routeLoader$, server$, type StaticGenerateHandler } from '@qwik.dev/router';
+import { noStore, shellRender } from '~/platform/shell-render';
 import { loadBrowseCatalog } from '~/services/browse-catalog';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
@@ -17,15 +18,25 @@ import { productGroupSchema } from '~/platform/product-jsonld';
 // refreshes every minute. Stale/foreign snapshots fall back to the live API;
 // stock is rechecked before checkout.
 // Products are in the HTML on first byte — no client-side API call needed.
+// ADR-0001 §2 (SHELL_CACHE=1): the listing is stock-bearing (inStock, and the in-stock filter decides which cards exist) and priced,
+// so the shell carries none of it: `deferred` and no products. The browser reads the same manifest snapshot on load through
+// `readShopCatalog` (no-store); LOCKED layer 2 is otherwise unchanged (manifest on load, the in-stock toggle is the live API hit).
 export const useCatalogLoader = routeLoader$(async ({ error }) => {
  // Brand views PR2: a branded shop reads its listing through useConfiguratorDetail (one generation with the detail products).
- if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false };
+ if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false, deferred: false };
+ if (shellRender()) return { totalItems: 0, products: [], fallback: false, deferred: true };
  try {
   const parsed = await loadBrowseCatalog();
-  return { ...parsed, fallback: false };
+  return { ...parsed, fallback: false, deferred: false };
  } catch {
   throw error(503, 'Catalog temporarily unavailable');
  }
+});
+
+/** The shop listing's manifest read, moved to the browser (ADR-0001 §2): the same snapshot the SSR loader reads, per request, no-store. */
+export const readShopCatalog = server$(async function () {
+ noStore(this);
+ return loadBrowseCatalog();
 });
 
 export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: unknown) => unknown }) => {

@@ -1,8 +1,11 @@
 // Brand views PR2 §10: the branded shop page: the listing (manifest on load; the in-stock toggle is its only live listing read,
 // moved from routes/shop/index.tsx) and the configurator over routes.json shop.detailProducts.
-import { $, component$, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, component$, useComputed$, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { useLocation } from '@qwik.dev/router';
+import { useLiveRead } from '~/platform/live-values';
+import { hasPendingValues, pickLiveSource } from './configurator-model';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { useConfiguratorDetail } from '~/platform/configurator-detail';
+import { readConfiguratorDetail, useConfiguratorDetail, type ConfiguratorDetail } from '~/platform/configurator-detail';
 import { ShopView, platformAction } from '~/platform/gateway';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { ActionResult, PublicIdentity, ShopListingItem, ShopViewData } from '~/platform/views';
@@ -30,7 +33,12 @@ export async function liveListingOverride(listedSlugs: readonly string[], search
 export const BrandShopMount = component$(() => {
 	const identity = useStoreIdentityLoader();
 	const detail = useConfiguratorDetail();
-	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'shop');
+	const location = useLocation();
+	// ADR-0001 §2: a shell detail (no listing, prices pending) is read in the browser on load from the manifest, no-store (LOCKED layer 2:
+	// still the manifest on load; the in-stock toggle stays the live API hit).
+	const liveKey = useComputed$(() => (hasPendingValues(detail.value, 'shop') ? location.url.pathname : null));
+	const live = useLiveRead<ConfiguratorDetail>($(() => readConfiguratorDetail()), liveKey);
+	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'shop', live);
 	const inStockOnly = useSignal(true);
 	const override = useSignal<Record<string, boolean> | null>(null);
 	const listCtl = useStore<ActionCtl>({ disposed: false, admitted: [] });
@@ -40,9 +48,9 @@ export const BrandShopMount = component$(() => {
 	const listingGen = useSignal(0);
 	// The listed slugs as plain data, taken at render: the read never touches the loader signal from inside an event handler.
 	const listed = useStore<{ slugs: string[] }>({ slugs: (detail.value?.listing ?? []).map((item) => item.slug) });
-	// A new loader value (SPA navigation) re-takes the slugs.
+	// A new loader value (SPA navigation) or the browser's listing read re-takes the slugs.
 	useTask$(({ track }) => {
-		const d = track(() => detail.value);
+		const d = pickLiveSource(track(() => detail.value), track(() => live.value), 'shop');
 		listed.slugs = (d?.listing ?? []).map((item) => item.slug);
 	});
 	const readListing = $(async (): Promise<boolean> => {
@@ -65,7 +73,7 @@ export const BrandShopMount = component$(() => {
 	);
 
 	// Built in the render body, field by field (no nested computed: see useConfigurator `project`).
-	const d = detail.value;
+	const d = pickLiveSource(detail.value, live.value, 'shop');
 	const v = c.project();
 	const data = seal<ShopViewData>({
 		identity: projectIdentity(identity.value.identity) as PublicIdentity,

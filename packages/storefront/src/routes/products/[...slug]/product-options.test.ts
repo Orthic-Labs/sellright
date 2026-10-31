@@ -7,6 +7,7 @@ import {
 	getOptionGroups,
 	isActivePreOrder,
 	isPaintedSoldOut,
+	paintStockHint,
 	isPreOrderPresented,
 	isSelectionOutOfStock,
 	isStockHintPending,
@@ -380,5 +381,24 @@ describe('#408 options in any order', () => {
 		expect(selectOptionValue(variants, groups, [null, 'Red'], 0, 'Black')).toEqual(['Black', 'Red']);
 		expect(selectOptionValue(variants, groups, [null, 'Blue'], 0, 'Black')).toEqual(['Black', null]);
 		expect(selectOptionValue(variants, groups, ['Black', null], 1, 'Blue')).toEqual([null, 'Blue']);
+	});
+});
+
+describe('ADR-0001 shell (valuesPending): availability not known yet', () => {
+	const unchecked = [variant({ sku: 'A', options: [], inStock: false, availableQuantity: 0 })];
+	it('the redacted shell (catalogInStock null) paints no Sold Out before the live read', () => {
+		const hint = paintStockHint(true, null);
+		expect(isPaintedSoldOut(unchecked, hint, false)).toBe(false);
+		expect(isSelectionOutOfStock(true, unchecked[0], isStockHintPending(hint, false))).toBe(false);
+	});
+	it('the live read stays authoritative (a real sold-out paints once loaded) and nothing becomes purchasable', () => {
+		expect(isPaintedSoldOut(unchecked, paintStockHint(true, null), true)).toBe(true);
+		expect(isVariantPurchasable(unchecked[0]!)).toBe(false);
+	});
+	it('switch off: the manifest hint is used unchanged', () => {
+		expect(paintStockHint(false, null)).toBeNull();
+		expect(paintStockHint(false, false)).toBe(false);
+		expect(paintStockHint(false, true)).toBe(true);
+		expect(isPaintedSoldOut(unchecked, paintStockHint(false, null), false)).toBe(true);
 	});
 });

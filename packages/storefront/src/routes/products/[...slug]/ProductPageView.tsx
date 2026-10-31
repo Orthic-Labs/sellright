@@ -13,6 +13,7 @@ import { reviewsMeetThreshold, starString } from '~/utils/rewards';
 import { productPageContent } from '~/platform/brand-data';
 import { useRelatedProducts } from '~/platform/product-related';
 import { formatPrice } from '~/utils/price-format';
+import { PRICE_PLACEHOLDER } from '~/platform/live-values';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
 // now lives in the base's own default slot files under src/brand-slots.
@@ -21,10 +22,12 @@ const hasWaitlist = hasView('pdp.waitlist');
 const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, catalogInStock, enhancementError, isEnhancing, refreshLiveStock, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { pricesPending, relatedPrices, addItemToOrderErrorSignal, catalogInStock, enhancementError, isEnhancing, refreshLiveStock, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
+  // ADR-0001 DP-1: while the shell's prices are pending nothing shows a price (placeholders hold their space).
+  const pricePending = pricesPending?.value === true;
   let widgetPriceCents = 0;
-  if (hasPaymentWidget) {
+  if (hasPaymentWidget && !pricePending) {
     const sv: CatalogVariant | undefined = selectedVariant.value;
     const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
     const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
@@ -36,7 +39,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
   // the previous platform showed the waitlist whenever every variant was sold out (O/components/products/WaitlistForm.tsx use). Here "sold out" must
   // be real: a complete live read, or the manifest itself saying the product is out of stock (never an unchecked shell).
   const waitlistAvailable = hasWaitlist && allVariantsSoldOut.value && (liveStockReady.value || catalogInStock === false) && product.variants.some((v: CatalogVariant) => v.enabled !== false);
-  const namedVariantPricesVary = groups.value.length === 0 && new Set(product.variants.map((v: CatalogVariant) => effectiveVariantPrice(v))).size > 1;
+  const namedVariantPricesVary = !pricePending && groups.value.length === 0 && new Set(product.variants.map((v: CatalogVariant) => effectiveVariantPrice(v))).size > 1;
   return (
     <div class="sr-pdp">
       <div class="sr-layout">
@@ -168,7 +171,11 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               <span>{rating.average.toFixed(1)} ({rating.count})</span>
             </a>
           )}
-          {(() => {
+          {pricePending ? (
+            <div class="sr-price-row" data-price-pending="">
+              <span class="sr-price" aria-hidden="true" style={{ visibility: 'hidden' }}>{PRICE_PLACEHOLDER}</span>
+            </div>
+          ) : (() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
             const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
@@ -201,7 +208,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             productId={productId}
             from={!!showFromPrefix.value && !hasSale.value && !isPreOrder.value}
           />
-          {hasPaymentWidget && <PaymentWidgetView priceCents={widgetPriceCents} />}
+          {hasPaymentWidget && (pricePending ? (
+            <div aria-hidden="true" style={{ visibility: 'hidden' }}><PaymentWidgetView priceCents={0} /></div>
+          ) : <PaymentWidgetView priceCents={widgetPriceCents} />)}
           <div class="sr-rule" />
           {enhancementError.value && (
             <div role="status" class="sr-stock-error" style="margin:0 0 12px">
@@ -463,7 +472,11 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                   {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
                 </div>
                 <div class="sr-related-name">{rp.name}</div>
-                <div class="sr-related-price">{rp.priceCents > 0 ? formatPrice(rp.priceCents, product.currency || undefined) : ''}</div>
+                {(() => {
+                  // ADR-0001 DP-1: a shell row's prices come from the page's live read (relatedPrices); until then a placeholder.
+                  const cents = rp.pricePending ? relatedPrices?.value?.[rp.slug] ?? null : rp.priceCents;
+                  return <div class="sr-related-price">{cents === null ? <span aria-hidden="true" style={{ visibility: 'hidden' }}>{PRICE_PLACEHOLDER}</span> : cents > 0 ? formatPrice(cents, product.currency || undefined) : ''}</div>;
+                })()}
               </a>
             ))}
           </div>
@@ -476,6 +489,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         ctaDisabled={ctaDisabled}
         ctaTooltipFading={ctaTooltipFading}
         displayPrice={displayPrice}
+        pricesPending={pricesPending}
         handleAddToCart={handleAddToCart}
         isAddingToCart={isAddingToCart}
         isOutOfStock={isOutOfStock}

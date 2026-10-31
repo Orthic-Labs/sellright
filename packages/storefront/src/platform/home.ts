@@ -1,6 +1,7 @@
 // A13: homepage platform code moved verbatim from src/routes/index.tsx (loaders + JSON-LD wiring). The route file
 // re-exports the loaders (proven pattern, see probe.ts) and keeps the presentation.
-import { routeLoader$ } from '@qwik.dev/router';
+import { routeLoader$, server$ } from '@qwik.dev/router';
+import { noStore, shellRender } from '~/platform/shell-render';
 import { createSEOHead } from '~/utils/seo';
 import { jsonLdOrganization } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
@@ -71,26 +72,73 @@ async function fetchHomeProduct(slug: string) {
   }
 }
 
-export const usePreorderProduct = routeLoader$(async () => (brandHome() ? null : fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG)), HOME_LOADER_OPTIONS);
+type HomeProduct = NonNullable<Awaited<ReturnType<typeof fetchHomeProduct>>>;
+
+/** ADR-0001 §2-§3: the shell copy of a home product: every price and the stock level removed, `valuesPending`. */
+export function shellHomeProduct(p: HomeProduct | null): (HomeProduct & { valuesPending?: boolean }) | null {
+  if (!p) return null;
+  return {
+    ...p,
+    variants: p.variants.map((v) => ({
+      ...v,
+      price: 0,
+      priceWithTax: 0,
+      stockLevel: null,
+      customFields: { ...v.customFields, preOrderPrice: null, salePrice: null },
+    })),
+    valuesPending: true,
+  };
+}
+
+/** A home product loader's value: with SHELL_CACHE=1 the shell copy. */
+const homeProductFor = async (slug: string) => {
+  const p = await fetchHomeProduct(slug);
+  return shellRender() ? shellHomeProduct(p) : (p as (HomeProduct & { valuesPending?: boolean }) | null);
+};
+
+export const usePreorderProduct = routeLoader$(async () => (brandHome() ? null : homeProductFor(SPOTLIGHT_PRODUCT_SLUG)), HOME_LOADER_OPTIONS);
 
 // Distinct from usePreorderProduct on purpose — same slug would render the
 // same product in both the spotlight section AND HomeTeeSection.
 export const useFeatureProduct = routeLoader$(async () => {
   if (brandHome() || !FEATURE_PRODUCT_SLUG || FEATURE_PRODUCT_SLUG === SPOTLIGHT_PRODUCT_SLUG) return null;
-  return fetchHomeProduct(FEATURE_PRODUCT_SLUG);
+  return homeProductFor(FEATURE_PRODUCT_SLUG);
 }, HOME_LOADER_OPTIONS);
 
 /** Live storefront catalog — 4 tiles, same data/shape as the shop grid
  * (adaptSearch), so a demo/fresh install always has real, honest product
  * tiles here rather than a hand-picked slug that might not exist yet. */
-export const useFeaturedProducts = routeLoader$(async () => {
+async function featuredItems() {
   try {
     const res = await search({ take: 4 });
     return (res?.items ?? []).slice(0, 4);
   } catch {
     return [];
   }
+}
+
+type FeaturedItem = Awaited<ReturnType<typeof featuredItems>>[number];
+
+/** ADR-0001 §2-§3: a featured tile for the shell: no price, the fail-closed stock constant (shown as "not known yet"). */
+export const shellFeaturedItem = (item: FeaturedItem): FeaturedItem => ({ ...item, priceWithTax: { min: 0, max: 0 }, inStock: false });
+
+/** `valuesPending` (SHELL_CACHE=1): the tiles carry no price or stock; the page reads them in the browser (readHomeValues). */
+export const useFeaturedProducts = routeLoader$(async () => {
+  const items = await featuredItems();
+  return shellRender() ? { items: items.map(shellFeaturedItem), valuesPending: true } : { items, valuesPending: false };
 }, HOME_LOADER_OPTIONS);
+
+/** ADR-0001: the home page's live values in the browser, from the same reads as the loaders, per request, no-store. */
+export const readHomeValues = server$(async function () {
+  noStore(this);
+  const base = !brandHome();
+  const [preorder, feature, featured] = await Promise.all([
+    base ? fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG) : null,
+    base && FEATURE_PRODUCT_SLUG && FEATURE_PRODUCT_SLUG !== SPOTLIGHT_PRODUCT_SLUG ? fetchHomeProduct(FEATURE_PRODUCT_SLUG) : null,
+    featuredItems(),
+  ]);
+  return { preorder, feature, featured };
+});
 
 /** Collection links (Desk & Paper / Everyday Carry / At Home on the seeded
  * demo catalog) — whatever the store actually has, never a hardcoded list. */

@@ -25,6 +25,11 @@ interface ProductCardProps {
   preOrderPrice?: number | null;
   isPreOrder?: boolean;
   inStock?: boolean;
+  /** ADR-0001: availability not read yet (shell). Neither Sold Out nor in-stock presentation, no badges; nothing is purchasable
+   *  from a card. A failed read is passed as `inStock={false}` (fail closed). */
+  pending?: boolean;
+  /** ADR-0001 DP-1: price not read yet (or failed): the price keeps its space with a placeholder. */
+  pricePending?: boolean;
   priority?: boolean;
   skeleton?: boolean;
   /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
@@ -48,8 +53,11 @@ export default component$((props: ProductCardProps) => {
 	} = props;
 	// Fail closed: only an explicit live `inStock === true` is available. Omitted/undefined stock renders the
 	// unavailable state, and the pre-order flag never presents without live stock.
+	const pending = props.pending === true;
 	const available = props.inStock === true;
-	const preOrder = isPreOrder && available;
+	const preOrder = isPreOrder && available && !pending;
+	/** Shows the unavailable state only once availability is known. */
+	const soldOut = !available && !pending;
 	const name = props.name ?? props.productName;
 	const image = props.image ?? props.productAsset?.preview ?? null;
 	const price = props.price ?? legacyPriceWithTaxToNumber(props.priceWithTax);
@@ -71,7 +79,7 @@ export default component$((props: ProductCardProps) => {
 					<div class="w-full h-full animate-pulse" />
 				) : (
 					<>
-						{!available && (
+						{soldOut && (
 							<div class="absolute top-0 left-0 z-10 bg-[var(--color-ink)] text-white px-3 py-1.5 text-[13px] font-normal uppercase tracking-[2px] font-heading">
 								Sold Out
 							</div>
@@ -89,7 +97,7 @@ export default component$((props: ProductCardProps) => {
 						<OptimizedImage
 							src={image || '/asset_placeholder.webp'}
 							class={`w-full h-full object-cover object-center transition-transform duration-500 ease-out group-hover:scale-[1.03] ${
-								!available ? 'opacity-50' : ''
+								soldOut ? 'opacity-50' : ''
 							}`}
 							width={400}
 							height={500}
@@ -113,7 +121,7 @@ export default component$((props: ProductCardProps) => {
 					<>
 						<h3
 							class={`font-heading font-normal text-[20px] leading-tight tracking-tight ${
-								!available ? 'text-[var(--color-ink-soft)]' : 'text-[var(--color-ink)]'
+								soldOut ? 'text-[var(--color-ink-soft)]' : 'text-[var(--color-ink)]'
 							}`}
 						>
 							{name}
@@ -123,7 +131,8 @@ export default component$((props: ProductCardProps) => {
 							<Price
 								price={price}
 								maxPrice={props.maxPrice ?? null}
-								forcedClass={`font-heading font-normal text-[19px] text-[var(--color-ink)] ${!available ? 'text-[var(--color-ink-muted)]' : ''}`}
+								forcedClass={`font-heading font-normal text-[19px] text-[var(--color-ink)] ${soldOut ? 'text-[var(--color-ink-muted)]' : ''}`}
+								pending={props.pricePending === true}
 								salePrice={salePrice}
 								preOrderPrice={preOrderPrice}
 								isPreOrder={preOrder}
@@ -136,7 +145,7 @@ export default component$((props: ProductCardProps) => {
 							<div class="flex items-center gap-2">
 								<div class="w-5 h-px bg-[var(--color-accent)] flex-shrink-0"></div>
 								<span class="text-[13px] tracking-[2.5px] uppercase text-[var(--color-accent)] font-normal font-heading">
-									{preOrder ? 'Pre-order now' : !available ? 'Notify me' : 'View product'}
+									{preOrder ? 'Pre-order now' : soldOut ? 'Notify me' : 'View product'}
 								</span>
 							</div>
 						</div>

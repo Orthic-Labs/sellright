@@ -7,3 +7,6 @@ src/services/CartService.test.ts|vendure_local_cart
 src/services/CartService.ts|vendure_local_cart
 src/services/CountryPreferenceService.ts|vendure_local_cart
 src/services/legacy-cart.test.ts|vendure_local_cart
+src/utils/session-customer.server.ts|__vendure_session
+src/utils/session-customer.server.test.ts|__vendure_session
+src/utils/root-layout-per-visitor.test.ts|__vendure_session

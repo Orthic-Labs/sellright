@@ -2,14 +2,15 @@
 // view's one live read in the browser). The route product and its siblings come from ONE catalog generation, or all of them from the
 // live API, never a mix. With no `route.product` view this loader returns null without any I/O, and the route keeps today's loader
 // and head untouched.
-import { routeLoader$, type DocumentHeadValue } from '@qwik.dev/router';
+import { routeLoader$, server$, type DocumentHeadValue } from '@qwik.dev/router';
+import { noStore, shellRender } from '~/platform/shell-render';
 import { hasView } from '~/platform/gateway';
 import { DETAIL_PRODUCTS } from '~/platform/brand-data';
 import { detailSet, productSlugOf, withCanonicalUrls } from '~/platform/product-detail-model';
 
 export { detailSet, productSlugOf, withCanonicalUrls };
 import { productPath, productUrl } from '~/platform/product-path';
-import { buildModelProduct, type ModelProduct } from '~/platform/controllers/product-model';
+import { buildModelProduct, redactModel, type ModelProduct } from '~/platform/controllers/product-model';
 import { readCatalogGeneration } from '~/services/catalog-snapshot';
 import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { getProductDetail } from '~/providers/shop/products/products';
@@ -73,14 +74,8 @@ export async function modelsFromLive(set: readonly { key: string; slug: string }
 }
 
 /** The branded product page's detail. Status 404 for an invalid slug, an unknown product and a product with no variants. */
-export const useBrandProductDetail = routeLoader$(async ({ params, status, url, headers }): Promise<BrandProductDetail | null> => {
-	if (!hasView('route.product')) return null;
-	const slug = productSlugOf(url.pathname, params);
-	if (slug === null) return null;
-	if (!slug || !SAFE_SLUG.test(slug)) {
-		status(404);
-		return MISSING;
-	}
+/** The found/missing detail of a valid slug, with its values. `unavailable` = the API failed (the loader answers 503). */
+export async function buildBrandProductDetail(slug: string): Promise<BrandProductDetail | 'unavailable'> {
 	const set = detailSet(slug);
 	let source: 'manifest' | 'network' = 'manifest';
 	let models: (ModelProduct | null)[] | null = await modelsFromManifest(set);
@@ -89,17 +84,11 @@ export const useBrandProductDetail = routeLoader$(async ({ params, status, url, 
 		try {
 			models = await modelsFromLive(set);
 		} catch {
-			// The API failed (not a 404): temporary, so 503 with Retry-After rather than "product not found".
-			headers.set('Retry-After', '30');
-			status(503);
-			return MISSING;
+			return 'unavailable';
 		}
 	}
 	const product = models[0];
-	if (!product || product.variants.length === 0) {
-		status(404);
-		return MISSING;
-	}
+	if (!product || product.variants.length === 0) return MISSING;
 	const member = DETAIL_PRODUCTS.find((m) => m.slug === slug);
 	return {
 		state: 'found',
@@ -112,6 +101,41 @@ export const useBrandProductDetail = routeLoader$(async ({ params, status, url, 
 		],
 		source,
 	};
+}
+
+/** ADR-0001 §2-§3: the shell copy of a found detail (every model's prices redacted; no stock is in the detail at all). */
+export const shellBrandProductDetail = (d: BrandProductDetail): BrandProductDetail =>
+	d.state === 'found' ? { ...d, product: redactModel(d.product), siblings: d.siblings.map(redactModel) } : d;
+
+export const useBrandProductDetail = routeLoader$(async ({ params, status, url, headers }): Promise<BrandProductDetail | null> => {
+	if (!hasView('route.product')) return null;
+	const slug = productSlugOf(url.pathname, params);
+	if (slug === null) return null;
+	if (!slug || !SAFE_SLUG.test(slug)) {
+		status(404);
+		return MISSING;
+	}
+	const detail = await buildBrandProductDetail(slug);
+	if (detail === 'unavailable') {
+		// The API failed (not a 404): temporary, so 503 with Retry-After rather than "product not found".
+		headers.set('Retry-After', '30');
+		status(503);
+		return MISSING;
+	}
+	if (detail.state === 'missing') {
+		status(404);
+		return MISSING;
+	}
+	return shellRender() ? shellBrandProductDetail(detail) : detail;
+});
+
+/** The branded product page's live values in the browser (ADR-0001): the same build for the slug, per request, no-store. Null on any
+ *  failure (the view keeps its pending prices). */
+export const readBrandProductDetail = server$(async function (slug: string): Promise<BrandProductDetail | null> {
+	noStore(this);
+	if (!hasView('route.product') || typeof slug !== 'string' || !SAFE_SLUG.test(slug)) return null;
+	const detail = await buildBrandProductDetail(slug);
+	return detail === 'unavailable' ? null : detail;
 });
 
 /** A 160-character plain-text description, cut at a word (as the base product head does). */

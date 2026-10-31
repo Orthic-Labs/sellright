@@ -13,7 +13,8 @@ import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
-import { NO_STORE_CACHE_CONTROL, createEdgeHtmlMiddleware, edgeHtmlCacheEnabled } from"./config/route-cache-policy";
+import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
+import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
@@ -87,6 +88,16 @@ else if (appleClientId() && appleSignInHosts().length === 0) {
 	console.error('[apple-signin] VITE_APPLE_CLIENT_ID is set but SELLRIGHT_APPLE_SIGNIN_HOSTS is empty: Apple sign-in is disabled on every host (list the pinned store\'s public hosts, comma-separated).');
 }
 
+// ADR-0001 (config/route-cache-policy.ts): read once per process. Default off: both shell middlewares are inert, so every document
+// keeps the per-request nonce CSP and `private, no-store`.
+const SHELL_CACHE_ON = shellCacheEnabled();
+
+// I-2, structural: with SHELL_CACHE=1 a `shell` GET loses Cookie, Authorization, cf-ipcountry and preview/nonce inputs here, before
+// the CSP nonce, the cookie/host contexts and every Qwik loader below, and is marked for the response-end check.
+app.use(createShellRequestMiddleware({ enabled: SHELL_CACHE_ON, exclude: shellExcludedPaths() }));
+// The loaders' shellRender() redacts values only inside a request marked as a shell render (excluded/dynamic: as switch off).
+app.use((req, res, next) => shellRenderContext.run(isShellRender(res), next));
+
 // Set security headers
 app.use(async (req, res, next) => {
 	// Per-request CSP nonce. Threaded to Qwik's SSR render via a custom
@@ -102,8 +113,12 @@ app.use(async (req, res, next) => {
 	// through @qwik.dev/router's node-server middleware into this app's
 	// render() call (see entry.ssr.tsx for the full trace) — only headers on
 	// the request do, via opts.serverData.requestHeaders.
-	const nonce = randomBytes(16).toString('base64');
-	req.headers['x-qwik-nonce'] = nonce;
+	// ADR-0001 item 4: a shell render (may be shared) gets NO nonce; its CSP is completed with sha256 hashes of the exact inline
+	// scripts at response end (createShellCacheMiddleware). Never a shared nonce.
+	const shellRender = isShellRender(res);
+	const nonce = shellRender ? undefined : randomBytes(16).toString('base64');
+	if (nonce) req.headers['x-qwik-nonce'] = nonce;
+	else delete req.headers['x-qwik-nonce'];
 
 	// Security Headers - PCI DSS Compliance
 	// XSS Protection
@@ -258,12 +273,12 @@ app.use((_req, res, next) => {
   next();
 });
 
-// P4b (config/route-cache-policy.ts "HTML edge policy"): with SELLRIGHT_EDGE_HTML_CACHE=1, an anonymous request for a
-// stock-free content document is rendered into a buffer; if the finished response passes the response checks, its CSP nonce is
-// replaced by sha256 hashes of the exact inline scripts and it is marked EDGE_HTML_CACHE_CONTROL. Anything else (or any doubt:
-// veto, Set-Cookie, non-200, oversize) leaves the no-store default and the nonce CSP untouched. Off by default.
-app.use(createEdgeHtmlMiddleware({
-  enabled: edgeHtmlCacheEnabled(process.env),
+// ADR-0001 I-6 (config/route-cache-policy.ts): for a response the request middleware marked as a shell render, buffer the body, add
+// the sha256 of every executable inline script to script-src, and promote to `public, max-age=0, s-maxage=<SHELL_CACHE_TTL>` only
+// if status 200, text/html, no Set-Cookie and no loader veto (identity fallback, maintenance, unpublished...). Else no-store.
+app.use(createShellCacheMiddleware({
+  enabled: SHELL_CACHE_ON,
+  ttlSeconds: shellTtlSeconds(),
   sha256Base64: (text) => createHash('sha256').update(text, 'utf8').digest('base64'),
 }));
 
@@ -274,6 +289,10 @@ app.use(createEdgeHtmlMiddleware({
 app.use(createLegacyRedirects(BRAND_REDIRECTS));
 
 app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS)));
+
+// ADR-0001 I-3: a shell render sees the bare path (its query is tracking-only; Qwik would serialise it into the page). No-op
+// unless SHELL_CACHE=1 marked this request a shell render.
+app.use(shellRenderUrl);
 
 // Use Qwik Router's page and endpoint request handler
 app.use(router);
