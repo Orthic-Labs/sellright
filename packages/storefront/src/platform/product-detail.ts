@@ -127,7 +127,7 @@ export const useBrandProductDetail = routeLoader$(async ({ params, status, url, 
 		return MISSING;
 	}
 	return shellRender() ? shellBrandProductDetail(detail) : detail;
-});
+}, { serializationStrategy: 'always' });
 
 /** The branded product page's live values in the browser (ADR-0001): the same build for the slug, per request, no-store. Null on any
  *  failure (the view keeps its pending prices). */

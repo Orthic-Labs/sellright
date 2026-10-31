@@ -34,7 +34,7 @@ export const useCollectionLoader = routeLoader$(async ({ params, status, query }
   // ADR-0001 §2-§3: the shell's cards carry no price and no stock (fail-closed constant, shown as "not known yet"); the browser reads
   // them on load (readCollectionValues, no-store).
   return shellRender() ? { ...collection, products: collection.products.map(redactListItem), valuesPending: true } : { ...collection, valuesPending: false };
-}, { search: ['page'] });
+}, { search: ['page'], serializationStrategy: 'always' });
 
 /** ADR-0001: the collection page's live card values (price, inStock) by slug, from the same API read, per request, no-store. */
 export const readCollectionValues = server$(async function (slug: string, page: number): Promise<Record<string, CardValues> | null> {

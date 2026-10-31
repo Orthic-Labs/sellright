@@ -14,7 +14,7 @@ export const BLOG_PAGE_SIZE: number = blogPageSize(BRAND_ROUTES);
 
 export const useBlogPosts = routeLoader$(async () => {
     return getBlogPosts(BLOG_PAGE_SIZE, 0);
-});
+}, { serializationStrategy: 'always' });
 
 // Moved verbatim from routes/blog/[slug]/index.tsx (the route re-exports them, the A13 pattern).
 export const useBlogPost = routeLoader$(async (requestEvent) => {
@@ -26,7 +26,7 @@ export const useBlogPost = routeLoader$(async (requestEvent) => {
     if (!post) { requestEvent.status(404); return null; }
     if (post.bodyHtml) post.bodyHtml = fixBodyHtml(post.bodyHtml);
     return post;
-});
+}, { serializationStrategy: 'always' });
 
 export const useRelatedPosts = routeLoader$(async (requestEvent) => {
     const slug = requestEvent.params.slug;
@@ -42,7 +42,7 @@ export const useRelatedPosts = routeLoader$(async (requestEvent) => {
     } catch {
         return [] as BlogPostSummary[];
     }
-});
+}, { serializationStrategy: 'always' });
 
 export const head = ({ resolveValue }: any) => {
     const blogData = resolveValue(useBlogPosts);

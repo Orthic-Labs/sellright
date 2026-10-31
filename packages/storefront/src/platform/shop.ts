@@ -39,7 +39,7 @@ export const useCatalogLoader = routeLoader$(async ({ error }) => {
  } catch {
   throw error(503, 'Catalog temporarily unavailable');
  }
-});
+}, { serializationStrategy: 'always' });
 
 /** A shop listing item for the shell (#412): structure only, as an explicit projection (no unknown field can carry a value through),
  *  then redacted (no price, the fail-closed stock constant, never shown as Sold Out while pending). */

@@ -9,4 +9,4 @@ export const useContentReviewSummary = routeLoader$(async ({ url }): Promise<Con
 	if (!hasContentViewFor(url.pathname) || !matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return null;
 	const { readReviewSummary } = await import('~/platform/review-summary.server');
 	return readReviewSummary();
-});
+}, { serializationStrategy: 'always' });
