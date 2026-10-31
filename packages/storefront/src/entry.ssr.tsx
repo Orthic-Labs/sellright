@@ -19,6 +19,7 @@ import { ipCountry } from './platform/head-analytics';
 import { headOrderWriter } from './platform/head-order';
 import { clientDistDir, inlineStylesheetInjections, readBuiltCss } from './platform/inline-stylesheet.server';
 import { loadWarmScript } from './platform/warm-graph.server';
+import { earlyReadsStream } from './platform/early-reads.server';
 
 // #425 step 2: the global stylesheet inline (platform/inline-stylesheet.server.ts), resolved once per manifest object.
 const distDir = import.meta.env.PROD ? clientDistDir(import.meta.url) : null;
@@ -59,7 +60,8 @@ export default function (opts: ExtendedRenderOptions) {
 	const country = ipCountry(opts.serverData?.requestHeaders?.['cf-ipcountry']);
 
 	// F2: the render-blocking stylesheet first in <head>, Qwik's speculative preloads after it (platform/head-order.ts).
-	const stream = headOrderWriter(opts.stream);
+	// #415: the parse-time live reads script, first in <head> (platform/early-reads.server.ts).
+	const stream = headOrderWriter(earlyReadsStream(opts.stream, opts.serverData?.url, nonce));
 	const base = withInlineStylesheet((opts.manifest as typeof manifest | undefined) ?? manifest);
 	// Per request: the warm script carries this render's nonce (a shell render has none; the express layer hashes it instead).
 	const renderManifest = base && warm

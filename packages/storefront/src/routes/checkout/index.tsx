@@ -67,7 +67,7 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) 
 export const useCheckoutNoCartCookie = routeLoader$(({ cookie, sharedMap }) => {
   if (sharedMap.has('@loaderId') || shellRender()) return false;
   return !cookie.get(TOKEN_COOKIE)?.value;
-});
+}, { serializationStrategy: 'always' });
 
 /** The checkout views whose entry has started (the shell's document-ready start and the visible task never both run it). A WeakSet
  *  keyed by the view's own store: it holds no cart data and nothing outlives the view. */
