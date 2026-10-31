@@ -71,12 +71,19 @@ const listeners = new Set<AnalyticsListener>();
 // during SSR (there is no visitor to consent yet), and this module is never
 // imported for its side effects on the server render path.
 let consentGranted = false;
+// #425: events tracked before the page's subscriber starts (the conversion subscriber mounts at document-idle, but the product view
+// starts its stock read at qinit, so `view_item` came first and was dropped). Held, bounded, until the first subscriber registers:
+// delivered to it only if consent is granted at that moment (implied-consent brands grant it just before subscribing), otherwise
+// discarded, so nothing tracked before an explicit consent is ever sent. No storage: a page's held events die with the page.
+const MAX_HELD = 20;
+let held: AnalyticsEvent[] = [];
 
 /** Grant or revoke consent. Revoking does not retroactively un-fire past
  *  events (there is no retention here to undo) — it only gates future
  *  `track()` calls. */
 export function setAnalyticsConsent(granted: boolean): void {
 	consentGranted = granted;
+	if (!granted) held = [];
 	// #375: revoking consent forgets the stored hashed user data (platform/controllers/user-data.ts USER_DATA_STORAGE_KEY).
 	if (!granted && typeof window !== 'undefined') {
 		try {
@@ -96,21 +103,31 @@ export function hasAnalyticsConsent(): boolean {
  *  adapter needs — it never has to be threaded through call sites. */
 export function onAnalyticsEvent(listener: AnalyticsListener): () => void {
 	listeners.add(listener);
+	const early = held;
+	held = [];
+	if (consentGranted) for (const event of early) deliver(listener, event);
 	return () => listeners.delete(listener);
 }
 
 /** Emit an event. No-op (silently) without consent — callers don't need to
  *  check `hasAnalyticsConsent()` themselves before every `track()` call. */
 export function track(event: AnalyticsEvent): void {
+	if (listeners.size === 0) {
+		// No subscriber yet (it may still be starting): hold, decided at subscription (consent then).
+		if (typeof window !== 'undefined' && held.length < MAX_HELD) held.push(event);
+		return;
+	}
 	if (!consentGranted) return;
-	for (const listener of listeners) {
-		try {
-			listener(event);
-		} catch (err) {
-			// A misbehaving subscriber must never break the page it's
-			// instrumenting.
-			console.error('analytics listener failed:', err);
-		}
+	for (const listener of listeners) deliver(listener, event);
+}
+
+function deliver(listener: AnalyticsListener, event: AnalyticsEvent): void {
+	try {
+		listener(event);
+	} catch (err) {
+		// A misbehaving subscriber must never break the page it's
+		// instrumenting.
+		console.error('analytics listener failed:', err);
 	}
 }
 
