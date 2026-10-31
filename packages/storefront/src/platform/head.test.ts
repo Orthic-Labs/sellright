@@ -128,6 +128,12 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 });
 
 describe('resolveHead: preloads', () => {
+	it('#360: a font preload can carry fetchpriority (high for the LCP heading font)', () => {
+		const spec = { fontPreloads: [{ href: '/fonts/h.woff2', type: 'font/woff2' as const, fetchpriority: 'high' as const }] };
+		const r = resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources(spec));
+		expect(r.extraLinks).toContainEqual(expect.objectContaining({ rel: 'preload', as: 'font', href: '/fonts/h.woff2', fetchpriority: 'high' }));
+	});
+
 	it('a path ending in * matches every path under its prefix', () => {
 		const spec = { fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2' as const, paths: ['/blog/*'] }] };
 		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blog/a-post/', identity, sources(spec)).extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2']);

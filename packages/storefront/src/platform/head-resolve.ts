@@ -20,7 +20,7 @@ export interface BrandHeadSpec {
 	/** `appleTouch`: the 180x180 PNG iOS uses for home-screen and share icons (else it probes /apple-touch-icon.png). */
 	favicon?: { svg?: string; ico?: string; appleTouch?: string };
 	/** `paths`: exact paths, or a prefix ending in `*` (`/blog/*` is every path under /blog/, /blog/ included). */
-	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[] }[];
+	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[]; fetchpriority?: 'high' | 'auto' }[];
 	imagePreloads?: {
 		paths: string[];
 		type: 'image/avif' | 'image/webp' | 'image/jpeg';
@@ -237,7 +237,7 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 		if (f.paths && !pathListMatches(f.paths, path)) continue;
 		if (have.has(f.href)) continue;
 		have.add(f.href);
-		extraLinks.push({ rel: 'preload', as: 'font', type: f.type, href: f.href, crossOrigin: 'anonymous' });
+		extraLinks.push({ rel: 'preload', as: 'font', type: f.type, href: f.href, crossOrigin: 'anonymous', ...(f.fetchpriority ? { fetchpriority: f.fetchpriority } : {}) });
 	}
 	for (const im of spec.imagePreloads ?? []) {
 		if (!pathListMatches(im.paths, path)) continue;
