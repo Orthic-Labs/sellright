@@ -3,11 +3,10 @@ import { and, desc, eq, inArray, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { priceCart, promotionStackErrorJson, CouponCodesIn } from './cart.js';
+import { promotionStackErrorJson, CouponCodesIn, quoteShippingMethods, ShippingQuoteOut } from './cart.js';
 import { PromotionStackError } from '../money/promotion-stack.js';
 import { customerToken } from '../auth/session.js';
-import { calculateOrderTotals } from '../money/totals.js';
-import { freeShippingThreshold, isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
+import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
 import { clientIp, giftCardLookupRetryAfter, recordGiftCardMiss } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
@@ -286,33 +285,15 @@ shopExtra.openapi(createRoute({
   method: 'post', path: '/v1/shop/shipping-methods', summary: 'Quote shipping from cart items',
   request: { body: { content: J(ShippingQuoteIn) } },
   responses: {
-    200: { description: 'Quoted methods', content: J(z.object({
-      methods: z.array(z.object({ code: z.string(), name: z.string(), rate: z.number().int(), price: z.number().int() })),
-      // The nearest free-shipping tier for this destination (null when already free or none is reachable), so storefronts never
-      // carry thresholds of their own.
-      freeShipping: z.object({ threshold: z.number().int(), remaining: z.number().int() }).nullable(),
-    })) },
+    200: { description: 'Quoted methods', content: J(ShippingQuoteOut) },
     409: { description: 'Credit quote unavailable', content: J(apiErrorSchema()) },
   },
 }), async c => {
   const st = await resolveStoreFromCtx(c);
   const body = c.req.valid('json') as z.infer<typeof ShippingQuoteIn>;
   try {
-    const result = await withStore(st.id, async tx => {
-      // Checkout tests shipping eligibility before planning points redemption.
-      const quote = await priceCart(tx, st, body.items, { shipCountry: body.country, couponCode: body.couponCode, couponCodes: body.couponCodes, pricingIntent: 'checkout', token: customerToken(c) });
-      if (quote.unavailable.length) return { methods: [], freeShipping: null };
-      const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
-      const ctx = { country: body.country, subtotal: quote.subtotal, discountedSubtotalWithTax: quote.grandTotal };
-      const freeShipping = freeShippingThreshold(methods.map(m => m.calculator), ctx);
-      return { freeShipping, methods: methods.filter(method => isMethodEligible(method.calculator, ctx)).map(method => {
-        const calc = method.calculator as ShippingCalculator;
-        const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
-          taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
-          shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
-        return { code: method.code, name: method.name, rate: shippingRate(calc), price: total.grandTotal };
-      }) };
-    });
+    const result = await withStore(st.id, tx => quoteShippingMethods(tx, st, body.items,
+      { country: body.country, couponCode: body.couponCode, couponCodes: body.couponCodes, token: customerToken(c) }));
     return c.json(result, 200);
   } catch (error) {
     if (error instanceof PromotionStackError) return promotionStackErrorJson(c, error);

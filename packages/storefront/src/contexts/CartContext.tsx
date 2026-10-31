@@ -182,12 +182,16 @@ export function startCheckoutEntryBoot(pathname: string): boolean {
   const cookie = typeof document === 'undefined' ? null : COUNTRY_COOKIE_RE.exec(document.cookie);
   const shipCountry = cookie?.[1] || undefined;
   CartService.setQuoteContext({ pricingIntent: 'checkout', ...(shipCountry ? { shipCountry } : {}) });
-  const read = CartService.bootstrap();
+  const read = CartService.bootstrap(CHECKOUT_ENTRY_READ);
   // The entry awaits it and reports its failure; this only keeps an unawaited rejection from being reported twice.
   read.catch(() => undefined);
   checkoutBoot.read = read;
   return true;
 }
+
+/** #412: every checkout-entry read also asks for the shipping quote, so the entry needs no separate shipping POST nor a second,
+ *  method-priced cart GET: the checkout takes the quote over once (`CartService.takeShippingQuote`). Same live no-store read. */
+const CHECKOUT_ENTRY_READ = { includeShippingMethods: true } as const;
 
 /** Test seam: forget a deferred boot. */
 export function resetCheckoutBootForTest(): void {
@@ -245,11 +249,11 @@ export const refreshCartLive = $(async (cartState: CartContextState): Promise<'o
   checkoutBoot.deferred = false;
   checkoutBoot.read = undefined;
   try {
-    let res = boot ? await (started ?? CartService.bootstrap()) : await CartService.refresh();
+    let res = boot ? await (started ?? CartService.bootstrap(CHECKOUT_ENTRY_READ)) : await CartService.refresh(CHECKOUT_ENTRY_READ);
     // The read went out with the quote context of the moment it was sent. When the checkout's pricing inputs (destination,
     // method, points) changed while it was in flight, its response was superseded and not installed, or it priced the old
     // inputs: read once more, live, under the current ones (#412: the read now starts earlier, so this window is wider).
-    if (CartService.token() && !CartService.currentQuoteAlreadyRead()) res = await CartService.refresh();
+    if (CartService.token() && !CartService.currentQuoteAlreadyRead()) res = await CartService.refresh(CHECKOUT_ENTRY_READ);
     applyResult(cartState, res);
     if (boot) cartState.hasLoadedOnce = true;
     return 'ok';

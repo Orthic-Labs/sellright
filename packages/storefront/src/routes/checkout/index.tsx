@@ -22,7 +22,7 @@ import { confirmationUrl, type PayableOrder } from '~/components/checkout/payabl
 import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
 import { expressCheckoutOptions, type ExpressOrderForm, type ExpressOrderResult } from '~/components/checkout/express-checkout';
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
-import { getShopConfig, getShippingQuote } from '~/providers/shop/checkout/checkout';
+import { getShopConfig, getShippingQuote, type ShippingQuote } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
@@ -33,7 +33,7 @@ import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/vie
 import type { ResumeQueue } from '~/components/checkout/resume-selection';
 import { beginResumeFlow, cancelResumeFlow } from '~/components/checkout/resume-flow';
 import { submitOrderFlow } from '~/components/checkout/place-order-flow';
-import { pricingReadStep } from '~/components/checkout/checkout-pricing';
+import { chooseShippingMethod, pricingReadStep } from '~/components/checkout/checkout-pricing';
 import { applyPaymentInitError, applyPaymentProcessingChange } from '~/components/checkout/payment-callbacks';
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
@@ -197,6 +197,23 @@ const CheckoutContent = component$(() => {
       return;
     }
 
+    const install = (quote: ShippingQuote, pricedWith?: string | null) => {
+      shippingQuoteKey.value = quoteKey;
+      appState.freeShipping = quote.freeShipping;
+      const chosen = chooseShippingMethod(quote.methods, pricedWith);
+      shippingMethod.value = chosen;
+      shippingCents.value = chosen ? chosen.rate : null;
+    };
+    // #412: the checkout-entry read quotes shipping itself (same live read): its quote, for exactly this cart revision and
+    // destination, is taken here once, and neither this POST nor the method-priced cart read after it is made. A changed
+    // destination, items or coupons (or an entry read without a quote) quote through the POST as before.
+    const fromRead = CartService.takeShippingQuote(countryCode);
+    if (fromRead) {
+      install({ methods: fromRead.methods as unknown as ShopShippingMethod[], freeShipping: fromRead.freeShipping }, localCart.cart.shippingMethodCode);
+      shippingQuotePending.value = false;
+      return;
+    }
+
     let cancelled = false;
     cleanup(() => { cancelled = true; });
     shippingQuotePending.value = true;
@@ -206,20 +223,9 @@ const CheckoutContent = component$(() => {
     void (async () => {
       try {
         // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
-        const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
+        const quote = await getShippingQuote(countryCode, items, couponCodes);
         if (cancelled) return;
-        shippingQuoteKey.value = quoteKey;
-        appState.freeShipping = freeShipping;
-        if (!methods.length) {
-          shippingCents.value = null;
-          shippingMethod.value = null;
-          return;
-        }
-        // Cheapest eligible — the displayed rate and the submitted method must
-        // be the same server-priced choice.
-        const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
-        shippingMethod.value = cheapest;
-        shippingCents.value = cheapest.rate;
+        install(quote);
       } catch (e) {
         if (cancelled) return;
         console.warn('[Checkout] Failed to fetch server shipping quote:', e);

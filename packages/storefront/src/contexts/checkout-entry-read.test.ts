@@ -197,6 +197,78 @@ describe('#412: the checkout entry read starts at document start', () => {
 		expect(state.hasLoadedOnce).toBe(false);
 	});
 
+	describe('#412: the entry read carries the shipping quote (no separate POST, no method-priced second GET)', () => {
+		const shippingQuote = { country: 'CA', freeShipping: { threshold: 10000, remaining: 5000 },
+			methods: [{ code: 'express', name: 'Express', rate: 1500, price: 1500 }, { code: 'std', name: 'Standard', rate: 500, price: 500 }] };
+		const quoted = (over: Partial<ServerCart> = {}) => serverCart({ pricingIntent: 'checkout', shippingMethodCode: 'std', shippingTotal: 500, grandTotal: 5500, ...over, ...{ shippingQuote } as object });
+
+		it('one live GET asks for it; the checkout takes it once, and the method-priced pricing read has nothing to add', async () => {
+			document.cookie = 'countryCode=CA; Path=/';
+			queue.push(respond(200, quoted()));
+			startCheckoutEntryBoot('/checkout/');
+			await settle();
+			const url = urlOf(0);
+			expect(url.pathname).toBe('/v1/shop/cart/tok_srv');
+			expect(url.searchParams.get('includeShippingMethods')).toBe('1');
+			expect(url.searchParams.get('pricingIntent')).toBe('checkout');
+			expect(url.searchParams.get('shipCountry')).toBe('CA');
+			const state = newState();
+			expect(await readCartAtCheckoutEntry(state)).toBe('ok');
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			// The quote is never part of the cart mirror.
+			expect('shippingQuote' in state.cart).toBe(false);
+			expect('shippingQuote' in CartService.getCart()).toBe(false);
+			expect(state.cart).toMatchObject({ shippingMethodCode: 'std', shippingTotal: 500 });
+			// The checkout's pricing task then names the method the read priced with: the same query, already read.
+			CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'CA', shippingMethodCode: 'std' });
+			expect(CartService.currentQuoteAlreadyRead()).toBe(true);
+			// Another method is a different quote: read again.
+			CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'CA', shippingMethodCode: 'express' });
+			expect(CartService.currentQuoteAlreadyRead()).toBe(false);
+			// Handed over once, for its own destination only.
+			expect(CartService.takeShippingQuote('ca')).toEqual(shippingQuote);
+			expect(CartService.takeShippingQuote('CA')).toBeNull();
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('another destination, or a newer cart revision, gets no quote from it (the checkout quotes through the POST)', async () => {
+			document.cookie = 'countryCode=CA; Path=/';
+			queue.push(respond(200, quoted()));
+			startCheckoutEntryBoot('/checkout/');
+			await readCartAtCheckoutEntry(newState());
+			expect(CartService.takeShippingQuote('US')).toBeNull();
+			queue.push(respond(200, quoted()));
+			await CartService.refresh({ includeShippingMethods: true });
+			queue.push(respond(200, serverCart({ revision: 5 })));
+			await CartService.refresh();
+			expect(CartService.takeShippingQuote('CA')).toBeNull();
+		});
+
+		it('only the entry asks: the pricing read and the pre-submit read are unchanged', async () => {
+			queue.push(respond(200, quoted()));
+			startCheckoutEntryBoot('/checkout/');
+			await readCartAtCheckoutEntry(newState());
+			queue.push(respond(200, serverCart({ pricingIntent: 'checkout' })));
+			await CartService.refresh();
+			queue.push(respond(200, serverCart({ pricingIntent: 'checkout' })));
+			await CartService.readFresh();
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(urlOf(1).searchParams.has('includeShippingMethods')).toBe(false);
+			expect(urlOf(2).searchParams.has('includeShippingMethods')).toBe(false);
+			expect(CartService.takeShippingQuote('US')).toBeNull();
+		});
+
+		it('SPA entry (no deferred boot): its own live GET asks for the quote too', async () => {
+			queue.push(respond(200, serverCart()));
+			const state = newState();
+			await loadCartIfNeeded(state);
+			queue.push(respond(200, quoted()));
+			await readCartAtCheckoutEntry(state);
+			expect(urlOf(0).searchParams.has('includeShippingMethods')).toBe(false);
+			expect(urlOf(1).searchParams.get('includeShippingMethods')).toBe('1');
+		});
+	});
+
 	it('a cart opened before entry drops the early read: the entry still makes its own live GET', async () => {
 		queue.push(respond(200, serverCart()));
 		startCheckoutEntryBoot('/checkout/');

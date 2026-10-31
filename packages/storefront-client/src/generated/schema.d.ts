@@ -20290,6 +20290,7 @@ export interface paths {
                 query?: {
                     couponCode?: string;
                     couponCodes?: string;
+                    includeShippingMethods?: "0" | "1";
                     pricingIntent?: "preview" | "checkout";
                     redeemPoints?: number;
                     shipCountry?: string;
@@ -20354,6 +20355,19 @@ export interface paths {
                             quoteHash: string;
                             revision: number;
                             shippingMethodCode: string | null;
+                            shippingQuote?: {
+                                country: string;
+                                freeShipping: {
+                                    remaining: number;
+                                    threshold: number;
+                                } | null;
+                                methods: {
+                                    code: string;
+                                    name: string;
+                                    price: number;
+                                    rate: number;
+                                }[];
+                            };
                             shippingTotal: number;
                             status: string;
                             subtotal: number;

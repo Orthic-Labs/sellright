@@ -32,6 +32,7 @@ import {
   type AddLineResult,
   type CartMutationResult,
   type ServerCart,
+  type CartShippingQuote,
 } from '~/sellright/types/cart';
 
 /** The cart token cookie (also read server-side by the checkout route's display-only summary read, L11). */
@@ -90,6 +91,10 @@ const ORDER_PAID_MESSAGE = 'This order is already paid. Start a new cart to orde
 const PAYMENT_IN_PROGRESS_MESSAGE = 'Your payment is still processing. Continue to checkout to see it through.';
 
 /** Outcome of reopening a converted cart (#370). */
+/** Options of one live cart read. `includeShippingMethods` (#412, the checkout entry read only) asks the read to quote the shipping
+ *  methods for the cart's destination too and price the cart with the selected one; see `takeShippingQuote`. */
+export interface LiveReadOptions { includeShippingMethods?: boolean }
+
 export type ReopenResult = { ok: true } | { ok: false; message: string };
 
 /** The original order behind a converted cart, as `GET /v1/shop/cart/{token}/checkout` reports it. */
@@ -173,16 +178,41 @@ export class CartService {
     this.quoteContext = { ...context };
     this.snapshotSeq++;
   }
-  /** Query + resulting cart revision of the last completed live GET. Lets the checkout skip a pricing read identical to the
-   *  one that just finished (the entry read is the same query); never used to skip a required live check. */
-  private static lastLiveRead: { key: string; revision: number } | null = null;
-  private static liveReadKey(token: string): string {
-    return JSON.stringify([token, { ...this.couponQuery(), shipCountry: this.quoteCountry() }]);
+  /** Queries + resulting cart revision of the last completed live GET. Lets the checkout skip a pricing read identical to the
+   *  one that just finished (the entry read is the same query); never used to skip a required live check. A read that asked
+   *  for the shipping quote also answers the same query naming the method the server priced it with (#412). */
+  private static lastLiveRead: { keys: string[]; revision: number } | null = null;
+  /** The pricing inputs of a read, in a fixed order (an unset input is left out). */
+  private static liveReadKey(token: string, shippingMethodCode = this.quoteContext.shippingMethodCode): string {
+    const { pricingIntent, redeemPoints } = this.quoteContext;
+    return JSON.stringify([token, { pricingIntent, shipCountry: this.quoteCountry(), shippingMethodCode, redeemPoints }]);
   }
   /** True when the last completed live read used exactly the current query and the cart has not changed since. */
   static currentQuoteAlreadyRead(): boolean {
     const token = this.readTokenCookie();
-    return !!token && !!this.lastLiveRead && this.lastLiveRead.key === this.liveReadKey(token) && this.lastLiveRead.revision === this.cart.revision;
+    return !!token && !!this.lastLiveRead && this.lastLiveRead.keys.includes(this.liveReadKey(token)) && this.lastLiveRead.revision === this.cart.revision;
+  }
+  /** #412: the shipping quote the last live read with `includeShippingMethods` returned, for the cart revision it read. Handed
+   *  over once (`takeShippingQuote`); a later revision or another destination makes it unusable. Holds no stock data. */
+  private static readShippingQuote: { token: string; revision: number; quote: CartShippingQuote } | null = null;
+  /** The checkout's shipping quote from its entry read, when that read quoted `country` for the cart now in the mirror; taken
+   *  once. Null otherwise: the caller then quotes through POST /v1/shop/shipping-methods. */
+  static takeShippingQuote(country: string): CartShippingQuote | null {
+    const held = this.readShippingQuote;
+    this.readShippingQuote = null;
+    if (!held || held.token !== this.readTokenCookie() || held.revision !== this.cart.revision) return null;
+    return held.quote.country === country.toUpperCase() ? held.quote : null;
+  }
+  /** The queries a completed live read answers (taken before its install, as the read was sent). */
+  private static liveReadKeys(token: string, server: ServerCart, quote: CartShippingQuote | undefined): string[] {
+    const keys = [this.liveReadKey(token)];
+    if (quote && server.shippingMethodCode) keys.push(this.liveReadKey(token, server.shippingMethodCode));
+    return keys;
+  }
+  /** A completed live read: its query keys and, when it carried one, its shipping quote. */
+  private static recordLiveRead(token: string, keys: string[], server: ServerCart, quote: CartShippingQuote | undefined): void {
+    this.lastLiveRead = { keys, revision: this.cart.revision };
+    this.readShippingQuote = quote ? { token, revision: server.revision, quote } : null;
   }
   private static quoteCountry(): string {
     return this.quoteContext.shipCountry ?? CountryPreferenceService.getCountry();
@@ -350,6 +380,7 @@ export class CartService {
     this.couponCodes = null;
     this.pendingIntentMigration = false;
     this.enrichment.clear();
+    this.readShippingQuote = null;
     this.cart = EMPTY_CART;
     // The cookie is gone (retired or discarded): no cart, so no count. A cookie that merely names another cart is that cart's to write.
     if (!this.readTokenCookie()) this.clearCount();
@@ -385,6 +416,8 @@ export class CartService {
    */
   private static install(server: ServerCart, requestToken: string, expectedRemoval?: string): string[] | null {
     if (server.token !== requestToken || this.readTokenCookie() !== requestToken) return null;
+    // A new snapshot: a shipping quote of an earlier read no longer belongs to the mirror (`recordLiveRead` sets this read's).
+    this.readShippingQuote = null;
     const prior = new Set(this.cart.lines.map((l) => l.sku));
     const next = new Set(server.lines.map((l) => l.sku));
     const dropped = [...prior].filter((sku) => sku !== expectedRemoval && !next.has(sku));
@@ -437,20 +470,20 @@ export class CartService {
   private static boot: { inFlight?: Promise<CartMutationResult> } = {};
 
   /** Legacy work needs a write lock; ordinary native boot retains its read-only browser fallback. */
-  static bootstrap(): Promise<CartMutationResult> {
+  static bootstrap(opts: LiveReadOptions = {}): Promise<CartMutationResult> {
     const shared = this.boot.inFlight;
     if (shared) return shared;
-    const run = this.bootstrapOnce();
+    const run = this.bootstrapOnce(opts);
     this.boot.inFlight = run;
     const clear = () => { if (this.boot.inFlight === run) this.boot.inFlight = undefined; };
     run.then(clear, clear);
     return run;
   }
 
-  private static bootstrapOnce(): Promise<CartMutationResult> {
+  private static bootstrapOnce(opts: LiveReadOptions): Promise<CartMutationResult> {
     this.syncToCookie();
     this.restoreIntent();
-    if (!this.hasLegacyIntent() && !this.pendingIntentMigration) return this.refresh();
+    if (!this.hasLegacyIntent() && !this.pendingIntentMigration) return this.refresh(opts);
     return this.exclusive(async () => {
       if (this.hasLegacyIntent()) await this.migrateLegacyInLock(true);
       if (this.pendingIntentMigration && this.readTokenCookie()) {
@@ -462,7 +495,7 @@ export class CartService {
         this.pendingIntentMigration = false;
         this.persistIntent();
       }
-      return this.refreshInLock();
+      return this.refreshInLock(opts);
     });
   }
 
@@ -711,45 +744,52 @@ export class CartService {
   /** Re-fetch the server-priced cart (live stock/price/coupon) — used for the
    *  LOCKED stock checks: cart open, checkout entry, and pre-submit.
    *  Without Web Locks this is a read-only refresh: it installs the mirror under the token fence and never retires. */
-  static refresh(): Promise<CartMutationResult> {
-    return this.hasLocks() ? this.exclusive(() => this.refreshInLock()) : this.refreshReadOnly();
+  static refresh(opts: LiveReadOptions = {}): Promise<CartMutationResult> {
+    return this.hasLocks() ? this.exclusive(() => this.refreshInLock(opts)) : this.refreshReadOnly(opts);
   }
 
-  private static async refreshInLock(): Promise<CartMutationResult> {
+  /** The live read's query: the quote context, plus the opt-in shipping quote when asked for. */
+  private static liveReadQuery(opts: LiveReadOptions) {
+    return { ...this.couponQuery(), shipCountry: this.quoteCountry(), ...(opts.includeShippingMethods ? { includeShippingMethods: '1' as const } : {}) };
+  }
+
+  private static async refreshInLock(opts: LiveReadOptions = {}): Promise<CartMutationResult> {
     this.assertHeld();
     const token = this.readTokenCookie();
     if (!token) return { cart: this.cart, dropped: [] };
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
+        params: { path: { token }, query: this.liveReadQuery(opts) },
       });
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
-      const key = this.liveReadKey(token);
-      const dropped = this.install(data, token) ?? [];
-      this.lastLiveRead = { key, revision: this.cart.revision };
+      const { shippingQuote, ...server } = data;
+      const keys = this.liveReadKeys(token, server, shippingQuote);
+      const dropped = this.install(server, token) ?? [];
+      this.recordLiveRead(token, keys, server, shippingQuote);
       return { cart: this.cart, dropped };
     } catch (e) {
       throw this.classify(e, token);
     }
   }
 
-  private static async refreshReadOnly(): Promise<CartMutationResult> {
+  private static async refreshReadOnly(opts: LiveReadOptions = {}): Promise<CartMutationResult> {
     this.syncToCookie();
     const token = this.readTokenCookie();
     if (!token) return { cart: this.cart, dropped: [] };
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { ...this.couponQuery(), shipCountry: this.quoteCountry() } },
+        params: { path: { token }, query: this.liveReadQuery(opts) },
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
-      const key = this.liveReadKey(token);
-      const dropped = this.install(data, token) ?? [];
-      this.lastLiveRead = { key, revision: this.cart.revision };
+      const { shippingQuote, ...server } = data;
+      const keys = this.liveReadKeys(token, server, shippingQuote);
+      const dropped = this.install(server, token) ?? [];
+      this.recordLiveRead(token, keys, server, shippingQuote);
       return { cart: this.cart, dropped };
     } catch (e) {
       // Without the lock a cookie must never be cleared: report the missing cart, keep the token.

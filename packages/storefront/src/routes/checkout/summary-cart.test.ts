@@ -140,7 +140,10 @@ describe('checkout route wiring', () => {
     expect(pricing.indexOf('if (!untrack(() => entryReadDone.value)) return;')).toBeLessThan(pricing.indexOf('CartService.refresh()'));
     expect(pricing).toMatch(/void \(async \(\) => \{\n\s*try \{\n\s*await CartService\.refresh\(\);/);
     // The shipping quote is not awaited by its task either.
-    expect(route).toMatch(/void \(async \(\) => \{\n\s*try \{\n[^\n]*\n\s*const \{ methods, freeShipping \} = await getShippingQuote/);
+    expect(route).toMatch(/void \(async \(\) => \{\n\s*try \{\n[^\n]*\n\s*const quote = await getShippingQuote/);
+    // The entry read's own shipping quote is taken first; the POST runs only without one.
+    expect(route.indexOf('CartService.takeShippingQuote(countryCode)')).toBeGreaterThan(-1);
+    expect(route.indexOf('CartService.takeShippingQuote(countryCode)')).toBeLessThan(route.indexOf('await getShippingQuote'));
     // Identity: the layout's session read for this page, never a second GET /api/session/.
     expect(route).toContain('await pageSessionCustomer()');
     expect(route).not.toContain('fetchSessionCustomer');
