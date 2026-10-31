@@ -3,11 +3,11 @@ import { qwikVite } from '@qwik.dev/core/optimizer';
 import { defineConfig, loadEnv } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import { imagetools } from 'vite-imagetools';
-import viteCompression from 'vite-plugin-compression';
 import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
 import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 import { preloadGraphPlugin } from './src/platform/preload-graph';
+import { precompressPlugin } from './src/platform/precompress';
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -157,32 +157,8 @@ export default defineConfig((config) => {
           }
         }
       },
-      // Text compression - addresses GTmetrix "Enable text compression" (577KB savings)
-      ...(!isDev ? [
-        // Gzip compression (universally supported, built into Nginx)
-        viteCompression({
-          algorithm: 'gzip',
-          ext: '.gz',
-          threshold: 1024, // Only compress files > 1KB
-          deleteOriginFile: false, // Keep original files
-          filter: /\.(js|mjs|json|css|html|svg)$/i, // Compress text-based files
-          compressionOptions: {
-            level: 9, // Maximum compression for build-time (since it's pre-computed)
-          },
-        }),
-        // 🚀 NEW: Brotli compression (better compression than gzip, supported by modern browsers)
-        viteCompression({
-          algorithm: 'brotliCompress',
-          ext: '.br',
-          threshold: 1024, // Only compress files > 1KB
-          deleteOriginFile: false, // Keep original files
-          filter: /\.(js|mjs|json|css|html|svg)$/i, // Compress text-based files
-          compressionOptions: {
-            level: 11, // Maximum Brotli compression (0-11, 11 is best compression)
-            chunkSize: 32 * 1024, // 32KB chunks for optimal compression
-          },
-        }),
-      ] : []),
+      // Build-time .gz (level 9) + .br (q11) siblings, served by the /build handler in entry.express.tsx.
+      ...(!isDev ? [precompressPlugin()] : []),
     ],
     preview: {
       host: '0.0.0.0',

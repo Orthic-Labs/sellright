@@ -16,6 +16,7 @@ import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
 import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
+import { precompressedStatic } from"./utils/precompressed-static";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
@@ -230,6 +231,7 @@ app.use((req, _res, next) => {
 app.use(snapshotGuard);
 
 // Static asset handlers
+app.use(`/build`, precompressedStatic(buildDir, { skip: (p) => neverServedFromDisk(p) }));
 app.use(`/build`, express.static(buildDir, { immutable: true, maxAge:"1y" }));
 app.use(`/assets`, express.static(assetsDir, { immutable: true, maxAge:"1y" }));
 // Add specific handler for fonts
