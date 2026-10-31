@@ -33,7 +33,7 @@ const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map
 const ROWS = [
 	['shell', '/'], ['shell', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
 	['shell', '/blog/'], ['shell', flag('--blog-post', null)], ['shell', '/about/'], ['shell', '/contact/'],
-	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['shell', '/checkout/'],
+	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['dynamic', '/checkout/'],
 	['dynamic', '/checkout/payment/'], ['dynamic', '/checkout/cart-link/'], ['dynamic', '/account/'], ['dynamic', '/sign-in/'],
 	['dynamic', '/search/?q=a'], ['dynamic', '/track-order/'], ['dynamic', '/verify/'], ['dynamic', '/forgot-password/'],
 	['dynamic', '/?preview_token=conformance'], ['dynamic', '/collections/x/?page=2'], ['dynamic', '/edge-conformance-unknown/'],
