@@ -38,7 +38,7 @@ export const HomeHero = component$<HomeHeroProps>(({ storeName, tagline, policie
             <img
               src={HeroImageJPEG_1024}
               alt={`${identity.storeName} — featured product photography`}
-              loading="eager" fetchPriority="high" decoding="sync"
+              loading="eager" fetchPriority="high" decoding="async"
               width={1600} height={1067}
               class="hero-img absolute inset-0 w-full h-full object-cover"
               style="object-position: center 40%"

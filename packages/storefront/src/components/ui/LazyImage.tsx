@@ -195,8 +195,8 @@ interface OptimizedImageProps {
  priority?: boolean;
  /** Overrides the priority-derived hint (grid cards: only the first image is 'high'). */
  fetchPriority?: 'high' | 'low' | 'auto';
- /** Overrides the priority-derived decoding (default: sync when priority, else async). */
- decoding?: 'sync' | 'async' | 'auto';
+ /** Overrides the default async decoding. F1: never 'sync' — it held the first frame until the image decoded. */
+ decoding?: 'async' | 'auto';
  width?: number;
  height?: number;
  onLoad?: QRL<() => void>;
@@ -294,7 +294,7 @@ export const OptimizedImage = component$<OptimizedImageProps>(({
        height={height}
        loading={loadingProp ?? (priority ? 'eager' : 'lazy')}
        fetchPriority={fetchPriorityProp ?? (priority ? 'high' : undefined)}
-       decoding={decodingProp ?? (priority ? 'sync' : 'async')}
+       decoding={decodingProp ?? 'async'}
        class={className}
        crossOrigin={isCrossOrigin ? 'anonymous' : undefined}
        onLoad$={onLoad}

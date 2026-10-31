@@ -35,6 +35,7 @@ import { BRAND_HEAD } from '~/platform/brand-data';
 import { canRestorePreferredCountry } from '~/components/checkout/checkout-country';
 import { anonymousCustomer, fetchSessionCustomer, nextCustomer } from '~/utils/session-customer';
 import { getCookie } from '~/utils';
+import { enablePostPaintEffects } from '~/utils/post-paint-fx';
 import { CartService } from '~/services/CartService';
 
 /** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
@@ -245,6 +246,8 @@ export default component$(() => {
 	// interaction are not behind it. Header user state, the country default and cross-tab address sync appear a moment later.
 	// Order matters: the cookie is the initial country, the stored preference below it wins. Stock reads are NOT here.
 	useOnDocument('qidle', $(() => {
+		// F1: header blur and scroll-timeline effects switch on only after load + first paint (html.sr-fx).
+		enablePostPaintEffects();
 		LocalAddressService.setupCrossTabSync();
 		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
 		const cookieCountry = getCookie(COUNTRY_COOKIE);
