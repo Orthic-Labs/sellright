@@ -27,6 +27,26 @@ describe('warm graph (#425 step 3)', () => {
 		expect(Object.values(g).flat()).not.toContain('/build/q-acct.js');
 	});
 
+	it('cart warms everything the drawer renders and runs; product warms its click handlers (#427)', () => {
+		const m = {
+			symbols: {
+				a: sym('components/ui/LazyImage.tsx'),
+				b: sym('components/icons/TrashIcon.tsx'),
+				c: sym('components/checkout/ExpressCheckout.tsx', 'useVisibleTask$'),
+				d: sym('components/cart/CartExpress.tsx', 'useVisibleTask$'),
+				e: sym('utils/addressStorage.ts', '$'),
+				f: sym('routes/products/[...slug]/ProductPageView.tsx', 'onClick$', 'eventHandler'),
+				g: sym('components/checkout/StripeForm.tsx'),
+			},
+			mapping: { a: 'q-a.js', b: 'q-b.js', c: 'q-c.js', d: 'q-d.js', e: 'q-e.js', f: 'q-f.js', g: 'q-g.js' },
+			bundles: {},
+		};
+		const g = warmGroups(m);
+		expect(g.cart).toEqual(['/build/q-a.js', '/build/q-b.js', '/build/q-c.js', '/build/q-d.js', '/build/q-e.js']);
+		expect(g.product).toEqual(['/build/q-f.js']);
+		expect(g.cart).not.toContain('/build/q-g.js');
+	});
+
 	it('emits a script that only warms after load (no work at parse) and respects Save-Data', () => {
 		const s = warmScript(warmGroups(manifest));
 		expect(s).toContain("addEventListener('load',after,{once:true})");

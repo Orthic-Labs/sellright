@@ -12,17 +12,24 @@ interface Manifest { symbols: Record<string, ManifestSymbol>; mapping: Record<st
 
 export type WarmGroup = 'cart' | 'home' | 'product' | 'checkout';
 
-const RENDER_CTX = new Set(['component$', 'useTask$', 'useComputed$', 'useStyles$', '$']);
+// useVisibleTask$ counts as render code: the cart drawer's tasks (CartExpress, ExpressCheckout) run as it opens, and a cold
+// task file put four serial ~0.75 s fetches on the add-to-cart click (#427, measured live 2026-11-01).
+const RENDER_CTX = new Set(['component$', 'useTask$', 'useVisibleTask$', 'useComputed$', 'useStyles$', '$']);
 const isRender = (s: ManifestSymbol) => s.ctxKind !== 'eventHandler' && RENDER_CTX.has(s.ctxName);
+const PRODUCT = /^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/)/;
 
 const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
+	// Everything the drawer renders, not only components/cart: shared ui and icons (image, quantity, trash, check), the
+	// express buttons, the cart service and the on-demand country read the add path awaits.
 	cart: (s) =>
-		(/^(components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|contexts\/CartContext\.tsx)/.test(s.origin) && isRender(s)) ||
+		(/^(components\/(cart|cart-contents|cart-totals|free-shipping-progress|ui|icons)\/|components\/checkout\/ExpressCheckout|contexts\/CartContext\.tsx|services\/CartService|utils\/addressStorage\.ts)/.test(
+			s.origin,
+		) &&
+			isRender(s)) ||
 		(s.displayName.endsWith('Link_component') && s.ctxName === 'component$'),
 	home: (s) => /^(routes\/index\.tsx|components\/home\/|brand-slots\/route\.home|platform\/controllers\/configurator)/.test(s.origin) && isRender(s),
-	product: (s) =>
-		/^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/)/.test(s.origin) &&
-		isRender(s),
+	// The product page's click handlers too (option pills, add to cart): the add-to-cart handler was itself a cold fetch.
+	product: (s) => PRODUCT.test(s.origin) && (isRender(s) || s.ctxKind === 'eventHandler'),
 	checkout: (s) =>
 		/^(routes\/checkout\/index\.tsx|components\/(checkout|payment|address-form|billing-address-form|cart-totals|cart-contents)\/|contexts\/Checkout)/.test(s.origin) &&
 		isRender(s),
