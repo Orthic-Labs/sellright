@@ -22,6 +22,8 @@ const READS: Record<LiveReadName, (slug: string) => Promise<unknown>> = {
 	'shop-configurator': async () => (hasView('route.shop') ? buildConfiguratorDetail() : null),
 	'product-values': (slug) => productLiveValues(slug),
 	'product-live': (slug) => brandProductLive(slug),
+	// served by the license flow's own route (platform/license/routes/api/live/license-catalog); not part of the store flow
+	'license-catalog': async () => null,
 };
 
 export const onGet: RequestHandler = async ({ params, query, headers, json }) => {

@@ -14,6 +14,8 @@ export const onRequest: RequestHandler = ({ headers }) => {
 /** The variant of the request's validated host: X-Forwarded-Host only behind a declared trusted proxy, the same boundary the API's store resolution uses. */
 export const useHostVariant = routeLoader$<HostVariant>(({ request, url }) =>
   variantForHost(validatedRequestHost({ host: request.headers.get('host') ?? url.host, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined })),
+  // #425: serialized, so a client re-render never refetches it (/q-loader-*.json).
+  { serializationStrategy: 'always' },
 );
 
 export default component$(() => {

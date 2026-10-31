@@ -23,7 +23,7 @@ export interface EarlyReadsStore {
 }
 
 /** The GET API equivalents of the shell routes' live-values server$ reads (routes/api/live/[read]/index.ts). */
-export const LIVE_READS = ['home-values', 'home-spotlight', 'shop-catalog', 'shop-configurator', 'product-values', 'product-live'] as const;
+export const LIVE_READS = ['home-values', 'home-spotlight', 'shop-catalog', 'shop-configurator', 'product-values', 'product-live', 'license-catalog'] as const;
 export type LiveReadName = (typeof LIVE_READS)[number];
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9\-_]*$/;
@@ -57,6 +57,8 @@ export interface EarlyReadsContext {
 	detailSlugs: readonly string[];
 	/** platform setting shop.stockOnLoad = live: the shop makes one live listing read on load. */
 	shopLiveListing: boolean;
+	/** License commerce flow (RightSites store.* hosts): its own routes; the only page read is the home's license catalog. */
+	license?: boolean;
 }
 
 export type EarlyPageType = 'home' | 'shop' | 'product' | 'checkout' | 'other';
@@ -88,6 +90,10 @@ export function earlyPageOf(pathname: string, productPrefix: 'products' | 'shop'
 /** Every GET read a page of this type needs on load, in the order its consumers start them (stock first, values low). Pure. */
 export function buildEarlyReadsPlan(pathname: string, ctx: EarlyReadsContext): EarlyReadsPlan {
 	const { page, slug } = earlyPageOf(pathname, ctx.productPrefix);
+	if (ctx.license) {
+		// #425: the license flow has none of the store reads (no stock, cart, session or core /api/live routes); its home's prices only.
+		return { page, get: page === 'home' && ctx.shell ? [[liveReadUrl('license-catalog'), 1]] : [], checkout: false };
+	}
 	const get: [string, 0 | 1][] = [];
 	const stock = (s: string) => { if (SAFE_SLUG.test(s)) get.push([stockReadUrl(s), 0]); };
 	const live = (read: LiveReadName, s?: string) => { if (ctx.shell) get.push([liveReadUrl(read, s), 1]); };

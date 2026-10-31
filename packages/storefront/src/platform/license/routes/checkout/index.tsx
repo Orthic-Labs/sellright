@@ -48,10 +48,10 @@ export const useItem = routeLoader$<CheckoutItem | null>(async ({ url, resolveVa
     }
   }
   return null;
-}, { search: ['sku'] });
+}, { search: ['sku'], serializationStrategy: 'always' });
 
 /** `?upgrade=mobile`: the app-store purchase credit (src/brand/license.json upgradeCredit), linked from the account page and the app. */
-export const useMobileUpgrade = routeLoader$<boolean>(({ url }) => url.searchParams.get('upgrade') === 'mobile', { search: ['upgrade'] });
+export const useMobileUpgrade = routeLoader$<boolean>(({ url }) => url.searchParams.get('upgrade') === 'mobile', { search: ['upgrade'], serializationStrategy: 'always' });
 
 const UPGRADE = BRAND_LICENSE?.upgradeCredit;
 const SOURCE = UPGRADE?.sourceName ?? '';

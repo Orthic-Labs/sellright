@@ -219,3 +219,16 @@ describe('CSP and placement', () => {
 		expect(chunks[1]).toBe('<div><head></head></div>');
 	});
 });
+
+describe('#425 license flow (RightSites store.* hosts)', () => {
+	const license: EarlyReadsContext = { ...damned, license: true };
+	it('the shell home reads only the license catalog; no store reads (stock, cart, session, core /api/live)', () => {
+		const plan = buildEarlyReadsPlan('/', { ...license, shell: true });
+		expect(plan.get).toEqual([['/api/live/license-catalog/', 1]]);
+		expect(plan.checkout).toBe(false);
+	});
+	it('a dynamic render and every other license page start nothing', () => {
+		expect(buildEarlyReadsPlan('/', { ...license, shell: false }).get).toEqual([]);
+		for (const p of ['/pricing/', '/checkout/', '/account/', '/products/x/']) expect(buildEarlyReadsPlan(p, { ...license, shell: true }).get, p).toEqual([]);
+	});
+});

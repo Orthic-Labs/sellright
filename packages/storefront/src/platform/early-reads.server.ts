@@ -7,6 +7,7 @@ import { DETAIL_PRODUCTS, HOME_SPOTLIGHT } from '~/platform/brand-data';
 import { PRODUCT_PREFIX } from '~/platform/product-path';
 import { SHOP_STOCK_ON_LOAD } from '~/platform/stock-triggers';
 import { shellRender } from '~/platform/shell-render';
+import { COMMERCE_FLOW } from '~/platform/license/flow-env';
 import { earlyReadsWriter, type EarlyReadsContext, type EarlyReadsStreamWriter } from '~/platform/early-reads';
 
 /** This build's context for a render (`shell`: this request may be stored as a shared shell, so its values are read in the browser). */
@@ -20,6 +21,7 @@ export function earlyReadsContext(shell = shellRender()): EarlyReadsContext {
 		homeSpotlightSlug: HOME_SPOTLIGHT?.slug ?? null,
 		detailSlugs: DETAIL_PRODUCTS.map((p) => p.slug),
 		shopLiveListing: SHOP_STOCK_ON_LOAD === 'live',
+		license: COMMERCE_FLOW === 'license',
 	};
 }
 
