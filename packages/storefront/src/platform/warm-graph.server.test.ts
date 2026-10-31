@@ -52,6 +52,8 @@ describe('warm graph (#425 step 3)', () => {
 		expect(s).toContain("addEventListener('load',after,{once:true})");
 		expect(s).toContain('saveData');
 		expect(s).toContain("l.rel='modulepreload'");
+		// #427: checkout warms after load too; the cart's Checkout control is a button, so link intent never fired (12 s live).
+		expect(s).toContain("w('checkout',1)}");
 		expect(() => new Function(s)).not.toThrow();
 	});
 });
