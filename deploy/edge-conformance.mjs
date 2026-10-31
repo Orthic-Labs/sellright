@@ -61,6 +61,9 @@ const VALUE_PATTERNS = [
 	/\b\d[\d,]*\.\d{2}\s?(?:USD|EUR|GBP|INR)\b/g,
 	/"(?:price|priceWithTax|minPrice|maxPrice|salePrice|compareAtPrice|preOrderPrice|unitPrice|stockLevel)"\s*:\s*"?[1-9]/g,
 	/"inStock"\s*:\s*true/g,
+	// Stock wording a shell must never paint (availability is read live; the shell shows "not known yet").
+	/schema\.org\/(?:InStock|OutOfStock|PreOrder|BackOrder)/g,
+	/class="[^"]*sr-badge-soldout[^"]*">[^<]+/g,
 ];
 // Blog pages are CMS writing (amounts in titles, excerpts and keywords are content, purged on edit): only the field patterns apply.
 const isBlog = (path) => /^\/blog(\/|$)/.test(path);
