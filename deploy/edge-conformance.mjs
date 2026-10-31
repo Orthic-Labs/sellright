@@ -6,7 +6,8 @@
 //   dynamic -> `private, no-store` always.
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
-//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--json]
+//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--json]
+// --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic).
 // --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
 // purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
 // Exit 1 when any row fails. Sends no cookies; a second shell pass sends a fake signed-in cookie to prove it does not change the body.
@@ -23,6 +24,8 @@ const json = args.includes('--json');
 const allowFile = flag('--allow', null);
 // --save-dir: every fetched body is kept (so a later "what did the edge serve" question has evidence).
 const saveDir = flag('--save-dir', null);
+const stripSlash = (p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
+const EXCLUDED = new Set((flag('--exclude', '') ?? '').split(',').map((p) => p.trim()).filter(Boolean).map(stripSlash));
 if (saveDir) mkdirSync(saveDir, { recursive: true });
 let saved = 0;
 const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
@@ -35,7 +38,7 @@ const ROWS = [
 	['dynamic', '/search/?q=a'], ['dynamic', '/track-order/'], ['dynamic', '/verify/'], ['dynamic', '/forgot-password/'],
 	['dynamic', '/?preview_token=conformance'], ['dynamic', '/collections/x/?page=2'], ['dynamic', '/edge-conformance-unknown/'],
 	['data', '/v1/shop/me'],
-].filter(([, p]) => p);
+].filter(([, p]) => p).map(([cls, p]) => [cls === 'shell' && EXCLUDED.has(stripSlash(p)) ? 'dynamic' : cls, p]);
 
 const isNoStore = (cc) => /\bno-store\b/.test(cc) && !/\bpublic\b|s-maxage/.test(cc);
 const isShellPublic = (cc) => /^public, max-age=0, s-maxage=\d+$/.test(cc);
