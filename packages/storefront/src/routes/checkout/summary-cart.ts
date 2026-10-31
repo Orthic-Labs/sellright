@@ -104,3 +104,26 @@ export function checkoutSummarySource(input: {
 export function hasMixedPreOrder(lines: ReadonlyArray<{ isPreOrder?: boolean | null }>): boolean {
   return lines.some((l) => !!l.isPreOrder) && lines.some((l) => !l.isPreOrder);
 }
+
+/**
+ * ADR-0001 #412: what the checkout loader returns for a cacheable shell (SHELL_CACHE=1): no cart and no price, only "this document
+ * is the shell". The page then paints the form at once (it holds no per-visitor value) beside the reserved summary skeleton, and
+ * starts the LOCKED checkout-entry live reads at document ready (qinit). With the switch off the loader never returns it.
+ */
+export interface CheckoutShellMarker {
+  shell: true;
+}
+
+export const CHECKOUT_SHELL: CheckoutShellMarker = { shell: true };
+
+/** The checkout loader's value: the L11 display cart, the shell marker, or nothing. */
+export type ServerCartValue = Cart | CheckoutShellMarker | null;
+
+export function isCheckoutShell(value: unknown): value is CheckoutShellMarker {
+  return !!value && typeof value === 'object' && (value as { shell?: unknown }).shell === true;
+}
+
+/** The display cart of a loader value (null for the shell marker). */
+export function displayServerCart(value: ServerCartValue | undefined): Cart | null {
+  return value && !isCheckoutShell(value) ? value : null;
+}

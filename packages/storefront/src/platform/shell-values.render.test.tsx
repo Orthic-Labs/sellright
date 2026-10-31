@@ -19,6 +19,8 @@ import { shellFeaturedItem, shellHomeProduct } from './home';
 import { relatedRow, shellRelatedRow, relatedPricesOf } from './product-related-model';
 import { fillJsonLdOffers, jsonLdTextWithOffers, productGroupSchema, productOgMeta, withoutOffers } from './product-jsonld';
 import { applyVariantPrices, cardState, redactListItem, valuesBySlug, withCardValues } from './live-values';
+import { shellShopItem } from './shop';
+import { CHECKOUT_SHELL, displayServerCart, isCheckoutShell } from '~/routes/checkout/summary-cart';
 
 const PRICE = 4567;
 /** Every rendering of the fixture price, and every stock value a shell could leak. */
@@ -200,5 +202,28 @@ describe('Price placeholder', () => {
 		expect(out).toContain('po-price');
 		expect(out).toContain('data-price-pending');
 		expect(await html(<Price price={PRICE} forcedClass="po-price" />)).toContain('45.67');
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------- #412: shell values of shop and checkout
+// (the page renders: routes/shop/shop-shell.render.test.tsx, components/checkout/checkout-shell.render.test.tsx)
+
+describe('/shop/ shell items (#412)', () => {
+	it('keep the structure only: slug, name, image, tags; no price, no stock value; no unknown field rides through', () => {
+		const shell = [listItem('tee'), listItem('cap', false)].map(shellShopItem);
+		const text = JSON.stringify(shell);
+		expect(priceFree(text)).toEqual([]);
+		expect(stockFree(text)).toEqual([]);
+		expect(shell[0]).toMatchObject({ slug: 'tee', name: 'Name tee', tags: ['tee'], image: null, minPrice: null, maxPrice: null, pricingVariant: null, inStock: false });
+		expect(Object.keys(shellShopItem({ ...listItem('tee'), availableQuantity: 5 } as CatalogListItem))).not.toContain('availableQuantity');
+	});
+});
+
+describe('/checkout/ shell loader value (#412)', () => {
+	it('the marker carries no cart, no price and no identity, and is never shown as a cart', () => {
+		expect(JSON.stringify(CHECKOUT_SHELL)).toBe('{"shell":true}');
+		expect(isCheckoutShell(CHECKOUT_SHELL)).toBe(true);
+		expect(displayServerCart(CHECKOUT_SHELL)).toBeNull();
+		expect(isCheckoutShell(null)).toBe(false);
 	});
 });

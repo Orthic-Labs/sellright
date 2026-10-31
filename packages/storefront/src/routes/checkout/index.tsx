@@ -1,4 +1,4 @@
-import { $, component$, useContext, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
+import { $, component$, untrack, useContext, useOnDocument, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
 import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getCookie } from '~/utils';
@@ -9,10 +9,10 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components/checkout/checkout-country';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { track } from '~/sellright/analytics';
-import { useCart, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { useCart, deferBootToCheckoutEntry, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
-import { readCheckoutServerCart, serverCartShipCountry } from './summary-cart';
+import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutServerCart, serverCartShipCountry, type ServerCartValue } from './summary-cart';
 import { shellRender } from '~/platform/shell-render';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
@@ -47,14 +47,52 @@ import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) => {
   if (sharedMap.has('@loaderId')) return null;
   // ADR-0001: with SHELL_CACHE=1 /checkout/ is a cacheable shell: no per-visitor cart and no prices in it. The summary renders its
-  // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). Off: unchanged.
-  if (shellRender()) return null;
-  return readCheckoutServerCart(
+  // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). #412: the marker (no value)
+  // tells the page it is the shell: the form paints in SSR and the entry reads start at document ready. Off: unchanged.
+  if (shellRender()) return CHECKOUT_SHELL;
+  const cart: ServerCartValue = await readCheckoutServerCart(
     (path, init) => sellright().GET(path, init),
     cookie.get(TOKEN_COOKIE)?.value,
     serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value),
   );
+  return cart;
 }, { serializationStrategy: 'always' });
+
+/** The checkout views whose entry has started (the shell's document-ready start and the visible task never both run it). A WeakSet
+ *  keyed by the view's own store: it holds no cart data and nothing outlives the view. */
+const enteredViews = new WeakSet<object>();
+/** Claims the entry for a view: true once per view. */
+function claimEntry(view: object): boolean {
+  if (enteredViews.has(view)) return false;
+  enteredViews.add(view);
+  return true;
+}
+
+/** #412: the identity reads the shell's entry started early, per view and generation; taken once by that generation's normal
+ *  checkout (a retry or a newer view reads again). Live reads only: nothing here outlives the entry that started it. */
+const earlyIdentity = new WeakMap<object, { gen: number; read: Promise<CheckoutIdentity> }>();
+function startEarlyIdentity(view: object, gen: number, read: Promise<CheckoutIdentity>): void {
+  earlyIdentity.set(view, { gen, read });
+}
+function takeEarlyIdentity(view: object, gen: number): Promise<CheckoutIdentity> | null {
+  const early = earlyIdentity.get(view);
+  earlyIdentity.delete(view);
+  return early && early.gen === gen ? early.read : null;
+}
+
+type CheckoutIdentity = [Awaited<ReturnType<typeof getMe>> | null, Awaited<ReturnType<typeof CountryService.getAvailableCountries>>];
+
+/** The normal checkout's identity reads (session customer, then the account; the country list), each failure tolerated. The customer
+ *  is filled in the browser (ADR-0001: no identity in the cached shell), so it may not be known yet: the storefront session endpoint
+ *  makes no API call for a visitor without credentials (#362: no guest /auth/me). */
+async function readCheckoutIdentity(customerId: string): Promise<CheckoutIdentity> {
+  const signedIn = customerId !== CUSTOMER_NOT_DEFINED_ID
+    || (await fetchSessionCustomer().catch(() => ({ status: 'unknown' as const }))).status === 'signed-in';
+  return Promise.all([
+    signedIn ? getMe().catch(() => null) : null,
+    CountryService.getAvailableCountries().catch(() => []),
+  ]);
+}
 
 interface CheckoutState {
   loading: boolean;
@@ -349,14 +387,8 @@ const CheckoutContent = component$(() => {
 
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
   const loadNormalCheckout = $(async (gen: number) => {
-    // The customer is filled in the browser (ADR-0001: no identity in the cached shell), so it may not be known yet here: ask the
-    // storefront session endpoint, which makes no API call for a visitor without credentials (#362: no guest /auth/me).
-    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID
-      || (await fetchSessionCustomer().catch(() => ({ status: 'unknown' as const }))).status === 'signed-in';
-    const [customerData, countriesData] = await Promise.all([
-      signedIn ? getMe().catch(() => null) : null,
-      CountryService.getAvailableCountries().catch(() => []),
-    ]);
+    // The shell's entry (#412) started these reads at document ready, beside the cart read; otherwise they start here.
+    const [customerData, countriesData] = await (takeEarlyIdentity(paymentInit, gen) ?? readCheckoutIdentity(appState.customer.id));
     if (!isCurrentView(paymentInit, gen)) return;
 
     if (countriesData && countriesData.length > 0) {
@@ -509,7 +541,7 @@ const CheckoutContent = component$(() => {
 
   useVisibleTask$(async () => {
     const gen = paymentInit.gen;
-    if (pageLoading.value) {
+    if (pageLoading.value && claimEntry(paymentInit)) {
       try {
         appState.showCart = false;
 
@@ -522,6 +554,33 @@ const CheckoutContent = component$(() => {
       }
     }
   });
+
+  // ADR-0001 #412: on the cacheable shell the entry starts at document ready (qinit), not when the page becomes visible, and its
+  // reads run side by side: the LOCKED live cart read (it is this document's boot, V27), the shop config, and the identity reads
+  // (session customer, account, countries) that the normal checkout needs once the cart read decides it. Every read is live,
+  // nothing is kept. A client-side navigation has no qinit: the visible task above enters as before. Off: not registered.
+  if (untrack(() => isCheckoutShell(serverCart.value))) {
+    // Conditional on purpose: the switch-off document must not gain a qinit listener. The condition is the document's loader value
+    // (fixed per document) and this is the component's only useOn* call, so the listener sequence never shifts.
+    // eslint-disable-next-line qwik/use-method-usage
+    useOnDocument('qinit', $(async () => {
+      const gen = paymentInit.gen;
+      if (!pageLoading.value || !claimEntry(paymentInit)) return;
+      try {
+        appState.showCart = false;
+        // The cart provider's own qinit handler may not have run yet: mark this document's boot for the entry read here too, so the
+        // entry makes one live GET (never a boot read and then the entry read).
+        if (!localCart.hasLoadedOnce) deferBootToCheckoutEntry(location.pathname);
+        startEarlyIdentity(paymentInit, gen, readCheckoutIdentity(appState.customer.id));
+        await enterCheckout();
+      } catch (error) {
+        console.error('[Checkout] Error during checkout initialization:', error);
+        if (isCurrentView(paymentInit, gen)) state.error = 'Failed to load checkout. Please try again.';
+      } finally {
+        pageLoading.value = false;
+      }
+    }));
+  }
 
   // A conversion discovered AFTER initialisation (a later cart refresh, a drawer action, another tab's order reaching
   // the mirror) switches to the resume view too: the original order must not stay behind the incomplete form or the

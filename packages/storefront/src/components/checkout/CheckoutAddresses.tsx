@@ -1,4 +1,5 @@
 import { $, component$, useContext, useSignal, QRL, useTask$, useOnDocument, useComputed$ } from '@qwik.dev/core';
+import { isServer } from '@qwik.dev/core/build';
 import { APP_STATE } from '~/constants';
 import { submitCheckoutAddresses } from './checkout-address-submit';
 import { validateEmail, validateName, validatePhone, filterPhoneInput, sanitizePhoneNumber } from '~/utils/validation';
@@ -174,6 +175,9 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     track(() => appState.shippingAddress.countryCode);
     track(() => useDifferentBilling.value);
     track(() => appState.billingAddress);
+    // ADR-0001 #412: the shell renders this form in SSR. A server timer would be a Node Timeout in the serialized state (Q20) and
+    // its validation never reaches the browser; the browser validates on its first address change, as a client mount always did.
+    if (isServer) return;
     if (validationTimer.value) {
       clearTimeout(validationTimer.value);
     }

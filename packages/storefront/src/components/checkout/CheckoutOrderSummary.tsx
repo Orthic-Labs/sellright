@@ -6,15 +6,16 @@ import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
 import type { Cart } from '~/sellright/types/cart';
 import { formatCents } from '~/hooks/checkout-total';
-import { checkoutSummarySource, hasMixedPreOrder } from '~/routes/checkout/summary-cart';
+import { checkoutSummarySource, displayServerCart, hasMixedPreOrder, type ServerCartValue } from '~/routes/checkout/summary-cart';
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
   hasMixedPreOrder: { value: boolean };
   localCart: any;
   pageLoading: Signal<boolean>;
-  /** L11: display-only server read of the cart (routes/checkout/summary-cart.ts), shown until the client's entry read lands. */
-  serverCart: ReadonlySignal<Cart | null>;
+  /** L11: display-only server read of the cart (routes/checkout/summary-cart.ts), shown until the client's entry read lands. The
+   *  ADR-0001 shell marker (#412) is no cart: the summary keeps its reserved skeleton until the entry read lands. */
+  serverCart: ReadonlySignal<ServerCartValue>;
   entryReadDone: Signal<boolean>;
   promoExpanded: Signal<boolean>;
   shippingCents: Signal<number | null>;
@@ -41,7 +42,7 @@ const CheckoutLoyalty = component$<{
 });
 
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => {
-  const serverCart = props.serverCart.value;
+  const serverCart = displayServerCart(props.serverCart.value);
   // L11: which cart the summary shows (see checkoutSummarySource): the server read only before the client's entry read lands.
   const source = checkoutSummarySource({
     pageLoading: props.pageLoading.value,
