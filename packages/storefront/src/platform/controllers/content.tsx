@@ -7,6 +7,7 @@ import { useStoreIdentityLoader } from '~/routes/layout';
 import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { mountTurnstileOnIntent, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { readHomeValues, useFeaturedProducts } from '~/platform/home';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { useLiveRead } from '~/platform/live-values';
 import { hasPendingValues } from './configurator-model';
 import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/platform/blog';
@@ -190,9 +191,10 @@ export const BrandHomeMount = component$(() => {
 	// ADR-0001: shell values (SHELL_CACHE=1) are read in the browser on load, no-store: the spotlight's prices through the configurator's
 	// source, the featured tiles' prices here. Off: neither read starts.
 	const spotKey = useComputed$(() => (hasPendingValues(spotlight.value, 'spotlight') ? 'spotlight' : null));
-	const spotLive = useLiveRead<HomeSpotlightDetail>($(() => readHomeSpotlight()), spotKey);
+	// #415: this document's early GETs of the same values (once each), else the server$ reads.
+	const spotLive = useLiveRead<HomeSpotlightDetail>($(() => earlyJsonOr(liveReadUrl('home-spotlight'), () => readHomeSpotlight())), spotKey);
 	const featuredKey = useComputed$(() => (featured.value.valuesPending ? 'featured' : null));
-	const featuredLive = useLiveRead($(async () => (await readHomeValues()).featured), featuredKey);
+	const featuredLive = useLiveRead($(async () => (await earlyJsonOr(liveReadUrl('home-values'), () => readHomeValues())).featured), featuredKey);
 	const c = useConfigurator(spotlight as ReadonlySignal<ConfiguratorLoaderValue>, 'spotlight', spotLive);
 	const data = useComputed$(() => {
 		const pending = featured.value.valuesPending && featuredLive.status !== 'ready';

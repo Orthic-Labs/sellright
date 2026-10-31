@@ -165,12 +165,17 @@ export interface ProductLiveValues {
  *  request (lane 11: the JSON-LD offers used to be a second server$ call on the same load). Null on failure. */
 export const readProductValues = server$(async function (slug: string): Promise<ProductLiveValues | null> {
   noStore(this);
+  return productLiveValues(slug);
+}, LIVE_READ_FETCH);
+
+/** The base PDP's live values (the body of `readProductValues`; also GET /api/live/product-values/, #415). Server only. */
+export async function productLiveValues(slug: string): Promise<ProductLiveValues | null> {
   if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
   const [related, offers, fromManifest] = await Promise.all([relatedPricesFor(slug), liveOffersOf(slug), productFromManifest(slug)]);
   if (fromManifest) return { variants: variantPricesOf(fromManifest.product), related, offers };
   const product = await getProductDetail(slug).catch(() => null);
   return product ? { variants: variantPricesOf(product), related, offers } : null;
-}, LIVE_READ_FETCH);
+}
 
 /** The related row's prices (routes.json productPage.related), from the same snapshot the row loader reads; empty without it. */
 async function relatedPricesFor(slug: string): Promise<Record<string, number>> {

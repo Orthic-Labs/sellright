@@ -7,6 +7,7 @@
  * stock — no legacy discriminated-union shapes anywhere.
  */
 import { sellright, SellRightError } from './client';
+import { earlyFetch } from '~/platform/early-reads';
 import {
   resolveAssetPath,
   mergeProductStock,
@@ -53,9 +54,11 @@ export async function fetchProductList(params: {
   limit?: number;
   offset?: number;
   collectionSlug?: string;
-} = {}): Promise<CatalogListResponse> {
+} = {}, opts: { early?: boolean } = {}): Promise<CatalogListResponse> {
   const { data, error } = await sellright().GET('/v1/shop/catalog/products', {
     params: { query: params },
+    // #415: the page load's automatic listing read takes this document's early read of the same request (once).
+    ...(opts.early ? { fetch: earlyFetch } : {}),
   });
   if (error) throw error;
   return { ...data, items: data.items.map(withResolvedImage) };
@@ -81,11 +84,14 @@ export async function fetchProductDetail(
 }
 
 /** GET /v1/shop/catalog/products/{slug}/stock — null on 404. `signal` aborts the request (a superseded view's read). */
-export async function fetchProductStock(slug: string, opts: { signal?: AbortSignal } = {}): Promise<CatalogStockResponse | null> {
+export async function fetchProductStock(slug: string, opts: { signal?: AbortSignal; early?: boolean } = {}): Promise<CatalogStockResponse | null> {
   try {
     const { data, error } = await sellright().GET('/v1/shop/catalog/products/{slug}/stock', {
       params: { path: { slug } },
       ...(opts.signal ? { signal: opts.signal } : {}),
+      // #415: only the view's automatic read on a page load passes `early`: it takes the read this document started at parse
+      // (once), else reads live. Every other read (retry, add, bfcache, SPA navigation) is live as before.
+      ...(opts.early ? { fetch: earlyFetch } : {}),
     });
     if (error) throw error;
     return data;
@@ -94,6 +100,10 @@ export async function fetchProductStock(slug: string, opts: { signal?: AbortSign
     throw e;
   }
 }
+
+/** #415: `fetchProductStock` for a page load's automatic read (takes this document's early read of the slug once, else live). */
+export const fetchProductStockEarly = (slug: string, opts: { signal?: AbortSignal } = {}): Promise<CatalogStockResponse | null> =>
+  fetchProductStock(slug, { ...opts, early: true });
 
 /** Fetch a product detail with live stock already merged in one call — the
  *  live-fallback path (manifest miss). Fail-closed if the stock call itself
@@ -142,6 +152,7 @@ async function fetchListPaged(query: {
   take: number;
   skip: number;
   inStock?: boolean;
+  early?: boolean;
 }): Promise<CatalogSearchResponse> {
   if (query.take <= 100) return fetchOnePage(query);
   const items: CatalogListItem[] = [];
@@ -169,6 +180,7 @@ async function fetchOnePage(query: {
   take: number;
   skip: number;
   inStock?: boolean;
+  early?: boolean;
 }): Promise<CatalogSearchResponse> {
   // The search endpoint requires a non-empty term; an empty term falls back to
   // the plain product list (search has nothing to match against otherwise).
@@ -187,7 +199,7 @@ async function fetchOnePage(query: {
     if (error) throw error;
     return { ...data, items: data.items.map(withResolvedImage) };
   }
-  const list = await fetchProductList({ limit: query.take, offset: query.skip, collectionSlug: query.collectionSlug });
+  const list = await fetchProductList({ limit: query.take, offset: query.skip, collectionSlug: query.collectionSlug }, { early: query.early });
   return { items: list.items, total: list.total };
 }
 
@@ -199,6 +211,8 @@ export async function searchCatalog(params: {
   take?: number;
   skip?: number;
   inStock?: boolean;
+  /** #415: a page load's automatic listing read (takes this document's early read of its first page once). */
+  early?: boolean;
 } = {}): Promise<CatalogSearchResponse> {
   return fetchListPaged({
     term: params.term,
@@ -206,5 +220,6 @@ export async function searchCatalog(params: {
     take: params.take ?? 24,
     skip: params.skip ?? 0,
     inStock: params.inStock,
+    early: params.early,
   });
 }

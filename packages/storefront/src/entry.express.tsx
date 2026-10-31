@@ -20,7 +20,8 @@ import { precompressedStatic } from"./utils/precompressed-static";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
-import { socialSignInIdsForHost } from "./utils/social-sign-in.server";
+import { socialSignInIdsForHost, storeGatewaysForHost } from "./utils/social-sign-in.server";
+import { GATEWAYS_HEADER } from "./platform/dns-prefetch";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
 import { theme } from"./theme/theme.config";
@@ -181,6 +182,9 @@ app.use(async (req, res, next) => {
 	// is enabled; SheerID (script-src + frame-src) uses the same built theme flag as its homepage offer.
 	// Google Identity origins (script/style/connect/frame) join only when Google sign-in is on.
 	const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers)).catch(() => ({ google: '', apple: '' }));
+	// #425: the store's configured payment gateways (same cached config read) for the head's dns-prefetch hints. Always overwritten:
+	// a client-sent value never reaches the render. Store-level and public, so a shell render may carry it.
+	req.headers[GATEWAYS_HEADER] = (await storeGatewaysForHost(validatedRequestHost(req.headers)).catch(() => [] as string[])).join(',');
 	const cspDirectives = buildCsp({
 		nonce,
 		apiOrigin,

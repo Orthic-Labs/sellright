@@ -5,6 +5,7 @@
  * request.
  */
 import { CUSTOMER_NOT_DEFINED_ID } from '~/constants';
+import { earlyFetch } from '~/platform/early-reads';
 
 /** The `no-store` endpoint (src/routes/api/session/index.ts). */
 export const SESSION_ENDPOINT = '/api/session/';
@@ -47,7 +48,8 @@ export function hasSessionMarker(cookieHeader: string): boolean {
 /** The page's own read: anonymous at once (no request) when the browser holds no session marker. */
 function readPageSession(): Promise<SessionResult> {
 	if (typeof document !== 'undefined' && !hasSessionMarker(document.cookie)) return Promise.resolve({ status: 'anonymous' });
-	return readSessionCustomer(fetch);
+	// #415: the page's first session read takes the one this document started at parse (once), else reads live.
+	return readSessionCustomer(earlyFetch);
 }
 
 /** A fresh `no-store` read of the session (the layout's per page). An explicit `fetchImpl` always reads on its own. */

@@ -39,7 +39,8 @@ describe('platform settings wiring', () => {
 
 	it('the trigger hooks are used by the base PDP, the brand configurator and both shop pages', () => {
 		const users = all.filter((s) => /from ['"]~\/platform\/stock-triggers['"]/.test(s.text)).map((s) => s.f).sort();
-		expect(users).toEqual(['platform/controllers/configurator.ts', 'platform/controllers/shop.tsx', 'routes/products/[...slug]/ProductContent.tsx', 'routes/shop/index.tsx']);
+		// #415: early-reads.server.ts reads SHOP_STOCK_ON_LOAD only (whether the shop's live listing read starts at document parse).
+		expect(users).toEqual(['platform/controllers/configurator.ts', 'platform/controllers/shop.tsx', 'platform/early-reads.server.ts', 'routes/products/[...slug]/ProductContent.tsx', 'routes/shop/index.tsx']);
 	});
 
 	it('brand code cannot import the settings or the trigger module (not a public platform module)', () => {

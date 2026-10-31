@@ -11,6 +11,7 @@ import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { applyVariantPrices, useLiveRead } from '~/platform/live-values';
 import { readProductValues, type ProductLiveValues } from '~/platform/product';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { fillLiveOffers } from '~/platform/controllers/jsonld-offers';
 import { findVariant, getOptionGroups, isPaintedSoldOut, paintStockHint, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
@@ -54,13 +55,14 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const selectedValues = useSignal<(string | null)[]>([]);
   // Each read carries a generation; only the latest read's result applies (a restore re-read can overlap the load read).
   const stockReadGen = useSignal(0);
-  const refreshLiveStock = $(async () => {
+  // #415: `early` only from the document trigger: the read takes the stock read this document started at parse (once), else live.
+  const refreshLiveStock = $(async (early?: boolean) => {
     const gen = ++stockReadGen.value;
     liveStockReady.value = false;
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
-      const stock = await getProductStock(product.slug);
+      const stock = await getProductStock(product.slug, early === true ? { early: true } : {});
       if (gen !== stockReadGen.value) return;
       if (!stock) throw new Error('Stock response unusable');
       const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
@@ -104,7 +106,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const pricesPending = useSignal(valuesPending);
   const priceKey = useComputed$(() => (valuesPending ? product.slug : null));
   const livePrices = useLiveRead<ProductLiveValues>($(async () => {
-    const values = await readProductValues(product.slug);
+    // #415: this document's early GET of the same values (once), else the server$ read.
+    const values = await earlyJsonOr(liveReadUrl('product-values', product.slug), () => readProductValues(product.slug));
     fillLiveOffers(values?.offers);
     return values;
   }), priceKey);

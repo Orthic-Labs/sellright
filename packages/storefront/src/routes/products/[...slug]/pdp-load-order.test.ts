@@ -36,7 +36,7 @@ describe('the PDP live stock read starts first and independently', () => {
 	});
 
 	it('the stock trigger and the live read handlers start their read and return at once (never hold the qinit queue)', () => {
-		expect(code('platform/stock-triggers.ts')).toContain("useOnDocument(page === 'pdp' ? PDP_STOCK_TRIGGER : 'qidle', $(() => { load(); }))");
+		expect(code('platform/stock-triggers.ts')).toContain("useOnDocument(page === 'pdp' ? PDP_STOCK_TRIGGER : 'qidle', $(() => { load(true); }))");
 		const lv = code('platform/live-values.ts');
 		expect(lv).toContain("useOnDocument('qinit', $(() => { void start(); }))");
 		expect(lv).not.toMatch(/useOnDocument\('qinit', start\)/);
@@ -66,7 +66,9 @@ describe('one server$ call for the live values (no duplicate qfunc on load)', ()
 		expect(s).not.toContain('readProductOffers');
 		expect(s.match(/useLiveRead</g)).toHaveLength(1);
 		const p = code('platform/product.ts');
-		expect(p).toMatch(/readProductValues = server\$\([\s\S]*?liveOffersOf\(slug\)[\s\S]*?\}, LIVE_READ_FETCH\);/);
+		// #415: the server$ and its GET twin (/api/live/product-values/) share one body, productLiveValues.
+		expect(p).toMatch(/readProductValues = server\$\([\s\S]*?return productLiveValues\(slug\);\s*\}, LIVE_READ_FETCH\);/);
+		expect(p).toMatch(/export async function productLiveValues\(slug: string\)[\s\S]*?liveOffersOf\(slug\)/);
 		expect(p).toContain("fetchOptions: { priority: 'low' as const }");
 	});
 
@@ -75,7 +77,8 @@ describe('one server$ call for the live values (no duplicate qfunc on load)', ()
 		expect(s).not.toContain('useJsonLdOffersFill');
 		expect(s).not.toContain('readBrandProductDetail');
 		expect(s.match(/readBrandProductLive\(/g)).toHaveLength(1);
-		expect(code('platform/product-live.ts')).toMatch(/Promise\.all\(\[buildBrandProductDetail\(slug\)[\s\S]*liveOffersOf\(slug\)\]\)[\s\S]*\}, LIVE_READ_FETCH\);/);
+		expect(code('platform/product-live.ts')).toMatch(/readBrandProductLive = server\$\([\s\S]*?return brandProductLive\(slug\);\s*\}, LIVE_READ_FETCH\);/);
+		expect(code('platform/product-live.ts')).toMatch(/export async function brandProductLive[\s\S]*Promise\.all\(\[buildBrandProductDetail\(slug\)[\s\S]*liveOffersOf\(slug\)\]\)/);
 	});
 });
 
@@ -87,7 +90,7 @@ describe('shop config and reviews stay off the PDP critical path', () => {
 		const l = code('components/loyalty/LoyaltyPdpEarn.tsx');
 		expect(l.indexOf('await afterLoadIdleOrInteraction()')).toBeGreaterThan(-1);
 		expect(l.indexOf('await afterLoadIdleOrInteraction()')).toBeLessThan(l.indexOf('loadLoyaltyProgram()'));
-		expect(code('providers/shop/checkout/checkout.ts')).toContain("sellright().GET('/v1/shop/config', { priority: 'low' })");
+		expect(code('providers/shop/checkout/checkout.ts')).toContain("sellright().GET('/v1/shop/config', { priority: 'low', fetch: earlyFetch })");
 	});
 
 	it('reviews read only near the viewport, at low priority, set up at idle (not document-ready)', () => {

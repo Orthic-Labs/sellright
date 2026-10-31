@@ -19,7 +19,12 @@ export interface BrandProductLive {
 /** The branded product page's live values in the browser: the same build for the slug and the live offers, per request, no-store. */
 export const readBrandProductLive = server$(async function (slug: string): Promise<BrandProductLive | null> {
 	noStore(this);
+	return brandProductLive(slug);
+}, LIVE_READ_FETCH);
+
+/** The body of `readBrandProductLive` (also GET /api/live/product-live/, #415). Server only. */
+export async function brandProductLive(slug: string): Promise<BrandProductLive | null> {
 	if (!hasView('route.product') || typeof slug !== 'string' || !SAFE_SLUG.test(slug)) return null;
 	const [detail, offers] = await Promise.all([buildBrandProductDetail(slug).catch(() => 'unavailable' as const), liveOffersOf(slug)]);
 	return { detail: detail === 'unavailable' ? null : detail, offers };
-}, LIVE_READ_FETCH);
+}

@@ -10,6 +10,7 @@ import { FacetWithValues } from '~/types';
 import { shopCategoryFilters } from '~/theme/theme.config';
 import { categoryFacets, filterCategoryProducts } from '~/config/shop-categories';
 import { readShopCatalog, useCatalogLoader } from '~/platform/shop';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { PRICE_PLACEHOLDER, useLiveRead } from '~/platform/live-values';
 import type { BrowseCatalog } from '~/services/browse-catalog';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
@@ -28,7 +29,7 @@ const BaseShopPage = component$(() => {
  const location = useLocation();
  // ADR-0001 §2: a deferred (shell) listing is read in the browser on load, from the manifest, no-store. Not deferred: no read.
  const listingKey = useComputed$(() => (catalog.value.deferred ? location.url.pathname : null));
- const liveCatalog = useLiveRead<BrowseCatalog>($(() => readShopCatalog()), listingKey);
+ const liveCatalog = useLiveRead<BrowseCatalog>($(() => earlyJsonOr(liveReadUrl('shop-catalog'), () => readShopCatalog())), listingKey);
  /** The manifest listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
  const listingProducts = (): CatalogListItem[] => (catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || []);
  const listingPending = catalog.value.deferred && (liveCatalog.status === 'idle' || liveCatalog.status === 'loading');
@@ -136,9 +137,10 @@ const BaseShopPage = component$(() => {
  // The listing's live read (the toggle, and shop.stockOnLoad = live on load): fail closed per platform/listing-availability.ts, and
  // only the latest request applies (an older response can never overwrite a newer one).
  const listingGen = useSignal(0);
- const readLiveListing = $(async (): Promise<boolean> => {
+ // #415: `early` only from the load trigger (useShopListingOnLoad): takes this document's early listing read once, else live.
+ const readLiveListing = $(async (early?: boolean): Promise<boolean> => {
   const gen = ++listingGen.value;
-  const live = await fetchLiveListing((p) => searchProducts(p));
+  const live = await fetchLiveListing((p) => searchProducts(early === true ? { ...p, early: true } : p));
   if (live === null) console.error('[shop] Live stock read failed');
   if (gen !== listingGen.value) return live !== null;
   const listed = catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || [];
@@ -154,7 +156,7 @@ const BaseShopPage = component$(() => {
   inStockOnly.value = inStock;
   isSearching.value = true;
   try {
-   await readLiveListing();
+   await readLiveListing(false);
   } finally {
    isSearching.value = false;
   }

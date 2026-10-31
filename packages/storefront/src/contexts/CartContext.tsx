@@ -69,7 +69,8 @@ export const CartProvider = component$(() => {
       // at document start (this handler is already loaded for every page), not when the checkout's own chunks have loaded;
       // the entry takes it over. The entry read is the LOCKED live check and always runs.
       if (startCheckoutEntryBoot(typeof location === 'undefined' ? '' : location.pathname)) return;
-      CartService.bootstrap()
+      // #415: the boot read takes the cart read this document started at parse (once), else reads live.
+      CartService.bootstrap({ early: true })
         .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
           console.error('CartContext: initial cart refresh failed:', e);
@@ -184,7 +185,8 @@ export function startCheckoutEntryBoot(pathname: string): boolean {
   const cookie = typeof document === 'undefined' ? null : COUNTRY_COOKIE_RE.exec(document.cookie);
   const shipCountry = cookie?.[1] || undefined;
   CartService.setQuoteContext({ pricingIntent: 'checkout', ...(shipCountry ? { shipCountry } : {}) });
-  const read = CartService.bootstrap(CHECKOUT_ENTRY_READ);
+  // #415: started at document parse by the early-reads script (same query); taken over here once, else read live.
+  const read = CartService.bootstrap({ ...CHECKOUT_ENTRY_READ, early: true });
   // The entry awaits it and reports its failure; this only keeps an unawaited rejection from being reported twice.
   read.catch(() => undefined);
   checkoutBoot.read = read;

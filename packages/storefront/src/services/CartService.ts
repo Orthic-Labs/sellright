@@ -23,6 +23,7 @@ import { srMe, srErrorStatus, srLegacyCartMigration } from '~/utils/sellright';
 import { CountryPreferenceService } from './CountryPreferenceService';
 import { classifyOrderState } from './order-state';
 import { theme } from '~/theme/theme.config';
+import { earlyFetch } from '~/platform/early-reads';
 import {
   EMPTY_CART,
   type Cart,
@@ -93,7 +94,12 @@ const PAYMENT_IN_PROGRESS_MESSAGE = 'Your payment is still processing. Continue 
 /** Outcome of reopening a converted cart (#370). */
 /** Options of one live cart read. `includeShippingMethods` (#412, the checkout entry read only) asks the read to quote the shipping
  *  methods for the cart's destination too and price the cart with the selected one; see `takeShippingQuote`. */
-export interface LiveReadOptions { includeShippingMethods?: boolean }
+export interface LiveReadOptions {
+  includeShippingMethods?: boolean;
+  /** #415: the document's boot read only: take the cart read this document started at parse (platform/early-reads.ts) once, else
+   *  read live. Never set for cart open, checkout entry re-reads, pre-submit or any read after a write. */
+  early?: boolean;
+}
 
 export type ReopenResult = { ok: true } | { ok: false; message: string };
 
@@ -495,7 +501,8 @@ export class CartService {
         this.pendingIntentMigration = false;
         this.persistIntent();
       }
-      return this.refreshInLock(opts);
+      // After the legacy writes the read must be newer than them: never the document's early read.
+      return this.refreshInLock({ ...opts, early: false });
     });
   }
 
@@ -761,6 +768,7 @@ export class CartService {
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.liveReadQuery(opts) },
+        ...(opts.early ? { fetch: earlyFetch } : {}),
       });
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
@@ -783,6 +791,7 @@ export class CartService {
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.liveReadQuery(opts) },
+        ...(opts.early ? { fetch: earlyFetch } : {}),
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };

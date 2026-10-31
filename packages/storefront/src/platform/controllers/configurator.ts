@@ -8,7 +8,7 @@ import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { addToCartWithOutcome, useCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
-import { fetchProductStock } from '~/sellright/catalog';
+import { fetchProductStock, fetchProductStockEarly } from '~/sellright/catalog';
 import { track } from '~/sellright/analytics';
 import { ADD_RESULT } from '~/platform/gateway/actions';
 import type { ActionResult, AddResult } from '~/platform/views';
@@ -80,9 +80,10 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	});
 
 	/** The view's automatic read (direct load: qidle; SPA navigation: the task below). One per view, whichever fires first. */
-	const load = $(async () => {
+	// #415: `early` (the document trigger only): the view's read takes the stock reads this document started at parse, once each.
+	const load = $(async (early?: boolean) => {
 		const source = await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode));
-		const started = requestLoad(ctl, source.products.map((p) => p.slug), fetchProductStock);
+		const started = requestLoad(ctl, source.products.map((p) => p.slug), early === true ? fetchProductStockEarly : fetchProductStock);
 		if (started && mode === 'product') {
 			const p = source.products[0];
 			const v = p?.variants[0];

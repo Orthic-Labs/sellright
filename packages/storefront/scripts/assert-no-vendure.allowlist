@@ -3,6 +3,8 @@
 src/providers/shop/account/bootstrap.test.ts|__vendure_session
 src/routes/account/layout.tsx|__vendure_session
 src/routes/layout.tsx|__vendure_session
+src/platform/early-reads.test.ts|vendure_local_cart
+src/platform/early-reads.ts|vendure_local_cart
 src/services/CartService.test.ts|vendure_local_cart
 src/services/CartService.ts|vendure_local_cart
 src/services/CountryPreferenceService.ts|vendure_local_cart

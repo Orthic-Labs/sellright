@@ -2,6 +2,7 @@
 import { component$, useStyles$, useSignal, useContext, useComputed$, $ } from '@qwik.dev/core';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead, readHomeValues } from '~/platform/home';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { cardState, useLiveRead } from '~/platform/live-values';
 import { APP_STATE } from '~/constants';
 import type { CartLineEnrichment } from '~/sellright/types/cart';
@@ -44,7 +45,8 @@ const BaseHomePage = component$(() => {
   const valuesKey = useComputed$(() =>
     featuredLoader.value.valuesPending || preorderLoader.value?.valuesPending || featureLoader.value?.valuesPending ? 'home' : null,
   );
-  const live = useLiveRead($(() => readHomeValues()), valuesKey);
+  // #415: this document's early GET of the same values (once), else the server$ read.
+  const live = useLiveRead($(() => earlyJsonOr(liveReadUrl('home-values'), () => readHomeValues())), valuesKey);
   const pending = valuesKey.value !== null;
   const ready = pending && live.status === 'ready' && !!live.value;
   const preorderProduct = { value: ready ? live.value!.preorder : preorderLoader.value };

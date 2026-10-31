@@ -8,6 +8,7 @@ import { fillLiveOffers } from './jsonld-offers';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { useBrandProductDetail, type BrandProductDetail } from '~/platform/product-detail';
 import { readBrandProductLive } from '~/platform/product-live';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { ProductMissingView, ProductView, platformAction } from '~/platform/gateway';
 import type { ProductFoundData, PublicIdentity } from '~/platform/views';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
@@ -32,7 +33,9 @@ export const ProductFoundMount = component$(() => {
 	const live = useLiveReadState<BrandProductDetail>();
 	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'product', live);
 	useLiveReadStart<BrandProductDetail>(live, $(async () => {
-		const values = await readBrandProductLive(liveKey.value ?? '');
+		const slug = liveKey.value ?? '';
+		// #415: this document's early GET of the same values (once), else the server$ read.
+		const values = await earlyJsonOr(liveReadUrl('product-live', slug), () => readBrandProductLive(slug));
 		fillLiveOffers(values?.offers);
 		return values?.detail ?? null;
 	}), liveKey);

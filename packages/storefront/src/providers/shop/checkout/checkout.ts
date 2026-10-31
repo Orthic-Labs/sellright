@@ -9,6 +9,7 @@
  * legacy hand-rolled `sr()` helper and never a legacy shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
+import { earlyFetch } from '~/platform/early-reads';
 import { storedAttribution } from '~/sellright/attribution';
 import { orderTracking, pixelOppref, userDataEnabled } from '~/platform/controllers/user-data';
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
@@ -293,7 +294,8 @@ export const getOrder = async (code: string, receiptToken?: string, signal?: Abo
 
 const fetchShopConfig = async (): Promise<ShopConfig> => {
 	// Low fetch priority (lane 11): public store settings never compete with the page's image or its live stock read.
-	const { data } = await sellright().GET('/v1/shop/config', { priority: 'low' });
+	// #415: the page's first config read takes this document's early read of it (once, started at parse), else reads live.
+	const { data } = await sellright().GET('/v1/shop/config', { priority: 'low', fetch: earlyFetch });
 	return nonEmpty(data, 'shop config') as ShopConfig;
 };
 

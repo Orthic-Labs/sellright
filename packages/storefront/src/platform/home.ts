@@ -131,6 +131,11 @@ export const useFeaturedProducts = routeLoader$(async () => {
 /** ADR-0001: the home page's live values in the browser, from the same reads as the loaders, per request, no-store. */
 export const readHomeValues = server$(async function () {
   noStore(this);
+  return homeLiveValues();
+});
+
+/** The home page's live values (the body of `readHomeValues`; also GET /api/live/home-values/, #415). Server only. */
+export async function homeLiveValues() {
   const base = !brandHome();
   const [preorder, feature, featured] = await Promise.all([
     base ? fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG) : null,
@@ -138,7 +143,7 @@ export const readHomeValues = server$(async function () {
     featuredItems(),
   ]);
   return { preorder, feature, featured };
-});
+}
 
 /** Collection links (Desk & Paper / Everyday Carry / At Home on the seeded
  * demo catalog) — whatever the store actually has, never a hardcoded list. */
