@@ -22,13 +22,23 @@ export function clientDistDir(fromUrl: string): string | null {
 
 const isStylesheet = (i: GlobalInjections) => i.tag === 'link' && i.attributes?.rel === 'stylesheet' && typeof i.attributes.href === 'string';
 
-/** Replaces each stylesheet <link> injection with an inline <style> of the same file, in the same position (same cascade order). */
+/** Replaces each stylesheet <link> injection with an inline <style> of the same file, in the same position (same cascade order),
+ *  and keeps the file itself as a <link> at the end of <body>. #427: client navigation (cart -> checkout) dropped the inline
+ *  <style>, leaving the next page unstyled; the body link (same rules, nothing after it to block, cached after the first visit)
+ *  keeps every navigated page styled. */
 export function inlineStylesheetInjections(injections: GlobalInjections[], read: (href: string) => string | null): GlobalInjections[] {
-	return injections.map((i) => {
-		if (!isStylesheet(i)) return i;
-		const css = read(i.attributes!.href);
-		return css === null ? i : { tag: 'style', location: i.location, attributes: { 'data-sr-global': '', dangerouslySetInnerHTML: css } };
-	});
+	const out: GlobalInjections[] = [];
+	const keep: GlobalInjections[] = [];
+	for (const i of injections) {
+		const css = isStylesheet(i) ? read(i.attributes!.href) : null;
+		if (css === null) {
+			out.push(i);
+			continue;
+		}
+		out.push({ tag: 'style', location: i.location, attributes: { 'data-sr-global': '', dangerouslySetInnerHTML: css } });
+		keep.push({ tag: 'link', location: 'body', attributes: { rel: 'stylesheet', href: i.attributes!.href, 'data-sr-global': '' } });
+	}
+	return [...out, ...keep];
 }
 
 /** `/build/style-x.css` -> its content under `distDir`, or null (missing file, or an href outside /build/). */
