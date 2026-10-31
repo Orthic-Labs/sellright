@@ -151,8 +151,23 @@ describe('resolveHead: preloads', () => {
 		const home = resolveHead(routeHead({ title: 'S', description: 'D' }), '/', identity, sources(spec));
 		expect(home.extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2', '/brand/h-640.avif']);
 		const shop = resolveHead(routeHead({ title: 'S', description: 'D' }), '/shop/', identity, sources(spec));
-		expect(shop.extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2', '/fonts/shop.woff2']);
+		expect(shop.extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2']);
 		expect(home.extraLinks[1]).toMatchObject({ as: 'image', imagesrcset: '/brand/h-640.avif 640w, /brand/h-1024.avif 1024w', imagesizes: '(max-width: 640px) 100vw, 640px', fetchpriority: 'high' });
+	});
+
+	it('F2: emits ONE font preload: the path\'s fetchpriority "high" entry, else its first', () => {
+		const fonts: BrandHeadSpec['fontPreloads'] = [
+			{ href: '/fonts/body.woff2', type: 'font/woff2' },
+			{ href: '/fonts/italic.woff2', type: 'font/woff2' },
+			{ href: '/fonts/display-700.woff2', type: 'font/woff2', fetchpriority: 'high' },
+			{ href: '/fonts/blog.woff2', type: 'font/woff2', paths: ['/blog/*'] },
+		];
+		const fontLinks = (path: string, f = fonts) =>
+			resolveHead(routeHead({ title: 'S', description: 'D' }), path, identity, sources({ fontPreloads: f })).extraLinks.filter((l) => l.as === 'font');
+		expect(fontLinks('/')).toEqual([expect.objectContaining({ href: '/fonts/display-700.woff2', fetchpriority: 'high', crossOrigin: 'anonymous' })]);
+		expect(fontLinks('/blog/a/').map((l) => l.href)).toEqual(['/fonts/display-700.woff2']);
+		expect(fontLinks('/', fonts!.filter((f) => !f.fetchpriority)).map((l) => l.href)).toEqual(['/fonts/body.woff2']);
+		expect(fontLinks('/blog/a/', [{ href: '/fonts/x.woff2', type: 'font/woff2', paths: ['/shop/'] }, { href: '/fonts/blog.woff2', type: 'font/woff2', paths: ['/blog/*'] }]).map((l) => l.href)).toEqual(['/fonts/blog.woff2']);
 	});
 
 	it('is deduplicated by href and imagesrcset against the route\'s own preloads and against itself', () => {

@@ -16,6 +16,7 @@ import Root from './root';
 import { extractBase } from './utils/i18n';
 import { identityFromStaticTheme } from './theme/theme.config';
 import { ipCountry } from './platform/head-analytics';
+import { headOrderWriter } from './platform/head-order';
 
 // Extend RenderToStreamOptions to include the request headers this app's
 // render() actually receives.
@@ -42,9 +43,12 @@ export default function (opts: ExtendedRenderOptions) {
 	// edge-cached) never sees cf-ipcountry or a nonce: the express layer strips both, so country and nonce are undefined there.
 	const country = ipCountry(opts.serverData?.requestHeaders?.['cf-ipcountry']);
 
-	return renderToStream(<Root nonce={nonce} country={country} />, {
+	// F2: the render-blocking stylesheet first in <head>, Qwik's speculative preloads after it (platform/head-order.ts).
+	const stream = headOrderWriter(opts.stream);
+	const result = renderToStream(<Root nonce={nonce} country={country} />, {
 		manifest,
 		...opts,
+		stream,
 		base: extractBase,
 		// Use container attributes to set attributes on the html tag.
 		//
@@ -76,4 +80,5 @@ export default function (opts: ExtendedRenderOptions) {
 			nonce,
 		},
 	});
+	return result.finally(() => stream.flush());
 }

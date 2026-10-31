@@ -233,11 +233,13 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 	// ---- brand preloads for this path, after the route's own, deduplicated by href / imagesrcset
 	const have = new Set(links.filter((l) => l.rel === 'preload').map(preloadKey).filter(Boolean));
 	const extraLinks: ExtraLink[] = [];
-	for (const f of spec.fontPreloads ?? []) {
-		if (f.paths && !pathListMatches(f.paths, path)) continue;
-		if (have.has(f.href)) continue;
-		have.add(f.href);
-		extraLinks.push({ rel: 'preload', as: 'font', type: f.type, href: f.href, crossOrigin: 'anonymous', ...(f.fetchpriority ? { fetchpriority: f.fetchpriority } : {}) });
+	// F2: ONE font preload per page: the path's fetchpriority "high" entry (the LCP heading font), else its first entry. Every
+	// further font preload competed with the render-blocking stylesheet on slow links; the other faces load from the CSS.
+	const pathFonts = (spec.fontPreloads ?? []).filter((f) => !f.paths || pathListMatches(f.paths, path));
+	const font = pathFonts.find((f) => f.fetchpriority === 'high') ?? pathFonts[0];
+	if (font && !have.has(font.href)) {
+		have.add(font.href);
+		extraLinks.push({ rel: 'preload', as: 'font', type: font.type, href: font.href, crossOrigin: 'anonymous', ...(font.fetchpriority ? { fetchpriority: font.fetchpriority } : {}) });
 	}
 	for (const im of spec.imagePreloads ?? []) {
 		if (!pathListMatches(im.paths, path)) continue;
