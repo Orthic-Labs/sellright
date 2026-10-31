@@ -6,7 +6,7 @@
 //   dynamic -> `private, no-store` always.
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
-//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--json]
+//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--min-hit 0.9] [--json]
 // --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic).
 // --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
 // purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
@@ -37,6 +37,8 @@ const ROWS = [
 	['dynamic', '/checkout/payment/'], ['dynamic', '/checkout/cart-link/'], ['dynamic', '/account/'], ['dynamic', '/sign-in/'],
 	['dynamic', '/search/?q=a'], ['dynamic', '/track-order/'], ['dynamic', '/verify/'], ['dynamic', '/forgot-password/'],
 	['dynamic', '/?preview_token=conformance'], ['dynamic', '/collections/x/?page=2'], ['dynamic', '/edge-conformance-unknown/'],
+	['dynamic', '/checkout/confirmation/CONFORMANCE1/'], ['dynamic', '/checkout/conformance-alias/'], ['dynamic', '/account/orders/'],
+	['dynamic', '/api/session/'], ['dynamic', '/cache/'],
 	['data', '/v1/shop/me'],
 ].filter(([, p]) => p).map(([cls, p]) => [cls === 'shell' && EXCLUDED.has(stripSlash(p)) ? 'dynamic' : cls, p]);
 
@@ -101,6 +103,18 @@ for (const [cls, path] of ROWS) {
 		problems.push(`expected private no-store, got ${res.cc || '(none)'}`);
 	}
 	results.push({ class: cls, path, status: res.status, cacheControl: res.cc, cfCacheStatus: res.cf, diag: res.diag, ok: problems.length === 0, problems });
+}
+
+// --min-hit <ratio>: with the switch on, every OK shell row is fetched again; the share served as cf-cache-status HIT must reach
+// the ratio (ADR-0001 QS-1a), else one FAIL row reports it. A row fetched first as MISS/EXPIRED is normally HIT on the re-fetch.
+const minHit = Number(flag('--min-hit', '0')) || 0;
+if (minHit > 0 && expectShell === 'on') {
+	const shellOk = results.filter((r) => r.class === 'shell' && r.ok && r.status === 200);
+	let hits = 0;
+	for (const r of shellOk) if ((await get(r.path)).cf === 'HIT') hits++;
+	const ratio = shellOk.length ? hits / shellOk.length : 1;
+	const ok = ratio >= minHit;
+	results.push({ class: 'hit-ratio', path: `${hits}/${shellOk.length} shell rows HIT`, status: 0, cacheControl: '', cfCacheStatus: '', diag: '', ok, problems: ok ? [] : [`HIT ratio ${ratio.toFixed(2)} < ${minHit}`] });
 }
 
 if (json) console.log(JSON.stringify({ base, expectShell, results }, null, 2));
