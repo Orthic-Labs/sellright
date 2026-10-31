@@ -32,7 +32,14 @@ const isShellPublic = (cc) => /^public, max-age=0, s-maxage=\d+$/.test(cc);
 
 // K-1: Qwik stamps a random per-render container id (q:instance, also inside the qFuncs_/_qwikEv inline scripts). Two renders of
 // the same anonymous shell differ only there; compare bodies with it replaced.
-const withoutInstance = (body) => { const id = /q:instance="([^"]+)"/.exec(body)?.[1]; return id ? body.replaceAll(id, 'QINSTANCE') : body; };
+// Cloudflare Email Address Obfuscation rewrites every mailto with a random XOR key per response (cdn-cgi email-protection
+// href + data-cfemail); not visitor data, so it is normalised too.
+const withoutInstance = (body) => {
+	const id = /q:instance="([^"]+)"/.exec(body)?.[1];
+	return (id ? body.replaceAll(id, 'QINSTANCE') : body)
+		.replace(/\/cdn-cgi\/l\/email-protection#[0-9a-f]+/g, '/cdn-cgi/l/email-protection#CF')
+		.replace(/data-cfemail="[0-9a-f]+"/g, 'data-cfemail="CF"');
+};
 
 async function get(path, headers = {}) {
 	const r = await fetch(`${base}${path}`, { headers: { 'user-agent': 'sellright-edge-conformance/1', ...headers }, redirect: 'manual' });
