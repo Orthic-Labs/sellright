@@ -1,6 +1,8 @@
 import { qwikRouter } from '@qwik.dev/router/vite';
 import { qwikVite } from '@qwik.dev/core/optimizer';
-import { defineConfig, loadEnv } from 'vite';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import { imagetools } from 'vite-imagetools';
 import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
@@ -8,6 +10,21 @@ import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
 import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 import { preloadGraphPlugin } from './src/platform/preload-graph';
 import { precompressPlugin } from './src/platform/precompress';
+
+const NO_GLOBAL_CSS = '\0sellright-no-global-css';
+function noGlobalCssPlugin(srcDir: string): Plugin {
+  return {
+    name: 'sellright-license-no-global-css',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (source === './global.css' && importer && dirname(importer.split('?')[0]) === srcDir) return NO_GLOBAL_CSS;
+      return null;
+    },
+    load(id) {
+      return id === NO_GLOBAL_CSS ? 'export {};' : null;
+    },
+  };
+}
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -33,7 +50,7 @@ export default defineConfig((config) => {
     base: '/', // Ensure root-relative URLs
     // Vite 8 / Rolldown (ported from the Rotten Hand and Damned storefronts): the
     // SSR build must bundle tailwindcss so the `@import 'tailwindcss'` in
-    // global.css (?inline) resolves instead of being externalised.
+    // global.css resolves instead of being externalised.
     ssr: {
       noExternal: ['tailwindcss'],
     },
@@ -157,6 +174,9 @@ export default defineConfig((config) => {
           }
         }
       },
+      // #360: src/root.tsx imports global.css as a stylesheet, and Qwik links every client CSS asset in every page's head. The
+      // license flow renders LicenseRoot with its own license.css, so its build resolves that import to an empty module.
+      ...(commerceFlow === 'license' ? [noGlobalCssPlugin(fileURLToPath(new URL('./src', import.meta.url)))] : []),
       // Build-time .gz (level 9) + .br (q11) siblings, served by the /build handler in entry.express.tsx.
       ...(!isDev ? [precompressPlugin()] : []),
     ],

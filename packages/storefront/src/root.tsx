@@ -1,10 +1,13 @@
-import { component$, useStyles$ } from '@qwik.dev/core';
+import { component$ } from '@qwik.dev/core';
 import { QwikRouterProvider, RouterOutlet, ServiceWorkerRegister } from '@qwik.dev/router';
 import { Head } from './components/head/head';
 import { COMMERCE_FLOW } from './platform/license/flow-env';
 import { LicenseRoot } from './platform/license/root';
 
-import globalStyles from './global.css?inline';
+// #360: a stylesheet import, not ?inline + useStyles$: the client build emits it as a content-hashed /build/*.css (immutable,
+// precompressed) and Qwik's manifest injections link it first in every page's <head>, where the inline <style q:style> sat
+// (same cascade position). A license-flow build resolves this import to nothing (vite.config.ts): LicenseRoot has license.css.
+import './global.css';
 
 interface RootProps {
 	nonce?: string;
@@ -13,8 +16,6 @@ interface RootProps {
 }
 
 const CartRoot = component$<RootProps>(({ nonce, country }) => {
-	useStyles$(globalStyles);
-
 	return (
 		<QwikRouterProvider>
 			<Head nonce={nonce} country={country} />
