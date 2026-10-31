@@ -43,6 +43,13 @@ export function isStockHintPending(catalogInStock: boolean | null | undefined, l
   return catalogInStock === true && !liveStockLoaded;
 }
 
+/** ADR-0001: the stock hint a page paints with. The cacheable shell (`valuesPending`) redacts the manifest hint and ships fail-closed
+ *  stock, so its availability is "not known yet": held like an in-stock hint (no Sold Out paint, add-to-cart takes the live read
+ *  first) until the live read lands. Never makes anything purchasable. */
+export function paintStockHint(valuesPending: boolean, catalogInStock: boolean | null | undefined): boolean | null | undefined {
+  return valuesPending ? true : catalogInStock;
+}
+
 /** `areAllVariantsSoldOut` as painted: the manifest hint holds the sold-out state off until the live read lands. */
 export function isPaintedSoldOut(variants: PurchasableVariant[], catalogInStock: boolean | null | undefined, liveStockLoaded: boolean): boolean {
   return !isStockHintPending(catalogInStock, liveStockLoaded) && areAllVariantsSoldOut(variants);

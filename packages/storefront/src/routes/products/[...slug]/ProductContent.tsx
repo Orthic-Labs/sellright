@@ -12,7 +12,7 @@ import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-tri
 import { applyVariantPrices, useLiveRead } from '~/platform/live-values';
 import { readProductValues, type VariantPrice } from '~/platform/product';
 import { useJsonLdOffersFill } from '~/platform/controllers/jsonld-offers';
-import { findVariant, getOptionGroups, isPaintedSoldOut, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
+import { findVariant, getOptionGroups, isPaintedSoldOut, paintStockHint, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
 
 /** One gallery image — native shape (no legacy `Asset` object, no `id`;
@@ -285,12 +285,13 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     }
     return product.variants.some((v) => typeof v.salePrice === 'number' && v.salePrice > 0);
   });
-  const allVariantsSoldOut = useComputed$(() => isPaintedSoldOut(product.variants, catalogInStock, liveStockLoaded.value));
+  const stockHint = paintStockHint(valuesPending, catalogInStock);
+  const allVariantsSoldOut = useComputed$(() => isPaintedSoldOut(product.variants, stockHint, liveStockLoaded.value));
   const allGroupsSelected = useComputed$(() =>
     selectedValues.value.length === selectionSize.value && selectedValues.value.every(v => v !== null)
   );
   const isOutOfStock = useComputed$(() => {
-    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value, isStockHintPending(catalogInStock, liveStockLoaded.value));
+    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value, isStockHintPending(stockHint, liveStockLoaded.value));
   });
   const showCtaTooltip = useSignal(false);
   const ctaTooltipFading = useSignal(false);
@@ -303,7 +304,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         isAddingToCart.value = true;
         addItemToOrderErrorSignal.value = '';
         // The paint may still be on the manifest hint: take the live read first, then judge (a failed read stays fail-closed).
-        if (isStockHintPending(catalogInStock, liveStockLoaded.value)) await refreshLiveStock();
+        if (isStockHintPending(stockHint, liveStockLoaded.value)) await refreshLiveStock();
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
         // Fail closed on the live read, independent of the pre-order flag.
