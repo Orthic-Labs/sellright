@@ -18,3 +18,7 @@ export async function loadCatalog(collection: string): Promise<PricedProduct[]> 
 }
 
 export const sellableVariants = (variants: readonly VariantDetail[]): VariantDetail[] => variants.filter((v) => v.fulfillmentType !== 'physical');
+
+/** ADR-0001 §3: the catalog for a cacheable shell: names and SKUs kept, every price removed (the browser reads them, no-store). */
+export const redactCatalogPrices = (catalog: readonly PricedProduct[]): PricedProduct[] =>
+	catalog.map((p) => ({ ...p, variants: p.variants.map((v) => ({ ...v, price: 0, salePrice: null, compareAtPrice: null })) }));

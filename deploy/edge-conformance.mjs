@@ -41,11 +41,22 @@ const withoutInstance = (body) => {
 		.replace(/data-cfemail="[0-9a-f]+"/g, 'data-cfemail="CF"');
 };
 
+// DP-1/I-1: a shell body carries no price and no stock. Flags currency amounts in markup or state and non-zero value fields in
+// serialised state (a redacted field is 0, null or false). Brand copy that names an amount fails too: keep amounts out of the shell.
+const VALUE_PATTERNS = [
+	/[$€£₹]\s?\d[\d,]*(?:\.\d{2})?/g,
+	/\b\d[\d,]*\.\d{2}\s?(?:USD|EUR|GBP|INR)\b/g,
+	/"(?:price|priceWithTax|minPrice|maxPrice|salePrice|compareAtPrice|preOrderPrice|unitPrice|stockLevel)"\s*:\s*"?[1-9]/g,
+	/"inStock"\s*:\s*true/g,
+];
+const valueHits = (body) => [...new Set(VALUE_PATTERNS.flatMap((re) => body.match(re) ?? []))].slice(0, 5);
+
 async function get(path, headers = {}) {
 	const r = await fetch(`${base}${path}`, { headers: { 'user-agent': 'sellright-edge-conformance/1', ...headers }, redirect: 'manual' });
 	const body = await r.text();
 	return { status: r.status, cc: r.headers.get('cache-control') ?? '', cf: r.headers.get('cf-cache-status') ?? '-', csp: r.headers.get('content-security-policy') ?? '',
-		setCookie: r.headers.get('set-cookie'), diag: r.headers.get('x-sr-edge') ?? '', hash: createHash('sha256').update(withoutInstance(body)).digest('hex').slice(0, 12) };
+		setCookie: r.headers.get('set-cookie'), diag: r.headers.get('x-sr-edge') ?? '', hash: createHash('sha256').update(withoutInstance(body)).digest('hex').slice(0, 12),
+		values: valueHits(body) };
 }
 
 const results = [];
@@ -59,6 +70,7 @@ for (const [cls, path] of ROWS) {
 		if (/nonce-|unsafe-inline/.test(scriptSrc)) problems.push('script-src has a nonce or unsafe-inline');
 		const signed = await get(path, { cookie: 'sr_cust=conformance; countryCode=DE', authorization: 'Bearer conformance' });
 		if (signed.hash !== res.hash) problems.push(`signed-in body differs (${signed.hash} vs ${res.hash})`);
+		if (res.values.length) problems.push(`price/stock value in shell body: ${res.values.join(' | ')}`);
 	} else if (!isNoStore(res.cc)) {
 		problems.push(`expected private no-store, got ${res.cc || '(none)'}`);
 	}
