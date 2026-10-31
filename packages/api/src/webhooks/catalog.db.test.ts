@@ -60,7 +60,7 @@ describe('catalog cache purge transaction boundary', () => {
       expect(onCatalogCacheChanged).not.toHaveBeenCalled();
     });
 
-    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/shop/catalog-product/' });
+    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/shop/catalog-product/', collectionSlugs: [] });
     await withStore(STORE, async (tx) => {
       expect(await deliveries(tx)).toEqual([{ topic: 'catalog.product_changed', payload }]);
       const [product] = await tx.select({ name: s.product.name }).from(s.product).where(eq(s.product.id, PRODUCT));
@@ -94,7 +94,25 @@ describe('catalog cache purge transaction boundary', () => {
       expect(onCatalogCacheChanged).not.toHaveBeenCalled();
     });
 
-    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/products/catalog-product/' });
+    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/products/catalog-product/', collectionSlugs: [] });
     expect(await withStore(STORE, deliveries)).toEqual([{ topic: 'catalog.product_changed', payload }]);
+  });
+
+  it.each(helpers)('ADR-0001 I-4: $kind change carries every published collection page that can list the product', async ({ notify }) => {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status)
+        VALUES ('caca0000-0000-0000-0000-000000000009', ${STORE}, 'other-product', 'Other', 'active')`);
+      await tx.execute(sql`INSERT INTO collection (id, store_id, slug, name, published, rules) VALUES
+        ('caca0000-0000-0000-0000-0000000000c1', ${STORE}, 'summer', 'Summer', true, NULL),
+        ('caca0000-0000-0000-0000-0000000000c2', ${STORE}, 'hidden', 'Hidden', false, NULL),
+        ('caca0000-0000-0000-0000-0000000000c3', ${STORE}, 'unrelated', 'Unrelated', true, NULL),
+        ('caca0000-0000-0000-0000-0000000000c4', ${STORE}, 'under-20', 'Under 20', true, ${JSON.stringify({ match: 'all', conditions: [{ field: 'price', op: 'lt', value: 2000 }] })}::jsonb)`);
+      await tx.execute(sql`INSERT INTO collection_product (store_id, collection_id, product_id) VALUES
+        (${STORE}, 'caca0000-0000-0000-0000-0000000000c1', ${PRODUCT}),
+        (${STORE}, 'caca0000-0000-0000-0000-0000000000c2', ${PRODUCT}),
+        (${STORE}, 'caca0000-0000-0000-0000-0000000000c3', 'caca0000-0000-0000-0000-000000000009')`);
+    });
+    await withStore(STORE, async (tx) => { await notify(tx); });
+    expect(onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith(STORE_SLUG, [PRODUCT], { productPath: '/shop/catalog-product/', collectionSlugs: ['summer', 'under-20'] });
   });
 });

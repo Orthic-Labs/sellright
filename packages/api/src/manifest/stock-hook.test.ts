@@ -308,6 +308,13 @@ describe('V60 / N9 — content triggers and purge ordering', () => {
     expect(publishSpy.mock.calls[1]![0].purge).toBeUndefined();
   });
 
+  it('ADR-0001 I-4: the immediate purge carries the collection set from the mutation; stock never purges', () => {
+    onCatalogContentChanged('other-store', ['prod-1'], { productPath: '/products/a/', collectionSlugs: ['summer'] });
+    expect(purgeHook.onCatalogCacheChanged).toHaveBeenCalledExactlyOnceWith('other-store', { productPath: '/products/a/', collectionSlugs: ['summer'] });
+    onStockChanged('other-store', ['v1']);
+    expect(purgeHook.onCatalogCacheChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('purges at once where this deployment publishes no catalog', () => {
     onCatalogContentChanged('other-store', ['prod-1'], { productPath: '/products/a/' });
     expect(purgeHook.onCatalogCacheChanged).toHaveBeenCalledWith('other-store', { productPath: '/products/a/' });

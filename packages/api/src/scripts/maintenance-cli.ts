@@ -5,34 +5,29 @@
  * privileged process; it just writes/reads the flag file on the volume the
  * api process itself checks (see maintenance.ts).
  */
-import { env } from '../env.js';
-import { purgeHostForMaintenance } from '../cache/purge-hook.js';
-import { isMaintenanceOn, maintenanceInfo, setMaintenance } from '../maintenance.js';
+import { toggleMaintenance } from '../maintenance-toggle.js';
+import { isMaintenanceOn, maintenanceInfo } from '../maintenance.js';
 
-async function main(): Promise<void> {
-  const cmd = process.argv[2];
+async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const cmd = argv[0];
   switch (cmd) {
     case 'on':
-      setMaintenance(true, process.argv[3] ?? 'update');
-      console.log('maintenance: on');
+    case 'off': {
+      // ADR-0001 QS-6: flag written, then every host of the store purged. Awaited because this process exits right
+      // after; bounded + retried + alert-logged inside runPurge, never throws and never changes the exit code.
+      const purge = await toggleMaintenance(cmd === 'on', { reason: cmd === 'on' ? (argv[1] ?? 'update') : undefined });
+      console.log(`maintenance: ${cmd}`);
+      // Sanity echo so a caller parsing stdout can also just check the exit code.
+      process.exitCode = isMaintenanceOn() === (cmd === 'on') ? 0 : 1;
+      console.log(`maintenance: edge purge ${purge}`);
       break;
-    case 'off':
-      setMaintenance(false);
-      console.log('maintenance: off');
-      break;
+    }
     case 'status':
       console.log(JSON.stringify(maintenanceInfo()));
       break;
     default:
       console.error('usage: maintenance-cli.js <on|off|status> [reason]');
       process.exitCode = 1;
-  }
-  // Sanity echo so a caller parsing stdout can also just check the exit code.
-  if (cmd === 'on' || cmd === 'off') {
-    process.exitCode = isMaintenanceOn() === (cmd === 'on') ? 0 : 1;
-    // ADR-0001 QS-6: the flag file is written, so purge every cached page for the host. Awaited because this process
-    // exits right after; bounded + retried + alert-logged inside runPurge, never throws and never changes the exit code.
-    if (env.STORE_SLUG) console.log(`maintenance: edge purge ${await purgeHostForMaintenance(env.STORE_SLUG)}`);
   }
 }
 

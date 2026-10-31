@@ -14,7 +14,7 @@ vi.mock('../lib/logger.js', () => ({ log: { info: vi.fn() }, err: { error: (...a
 const { hostSpy } = vi.hoisted(() => ({ hostSpy: vi.fn().mockResolvedValue(true) }));
 vi.mock('./cloudflare-purge.js', () => ({ purgeCloudflareUrls: (...a: unknown[]) => purgeSpy(...a), purgeCloudflareHosts: (...a: unknown[]) => hostSpy(...a), resolveCloudflareConfig: () => cfConfig() }));
 
-import { onBlogContentChanged, onCatalogCacheChanged, onCollectionChanged, onStoreShellConfigChanged, planPurge, purgeAfterPublish, purgeHostForMaintenance, PURGE_URL_FALLBACK_THRESHOLD, runPurge, _setPurgeRetryPolicyForTest } from './purge-hook.js';
+import { onBlogContentChanged, onCatalogCacheChanged, onCollectionChanged, onStoreShellConfigChanged, planPurge, purgeAfterPublish, purgeHostForMaintenance, PURGE_MAX_ATTEMPTS, PURGE_URL_FALLBACK_THRESHOLD, runPurge, _setPurgeRetryPolicyForTest } from './purge-hook.js';
 
 beforeEach(() => {
   for (const k of Object.keys(envMock)) delete envMock[k];
@@ -22,81 +22,124 @@ beforeEach(() => {
   purgeSpy.mockClear();
 });
 
-describe('onCatalogCacheChanged', () => {
-  it('purges the shop root/listing/sitemaps using STOREFRONT_URL', () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
-    onCatalogCacheChanged('acme');
+describe('onCatalogCacheChanged (no catalog published: purge at once)', () => {
+  const O = 'https://acme.example.com';
+  beforeEach(() => {
+    cfConfig.mockImplementation(() => ({ zoneId: 'z', apiToken: 't' }));
+    purgeSpy.mockReset(); purgeSpy.mockResolvedValue(true);
+    hostSpy.mockReset(); hostSpy.mockResolvedValue(true);
+    _setPurgeRetryPolicyForTest({ attemptTimeoutMs: 20, backoffBaseMs: 1 });
+  });
+  afterEach(() => _setPurgeRetryPolicyForTest());
+
+  it('I-4: purges the product page, /, /shop/, every collection page listing it and the sitemaps', () => {
+    envMock.STOREFRONT_URL = O;
+    onCatalogCacheChanged('acme', { productPath: '/shop/widget/', collectionSlugs: ['summer', 'new in', 'summer'] });
     expect(purgeSpy).toHaveBeenCalledWith('acme', [
-      'https://acme.example.com/',
-      'https://acme.example.com/shop/',
-      'https://acme.example.com/sitemap.xml',
-      'https://acme.example.com/sitemap-products.xml',
+      `${O}/`, `${O}/shop/`, `${O}/sitemap.xml`, `${O}/sitemap-products.xml`,
+      `${O}/shop/widget/`,
+      `${O}/sitemap-collections.xml`, `${O}/collections/summer/`, `${O}/collections/new%20in/`,
     ]);
+    expect(hostSpy).not.toHaveBeenCalled();
   });
 
-  it('also purges the specific product page at the path the caller resolved from the store config', () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
-    onCatalogCacheChanged('acme', { productPath: '/products/widget/' });
-    expect(purgeSpy).toHaveBeenCalledWith('acme', expect.arrayContaining(['https://acme.example.com/products/widget/']));
-    onCatalogCacheChanged('acme', { productPath: '/shop/widget/' });
-    expect(purgeSpy).toHaveBeenLastCalledWith('acme', expect.arrayContaining(['https://acme.example.com/shop/widget/']));
-    expect(purgeSpy.mock.lastCall?.[1]).not.toContain('https://acme.example.com/products/widget/');
+  it('a product in no collection still purges its page, / and /shop/', () => {
+    envMock.STOREFRONT_URL = O;
+    onCatalogCacheChanged('acme', { productPath: '/products/w/', collectionSlugs: [] });
+    expect(purgeSpy.mock.calls[0]![1]).toEqual([`${O}/`, `${O}/shop/`, `${O}/sitemap.xml`, `${O}/sitemap-products.xml`, `${O}/products/w/`]);
   });
 
-  it('prefers a per-store origin override over the single fallback', () => {
+  it('falls back to a host purge when the affected set is unknown (no collection set or no product path)', async () => {
+    envMock.STOREFRONT_URL = O;
+    onCatalogCacheChanged('acme', { productPath: '/products/w/' });
+    onCatalogCacheChanged('acme', { collectionSlugs: ['summer'] });
+    onCatalogCacheChanged('acme');
+    await vi.waitFor(() => expect(hostSpy).toHaveBeenCalledTimes(3));
+    expect(hostSpy).toHaveBeenCalledWith('acme', ['acme.example.com']);
+    expect(purgeSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a host purge past the URL threshold', async () => {
+    envMock.STOREFRONT_URL = O;
+    const collectionSlugs = Array.from({ length: PURGE_URL_FALLBACK_THRESHOLD }, (_, i) => `c${i}`);
+    onCatalogCacheChanged('acme', { productPath: '/products/w/', collectionSlugs });
+    await vi.waitFor(() => expect(hostSpy).toHaveBeenCalledTimes(1));
+    expect(purgeSpy).not.toHaveBeenCalled();
+  });
+
+  it('prefers a per-store origin override and strips a trailing slash', () => {
     envMock.STOREFRONT_URL = 'https://fallback.example.com';
-    envMock.STOREFRONT_ORIGIN_BY_STORE = 'acme=https://acme-brand.com';
-    onCatalogCacheChanged('acme');
-    expect(purgeSpy).toHaveBeenCalledWith('acme', expect.arrayContaining(['https://acme-brand.com/']));
-  });
-
-  it('strips a trailing slash from the configured origin before building urls', () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com/';
-    onCatalogCacheChanged('acme');
-    expect(purgeSpy).toHaveBeenCalledWith('acme', expect.arrayContaining(['https://acme.example.com/']));
-    // no double slash
+    envMock.STOREFRONT_ORIGIN_BY_STORE = 'acme=https://acme-brand.com/';
+    onCatalogCacheChanged('acme', { productPath: '/products/w/', collectionSlugs: [] });
     const urls = purgeSpy.mock.calls[0]![1] as string[];
-    expect(urls.some((u) => u.includes('//shop'))).toBe(false);
+    expect(urls).toContain('https://acme-brand.com/');
+    expect(urls.some((u) => u.includes('//shop') || u.includes('//products'))).toBe(false);
   });
 
-  it('never throws when STOREFRONT_URL is missing/misconfigured — logs and no-ops', () => {
-    // envMock.STOREFRONT_URL intentionally left unset
+  it('never throws when STOREFRONT_URL is missing — no-ops', () => {
     expect(() => onCatalogCacheChanged('acme')).not.toThrow();
     expect(purgeSpy).not.toHaveBeenCalled();
+    expect(hostSpy).not.toHaveBeenCalled();
   });
 });
 
 describe('purgeAfterPublish (N9 / F5)', () => {
-  beforeEach(() => { cfConfig.mockImplementation(() => ({ zoneId: 'z', apiToken: 't' })); purgeSpy.mockReset(); });
+  const O = 'https://acme.example.com';
+  beforeEach(() => {
+    cfConfig.mockImplementation(() => ({ zoneId: 'z', apiToken: 't' }));
+    purgeSpy.mockReset(); hostSpy.mockReset(); hostSpy.mockResolvedValue(true);
+    _setPurgeRetryPolicyForTest({ attemptTimeoutMs: 20, backoffBaseMs: 1 });
+  });
+  afterEach(() => _setPurgeRetryPolicyForTest());
 
-  it('purges the standard set plus every affected product page and reports success', async () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
+  it('purges the standard set, every affected product page and its collection pages', async () => {
+    envMock.STOREFRONT_URL = O;
     purgeSpy.mockResolvedValueOnce(true);
-    await expect(purgeAfterPublish('acme', ['/products/old/', '/products/new/', '/products/new/'])).resolves.toBe('purged');
+    await expect(purgeAfterPublish('acme', { productPaths: ['/products/old/', '/products/new/', '/products/new/'], collectionSlugs: ['summer'] })).resolves.toBe('purged');
     const urls = purgeSpy.mock.calls[0]![1] as string[];
-    expect(urls).toEqual(expect.arrayContaining(['https://acme.example.com/', 'https://acme.example.com/products/old/', 'https://acme.example.com/products/new/']));
+    expect(urls).toEqual(expect.arrayContaining([`${O}/`, `${O}/shop/`, `${O}/products/old/`, `${O}/products/new/`, `${O}/collections/summer/`]));
     expect(urls.filter((u) => u.endsWith('/products/new/'))).toHaveLength(1);
   });
 
-  it('is skipped (not failed) without an origin or Cloudflare config', async () => {
-    await expect(purgeAfterPublish('acme')).resolves.toBe('skipped');
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
-    cfConfig.mockImplementation(() => null);
-    await expect(purgeAfterPublish('acme')).resolves.toBe('skipped');
+  it('an unknown affected set (full rebuild) purges the whole host', async () => {
+    envMock.STOREFRONT_URL = O;
+    await expect(purgeAfterPublish('acme', null)).resolves.toBe('purged');
+    expect(hostSpy).toHaveBeenCalledWith('acme', ['acme.example.com']);
     expect(purgeSpy).not.toHaveBeenCalled();
   });
 
-  it('reports a rejected purge as failed (retryable)', async () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
-    purgeSpy.mockResolvedValueOnce(false);
-    await expect(purgeAfterPublish('acme')).resolves.toBe('failed');
+  it('is skipped (not failed) without an origin or Cloudflare config', async () => {
+    await expect(purgeAfterPublish('acme', null)).resolves.toBe('skipped');
+    envMock.STOREFRONT_URL = O;
+    cfConfig.mockImplementation(() => null);
+    await expect(purgeAfterPublish('acme', { productPaths: [], collectionSlugs: [] })).resolves.toBe('skipped');
+    expect(purgeSpy).not.toHaveBeenCalled();
+    expect(hostSpy).not.toHaveBeenCalled();
   });
 
-  it('bounds a hung purge by its deadline', async () => {
-    envMock.STOREFRONT_URL = 'https://acme.example.com';
-    purgeSpy.mockImplementationOnce(() => new Promise(() => {}));
-    await expect(purgeAfterPublish('acme', [], 20)).resolves.toBe('failed');
-    expect(errError).toHaveBeenCalled();
+  it('retries a rejected purge (PURGE_MAX_ATTEMPTS) and succeeds without alerting', async () => {
+    envMock.STOREFRONT_URL = O;
+    purgeSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await expect(purgeAfterPublish('acme', { productPaths: ['/products/a/'], collectionSlugs: [] })).resolves.toBe('purged');
+    expect(purgeSpy).toHaveBeenCalledTimes(PURGE_MAX_ATTEMPTS);
+    expect(errError).not.toHaveBeenCalled();
+  });
+
+  it('bounds hung attempts by the per-attempt timeout, then reports failed with ONE cache_purge_failed alert', async () => {
+    envMock.STOREFRONT_URL = O;
+    purgeSpy.mockImplementation(() => new Promise(() => {}));
+    await expect(purgeAfterPublish('acme', { productPaths: ['/products/a/'], collectionSlugs: [] })).resolves.toBe('failed');
+    expect(purgeSpy).toHaveBeenCalledTimes(PURGE_MAX_ATTEMPTS);
+    expect(errError).toHaveBeenCalledTimes(1);
+    expect(errError.mock.calls[0]![2]).toMatchObject({ alert: 'cache_purge_failed', event: 'product-content', storeSlug: 'acme', mode: 'urls', attempts: PURGE_MAX_ATTEMPTS, last: 'timeout' });
+  });
+
+  it('a failed host fallback also alerts and reports failed', async () => {
+    envMock.STOREFRONT_URL = O;
+    hostSpy.mockResolvedValue(false);
+    await expect(purgeAfterPublish('acme', null)).resolves.toBe('failed');
+    expect(hostSpy).toHaveBeenCalledTimes(PURGE_MAX_ATTEMPTS);
+    expect(errError.mock.calls[0]![2]).toMatchObject({ alert: 'cache_purge_failed', event: 'product-content', mode: 'host', reason: 'everything' });
   });
 });
 
@@ -146,9 +189,9 @@ describe('ADR-0001 item 5 triggers', () => {
     expect(hostSpy).toHaveBeenCalledWith('acme', ['acme.example.com']);
   });
 
-  it('product content edit purges the standard set + the product page; price has no purge entry point', () => {
-    onCatalogCacheChanged('acme', { productPath: '/products/w/' });
-    expect(purgeSpy.mock.calls[0]![1]).toEqual(expect.arrayContaining([`${O}/`, `${O}/shop/`, `${O}/products/w/`]));
+  it('product content edit purges the product page, /, /shop/ and its collections; price has no purge entry point', () => {
+    onCatalogCacheChanged('acme', { productPath: '/products/w/', collectionSlugs: ['summer'] });
+    expect(purgeSpy.mock.calls[0]![1]).toEqual(expect.arrayContaining([`${O}/`, `${O}/shop/`, `${O}/products/w/`, `${O}/collections/summer/`]));
   });
 
   it('skips (no failure, no call) without origin or Cloudflare config', async () => {
