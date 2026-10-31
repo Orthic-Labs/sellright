@@ -1,6 +1,6 @@
 import { constants, brotliCompress, gzip } from 'node:zlib';
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Plugin } from 'vite';
 
@@ -58,11 +58,14 @@ export function precompressPlugin(): Plugin {
 		apply: 'build',
 		enforce: 'post',
 		configResolved(c) {
-			outDir = join(c.root, c.build.outDir);
+			// resolve, not join: Qwik sets an absolute build.outDir, and join() would append it to the root (a path that does not
+			// exist, so the walk found nothing and no .br/.gz was ever written).
+			outDir = resolve(c.root, c.build.outDir);
 		},
 		async closeBundle() {
 			const { files } = await precompressDir(outDir);
-			if (files) console.info(`[precompress] ${files} files -> .gz (level 9) + .br (q11)`);
+			if (files) console.info(`[precompress] ${outDir}: ${files} files -> .gz (level 9) + .br (q11)`);
+			else console.warn(`[precompress] ${outDir}: no file compressed (missing dir or nothing over ${PRECOMPRESS_THRESHOLD} bytes)`);
 		},
 	};
 }

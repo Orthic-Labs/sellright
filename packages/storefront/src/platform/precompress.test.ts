@@ -31,3 +31,19 @@ describe('precompress', () => {
 		expect(p.enforce).toBe('post');
 	});
 });
+
+describe('precompressPlugin outDir', () => {
+	it('resolves an absolute build.outDir as is (join() would have appended it to the root)', async () => {
+		const { precompressPlugin } = await import('./precompress');
+		const p = precompressPlugin() as unknown as { configResolved: (c: unknown) => void; closeBundle: () => Promise<void> };
+		const { mkdtempSync, writeFileSync, existsSync } = await import('node:fs');
+		const { tmpdir } = await import('node:os');
+		const { join } = await import('node:path');
+		const dir = mkdtempSync(join(tmpdir(), 'precompress-abs-'));
+		writeFileSync(join(dir, 'a.js'), 'x'.repeat(4096));
+		p.configResolved({ root: '/some/other/root', build: { outDir: dir } });
+		await p.closeBundle();
+		expect(existsSync(join(dir, 'a.js.br'))).toBe(true);
+		expect(existsSync(join(dir, 'a.js.gz'))).toBe(true);
+	});
+});
