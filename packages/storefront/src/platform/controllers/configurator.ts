@@ -149,18 +149,37 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 				ctl.last = rejected;
 				return rejected;
 			}
+			// #427 local first: the line shows and the drawer opens on the click; the server write runs behind it. `eligible`
+			// already came from this page's live stock read. The add's own response then replaces the line (server price,
+			// availability); a failed add drops it again (the mirror never had it) and the drawer shows the error.
+			const enrichment = enrichmentFor(model, variant);
+			const unitPrice = effectivePriceOf(variant);
+			const lines = cart.cart?.lines;
+			if (lines) {
+				const same = lines.find((l) => l.sku === variant.sku);
+				if (same) {
+					same.quantity += quantity;
+					same.lineSubtotal = same.unitPrice * same.quantity;
+					same.lineTotal = same.lineSubtotal - (same.lineDiscount ?? 0);
+				} else {
+					cart.cart.lines = [
+						...lines,
+						{ ...enrichment, sku: variant.sku, name: model.name, unitPrice, quantity, lineSubtotal: unitPrice * quantity, lineDiscount: 0, lineTotal: unitPrice * quantity, available: true, availableQuantity: null } as (typeof lines)[number],
+					];
+				}
+			}
+			// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first.
+			if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
+			else appState.showCart = true;
 			ctl.adding = true;
 			let result: AddResult;
 			try {
-				result = addResultFrom(await addToCartWithOutcome(cart, variant.sku, quantity, enrichmentFor(model, variant)), variant.sku, quantity);
+				result = addResultFrom(await addToCartWithOutcome(cart, variant.sku, quantity, enrichment), variant.sku, quantity);
 			} finally {
 				ctl.adding = false;
 			}
 			ctl.last = result;
 			if (result.status === 'added' || result.status === 'added-unavailable') {
-				// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first (the add is already done).
-				if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
-				else appState.showCart = true;
 				loadCountryOnDemand(appState);
 				announce(`${model.name} added to cart`);
 				track({ name: 'add_to_cart', sku: variant.sku, productName: model.name, price: effectivePriceOf(variant), currency: model.currencyCode, quantity });
