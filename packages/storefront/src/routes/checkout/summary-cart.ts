@@ -88,15 +88,21 @@ export type SummarySource = 'client' | 'server' | 'skeleton';
 /**
  * What the order summary renders. After loading: the client cart (unchanged). While loading: the client cart once the
  * checkout-entry live read has landed with an active cart; before that, the server read; else the skeleton.
+ *
+ * #412 `shell` (the ADR-0001 cacheable shell, no server read): the cart mirror of a shell document starts empty and is filled
+ * only by this document's live entry read (started at document start), so an active cart with lines in it IS that read. The
+ * summary shows it as soon as it lands, not after the checkout page's own code has also taken the read over.
  */
 export function checkoutSummarySource(input: {
   pageLoading: boolean;
   entryReadDone: boolean;
   client: { status: string; lineCount: number };
   hasServerCart: boolean;
+  shell?: boolean;
 }): SummarySource {
   if (!input.pageLoading) return 'client';
-  if (input.entryReadDone) return input.client.status === 'active' && input.client.lineCount > 0 ? 'client' : 'skeleton';
+  const clientReady = input.client.status === 'active' && input.client.lineCount > 0;
+  if (input.entryReadDone || input.shell) return clientReady ? 'client' : 'skeleton';
   return input.hasServerCart ? 'server' : 'skeleton';
 }
 

@@ -31,6 +31,9 @@ const handleProductLinkClick = $((productSlug: string, featuredAssetPreview?: st
 export default component$<{
 	/** Display-only cart to render instead of the context's (checkout's server-read summary, L11). Actions still use the context. */
 	cart?: Cart;
+	/** #412: the line thumbnails are the page's largest early content (the cacheable checkout shell's summary): fetch them at high
+	 *  priority. Off by default, so every other render is unchanged. */
+	priorityThumbnails?: boolean;
 }>((props) => {
 
 	const location = useLocation();
@@ -160,15 +163,29 @@ export default component$<{
 						<li key={line.sku} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">
 							{/* Image — square crop, no border radius for editorial feel */}
 							<div class={`shrink-0 w-[88px] h-[112px] overflow-hidden ${isCheckoutView ? 'bg-[rgba(253,250,246,0.06)]' : 'bg-[rgba(17,17,17,0.04)]'}`}>
-								<OptimizedImage
-									class="w-full h-full object-center object-cover"
-									src={resolveAssetPath(line.image) || '/asset_placeholder.webp'}
-									width={160}
-									height={200}
-									loading={isCheckoutView ? 'eager' : 'lazy'}
-									responsive="thumbnail"
-									alt={line.productName ? `${line.productName}, ${line.name}` : `Image of: ${line.name}`}
-								/>
+								{/* #412: a separate element, so a render without priority serializes exactly as before. */}
+								{props.priorityThumbnails ? (
+									<OptimizedImage
+										class="w-full h-full object-center object-cover"
+										src={resolveAssetPath(line.image) || '/asset_placeholder.webp'}
+										width={160}
+										height={200}
+										loading={isCheckoutView ? 'eager' : 'lazy'}
+										priority
+										responsive="thumbnail"
+										alt={line.productName ? `${line.productName}, ${line.name}` : `Image of: ${line.name}`}
+									/>
+								) : (
+									<OptimizedImage
+										class="w-full h-full object-center object-cover"
+										src={resolveAssetPath(line.image) || '/asset_placeholder.webp'}
+										width={160}
+										height={200}
+										loading={isCheckoutView ? 'eager' : 'lazy'}
+										responsive="thumbnail"
+										alt={line.productName ? `${line.productName}, ${line.name}` : `Image of: ${line.name}`}
+									/>
+								)}
 							</div>
 
 							{/* Product Details */}

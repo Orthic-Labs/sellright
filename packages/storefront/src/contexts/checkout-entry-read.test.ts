@@ -18,7 +18,7 @@ vi.mock('@qwik.dev/core', () => ({
 import { CartService } from '~/services/CartService';
 import { installLocks, removeLocks } from '~/services/cart-test-harness';
 import { EMPTY_CART, type ServerCart } from '~/sellright/types/cart';
-import { deferBootToCheckoutEntry, isBootDeferredToCheckoutEntry, isCheckoutEntryPath, loadCartIfNeeded, refreshCartLive, resetCheckoutBootForTest, type CartContextState } from './CartContext';
+import { deferBootToCheckoutEntry, isBootDeferredToCheckoutEntry, isCheckoutEntryPath, loadCartIfNeeded, refreshCartLive, resetCheckoutBootForTest, startCheckoutEntryBoot, type CartContextState } from './CartContext';
 
 /** The checkout route's entry sequence (routes/checkout/index.tsx enterCheckout), minus its view-generation checks. */
 const readCartAtCheckoutEntry = async (state: CartContextState): Promise<'ok' | 'failed'> => {
@@ -57,7 +57,17 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	removeLocks();
 	document.cookie = 'sr_cart=; Path=/; Max-Age=0';
+	document.cookie = 'countryCode=; Path=/; Max-Age=0';
+	CartService.setQuoteContext({});
 });
+
+/** The URL of the n-th fetch (the client passes a Request or a URL string). */
+const urlOf = (n: number): URL => {
+	const arg = fetchMock.mock.calls[n]?.[0] as Request | string | URL;
+	return new URL(typeof arg === 'string' ? arg : arg instanceof URL ? arg.href : arg.url, 'http://localhost');
+};
+/** Let queued promise reactions (lock grant, fetch call) run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('checkout entry cart read (V27)', () => {
 	it('only the checkout page itself defers the boot', () => {
@@ -125,5 +135,76 @@ describe('checkout entry cart read (V27)', () => {
 		queue.push(respond(404, { error: { code: 'CART_NOT_FOUND', message: 'cart not found' } }));
 		expect(await readCartAtCheckoutEntry(state)).toBe('ok');
 		expect(state.cart.lines).toHaveLength(0);
+	});
+});
+
+describe('#412: the checkout entry read starts at document start', () => {
+	it('started by the provider, taken over by the entry: ONE live GET, sent with the checkout quote for the country cookie', async () => {
+		document.cookie = 'countryCode=CA; Path=/';
+		queue.push(respond(200, serverCart({ pricingIntent: 'checkout' })));
+		expect(startCheckoutEntryBoot('/checkout/')).toBe(true);
+		await settle();
+		// Sent before the checkout page's code runs at all.
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const url = urlOf(0);
+		expect(url.searchParams.get('pricingIntent')).toBe('checkout');
+		expect(url.searchParams.get('shipCountry')).toBe('CA');
+		const state = newState();
+		expect(await readCartAtCheckoutEntry(state)).toBe('ok');
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(state.hasLoadedOnce).toBe(true);
+		expect(state.isLoading).toBe(false);
+		expect(state.cart.lines[0]?.availableQuantity).toBe(0); // the live response's stock, fail-closed
+		// The pricing read for the same inputs has nothing to add (routes/checkout/index.tsx skips it).
+		CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'CA', shippingMethodCode: undefined });
+		expect(CartService.currentQuoteAlreadyRead()).toBe(true);
+	});
+
+	it('once per document: the checkout shell starting it again (whichever qinit runs first) sends nothing more', async () => {
+		queue.push(respond(200, serverCart()));
+		startCheckoutEntryBoot('/checkout/');
+		startCheckoutEntryBoot('/checkout/');
+		await settle();
+		await readCartAtCheckoutEntry(newState());
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(startCheckoutEntryBoot('/shop/')).toBe(false);
+	});
+
+	it('the pricing inputs moved while it was in flight: the entry reads again, live, under the new inputs', async () => {
+		document.cookie = 'countryCode=US; Path=/';
+		let release: (r: Response) => void = () => undefined;
+		queue.push(new Promise<Response>((resolve) => { release = resolve; }));
+		startCheckoutEntryBoot('/checkout/');
+		await settle();
+		CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'DE' });
+		release(await respond(200, serverCart({ pricingIntent: 'checkout' })));
+		queue.push(respond(200, serverCart({ pricingIntent: 'checkout', revision: 9 })));
+		const state = newState();
+		expect(await readCartAtCheckoutEntry(state)).toBe('ok');
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(urlOf(1).searchParams.get('shipCountry')).toBe('DE');
+		expect(state.cart.revision).toBe(9);
+		expect(state.cart.lines).toHaveLength(1);
+	});
+
+	it('a failed early read reports failed at entry (never the normal checkout from it)', async () => {
+		queue.push(respond(503, { error: { code: 'UNAVAILABLE', message: 'down' } }));
+		startCheckoutEntryBoot('/checkout/');
+		await settle();
+		const state = newState();
+		expect(await readCartAtCheckoutEntry(state)).toBe('failed');
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(state.hasLoadedOnce).toBe(false);
+	});
+
+	it('a cart opened before entry drops the early read: the entry still makes its own live GET', async () => {
+		queue.push(respond(200, serverCart()));
+		startCheckoutEntryBoot('/checkout/');
+		const state = newState();
+		await loadCartIfNeeded(state); // joins the boot in flight
+		queue.push(respond(200, serverCart({ revision: 8 })));
+		await readCartAtCheckoutEntry(state);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(state.cart.revision).toBe(8);
 	});
 });

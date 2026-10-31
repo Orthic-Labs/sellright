@@ -3,13 +3,13 @@ import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
-import { fetchSessionCustomer } from '~/utils/session-customer';
+import { pageSessionCustomer } from '~/utils/session-customer';
 import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components/checkout/checkout-country';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { track } from '~/sellright/analytics';
-import { useCart, deferBootToCheckoutEntry, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { useCart, startCheckoutEntryBoot, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
 import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutServerCart, serverCartShipCountry, type ServerCartValue } from './summary-cart';
@@ -84,10 +84,11 @@ type CheckoutIdentity = [Awaited<ReturnType<typeof getMe>> | null, Awaited<Retur
 
 /** The normal checkout's identity reads (session customer, then the account; the country list), each failure tolerated. The customer
  *  is filled in the browser (ADR-0001: no identity in the cached shell), so it may not be known yet: the storefront session endpoint
- *  makes no API call for a visitor without credentials (#362: no guest /auth/me). */
+ *  makes no API call for a visitor without credentials (#362: no guest /auth/me). #412: "who is signed in" is the root layout's own
+ *  session read for this page (joined, or its answer), never a second GET /api/session/ on the same page load. */
 async function readCheckoutIdentity(customerId: string): Promise<CheckoutIdentity> {
   const signedIn = customerId !== CUSTOMER_NOT_DEFINED_ID
-    || (await fetchSessionCustomer().catch(() => ({ status: 'unknown' as const }))).status === 'signed-in';
+    || (await pageSessionCustomer().catch(() => ({ status: 'unknown' as const }))).status === 'signed-in';
   return Promise.all([
     signedIn ? getMe().catch(() => null) : null,
     CountryService.getAvailableCountries().catch(() => []),
@@ -200,31 +201,35 @@ const CheckoutContent = component$(() => {
     cleanup(() => { cancelled = true; });
     shippingQuotePending.value = true;
 
-    try {
-      // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
-      const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
-      if (cancelled) return;
-      shippingQuoteKey.value = quoteKey;
-      appState.freeShipping = freeShipping;
-      if (!methods.length) {
+    // #412: not awaited. A task's promise holds back this component's re-render, so the summary the cart read just filled
+    // waited for this quote (and the pricing read after it) before it painted. The run is still superseded by the next one.
+    void (async () => {
+      try {
+        // Eligibility and rate are decided server-side from the cart (items, coupons, tax); nothing is computed here.
+        const { methods, freeShipping } = await getShippingQuote(countryCode, items, couponCodes);
+        if (cancelled) return;
+        shippingQuoteKey.value = quoteKey;
+        appState.freeShipping = freeShipping;
+        if (!methods.length) {
+          shippingCents.value = null;
+          shippingMethod.value = null;
+          return;
+        }
+        // Cheapest eligible — the displayed rate and the submitted method must
+        // be the same server-priced choice.
+        const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
+        shippingMethod.value = cheapest;
+        shippingCents.value = cheapest.rate;
+      } catch (e) {
+        if (cancelled) return;
+        console.warn('[Checkout] Failed to fetch server shipping quote:', e);
         shippingCents.value = null;
         shippingMethod.value = null;
-        return;
+      } finally {
+        // A superseded run leaves the flag to the run that replaced it.
+        if (!cancelled) shippingQuotePending.value = false;
       }
-      // Cheapest eligible — the displayed rate and the submitted method must
-      // be the same server-priced choice.
-      const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
-      shippingMethod.value = cheapest;
-      shippingCents.value = cheapest.rate;
-    } catch (e) {
-      if (cancelled) return;
-      console.warn('[Checkout] Failed to fetch server shipping quote:', e);
-      shippingCents.value = null;
-      shippingMethod.value = null;
-    } finally {
-      // A superseded run leaves the flag to the run that replaced it.
-      if (!cancelled) shippingQuotePending.value = false;
-    }
+    })();
   });
 
   useTask$(async ({ track, cleanup }) => {
@@ -249,15 +254,21 @@ const CheckoutContent = component$(() => {
     quoteFormContext.value = context;
     let cancelled = false;
     cleanup(() => { cancelled = true; });
+    // #412: until the checkout-entry read lands, that read IS this read: it is sent under the quote context set above, and when
+    // the context moves while it is in flight the entry reads again under the new one (refreshCartLive). A read here as well
+    // was a second identical GET, queued behind the entry's under the cart lock. Not tracked: SSR state is unchanged.
+    if (!untrack(() => entryReadDone.value)) return;
     if (!CartService.token()) return;
     // The read that just finished (e.g. the checkout-entry read) already used this exact query on this cart revision.
     if (CartService.currentQuoteAlreadyRead()) return;
-    try {
-      await CartService.refresh();
-      if (cancelled) return;
-    } catch (error) {
-      if (!cancelled) state.error = error instanceof Error ? error.message : 'Updated quote could not be loaded.';
-    }
+    // Not awaited (see the shipping quote task): the read must not hold back the summary's re-render.
+    void (async () => {
+      try {
+        await CartService.refresh();
+      } catch (error) {
+        if (!cancelled) state.error = error instanceof Error ? error.message : 'Updated quote could not be loaded.';
+      }
+    })();
   });
 
   useVisibleTask$(({ cleanup }) => {
@@ -568,9 +579,9 @@ const CheckoutContent = component$(() => {
       if (!pageLoading.value || !claimEntry(paymentInit)) return;
       try {
         appState.showCart = false;
-        // The cart provider's own qinit handler may not have run yet: mark this document's boot for the entry read here too, so the
-        // entry makes one live GET (never a boot read and then the entry read).
-        if (!localCart.hasLoadedOnce) deferBootToCheckoutEntry(location.pathname);
+        // The cart provider's own qinit handler may not have run yet: start this document's boot read for the entry here too (once
+        // per document, whichever runs first), so the entry makes one live GET (never a boot read and then the entry read).
+        if (!localCart.hasLoadedOnce) startCheckoutEntryBoot(location.pathname);
         startEarlyIdentity(paymentInit, gen, readCheckoutIdentity(appState.customer.id));
         await enterCheckout();
       } catch (error) {

@@ -30,7 +30,7 @@ const serverRead = {
 	lines: [{ sku: 'SKU1', name: 'Server Widget', productName: 'Server Widget', quantity: 1, unitPrice: PRICE, lineSubtotal: PRICE, lineDiscount: 0, lineTotal: PRICE, available: true, availableQuantity: 3, image: null }],
 } as unknown as Cart;
 
-const Page = component$<{ server: ServerCartValue }>((props) => {
+const Page = component$<{ server: ServerCartValue; client?: Cart }>((props) => {
 	const appState = useStore({
 		customer: { id: CUSTOMER_NOT_DEFINED_ID, title: '', firstName: '', lastName: '', emailAddress: '', phoneNumber: '' },
 		shippingAddress: { countryCode: '', streetLine1: '', streetLine2: '', city: '', province: '', postalCode: '', phoneNumber: '' },
@@ -38,7 +38,7 @@ const Page = component$<{ server: ServerCartValue }>((props) => {
 		availableCountries: [], freeShipping: null, showCart: false,
 	} as unknown as AppState);
 	useContextProvider(APP_STATE, appState);
-	const cartState = useStore<CartContextState>({ cart: EMPTY_CART, isLoading: true, lastError: null, hasLoadedOnce: false, isRefreshingStock: false, notice: null, lastKnownQuantity: null });
+	const cartState = useStore<CartContextState>({ cart: props.client ?? EMPTY_CART, isLoading: true, lastError: null, hasLoadedOnce: false, isRefreshingStock: false, notice: null, lastKnownQuantity: null });
 	useContextProvider(CartContextId, cartState);
 	const pageLoading = useSignal(true);
 	const serverCart = useSignal<ServerCartValue>(props.server);
@@ -80,13 +80,13 @@ const Page = component$<{ server: ServerCartValue }>((props) => {
 	);
 });
 
-const render = async (server: ServerCartValue) =>
+const render = async (server: ServerCartValue, client?: Cart) =>
 	(await ssrRenderToDom(
 		<QwikRouterMockProvider url="http://localhost/checkout/">
 			<LoginModalProvider>
 				<CheckoutValidationProvider>
 					<CheckoutAddressProvider>
-						<Page server={server} />
+						<Page server={server} client={client} />
 					</CheckoutAddressProvider>
 				</CheckoutValidationProvider>
 			</LoginModalProvider>
@@ -99,9 +99,15 @@ const FORM_FIELD = 'input[autocomplete="email"], input[type="email"]';
 describe('/checkout/ shell (#412)', () => {
 	it('shell: the form paints in SSR beside the reserved summary; no cart contents, no price anywhere in the document', async () => {
 		const document = await render(CHECKOUT_SHELL);
-		const summary = document.querySelector('.checkout-left')!.innerHTML;
-		expect(summary).toContain('min-height:152px'); // reserved line space
-		expect(summary).toContain('min-height:146px'); // reserved totals space
+		const left = document.querySelector('.checkout-left')!;
+		// #412: the reserved summary is the loaded summary's own boxes: CartContents' line row with its fixed 88x112 thumbnail box,
+		// and CartTotals' dark rows, so the live read replacing it moves nothing (CLS).
+		const line = left.querySelector('[data-testid="checkout-shell-lines"] li')!;
+		expect(line.getAttribute('class')).toContain('py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full');
+		expect(line.firstElementChild!.getAttribute('class')).toContain('w-[88px] h-[112px]');
+		const totals = left.querySelector('[data-testid="checkout-shell-totals"]')!;
+		expect(totals.getAttribute('class')).toBe('border-t mt-2 border-[rgba(var(--color-accent-rgb),0.25)] pt-4 pb-2 space-y-3');
+		expect([...totals.innerHTML.matchAll(/<dt[^>]*>([^<]*)<\/dt>/g)].map((m) => m[1])).toEqual(['Subtotal', 'Shipping', 'Total']);
 		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeTruthy(); // the contact form, not its skeleton
 		const page = document.documentElement.outerHTML; // markup and serialized state
 		expect(cartFree(page)).toEqual([]);
@@ -121,5 +127,26 @@ describe('/checkout/ shell (#412)', () => {
 		expect(summary).toContain('Server Widget');
 		expect(summary).toContain('45.67');
 		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeFalsy();
+	});
+
+	it('#412 shell: the live entry read fills the summary as soon as it lands, in the same row boxes, thumbnail at high priority', async () => {
+		const client = { ...serverRead, token: 'tok', status: 'active', image: undefined } as unknown as Cart;
+		const document = await render(CHECKOUT_SHELL, client);
+		const left = document.querySelector('.checkout-left')!;
+		expect(left.innerHTML).not.toContain('checkout-shell-lines');
+		const line = left.querySelector('li')!;
+		expect(line.getAttribute('class')).toContain('py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full');
+		expect(line.firstElementChild!.getAttribute('class')).toContain('w-[88px] h-[112px]');
+		const img = line.querySelector('img')!;
+		expect(img.getAttribute('fetchpriority')).toBe('high');
+		expect(img.getAttribute('loading')).toBe('eager');
+		expect(left.innerHTML).toContain('Server Widget');
+	});
+
+	it('switch off, L11 server read: the line thumbnail keeps its default priority (unchanged)', async () => {
+		const document = await render(serverRead);
+		const img = document.querySelector('.checkout-left li img')!;
+		expect(img.getAttribute('fetchpriority')).toBeNull();
+		expect(img.getAttribute('decoding')).toBe('async');
 	});
 });

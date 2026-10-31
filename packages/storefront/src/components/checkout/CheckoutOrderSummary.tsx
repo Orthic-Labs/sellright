@@ -6,7 +6,7 @@ import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
 import type { Cart } from '~/sellright/types/cart';
 import { formatCents } from '~/hooks/checkout-total';
-import { checkoutSummarySource, displayServerCart, hasMixedPreOrder, type ServerCartValue } from '~/routes/checkout/summary-cart';
+import { checkoutSummarySource, displayServerCart, hasMixedPreOrder, isCheckoutShell, type ServerCartValue } from '~/routes/checkout/summary-cart';
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
@@ -41,14 +41,53 @@ const CheckoutLoyalty = component$<{
   return <LoyaltyRedemptionView {...view} onRedeemToggle$={platformAction('loyalty.redeem-toggle', props.onRedeemToggle$)} />;
 });
 
+/**
+ * #412: the cacheable shell's reserved summary. The same boxes as the loaded summary (CartContents' line row with its fixed 88x112
+ * thumbnail box, CartTotals' dark rows), so the cart read replacing it moves nothing below it. Labels only: no cart, price or
+ * customer value. Shell only; the switch-off skeletons below are unchanged.
+ */
+const ShellSummaryLines = component$(() => (
+  <div class="flow-root w-full" data-testid="checkout-shell-lines">
+    <ul class="divide-y w-full divide-[rgba(var(--color-accent-rgb),0.25)]">
+      <li class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full animate-pulse">
+        <div class="shrink-0 w-[88px] h-[112px] overflow-hidden bg-[rgba(253,250,246,0.06)]" />
+        <div class="flex flex-col justify-between min-w-0">
+          <div class="min-w-0">
+            <div style="height:12px;width:70%;border-radius:4px;background:rgba(253,250,246,0.1);margin:4px 0 8px;" />
+            <div style="height:10px;width:40%;border-radius:4px;background:rgba(253,250,246,0.06);" />
+          </div>
+        </div>
+        <div class="flex flex-col items-end justify-between min-w-[84px]">
+          <div style="height:12px;width:48px;border-radius:4px;background:rgba(253,250,246,0.1);margin-top:4px;" />
+        </div>
+      </li>
+    </ul>
+  </div>
+));
+
+const SHELL_TOTAL_ROWS = ['Subtotal', 'Shipping', 'Total'];
+const ShellSummaryTotals = component$(() => (
+  <dl class="border-t mt-2 border-[rgba(var(--color-accent-rgb),0.25)] pt-4 pb-2 space-y-3" data-testid="checkout-shell-totals">
+    {SHELL_TOTAL_ROWS.map((label) => (
+      <div key={label} class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
+        <dt>{label}</dt>
+        <dd class="animate-pulse" style="display:inline-block;height:10px;width:48px;border-radius:4px;background:rgba(253,250,246,0.08);" />
+      </div>
+    ))}
+  </dl>
+));
+
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => {
   const serverCart = displayServerCart(props.serverCart.value);
+  const shell = isCheckoutShell(props.serverCart.value);
   // L11: which cart the summary shows (see checkoutSummarySource): the server read only before the client's entry read lands.
+  // #412: on the shell, the client cart as soon as this document's live entry read has filled it.
   const source = checkoutSummarySource({
     pageLoading: props.pageLoading.value,
     entryReadDone: props.entryReadDone.value,
     client: { status: props.localCart.cart.status, lineCount: props.localCart.cart.lines?.length ?? 0 },
     hasServerCart: !!serverCart,
+    shell,
   });
   const shownCart: Cart | undefined = source === 'server' && serverCart ? serverCart : undefined;
   const formattedTotal = shownCart ? (shownCart.grandTotal > 0 ? formatCents(shownCart.grandTotal) : null) : props.formattedTotal.value;
@@ -84,7 +123,9 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         </div>
         <div class="rounded-lg mt-4 mb-3">
           <div class="px-4 py-3 sm:py-4">
-            {source === 'skeleton' ? (
+            {source === 'skeleton' && shell ? (
+              <ShellSummaryLines />
+            ) : source === 'skeleton' ? (
               // One placeholder per line the cart mirror already knows (at least one), each as tall as a loaded line (152px at
               // phone width), so the loaded summary does not move the form below it (it shifted 121px, CLS 0.125).
               <div class="space-y-4">
@@ -99,6 +140,8 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
                   </div>
                 ))}
               </div>
+            ) : shell ? (
+              <CartContents cart={shownCart} priorityThumbnails />
             ) : (
               <CartContents cart={shownCart} />
             )}
@@ -122,7 +165,9 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
           </div>
         )}
         <div class="px-4 pb-4 pt-2">
-          {source === 'skeleton' ? (
+          {source === 'skeleton' && shell ? (
+            <ShellSummaryTotals />
+          ) : source === 'skeleton' ? (
             <div class="animate-pulse space-y-3" style="padding-top:4px;min-height:146px;">
               <div class="flex justify-between">
                 <div style="height:10px;width:60px;border-radius:4px;background:rgba(253,250,246,0.08);" />

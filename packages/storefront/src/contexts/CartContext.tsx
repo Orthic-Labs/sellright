@@ -12,7 +12,7 @@ import { CartService, CartError, CART_COUNT_KEY } from '~/services/CartService';
 export { COUPON_MAX_LENGTH, INVALID_COUPON_MESSAGE } from '~/services/CartService';
 import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
 import type { Live } from '~/sellright/types/live';
-import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
+import { EMPTY_CART, type Cart, type CartLineEnrichment, type CartMutationResult } from '~/sellright/types/cart';
 
 /**
  * Single, server-owned cart context (cart-architecture plan: strangler flag
@@ -65,9 +65,10 @@ export const CartProvider = component$(() => {
       // Paint the last known count at once; the bootstrap read below replaces it.
       cartState.lastKnownQuantity = CartService.lastKnownQuantity();
       // V27: a document loaded AT checkout reads the cart once, at checkout entry (`refreshCartLive`): this boot
-      // read and the entry read were the same live GET back to back on the same page load. Only the boot is skipped;
-      // the entry read is the LOCKED live check and always runs.
-      if (deferBootToCheckoutEntry(typeof location === 'undefined' ? '' : location.pathname)) return;
+      // read and the entry read were the same live GET back to back on the same page load. #412: that one read starts here,
+      // at document start (this handler is already loaded for every page), not when the checkout's own chunks have loaded;
+      // the entry takes it over. The entry read is the LOCKED live check and always runs.
+      if (startCheckoutEntryBoot(typeof location === 'undefined' ? '' : location.pathname)) return;
       CartService.bootstrap()
         .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
@@ -153,8 +154,9 @@ export function cartErrorMessage(error: unknown, fallback: string): string {
 export const isCheckoutEntryPath = (pathname: string): boolean => pathname === '/checkout' || pathname === '/checkout/';
 
 /** Set by the provider when it left this document's first cart read to checkout entry; consumed (once) by that entry.
- *  Object holder so the minifier cannot fold it. Not a cache: it holds no cart data, only "nobody has read yet". */
-const checkoutBoot: { deferred: boolean } = { deferred: false };
+ *  Object holder so the minifier cannot fold it. Not a cache: it holds no cart data, only "nobody has read yet" and, from
+ *  #412, the one live boot read this document started for its checkout entry (`read`, taken once by `refreshCartLive`). */
+const checkoutBoot: { deferred: boolean; started: boolean; read?: Promise<CartMutationResult> } = { deferred: false, started: false };
 
 /** Provider side of V27: on a fresh document at the checkout path, skip the boot read and mark it for checkout entry. */
 export function deferBootToCheckoutEntry(pathname: string): boolean {
@@ -163,15 +165,42 @@ export function deferBootToCheckoutEntry(pathname: string): boolean {
   return true;
 }
 
+/** The country cookie the root layout copies into the shipping address at document start (`COUNTRY_COOKIE`). */
+const COUNTRY_COOKIE_RE = /(?:^|;\s*)countryCode=([^;]*)/;
+
+/**
+ * #412: the checkout entry's live cart read, started at document start (the provider's qinit, or the checkout shell's own qinit
+ * when it runs first): the boot of V27, begun before the checkout page's code has loaded. One live `no-store` GET (through
+ * `CartService.bootstrap()`, so the one-time legacy claim still runs first), under the quote context the checkout's pricing read
+ * sets first (checkout intent, the country cookie's destination), so that read is not repeated. `refreshCartLive` takes it over
+ * at entry, once; any other boot (`loadCartIfNeeded`) drops it. Once per document. Nothing here is kept beyond that hand-over.
+ */
+export function startCheckoutEntryBoot(pathname: string): boolean {
+  if (!deferBootToCheckoutEntry(pathname)) return false;
+  if (checkoutBoot.started) return true;
+  checkoutBoot.started = true;
+  const cookie = typeof document === 'undefined' ? null : COUNTRY_COOKIE_RE.exec(document.cookie);
+  const shipCountry = cookie?.[1] || undefined;
+  CartService.setQuoteContext({ pricingIntent: 'checkout', ...(shipCountry ? { shipCountry } : {}) });
+  const read = CartService.bootstrap();
+  // The entry awaits it and reports its failure; this only keeps an unawaited rejection from being reported twice.
+  read.catch(() => undefined);
+  checkoutBoot.read = read;
+  return true;
+}
+
 /** Test seam: forget a deferred boot. */
 export function resetCheckoutBootForTest(): void {
   checkoutBoot.deferred = false;
+  checkoutBoot.started = false;
+  checkoutBoot.read = undefined;
 }
 
 export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
   if (cartState.hasLoadedOnce) return;
   // Someone else (e.g. a cart open) booted first: checkout entry then makes its own live read after this boot (V27).
   checkoutBoot.deferred = false;
+  checkoutBoot.read = undefined;
   const result = await CartService.bootstrap();
   applyResult(cartState, result);
   cartState.hasLoadedOnce = true;
@@ -211,9 +240,16 @@ export const refreshCartLive = $(async (cartState: CartContextState): Promise<'o
   // (`CartService.bootstrap()`: legacy-intent migration, then the same live GET). Consumed once; every later call, and
   // every call on any other document, is the plain live read. Never a reused result or promise.
   const boot = isBootDeferredToCheckoutEntry(cartState);
+  // #412: the boot read this document started at document start (`startCheckoutEntryBoot`), taken over once.
+  const started = boot ? checkoutBoot.read : undefined;
   checkoutBoot.deferred = false;
+  checkoutBoot.read = undefined;
   try {
-    const res = boot ? await CartService.bootstrap() : await CartService.refresh();
+    let res = boot ? await (started ?? CartService.bootstrap()) : await CartService.refresh();
+    // The read went out with the quote context of the moment it was sent. When the checkout's pricing inputs (destination,
+    // method, points) changed while it was in flight, its response was superseded and not installed, or it priced the old
+    // inputs: read once more, live, under the current ones (#412: the read now starts earlier, so this window is wider).
+    if (CartService.token() && !CartService.currentQuoteAlreadyRead()) res = await CartService.refresh();
     applyResult(cartState, res);
     if (boot) cartState.hasLoadedOnce = true;
     return 'ok';
