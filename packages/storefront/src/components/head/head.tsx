@@ -2,7 +2,7 @@ import { component$, useTask$ } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useDocumentHead, useLocation } from '@qwik.dev/router';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
-import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
+import { cssText, sanitizeInlineScript } from '~/utils/sanitize-lite';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { PROVIDER_PREFETCH_ORIGINS } from '~/platform/payments/labels';
 import { brandHeadTags, DEFAULT_SOURCES, resolveHead } from '~/platform/head';
@@ -223,7 +223,7 @@ export const Head = component$<HeadProps>(({ nonce, country }) => {
 			{brandHeadTags(resolved, nonce, country)}
 
 			{head.styles.map(({ key, style, ...props }) => (
-				<style key={key} {...props} dangerouslySetInnerHTML={sanitizeStyle(style ?? '')} />
+				<style key={key} {...props} dangerouslySetInnerHTML={cssText(style ?? '')} />
 			))}
 		</head>
 	);

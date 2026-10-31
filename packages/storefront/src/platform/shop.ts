@@ -56,7 +56,8 @@ export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: 
  const searchTerm = url.searchParams.get('q') || '';
  // A branded shop (route.shop view): one platform-built ProductGroup per configurator product, from the page's own catalog
  // generation, with the brand's declared facts (no availability: platform/product-jsonld.ts).
- const configurator = hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
+ // Server build only (import.meta.env.SSR is folded by the client build, unlike core's runtime isServer; the ProductGroup JSON-LD is crawl data): product-jsonld.ts stays out of the client bundle.
+ const configurator = import.meta.env.SSR && hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
  const groups = (configurator?.detail ?? []).map((m) =>
   productGroupSchema(m, { siteOrigin: siteUrl, brandName: theme.storeName, facts: DETAIL_PRODUCTS.find((p) => p.slug === m.slug)?.facts, variantUrls: hasView('route.product') }),
  );

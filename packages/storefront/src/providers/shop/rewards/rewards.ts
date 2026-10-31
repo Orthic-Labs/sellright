@@ -30,10 +30,11 @@ export async function saveBirthday(month: number, day: number): Promise<{ month:
 /** Approved reviews + rating aggregate for a product (public). */
 export async function getProductReviews(
 	slug: string,
-	opts: { limit?: number; offset?: number; sort?: ReviewSort } = {},
+	opts: { limit?: number; offset?: number; sort?: ReviewSort; priority?: RequestPriority } = {},
 ): Promise<ReviewList> {
 	const { data } = await sellright().GET('/v1/shop/catalog/products/{slug}/reviews', {
 		params: { path: { slug }, query: { limit: opts.limit ?? 10, offset: opts.offset ?? 0, sort: opts.sort ?? 'newest' } },
+		...(opts.priority ? { priority: opts.priority } : {}),
 	});
 	return data as ReviewList;
 }

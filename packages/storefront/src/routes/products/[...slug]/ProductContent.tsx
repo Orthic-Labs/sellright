@@ -10,8 +10,8 @@ import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-for
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { applyVariantPrices, useLiveRead } from '~/platform/live-values';
-import { readProductValues, type VariantPrice } from '~/platform/product';
-import { useJsonLdOffersFill } from '~/platform/controllers/jsonld-offers';
+import { readProductValues, type ProductLiveValues } from '~/platform/product';
+import { fillLiveOffers } from '~/platform/controllers/jsonld-offers';
 import { findVariant, getOptionGroups, isPaintedSoldOut, paintStockHint, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -45,24 +45,6 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   // Manifest product-level in-stock hint (null when unknown). Only the pre-live paint trusts it; the live read is authoritative.
   const catalogInStock = loaderResult.catalogInStock ?? null;
   const liveStockLoaded = useSignal(false);
-  // ADR-0001 DP-1 (SHELL_CACHE=1): the shell's product carries no price (every price 0). The browser reads the prices once per view on
-  // load (no-store) and they render into the space the view holds; until then `pricesPending`. A failed read keeps the placeholder.
-  const valuesPending = loaderResult.valuesPending === true;
-  const pricesPending = useSignal(valuesPending);
-  const priceKey = useComputed$(() => (valuesPending ? product.slug : null));
-  const livePrices = useLiveRead<{ variants: VariantPrice[]; related: Record<string, number> }>($(() => readProductValues(product.slug)), priceKey);
-  useTask$(({ track }) => {
-    const status = track(() => livePrices.status);
-    if (status !== 'ready' || !livePrices.value) return;
-    product.variants = applyVariantPrices(product.variants, livePrices.value.variants);
-    pricesPending.value = false;
-  });
-  const relatedPrices = useComputed$(() => (livePrices.status === 'ready' ? livePrices.value?.related ?? {} : null));
-  // DP-1/DP-2: the Product JSON-LD offers (price, availability) come from a live read too.
-  useJsonLdOffersFill(product.slug, valuesPending);
-  const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
-  const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
-  const currentImageIndex = useSignal(0);
   const groups = useComputed$(() => getOptionGroups(product.variants));
   // Named variants without option groups use one selection slot containing the catalog SKU.
   const selectionSize = useComputed$(() => {
@@ -70,6 +52,72 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     return getOptionGroups(variants).length || (variants.length > 1 ? 1 : 0);
   });
   const selectedValues = useSignal<(string | null)[]>([]);
+  // Each read carries a generation; only the latest read's result applies (a restore re-read can overlap the load read).
+  const stockReadGen = useSignal(0);
+  const refreshLiveStock = $(async () => {
+    const gen = ++stockReadGen.value;
+    liveStockReady.value = false;
+    isEnhancing.value = true;
+    enhancementError.value = null;
+    try {
+      const stock = await getProductStock(product.slug);
+      if (gen !== stockReadGen.value) return;
+      if (!stock) throw new Error('Stock response unusable');
+      const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
+      const merged = mergeProductStock(product, stock);
+      product.variants = merged.variants;
+      liveStockReady.value = waitlistStockReady;
+      liveStockLoaded.value = true;
+      const isCompleteSelection =
+        selectionSize.value > 0 &&
+        selectedValues.value.length === selectionSize.value &&
+        selectedValues.value.every(v => v !== null);
+      if (isCompleteSelection) {
+        const resolved = findVariant(product.variants, groups.value, selectedValues.value);
+        if (!resolved) {
+          selectedValues.value = Array(selectionSize.value).fill(null);
+        }
+      }
+    } catch (error) {
+      console.error('[PDP] Live stock refresh failed:', error);
+      enhancementError.value = 'Failed to refresh stock';
+    } finally {
+      isEnhancing.value = false;
+    }
+  });
+  // Lane 11: registered BEFORE every other document handler of the page body (the live prices below), so the LOCKED live stock
+  // read is the first request the PDP starts and never waits behind another read. When the one automatic read starts
+  // (pdp.stockRefreshTrigger, default qidle) and the optional back/forward-cache re-read
+  // (pdp.bfcacheRefresh, default off): platform/stock-triggers.ts. Every read is live; nothing is cached.
+  usePdpStockTrigger(refreshLiveStock);
+  // A restored page first drops what it showed (every variant unchecked, fail closed; selections are kept), then reads again: a 404,
+  // a malformed body or a failure leaves it unavailable instead of keeping the stock it had before it was cached.
+  const refreshAfterRestore = $(async () => {
+    product.variants = withUncheckedStock(product).variants;
+    await refreshLiveStock();
+  });
+  useBfcacheStockRefresh(refreshAfterRestore);
+  // ADR-0001 DP-1 (SHELL_CACHE=1): the shell's product carries no price (every price 0). The browser reads the prices once per view on
+  // load (no-store, low fetch priority) and they render into the space the view holds; until then `pricesPending`. A failed read keeps
+  // the placeholder. The same request carries the Product JSON-LD offers (DP-2), so the PDP sends one server$ call, not two.
+  const valuesPending = loaderResult.valuesPending === true;
+  const pricesPending = useSignal(valuesPending);
+  const priceKey = useComputed$(() => (valuesPending ? product.slug : null));
+  const livePrices = useLiveRead<ProductLiveValues>($(async () => {
+    const values = await readProductValues(product.slug);
+    fillLiveOffers(values?.offers);
+    return values;
+  }), priceKey);
+  useTask$(({ track }) => {
+    const status = track(() => livePrices.status);
+    if (status !== 'ready' || !livePrices.value) return;
+    product.variants = applyVariantPrices(product.variants, livePrices.value.variants);
+    pricesPending.value = false;
+  });
+  const relatedPrices = useComputed$(() => (livePrices.status === 'ready' ? livePrices.value?.related ?? {} : null));
+  const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
+  const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
+  const currentImageIndex = useSignal(0);
   const preOrderConsent = useSignal(false);
   const hasVariantAssets = product.variants.some((v) => (v.assets?.length || 0) > 0);
   const baseGalleryList: GalleryImage[] = galleryImages;
@@ -162,49 +210,6 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       case 'ArrowRight': if (orderedAssets.value.length > 1) navigateModal('next'); break;
     }
   }));
-  // Each read carries a generation; only the latest read's result applies (a restore re-read can overlap the load read).
-  const stockReadGen = useSignal(0);
-  const refreshLiveStock = $(async () => {
-    const gen = ++stockReadGen.value;
-    liveStockReady.value = false;
-    isEnhancing.value = true;
-    enhancementError.value = null;
-    try {
-      const stock = await getProductStock(product.slug);
-      if (gen !== stockReadGen.value) return;
-      if (!stock) throw new Error('Stock response unusable');
-      const waitlistStockReady = hasAuthoritativeRestockStock(product.variants, stock);
-      const merged = mergeProductStock(product, stock);
-      product.variants = merged.variants;
-      liveStockReady.value = waitlistStockReady;
-      liveStockLoaded.value = true;
-      const isCompleteSelection =
-        selectionSize.value > 0 &&
-        selectedValues.value.length === selectionSize.value &&
-        selectedValues.value.every(v => v !== null);
-      if (isCompleteSelection) {
-        const resolved = findVariant(product.variants, groups.value, selectedValues.value);
-        if (!resolved) {
-          selectedValues.value = Array(selectionSize.value).fill(null);
-        }
-      }
-    } catch (error) {
-      console.error('[PDP] Live stock refresh failed:', error);
-      enhancementError.value = 'Failed to refresh stock';
-    } finally {
-      isEnhancing.value = false;
-    }
-  });
-  // When the one automatic read starts (pdp.stockRefreshTrigger, default qidle) and the optional back/forward-cache re-read
-  // (pdp.bfcacheRefresh, default off): platform/stock-triggers.ts. Every read is live; nothing is cached.
-  usePdpStockTrigger(refreshLiveStock);
-  // A restored page first drops what it showed (every variant unchecked, fail closed; selections are kept), then reads again: a 404,
-  // a malformed body or a failure leaves it unavailable instead of keeping the stock it had before it was cached.
-  const refreshAfterRestore = $(async () => {
-    product.variants = withUncheckedStock(product).variants;
-    await refreshLiveStock();
-  });
-  useBfcacheStockRefresh(refreshAfterRestore);
   const changeImage = $((newIndex: number) => {
     const newAsset = orderedAssets.value[newIndex];
     if (newAsset) {

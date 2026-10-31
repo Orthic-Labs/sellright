@@ -2,6 +2,7 @@ import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { createPaymentIntent, getShopConfig, placeOrder } from '~/providers/shop/checkout/checkout';
 import { refreshStockBeforeSubmit } from '~/hooks/pre-submit-stock';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { afterInteraction } from '~/utils/load-trigger';
 import { ExpressCheckout } from './ExpressCheckout';
 import { buyNowItems, expressGateway, type ExpressGateway, type ExpressOrderForm, type ExpressOrderResult } from './express-checkout';
 import { createBuyNowCart, detachedCartScope, placeExpressOrder } from './express-order';
@@ -35,6 +36,9 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 	useVisibleTask$(async ({ track }) => {
 		const currency = track(() => props.currency);
 		country.value = CountryPreferenceService.getCountry();
+		// Lane 11: no gateway config (GET /v1/shop/config) until the shopper's first interaction, never on the page's load: a buy-now
+		// needs a chosen variant anyway. The config read is shared per page (getShopConfig).
+		await afterInteraction();
 		try {
 			const cfg = await getShopConfig();
 			gateway.value = expressGateway({ gatewayConfigured: cfg.stripeConfigured, publishableKey: cfg.stripePublishableKey, currency });

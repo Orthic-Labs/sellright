@@ -2,11 +2,12 @@
 // a missing product renders `ProductMissingView` (no controller, no stock read, no view_item; the loader already set the 404 status),
 // a found one mounts the configurator.
 import { $, component$, useComputed$, type ReadonlySignal } from '@qwik.dev/core';
-import { useLiveRead } from '~/platform/live-values';
+import { useLiveReadStart, useLiveReadState } from '~/platform/live-values';
 import { hasPendingValues } from './configurator-model';
-import { useJsonLdOffersFill } from './jsonld-offers';
+import { fillLiveOffers } from './jsonld-offers';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { readBrandProductDetail, useBrandProductDetail, type BrandProductDetail } from '~/platform/product-detail';
+import { useBrandProductDetail, type BrandProductDetail } from '~/platform/product-detail';
+import { readBrandProductLive } from '~/platform/product-live';
 import { ProductMissingView, ProductView, platformAction } from '~/platform/gateway';
 import type { ProductFoundData, PublicIdentity } from '~/platform/views';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
@@ -26,10 +27,15 @@ export const ProductFoundMount = component$(() => {
 		const d = detail.value;
 		return d && d.state === 'found' && hasPendingValues(d, 'product') ? d.product.slug : null;
 	});
-	const live = useLiveRead<BrandProductDetail>($(() => readBrandProductDetail(liveKey.value ?? '')), liveKey);
-	const initial = detail.value;
-	useJsonLdOffersFill(initial && initial.state === 'found' ? initial.product.slug : '', !!initial && hasPendingValues(initial, 'product'));
+	// Lane 11: the configurator registers the LOCKED live stock read's document handler first; the live values read (prices and the
+	// JSON-LD offers in ONE request, low priority) registers after it, so the stock read is the first request this page starts.
+	const live = useLiveReadState<BrandProductDetail>();
 	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'product', live);
+	useLiveReadStart<BrandProductDetail>(live, $(async () => {
+		const values = await readBrandProductLive(liveKey.value ?? '');
+		fillLiveOffers(values?.offers);
+		return values?.detail ?? null;
+	}), liveKey);
 	// Built in the render body, field by field (no nested computed: see useConfigurator `project`).
 	const d = detail.value;
 	const v = c.project();

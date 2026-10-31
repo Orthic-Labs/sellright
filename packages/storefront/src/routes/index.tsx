@@ -8,7 +8,7 @@ import type { CartLineEnrichment } from '~/sellright/types/cart';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
-import { stripHtml } from '~/utils/sanitize';
+import { htmlToText } from '~/utils/sanitize-lite';
 import { homepageStyles, hasView, HomeHero, HomeTeeSection, HomeServiceSection, HomeTrustBar, Price, ProductCard } from '~/platform/gateway';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandHomeMount, useNewsletterForm } from '~/platform/controllers/content';
@@ -64,7 +64,7 @@ const BaseHomePage = component$(() => {
   // here as a fallback, which is wrong for every configured spotlight
   // product. No fallback text when a product has no description; the
   // paragraph simply doesn't render rather than showing something untrue.
-  const spotlightBody = preorderProduct.value?.description ? stripHtml(preorderProduct.value.description).trim() : '';
+  const spotlightBody = preorderProduct.value?.description ? htmlToText(preorderProduct.value.description).trim() : '';
 
   // The newsletter state, its Turnstile widget and its submit live in the platform (platform/controllers/content.tsx).
   const { email: nlEmail, honeypot: nlHoneypot, state: nlState, error: nlError, token: nlToken, handleSubmit: handleNewsletterSubmit } = useNewsletterForm();

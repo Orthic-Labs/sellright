@@ -20,7 +20,7 @@ import { theme, siteUrl } from '~/theme/theme.config';
 import { readCatalogGeneration, readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
-import { withAbsoluteImages, withoutOffers } from '~/platform/product-jsonld';
+import { withAbsoluteImages, withoutOffers } from '~/platform/product-jsonld-light';
 import { productMetaDescription } from '~/platform/product-meta';
 import { hasView } from '~/platform/gateway';
 
@@ -150,16 +150,27 @@ export const useProductJsonLd = routeLoader$(async ({ params, url }) => {
 
 const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9\-_]*$/;
 
-/** ADR-0001: a PDP's live prices in the browser (base PDP), from the same source the loader reads, per request, no-store. Null on failure. */
-export const readProductValues = server$(async function (slug: string): Promise<{ variants: VariantPrice[]; related: Record<string, number> } | null> {
+/** A browser read's request: low fetch priority, so it never competes with the LCP image or the live stock read (lane 11). */
+export const LIVE_READ_FETCH = { fetchOptions: { priority: 'low' as const } };
+
+/** The live values of the base PDP: the variants' prices, the related row's prices and the Product JSON-LD offers. */
+export interface ProductLiveValues {
+  variants: VariantPrice[];
+  related: Record<string, number>;
+  /** The live JSON-LD offers (price, availability per request); null when the API gave none. */
+  offers: Record<string, unknown> | null;
+}
+
+/** ADR-0001: a PDP's live values in the browser (base PDP), from the same source the loader reads, per request, no-store, in ONE
+ *  request (lane 11: the JSON-LD offers used to be a second server$ call on the same load). Null on failure. */
+export const readProductValues = server$(async function (slug: string): Promise<ProductLiveValues | null> {
   noStore(this);
   if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
-  const related = await relatedPricesFor(slug);
-  const fromManifest = await productFromManifest(slug);
-  if (fromManifest) return { variants: variantPricesOf(fromManifest.product), related };
+  const [related, offers, fromManifest] = await Promise.all([relatedPricesFor(slug), liveOffersOf(slug), productFromManifest(slug)]);
+  if (fromManifest) return { variants: variantPricesOf(fromManifest.product), related, offers };
   const product = await getProductDetail(slug).catch(() => null);
-  return product ? { variants: variantPricesOf(product), related } : null;
-});
+  return product ? { variants: variantPricesOf(product), related, offers } : null;
+}, LIVE_READ_FETCH);
 
 /** The related row's prices (routes.json productPage.related), from the same snapshot the row loader reads; empty without it. */
 async function relatedPricesFor(slug: string): Promise<Record<string, number>> {
@@ -171,14 +182,20 @@ async function relatedPricesFor(slug: string): Promise<Record<string, number>> {
   }
 }
 
-/** ADR-0001 DP-1/DP-2: the live Product JSON-LD offers (the API computes price and availability per request), no-store. */
-export const readProductOffers = server$(async function (slug: string): Promise<Record<string, unknown> | null> {
-  noStore(this);
-  if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
+/** The live Product JSON-LD offers of a product (the API computes price and availability per request); null without any. Server only. */
+export async function liveOffersOf(slug: string): Promise<Record<string, unknown> | null> {
   const schema = await jsonLdProduct(slug).catch(() => null);
   const offers = schema?.offers;
   return offers && typeof offers === 'object' ? (offers as Record<string, unknown>) : null;
-});
+}
+
+/** ADR-0001 DP-1/DP-2: the live Product JSON-LD offers alone, no-store (the PDPs read them with their values: readProductValues,
+ *  readBrandProductLive). */
+export const readProductOffers = server$(async function (slug: string): Promise<Record<string, unknown> | null> {
+  noStore(this);
+  if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
+  return liveOffersOf(slug);
+}, LIVE_READ_FETCH);
 
 // ─────────────────────────────────────────────────────────────────
 // Head — identical to original (preserves generateImagePreloadLinks for LCP)

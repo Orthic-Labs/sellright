@@ -20,7 +20,7 @@ import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
 import { withAggregateRating } from '~/utils/rewards';
 import { createSEOHead } from '~/utils/seo';
-import { stripHtml } from '~/utils/sanitize';
+import { htmlToText } from '~/utils/sanitize-lite';
 import { siteUrl, theme } from '~/theme/theme.config';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useProductJsonLd } from '~/platform/product';
@@ -140,7 +140,7 @@ export const readBrandProductDetail = server$(async function (slug: string): Pro
 
 /** A 160-character plain-text description, cut at a word (as the base product head does). */
 function plainDescription(html: string): string {
-	const raw = stripHtml(html).replace(/[“”]/g, '"').replace(/[‘’]/g, "'").trim();
+	const raw = htmlToText(html).replace(/[“”]/g, '"').replace(/[‘’]/g, "'").trim();
 	if (raw.length <= 160) return raw;
 	const truncated = raw.substring(0, 160);
 	const lastSpace = truncated.lastIndexOf(' ');
@@ -169,7 +169,9 @@ export const brandProductHead = ({ resolveValue }: { resolveValue: (loader: unkn
 		]),
 	];
 	if (jsonLd) {
-		const facts = withProductFacts(withCanonicalUrls(jsonLd, canonical), product, { siteOrigin: siteUrl, brandName: theme.storeName, facts: member?.facts });
+		// Server only: the facts builder (product-jsonld.ts, DOMPurify) stays out of the client bundle; a client navigation keeps the API's JSON-LD.
+		const canonicalLd = withCanonicalUrls(jsonLd, canonical);
+		const facts = import.meta.env.SSR ? withProductFacts(canonicalLd, product, { siteOrigin: siteUrl, brandName: theme.storeName, facts: member?.facts }) : canonicalLd;
 		schemas.push(withAggregateRating(facts as Record<string, unknown>, product.rating) as JsonLdSchema);
 	}
 	for (const s of member?.schemas ?? []) schemas.push(s as unknown as JsonLdSchema);
@@ -181,7 +183,7 @@ export const brandProductHead = ({ resolveValue }: { resolveValue: (loader: unkn
 		canonical,
 		ogUrl: canonical,
 		ogType: 'product',
-		productMeta: productOgMeta(jsonLd as Record<string, unknown> | null, product, theme.storeName),
+		productMeta: import.meta.env.SSR ? productOgMeta(jsonLd as Record<string, unknown> | null, product, theme.storeName) : undefined,
 		links: image ? generateImagePreloadLinks(image, 'productMain', ['avif']) : [],
 		schemas,
 	}) as DocumentHeadValue;

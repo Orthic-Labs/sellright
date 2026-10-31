@@ -31,13 +31,32 @@ const isCustomer = (value: unknown): value is SessionCustomer => {
  */
 const pageRead: { latest?: Promise<SessionResult>; early?: Promise<SessionResult> } = {};
 
+/**
+ * Lane 11: the readable cookies that can mean "this browser may be signed in". Sign-in (API auth/cookies.ts setCustomerCookies)
+ * sets the HttpOnly `sr_cust` together with the readable `sr_cust_csrf`, same path and lifetime, and sign-out clears both. The
+ * imported legacy transport is `authToken` (the previous Damned store wrote it from JS, so it is readable) or the endpoint's own
+ * `sr_legacy_cart` hint. Without any of them the endpoint can only answer "anonymous", so the page skips the request.
+ */
+export const SESSION_MARKER_COOKIES = ['sr_cust_csrf', 'authToken', 'sr_legacy_cart'] as const;
+
+/** Whether `cookieHeader` (document.cookie) carries a session marker (non-empty value). Pure. */
+export function hasSessionMarker(cookieHeader: string): boolean {
+	return SESSION_MARKER_COOKIES.some((name) => new RegExp(`(?:^|;\\s*)${name}=[^;\\s]`).test(cookieHeader));
+}
+
+/** The page's own read: anonymous at once (no request) when the browser holds no session marker. */
+function readPageSession(): Promise<SessionResult> {
+	if (typeof document !== 'undefined' && !hasSessionMarker(document.cookie)) return Promise.resolve({ status: 'anonymous' });
+	return readSessionCustomer(fetch);
+}
+
 /** A fresh `no-store` read of the session (the layout's per page). An explicit `fetchImpl` always reads on its own. */
 export function fetchSessionCustomer(fetchImpl?: typeof fetch): Promise<SessionResult> {
 	if (fetchImpl) return readSessionCustomer(fetchImpl);
 	const early = pageRead.early;
 	pageRead.early = undefined;
 	if (early) return early;
-	const read = readSessionCustomer(fetch);
+	const read = readPageSession();
 	pageRead.latest = read;
 	return read;
 }
@@ -45,7 +64,7 @@ export function fetchSessionCustomer(fetchImpl?: typeof fetch): Promise<SessionR
 /** The session read for the current page (in flight or settled); starts it when the layout has not yet. */
 export function pageSessionCustomer(): Promise<SessionResult> {
 	if (pageRead.latest) return pageRead.latest;
-	const read = readSessionCustomer(fetch);
+	const read = readPageSession();
 	pageRead.latest = read;
 	pageRead.early = read;
 	return read;
@@ -59,7 +78,7 @@ export function resetPageSessionForTest(): void {
 
 async function readSessionCustomer(fetchImpl: typeof fetch): Promise<SessionResult> {
 	try {
-		const response = await fetchImpl(SESSION_ENDPOINT, { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'application/json' } });
+		const response = await fetchImpl(SESSION_ENDPOINT, { cache: 'no-store', credentials: 'same-origin', priority: 'low', headers: { accept: 'application/json' } });
 		if (!response.ok) return { status: 'unknown' };
 		const body = (await response.json()) as Partial<SessionPayload> | null;
 		if (!body || !('customer' in body)) return { status: 'unknown' };

@@ -1,5 +1,7 @@
 import DOMPurify from 'isomorphic-dompurify';
 
+export { sanitizeInlineScript } from './sanitize-lite';
+
 type DomPurifyConfig = Parameters<typeof DOMPurify.sanitize>[1];
 
 /** The attribute allow-list of the default `sanitizeHtml` configuration (options replace keys wholesale, so a caller that adds one repeats it). */
@@ -104,42 +106,6 @@ export const stripHtml = (dirty: string): string => {
 		ALLOWED_ATTR: [],
 		KEEP_CONTENT: true
 	}) as unknown as string;
-};
-
-/**
- * Sanitize inline JavaScript for controlled environments
- * ONLY use for trusted, static JavaScript - not user input
- * Validates against dangerous patterns
- */
-export const sanitizeInlineScript = (scriptContent: string): string => {
-	if (!scriptContent || typeof scriptContent !== 'string') {
-		return '';
-	}
-
-	// Check for dangerous patterns that should never be in trusted scripts
-	const dangerousPatterns = [
-		/eval\s*\(/,
-		/document\.write\s*\(/,
-		/innerHTML\s*=/,
-		/outerHTML\s*=/,
-		/document\.location/,
-		/window\.location\s*=/,
-		/<script/i,
-		/javascript:/i,
-		/data:/i,
-		/vbscript:/i
-	];
-
-	// Check for dangerous patterns
-	for (const pattern of dangerousPatterns) {
-		if (pattern.test(scriptContent)) {
-			console.error('Dangerous pattern detected in script content:', pattern);
-			return ''; // Return empty string for safety
-		}
-	}
-
-	// Return the script content if it passes validation
-	return scriptContent;
 };
 
 /**

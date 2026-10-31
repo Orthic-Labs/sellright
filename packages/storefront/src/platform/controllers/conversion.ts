@@ -84,7 +84,7 @@ export function startConversion(): void {
 		if (!beacon) return;
 		const body = JSON.stringify(beacon);
 		const queued = typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(SINK_PATH, new Blob([body], { type: 'application/json' }));
-		if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => undefined);
+		if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true, priority: 'low' }).catch(() => undefined);
 	});
 }
 

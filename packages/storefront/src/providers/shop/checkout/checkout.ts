@@ -292,7 +292,8 @@ export const getOrder = async (code: string, receiptToken?: string, signal?: Abo
 };
 
 const fetchShopConfig = async (): Promise<ShopConfig> => {
-	const { data } = await sellright().GET('/v1/shop/config', {});
+	// Low fetch priority (lane 11): public store settings never compete with the page's image or its live stock read.
+	const { data } = await sellright().GET('/v1/shop/config', { priority: 'low' });
 	return nonEmpty(data, 'shop config') as ShopConfig;
 };
 
