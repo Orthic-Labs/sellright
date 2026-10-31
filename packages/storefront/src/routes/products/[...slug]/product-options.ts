@@ -210,7 +210,7 @@ export function enhanceDescription(name: string, html: string): string {
 }
 
 /** Accessible label of an option pill/card/swatch. Until the live stock read lands (`stockKnown` false: SSR / cached shell, stock
- *  fail-closed '0') the option is shown greyed and disabled like the previous Vendure store, but it is NOT announced as sold out:
+ *  fail-closed '0') the option is shown greyed and disabled like the previous store, but it is NOT announced as sold out:
  *  the label is the variant name only (undefined = the button text). After the read: the real reason. */
 export function optionAriaLabel(val: string, purchasable: boolean, availableWithOthers: boolean, stockKnown: boolean): string | undefined {
   if (!stockKnown) return undefined;

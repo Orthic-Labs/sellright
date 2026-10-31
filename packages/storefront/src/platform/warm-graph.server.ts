@@ -1,7 +1,7 @@
 // #425 step 3: Qwik's speculative preloader is off (entry.ssr.tsx `preloader: false`); this targeted warm graph replaces it.
-// With the preloader on, every dd/rh page fetched 115-271 script bundles (650-980 KB); Damned's Vendure storefront measured the same
+// With the preloader on, every dd/rh page fetched 115-271 script bundles (650-980 KB); Damned's previous storefront measured the same
 // switch (144 -> 55 script requests, no readiness loss, re-enabling it rejected: damned/docs/PERFORMANCE-2026-09-26/27.md). Like
-// Vendure, after window load and an idle slot the browser modulepreloads (low priority, never executed) only the cart's render path
+// that storefront, after window load and an idle slot the browser modulepreloads (low priority, never executed) only the cart's render path
 // and the current page's interactive closure; checkout code is warmed on intent (pointer/focus on a /checkout link). Event handlers
 // still load on demand. Code only: no stock, price or session read is started here.
 import { readFileSync } from 'node:fs';

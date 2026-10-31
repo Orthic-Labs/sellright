@@ -1,5 +1,5 @@
 // #425 step 2: the global stylesheet is inlined into every page again instead of linked as a render-blocking /build/style-*.css.
-// bedbed29 made it an external <link>, which on a cold load blocks first paint on a second round trip; Damned's Vendure storefront
+// bedbed29 made it an external <link>, which on a cold load blocks first paint on a second round trip; Damned's previous storefront
 // measured exactly that change and rejected it (damned/docs/PERFORMANCE-2026-09-26.md: FCP 599 -> 1,332 ms; inline-all and a
 // critical split were equal for FCP/LCP, 599 vs 605 ms). global.css is still emitted as a hashed file (the build-guards CSS gate
 // checks it); this module swaps the manifest's stylesheet injection for a <style> with the file's content, read once per process.
