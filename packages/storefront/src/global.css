@@ -1,5 +1,9 @@
 /* Font faces */
 @import 'tailwindcss' source('.');
+/* A18: brand token values live in brand/tokens.css (--brand-*); the names below map them to the public tokens. */
+@import './brand/tokens.css';
+/* @source must come AFTER every @import: an @import that follows any other statement is invalid CSS and is dropped
+   (bedbed29 put these lines before the brand tokens import, so --brand-* and the brand @font-face rules vanished). */
 /* #360: scan src/ only. Without source('.') Tailwind's automatic detection starts at the build's cwd, and the composed
    brand trees are not git checkouts, so it also walked node_modules, .incremental-prior-node_modules, scripts/fixtures,
    e2e and vendor/ (~65k candidates). Tests, fixtures, test stubs and the license flow (its own license.css, its own root)
@@ -10,8 +14,6 @@
 @source not './**/__fixtures__';
 @source not './**/__stubs__';
 @source not './platform/license';
-/* A18: brand token values live in brand/tokens.css (--brand-*); the names below map them to the public tokens. */
-@import './brand/tokens.css';
 
 /* ── Card/parchment sub-palette ──
    ProductCard, the PDP (product-styles.ts), blog, and the affiliate
