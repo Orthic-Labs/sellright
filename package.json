@@ -2,7 +2,7 @@
   "name": "sellright",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@11.25.0",
+  "packageManager": "pnpm@12.16.1",
   "engines": {
     "node": ">=24.15 <25 || >=26 <27",
     "pnpm": ">=11.25 <12"

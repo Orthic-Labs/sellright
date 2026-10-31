@@ -1,6 +1,6 @@
 {
   "name": "@sellright/admin",
-  "packageManager": "pnpm@11.25.0",
+  "packageManager": "pnpm@12.16.1",
   "version": "0.1.0",
   "private": true,
   "type": "module",
