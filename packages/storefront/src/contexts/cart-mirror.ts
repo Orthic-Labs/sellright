@@ -16,10 +16,22 @@ export interface MirroredCartState {
 /** Quantity shown by the header badge for a cart. */
 export const totalQuantityOf = (cart: Cart): number => cart.lines.reduce((a, l) => a + l.quantity, 0);
 
+/** Same cart content (the Qwik store fires on a new object reference even when nothing changed). */
+export const sameCart = (a: Cart, b: Cart): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Put `cart` into the context only when its content differs. #LCP: the boot at qinit installed the service's EMPTY_CART over the
+ * SSR one (a new object, same content) for every visitor without a cart, which re-ran the header's computed props and resumed the
+ * header with its whole slot runtime (~25 bundles) before the first paint. The data the context shows is the same either way.
+ */
+export function setCartIfChanged(cartState: MirroredCartState, cart: Cart): void {
+  if (!sameCart(cartState.cart, cart)) cartState.cart = cart;
+}
+
 /** Copy the service mirror into the context and announce it. Idempotent; reads the mirror at call time. */
 export function commitMirror(cartState: MirroredCartState): Cart {
   const cart = CartService.getCart();
-  cartState.cart = cart;
+  setCartIfChanged(cartState, cart);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: totalQuantityOf(cart) } }));
   }

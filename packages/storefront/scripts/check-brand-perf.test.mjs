@@ -147,3 +147,34 @@ test('CLI: exit 1 on errors, 0 with warnings only', () => {
   assert.equal(r2.status, 0);
   assert.match(r2.stderr, /warning src\/brand\/head\.json/);
 });
+
+// lcp-hidden-start: the LCP image (route.home hero or any high-priority image) or an ancestor starts hidden
+const REVEAL_CSS = '.x-reveal { opacity: 0; transform: translateY(28px); }\n.x-reveal.x-in { opacity: 1; }\n@keyframes xFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; } }\n@keyframes xRise { from { transform: translateY(8px); } to { transform: none; } }\n.x-fade { animation: xFade .6s both; }\n.x-rise { animation: xRise .6s both; }\n.x-card:hover { opacity: 0; }\n@media (prefers-reduced-motion: reduce) { .x-calm { opacity: 0; } }\n';
+const home = (wrapperAttrs, imgAttrs = '') => `export default () => (<section class="x-hero"><div ${wrapperAttrs}><picture><img src="h.jpg" loading="eager" fetchPriority="high" ${imgAttrs} /></picture></div></section>);\n`;
+
+test('lcp-hidden-start: the hero sits in an opacity-0 reveal container (class)', () => {
+  const root = good({ 'src/brand/styles/home.css': REVEAL_CSS, 'src/brand-slots/route.home.tsx': home('class="x-reveal"') });
+  const r = checkBrandPerf({ root });
+  assert.deepEqual(rules(r), ['error:lcp-hidden-start']);
+  assert.match(r.errors[0].message, /x-reveal.*opacity: 0/);
+});
+
+test('lcp-hidden-start: data-reveal on an ancestor, an opacity-0 start animation on the image, a template class', () => {
+  for (const [wrap, img] of [['data-reveal', ''], ['class="plain"', 'class="x-fade"'], ['class={`plain x-fade ${a}`}', '']]) {
+    const root = good({ 'src/brand/styles/home.css': REVEAL_CSS, 'src/brand-slots/route.home.tsx': home(wrap, img) });
+    assert.deepEqual(rules(checkBrandPerf({ root })), ['error:lcp-hidden-start'], `${wrap} ${img}`);
+  }
+});
+
+test('lcp-hidden-start: a high-priority image outside route.home is checked too', () => {
+  const root = good({ 'src/brand/styles/home.css': REVEAL_CSS, 'src/brand-slots/pdp.gallery.tsx': 'export const G = () => <div class="x-fade"><img src="a" fetchpriority="high" /></div>;\n' });
+  assert.deepEqual(rules(checkBrandPerf({ root })), ['error:lcp-hidden-start']);
+});
+
+test('lcp-hidden-start passes: transform-only animation, state/hover/reduced-motion rules, hidden non-LCP siblings, glued template tokens', () => {
+  const root = good({
+    'src/brand/styles/home.css': REVEAL_CSS,
+    'src/brand-slots/route.home.tsx': 'export default () => (<section class="x-hero"><div class={`x-rise x-card x-calm x-in`}><img src="h.jpg" loading="eager" fetchPriority="high" /></div><h1 class="x-fade">Hi</h1><div class="x-reveal"><img src="b.jpg" loading="lazy" /></div><div class={`pre-${a}x-reveal`}><img src="c.jpg" fetchpriority="high" loading="eager" /></div></section>);\n',
+  });
+  assert.deepEqual(rules(checkBrandPerf({ root })), []);
+});

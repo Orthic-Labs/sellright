@@ -10,7 +10,7 @@ import {
 } from '@qwik.dev/core';
 import { CartService, CartError, CART_COUNT_KEY } from '~/services/CartService';
 export { COUPON_MAX_LENGTH, INVALID_COUPON_MESSAGE } from '~/services/CartService';
-import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
+import { bindCartMirror, commitMirror, isDefinitiveCartFailure, setCartIfChanged } from './cart-mirror';
 import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment, type CartMutationResult } from '~/sellright/types/cart';
 
@@ -61,7 +61,7 @@ export const CartProvider = component$(() => {
       bindCartMirror(cartState);
       bindCrossTabSync(cartState);
       if (cartState.hasLoadedOnce) return;
-      cartState.cart = CartService.getCart();
+      setCartIfChanged(cartState, CartService.getCart());
       // Paint the last known count at once; the bootstrap read below replaces it.
       cartState.lastKnownQuantity = CartService.lastKnownQuantity();
       // V27: a document loaded AT checkout reads the cart once, at checkout entry (`refreshCartLive`): this boot
@@ -108,7 +108,9 @@ function bindCrossTabSync(cartState: CartContextState): void {
  *  last session (so the badge does not flash 0); after that it is the live lines. Brand headers (layer slots) use the
  *  same helper so every header shows the same number. */
 export function cartBadgeCount(state: { hasLoadedOnce?: boolean; lastKnownQuantity?: number | null; cart: { lines: ReadonlyArray<{ quantity: number }> } }): number {
-  if (!state.hasLoadedOnce && typeof state.lastKnownQuantity === 'number') return state.lastKnownQuantity;
+  // lastKnownQuantity first: with no persisted count `hasLoadedOnce` is never read, so a header computed from this does not
+  // subscribe to it and the boot's hasLoadedOnce flip (no visible change) does not re-run the header before the first paint.
+  if (typeof state.lastKnownQuantity === 'number' && !state.hasLoadedOnce) return state.lastKnownQuantity;
   return state.cart.lines.reduce((sum, line) => sum + line.quantity, 0);
 }
 

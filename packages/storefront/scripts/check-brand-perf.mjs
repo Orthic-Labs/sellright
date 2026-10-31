@@ -14,6 +14,12 @@
 //                       --brand-font-heading in src/brand/tokens.css) has a font-display other than swap (missing = the auto/block
 //                       default). Only url() faces count; src/brand/license.css (license flow) is not scanned.
 //   font-fallback-face  (error) that family has url() faces but no '<Family> Fallback' @font-face with size-adjust (layout shift on swap).
+//   lcp-hidden-start    (error) an LCP candidate image — the first image route.home renders, or any image asking for high fetch
+//                       priority in src/brand-slots/** or src/brand/** — or one of its JSX ancestors starts hidden: a `data-reveal`
+//                       attribute, or a static class that a brand stylesheet (src/brand/**/*.css) gives opacity: 0, visibility: hidden,
+//                       or an animation whose first keyframe (from / 0%) has opacity 0 (a fade-in or JS reveal). The browser does
+//                       not paint the LCP element until it is visible. Animations on it may only transform. Rules inside
+//                       @media (prefers-reduced-motion) and :hover/:focus/:active states are ignored.
 //   font-preload-high   (warning) a display-family face at weight 700 or at the h1 weight (700 unless a brand rule on h1 sets it) has no
 //                       head.json fontPreloads entry for its file with fetchpriority "high".
 import fs from 'node:fs';
@@ -61,6 +67,42 @@ function attrValue(attrs, names) {
   return undefined;
 }
 
+/** Static class tokens of a JSX class/className attribute (string or template literal; tokens next to `${}` are dropped). */
+function staticClasses(attrs) {
+  const out = [];
+  for (const a of attrs.properties) {
+    if (!ts.isJsxAttribute(a) || !['class', 'className'].includes(a.name.getText())) continue;
+    let e = a.initializer;
+    if (e && ts.isJsxExpression(e)) e = e.expression;
+    if (!e) continue;
+    if (ts.isStringLiteralLike(e)) out.push(...e.text.split(/\s+/));
+    else if (ts.isTemplateExpression(e)) {
+      const parts = [e.head.text, ...e.templateSpans.map((sp) => sp.literal.text)];
+      parts.forEach((t, i) => {
+        const toks = t.split(/(\s+)/);
+        // a token glued to an interpolation (first token after `${}`, last before one) is not a whole class name
+        const words = toks.filter((x) => x && !/^\s+$/.test(x));
+        if (words.length === 0) return;
+        if (i > 0 && !/^\s/.test(t)) words.shift();
+        if (i < parts.length - 1 && !/\s$/.test(t)) words.pop();
+        out.push(...words);
+      });
+    }
+  }
+  return out.filter(Boolean);
+}
+
+/** The element and its JSX ancestors, innermost first: tag, static classes, data-reveal. */
+function elementChain(node, sf) {
+  const chain = [];
+  const push = (el) => chain.push({ tag: el.tagName.getText(sf), classes: staticClasses(el.attributes), reveal: attrValue(el.attributes, ['data-reveal']) !== undefined });
+  push(node);
+  for (let p = ts.isJsxOpeningElement(node) ? node.parent.parent : node.parent; p; p = p.parent) {
+    if (ts.isJsxElement(p)) push(p.openingElement);
+  }
+  return chain;
+}
+
 function imageElements(file, text) {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const out = [];
@@ -74,7 +116,7 @@ function imageElements(file, text) {
         const priority = attrValue(node.attributes, ['priority']);
         const loading = attrValue(node.attributes, ['loading']);
         const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        out.push({ tag, isImg, fetchpriority, priority, loading, line: line + 1, col: character + 1 });
+        out.push({ tag, isImg, fetchpriority, priority, loading, line: line + 1, col: character + 1, chain: elementChain(node, sf) });
       }
     }
     ts.forEachChild(node, visit);
@@ -96,8 +138,24 @@ const isHigh = (el) => el.fetchpriority === 'high' || el.priority === true;
 export function checkImages(root) {
   const findings = [];
   const files = [...walk(root, 'src/brand-slots', isTsx), ...walk(root, 'src/brand', isTsx)];
+  const hidden = hiddenStartClasses(root);
   for (const rel of files) {
     const els = imageElements(rel, fs.readFileSync(path.join(root, rel), 'utf8'));
+    const lcp = new Set(els.filter(isHigh));
+    if (rel === 'src/brand-slots/route.home.tsx' && els.length > 0) lcp.add(els[0]);
+    for (const el of lcp) {
+      for (const [depth, a] of el.chain.entries()) {
+        const who = depth === 0 ? `the LCP image <${a.tag}>` : `an ancestor <${a.tag}> of the LCP image <${el.tag}>`;
+        const reason = a.reveal ? 'has data-reveal (an opacity-0 reveal animation)' : (() => {
+          const c = a.classes.find((k) => hidden.has(k));
+          return c ? `has class "${c}", which ${hidden.get(c)}` : null;
+        })();
+        if (reason) {
+          findings.push({ file: rel, line: el.line, col: el.col, rule: 'lcp-hidden-start', level: 'error', message: `${who} ${reason}; the LCP element must be visible at first paint (animate transform only)` });
+          break;
+        }
+      }
+    }
     for (const el of els) {
       if (isHigh(el) && effectiveLoading(el) === 'lazy') {
         const why = el.loading === undefined ? `<${el.tag}> has no loading attribute (defaults to lazy)` : `<${el.tag}> has loading="lazy"`;
@@ -112,6 +170,76 @@ export function checkImages(root) {
     }
   }
   return findings;
+}
+
+// ── hidden-start styles ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Top-level blocks of a CSS text: { prelude, body, index } with balanced braces. */
+function cssBlocks(text) {
+  const out = [];
+  let depth = 0, start = 0, open = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') { if (depth === 0) open = i; depth++; }
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0 && open >= 0) { out.push({ prelude: text.slice(start, open).trim(), body: text.slice(open + 1, i), index: start }); start = i + 1; open = -1; }
+      if (depth < 0) depth = 0;
+    } else if (ch === ';' && depth === 0) start = i + 1;
+  }
+  return out;
+}
+
+const isZero = (v) => v !== undefined && /^0*\.?0*%?$/.test(v.replace(/!important/, '').trim()) && /0/.test(v);
+
+/** Keyframes whose first frame (from / 0%) has opacity 0. */
+function hiddenKeyframes(blocks, acc = new Set()) {
+  for (const b of blocks) {
+    const kf = /^@(?:-webkit-)?keyframes\s+([\w-]+)/.exec(b.prelude);
+    if (kf) {
+      for (const f of cssBlocks(b.body)) {
+        if (f.prelude.split(',').some((x) => /^(from|0%)$/.test(x.trim())) && isZero(descriptors(f.body).opacity)) acc.add(kf[1]);
+      }
+    } else if (/^@/.test(b.prelude)) hiddenKeyframes(cssBlocks(b.body), acc);
+  }
+  return acc;
+}
+
+const STATE_PSEUDO = /:(hover|focus|focus-visible|focus-within|active|checked|disabled|target)\b/;
+
+/** class -> why it starts hidden, from every brand stylesheet. */
+export function hiddenStartClasses(root) {
+  const cssFiles = walk(root, 'src/brand', (rel) => /\.css$/.test(rel));
+  const all = cssFiles.map((rel) => cssBlocks(stripComments(fs.readFileSync(path.join(root, rel), 'utf8'))));
+  const keyframes = new Set();
+  for (const blocks of all) hiddenKeyframes(blocks, keyframes);
+  const out = new Map();
+  const visit = (blocks) => {
+    for (const b of blocks) {
+      if (/^@(?:-webkit-)?keyframes/.test(b.prelude)) continue;
+      if (/^@media[^{]*prefers-reduced-motion/.test(b.prelude)) continue;
+      if (/^@/.test(b.prelude)) { visit(cssBlocks(b.body)); continue; }
+      const d = descriptors(b.body);
+      let why = null;
+      if (isZero(d.opacity)) why = 'sets opacity: 0';
+      else if (d.visibility && /^hidden/.test(d.visibility.trim())) why = 'sets visibility: hidden';
+      else {
+        const anim = `${d.animation ?? ''} ${d['animation-name'] ?? ''}`;
+        const name = anim.split(/[\s,]+/).find((t) => keyframes.has(t));
+        if (name) why = `animates from opacity 0 (@keyframes ${name})`;
+      }
+      if (!why) continue;
+      for (const sel of b.prelude.split(',')) {
+        if (STATE_PSEUDO.test(sel)) continue;
+        const subject = sel.trim().split(/\s*[\s>+~]\s*/).pop() ?? '';
+        const classes = [...subject.matchAll(/\.([\w-]+)/g)].map((m) => m[1]);
+        // only a single-class subject: `.a.b` is a state of `.a` (e.g. `.reveal.in`), judged by its own declarations
+        if (classes.length === 1 && !out.has(classes[0])) out.set(classes[0], why);
+      }
+    }
+  };
+  for (const blocks of all) visit(blocks);
+  return out;
 }
 
 // ── fonts ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
