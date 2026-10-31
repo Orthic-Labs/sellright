@@ -17,6 +17,21 @@ import { extractBase } from './utils/i18n';
 import { identityFromStaticTheme } from './theme/theme.config';
 import { ipCountry } from './platform/head-analytics';
 import { headOrderWriter } from './platform/head-order';
+import { clientDistDir, inlineStylesheetInjections, readBuiltCss } from './platform/inline-stylesheet.server';
+import { loadWarmScript } from './platform/warm-graph.server';
+
+// #425 step 2: the global stylesheet inline (platform/inline-stylesheet.server.ts), resolved once per manifest object.
+const distDir = import.meta.env.PROD ? clientDistDir(import.meta.url) : null;
+const readCss = readBuiltCss(distDir);
+// #425 step 3: the targeted warm graph that replaces Qwik's preloader (platform/warm-graph.server.ts), built once per process.
+const warm = loadWarmScript(distDir);
+const inlined = new WeakMap<object, typeof manifest>();
+function withInlineStylesheet(m: typeof manifest): typeof manifest {
+	if (!m?.injections) return m;
+	let r = inlined.get(m);
+	if (!r) inlined.set(m, (r = { ...m, injections: inlineStylesheetInjections(m.injections, readCss) }));
+	return r;
+}
 
 // Extend RenderToStreamOptions to include the request headers this app's
 // render() actually receives.
@@ -45,9 +60,16 @@ export default function (opts: ExtendedRenderOptions) {
 
 	// F2: the render-blocking stylesheet first in <head>, Qwik's speculative preloads after it (platform/head-order.ts).
 	const stream = headOrderWriter(opts.stream);
+	const base = withInlineStylesheet((opts.manifest as typeof manifest | undefined) ?? manifest);
+	// Per request: the warm script carries this render's nonce (a shell render has none; the express layer hashes it instead).
+	const renderManifest = base && warm
+		? { ...base, injections: [...(base.injections ?? []), { tag: 'script', location: 'head' as const, attributes: { ...(nonce ? { nonce } : {}), dangerouslySetInnerHTML: warm } }] }
+		: base;
 	const result = renderToStream(<Root nonce={nonce} country={country} />, {
-		manifest,
 		...opts,
+		manifest: renderManifest,
+		// #425 step 3: no speculative preloader (115-271 script requests per page); the warm graph above fetches what is needed.
+		preloader: false,
 		stream,
 		base: extractBase,
 		// Use container attributes to set attributes on the html tag.
