@@ -27,11 +27,15 @@ describe('warm graph (#425 step 3)', () => {
 		expect(Object.values(g).flat()).not.toContain('/build/q-acct.js');
 	});
 
-	it('emits a script that only warms after load (no work at parse) and respects Save-Data', () => {
+	it('emits a script that warms nothing at load: cart and checkout only on intent, Save-Data respected', () => {
 		const s = warmScript(warmGroups(manifest));
-		expect(s).toContain("addEventListener('load',after,{once:true})");
+		expect(s).not.toContain("'load'");
+		expect(s).not.toContain('requestIdleCallback');
+		expect(s).toContain("'pointerover','focusin','touchstart'");
 		expect(s).toContain('saveData');
-		expect(s).toContain("l.rel='modulepreload'");
+		expect(s).toContain('/build/q-cart.js');
+		expect(s).not.toContain('/build/q-home.js');
+		expect(s).not.toContain('/build/q-pdp.js');
 		expect(() => new Function(s)).not.toThrow();
 	});
 });
