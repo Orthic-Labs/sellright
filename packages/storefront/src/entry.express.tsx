@@ -13,7 +13,8 @@ import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
-import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
+import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
+import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
@@ -93,7 +94,9 @@ const SHELL_CACHE_ON = shellCacheEnabled();
 
 // I-2, structural: with SHELL_CACHE=1 a `shell` GET loses Cookie, Authorization, cf-ipcountry and preview/nonce inputs here, before
 // the CSP nonce, the cookie/host contexts and every Qwik loader below, and is marked for the response-end check.
-app.use(createShellRequestMiddleware({ enabled: SHELL_CACHE_ON }));
+app.use(createShellRequestMiddleware({ enabled: SHELL_CACHE_ON, exclude: shellExcludedPaths() }));
+// The loaders' shellRender() redacts values only inside a request marked as a shell render (excluded/dynamic: as switch off).
+app.use((req, res, next) => shellRenderContext.run(isShellRender(res), next));
 
 // Set security headers
 app.use(async (req, res, next) => {

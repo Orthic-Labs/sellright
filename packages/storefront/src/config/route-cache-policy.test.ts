@@ -295,9 +295,11 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 
 	type Render = { status?: number; veto?: string; setCookie?: boolean };
 	/** Mirrors entry.express.tsx order: request strip -> CSP/nonce -> no-store default -> response-end check -> renderer. */
-	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>) => {
+	const { shellRenderContext } = await import('../platform/shell-render-context.server');
+	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>, exclude: string[] = []) => {
 		const app = express();
-		app.use(m.createShellRequestMiddleware({ enabled }) as never);
+		app.use(m.createShellRequestMiddleware({ enabled, exclude }) as never);
+		app.use((_req, res, next) => shellRenderContext.run(m.isShellRender(res), next));
 		app.use((req, res, next) => {
 			const nonce = m.isShellRender(res) ? undefined : `N${Math.random().toString(36).slice(2)}`;
 			if (nonce) req.headers['x-qwik-nonce'] = nonce; else delete req.headers['x-qwik-nonce'];
@@ -319,7 +321,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 			if (render.veto) res.setHeader(m.EDGE_VETO_HEADER, render.veto);
 			if (signedIn) res.setHeader(m.EDGE_VETO_HEADER, 'authenticated');
 			const body = `<html q:render="ssr"><head><script${na}>window.qwikevents=[]</script><script type="application/ld+json">{}</script></head>`
-				+ `<body><header>${signedIn ? 'Hi Jane' : 'Sign in'}</header><p data-co="${req.headers['cf-ipcountry'] ?? ''}" data-auth="${req.headers.authorization ?? ''}">${req.originalUrl}</p>`
+				+ `<body><header>${signedIn ? 'Hi Jane' : 'Sign in'}</header><i data-redact="${shellRenderContext.getStore() === true}"></i><p data-co="${req.headers['cf-ipcountry'] ?? ''}" data-auth="${req.headers.authorization ?? ''}">${req.originalUrl}</p>`
 				+ `<script type="qwik/json">{}</script><script id="qwikloader"${na}>(()=>{})()</script></body></html>`;
 			const size = Math.ceil(body.length / 3);
 			let i = 0;
@@ -411,6 +413,40 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 				if (headers.cookie?.includes('sr_cust')) expect(text).toContain('Hi Jane');
 			}
 		});
+	});
+
+	it('SHELL_CACHE on + SHELL_CACHE_EXCLUDE: an excluded shell path renders exactly as switch off (headers, cookies, nonce, values)', async () => {
+		const normalise = (t: string) => t.replace(/N[a-z0-9]+/g, 'NONCE');
+		const capture = async (enabled: boolean) => {
+			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string }> = {};
+			await serve(enabled, {}, async (get) => {
+				for (const path of ['/checkout/', '/shop/']) {
+					const { r, text } = await get(path, SIGNED_IN);
+					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text) };
+				}
+			}, enabled ? ['/checkout/', '/shop'] : []);
+			return out;
+		};
+		const off = await capture(false);
+		const excluded = await capture(true);
+		for (const path of ['/checkout/', '/shop/']) {
+			expect(excluded[path], path).toEqual(off[path]);
+			expect(excluded[path]!.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(excluded[path]!.text, path).toContain('Hi Jane');
+			expect(excluded[path]!.text, path).toContain('data-redact="false"');
+		}
+		await serve(true, {}, async (get) => {
+			const { r } = await get('/checkout/');
+			expect(r.headers.get('x-sr-edge')).toBe('bypass:excluded');
+			const home = await get('/');
+			expect(home.r.headers.get('cache-control')).toMatch(/^public, max-age=0, s-maxage=300$/);
+			expect(home.text).toContain('data-redact="true"');
+		}, ['/checkout/', '/shop']);
+	});
+
+	it('SHELL_CACHE_EXCLUDE parses a comma list of exact paths (trailing slash optional, junk ignored)', () => {
+		expect(m.shellExcludedPaths({})).toEqual([]);
+		expect(m.shellExcludedPaths({ SHELL_CACHE_EXCLUDE: ' /checkout/, /shop ,nope, /' })).toEqual(['/checkout', '/shop', '/']);
 	});
 
 	it('SHELL_CACHE off: every document is private no-store with the per-request nonce, request untouched, no diagnostic header', async () => {

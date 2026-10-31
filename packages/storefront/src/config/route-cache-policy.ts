@@ -41,6 +41,8 @@ export const CACHE_POLICY_VERSION = '2026-10-31.1';
 
 export const SHELL_CACHE_ENV = 'SHELL_CACHE';
 export const SHELL_CACHE_TTL_ENV = 'SHELL_CACHE_TTL';
+/** Comma list of exact shell paths kept `dynamic` (rendered exactly as with the switch off), e.g. `/checkout/,/shop/`. Default empty. */
+export const SHELL_CACHE_EXCLUDE_ENV = 'SHELL_CACHE_EXCLUDE';
 export const DEFAULT_SHELL_TTL_SECONDS = 300;
 
 type Env = Record<string, string | undefined>;
@@ -48,6 +50,10 @@ const processEnv = (): Env => (typeof process !== 'undefined' && process.env ? p
 
 /** ADR-0001 switch: on only when the process env has SHELL_CACHE=1 (default off; always false in the browser). */
 export const shellCacheEnabled = (env: Env = processEnv()): boolean => env[SHELL_CACHE_ENV] === '1';
+
+/** SHELL_CACHE_EXCLUDE as normalised paths (no trailing slash except `/`). */
+export const shellExcludedPaths = (env: Env = processEnv()): string[] =>
+	(env[SHELL_CACHE_EXCLUDE_ENV] ?? '').split(',').map((p) => p.trim()).filter((p) => p.startsWith('/')).map((p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p));
 
 /** Edge lifetime of a cacheable shell: SHELL_CACHE_TTL as a positive integer of seconds, else 300. */
 export const shellTtlSeconds = (env: Env = processEnv()): number => {
@@ -203,7 +209,8 @@ export const SHELL_STRIPPED_REQUEST_HEADERS = ['cookie', 'authorization', 'proxy
  * I-2, structural: with SHELL_CACHE=1, a `shell` request loses every identity/preview input before ANY later middleware (the CSP
  * nonce, the cookie/host AsyncLocalStorage contexts) or Qwik loader sees it. Must be registered before those. Off: inert.
  */
-export function createShellRequestMiddleware(opts: { enabled: boolean }) {
+export function createShellRequestMiddleware(opts: { enabled: boolean; exclude?: readonly string[] }) {
+	const exclude = new Set((opts.exclude ?? []).map(strip));
 	return (req: ShellReq, res: ShellRes, next: () => void): void => {
 		if (!opts.enabled) return next();
 		const q = req.originalUrl.indexOf('?');
@@ -211,6 +218,10 @@ export function createShellRequestMiddleware(opts: { enabled: boolean }) {
 		const cls = requestRouteClass({ method: req.method, pathname: req.path, search: q < 0 ? '' : req.originalUrl.slice(q + 1), cookie: Array.isArray(cookie) ? cookie.join('; ') : cookie });
 		if (cls !== 'shell') {
 			res.setHeader(SHELL_DIAG_HEADER, `bypass:class:${cls}`);
+			return next();
+		}
+		if (exclude.has(strip(req.path))) {
+			res.setHeader(SHELL_DIAG_HEADER, 'bypass:excluded');
 			return next();
 		}
 		for (const h of SHELL_STRIPPED_REQUEST_HEADERS) delete req.headers[h];
