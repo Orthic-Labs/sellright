@@ -153,6 +153,12 @@ const LoginModalComponent = component$(() => {
 	);
 });
 
+// #360: nothing of the modal (auth, signup flow, providers) is rendered or loaded until an opener sets `everOpened`.
+export const LoginModalGate = component$(() => {
+	const loginModalState = useLoginModalState();
+	return loginModalState.everOpened ? <LoginModalComponent /> : null;
+});
+
 export default component$(() => {
 	const location = useLocation();
 	const isHomePage = location.url.pathname === '/';
@@ -206,11 +212,6 @@ export default component$(() => {
 		addressBook: [],
 	});
 
-	// Initialize cross-tab storage listener (T4: idle, no UVT needed)
-	useOnDocument('qidle', $(() => {
-		LocalAddressService.setupCrossTabSync();
-	}));
-
 	useContextProvider(APP_STATE, state);
 
 	// The signed-in customer, read in the browser (ADR-0001 I-2): once when the document starts, and again on each client
@@ -234,20 +235,21 @@ export default component$(() => {
 			});
 		}
 	});
-	useOnDocument('qinit', $(() => {
-		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
-		const cookieCountry = getCookie(COUNTRY_COOKIE);
-		if (cookieCountry && !state.shippingAddress.countryCode) state.shippingAddress.countryCode = cookieCountry;
-		readSession();
-	}));
 	useTask$(({ track }) => {
 		track(() => location.url.pathname);
 		if (!isBrowser) return;
 		readSession();
 	});
 
-	// T3: Restore persisted country selection (qidle — lazy, no urgency)
+	// #360: the non-urgent start-up work, in one idle handler (it was three qinit/qidle handlers) so first paint and the first
+	// interaction are not behind it. Header user state, the country default and cross-tab address sync appear a moment later.
+	// Order matters: the cookie is the initial country, the stored preference below it wins. Stock reads are NOT here.
 	useOnDocument('qidle', $(() => {
+		LocalAddressService.setupCrossTabSync();
+		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
+		const cookieCountry = getCookie(COUNTRY_COOKIE);
+		if (cookieCountry && !state.shippingAddress.countryCode) state.shippingAddress.countryCode = cookieCountry;
+		readSession();
 		const storedCountry = CountryPreferenceService.getCountry();
 		// A saved or entered address keeps its own country (the checkout may have loaded one before this idle task).
 		if (storedCountry && canRestorePreferredCountry(state.shippingAddress)) {
@@ -304,7 +306,7 @@ export default component$(() => {
 			<div>
 				{!isAffiliateSurface && (hasView('shell.header') ? <BrandHeaderMount /> : <Header />)}
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
-				{!isAffiliateSurface && <Menu />}
+				{!isAffiliateSurface && state.showMenu && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
 					<main id="main-content" class={`flex-1 bg-[var(--color-page)] ${isHomePage || isAffiliateSurface ? '' : 'pt-[var(--header-offset)]'}`}>
 						<Slot />
@@ -313,7 +315,7 @@ export default component$(() => {
 					{HAS_ANALYTICS && <AnalyticsMount />}
 				</div>
 				{/* Global Login Modal */}
-				<LoginModalComponent />
+				<LoginModalGate />
 			</div>
 		</LoginModalProvider>
 		</CartProvider>

@@ -1,3 +1,4 @@
+// Both tasks use document-idle (#360: off the start-up path; conversion and attribution start on the first idle period).
 // Mounted by the layout only when head.json declares analytics: starts the conversion subscriber once the document is ready, and
 // records the landing attribution (UTM + oppref, consent-gated, last touch) of every URL the shopper reaches, SPA navigations included.
 // #375: for a brand with the OpenAI pixel (head.json analytics.adPlatforms), it also publishes hashed user data (user-data.ts) on every
@@ -19,7 +20,7 @@ export const AnalyticsMount = component$(() => {
 			startConversion();
 			captureAttribution(window.location.href);
 		},
-		{ strategy: 'document-ready' },
+		{ strategy: 'document-idle' },
 	);
 	useVisibleTask$(
 		({ track, cleanup }) => {
@@ -45,7 +46,7 @@ export const AnalyticsMount = component$(() => {
 			}, 600);
 			cleanup(() => clearTimeout(timer));
 		},
-		{ strategy: 'document-ready' },
+		{ strategy: 'document-idle' },
 	);
 	return null;
 });

@@ -13,6 +13,8 @@ import type { Live } from '~/sellright/types/live';
 
 export interface LoginModalState extends Live {
   isOpen: boolean;
+  /** #360: set by the first opener; the layout mounts the modal (and loads its chunk) only from then on. */
+  everOpened: boolean;
   onLoginSuccess?: QRL<() => void>;
 }
 
@@ -35,6 +37,7 @@ export const useLoginModal = () => useContext(LoginModalContextId);
 // Initial state
 const createInitialState = (): LoginModalState => ({
   isOpen: false,
+  everOpened: false,
   onLoginSuccess: undefined,
 });
 
@@ -44,6 +47,7 @@ export const LoginModalProvider = component$(() => {
 
   // Actions
   const openLoginModal = $((onSuccess?: QRL<() => void>) => {
+    state.everOpened = true;
     state.isOpen = true;
     state.onLoginSuccess = onSuccess;
   });
