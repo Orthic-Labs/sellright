@@ -542,3 +542,59 @@ describe('ADR-0001 wiring in entry.express.tsx', () => {
 		expect(src).not.toMatch(/SELLRIGHT_EDGE_HTML_CACHE|createEdgeHtmlMiddleware/);
 	});
 });
+
+describe('error responses are never stored (createErrorNoStoreMiddleware, real HTTP)', async () => {
+	const express = (await import('express')).default;
+	const { join } = await import('node:path');
+	const { mkdtempSync, writeFileSync } = await import('node:fs');
+	const { tmpdir } = await import('node:os');
+	const m = await import('./route-cache-policy');
+	const { snapshotGuard } = await import('../utils/snapshot-guard');
+	const dir = mkdtempSync(join(tmpdir(), 'sr-static-'));
+	writeFileSync(join(dir, 'a.js'), 'x');
+	const HEADER = /^private, no-store/;
+
+	it('static 404 under immutable handlers, router 404/500, express error, temporary redirect and guard 404 all carry private, no-store', async () => {
+		const app = express();
+		app.use(m.createErrorNoStoreMiddleware() as never);
+		app.use('/build', express.static(dir, { immutable: true, maxAge: '1y' }));
+		app.use(snapshotGuard as never);
+		app.get('/ok-static', (_q, res) => { res.setHeader('Cache-Control', 'public, max-age=60'); res.send('ok'); });
+		app.get('/gone', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.status(404).send('x'); });
+		app.get('/boom', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.status(503).send('x'); });
+		app.get('/throw', () => { throw new Error('x'); });
+		app.get('/tmp', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.redirect(302, '/x'); });
+		app.get('/perm', (_q, res) => { res.setHeader('Cache-Control', 'public, max-age=300'); res.redirect(301, '/x'); });
+		app.use((_q, res) => { res.status(404).send('nf'); });
+		const server = await new Promise<import('node:http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+		try {
+			const { port } = server.address() as import('node:net').AddressInfo;
+			const get = (p: string, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${port}${p}`, { redirect: 'manual', headers });
+			const okJs = await get('/build/a.js');
+			expect(okJs.headers.get('cache-control')).toMatch(/immutable/);
+			for (const [p, status] of [['/build/missing.js', 404], ['/gone', 404], ['/boom', 503], ['/throw', 500], ['/tmp', 302], ['/page.html', 404], ['/nope', 404]] as const) {
+				const r = await get(p);
+				expect([p, r.status]).toEqual([p, status]);
+				expect([p, r.headers.get('cache-control')]).toEqual([p, expect.stringMatching(HEADER)]);
+				expect(r.headers.get('cache-control')).not.toMatch(/s-maxage|immutable|public|max-age=[1-9]/);
+			}
+			// 416 from express.static carries immutable before it errors: must be overridden.
+			const r416 = await get('/build/a.js', { Range: 'bytes=999-1000' });
+			expect(r416.status).toBe(416);
+			expect(r416.headers.get('cache-control')).toMatch(HEADER);
+			expect(r416.headers.get('cache-control')).not.toMatch(/immutable/);
+			// Deliberate permanent redirect and 200 keep their own header.
+			expect((await get('/perm')).headers.get('cache-control')).toBe('public, max-age=300');
+			expect((await get('/ok-static')).headers.get('cache-control')).toBe('public, max-age=60');
+		} finally { await new Promise((resolve) => server.close(resolve)); }
+	});
+
+	it('wiring: entry.express.tsx registers the middleware right after the error-path log, before every handler', async () => {
+		const { readFileSync } = await import('node:fs');
+		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
+		const at = (needle: string) => src.indexOf(needle);
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeGreaterThan(at('app.use(createErrorPathLog())'));
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeLessThan(at('app.use(createShellRequestMiddleware'));
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeLessThan(at('app.use(snapshotGuard)'));
+	});
+});

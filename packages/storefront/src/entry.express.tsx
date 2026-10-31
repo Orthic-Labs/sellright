@@ -13,7 +13,7 @@ import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
-import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
+import { NO_STORE_CACHE_CONTROL, createErrorNoStoreMiddleware, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
 import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
 import { precompressedStatic } from"./utils/precompressed-static";
@@ -65,6 +65,8 @@ const app = express();
 app.disable('x-powered-by');
 // #364: first in the chain so every 404 and 5xx (static, guard, router, notFound) is named in the log (utils/error-path-log.ts).
 app.use(createErrorPathLog());
+// Every 4xx/5xx and temporary 3xx leaves `private, no-store`, whichever handler (static, guard, router, notFound, express error) answers.
+app.use(createErrorNoStoreMiddleware());
 
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both

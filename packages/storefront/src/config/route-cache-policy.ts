@@ -183,6 +183,34 @@ export function shellResponseVerdict(f: ShellResponseFacts): ShellVerdict {
 export const shellResponseCacheControl = (f: ShellResponseFacts, ttlSeconds: number): string =>
 	shellResponseVerdict(f).ok ? shellCacheControl(ttlSeconds) : NO_STORE_CACHE_CONTROL;
 
+// ─── error responses: never stored ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** Statuses that may keep a cacheable header: 2xx, 304 (revalidation of a stored file) and the deliberate permanent redirects 301/308. */
+export const mayKeepCacheHeader = (status: number): boolean => (status >= 200 && status < 300) || status === 304 || status === 301 || status === 308;
+
+/**
+ * Forces `private, no-store` on every 4xx/5xx and on every temporary 3xx, whatever set the header before (express.static's
+ * immutable on a 416/412, the static fallthrough, a handler that forgot, finalhandler). Hooks writeHead, which every path ends in
+ * (including the implicit one from end()), so it cannot be bypassed by ordering. Register first.
+ */
+export function createErrorNoStoreMiddleware() {
+	return (_req: unknown, res: { writeHead: (...a: any[]) => any; statusCode: number; setHeader(n: string, v: string): unknown; headersSent: boolean }, next: () => void): void => {
+		const writeHead = res.writeHead.bind(res);
+		res.writeHead = (...a: any[]) => {
+			const status = typeof a[0] === 'number' ? a[0] : res.statusCode;
+			if (!res.headersSent && !mayKeepCacheHeader(status)) {
+				res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
+				// An object/array header argument to writeHead would override setHeader: drop its cache keys.
+				for (const arg of a.slice(1)) {
+					if (arg && typeof arg === 'object' && !Array.isArray(arg)) for (const k of Object.keys(arg)) if (/^(cache-control|expires|surrogate-control|cdn-cache-control)$/i.test(k)) delete arg[k];
+				}
+			}
+			return writeHead(...a);
+		};
+		next();
+	};
+}
+
 // ─── express halves (server only; Node's Buffer is used lazily, nothing imported) ─────────────────────────────────────────
 
 type ShellReq = { method: string; path: string; originalUrl: string; headers: Record<string, string | string[] | undefined> };
