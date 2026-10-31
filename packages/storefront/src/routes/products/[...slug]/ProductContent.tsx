@@ -2,7 +2,7 @@ import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useS
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
 import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
-import { useCart, addToCartWithOutcome, ADD_FAILED_MESSAGE } from '~/contexts/CartContext';
+import { useCart, addToCartWithOutcome, showAddedLine, ADD_FAILED_MESSAGE } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
@@ -319,13 +319,17 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         if (!isVariantPurchasable(selectedVar)) throw new Error('Variant is out of stock');
         const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
         const enrichment = toCartEnrichment(product, selectedVar, image);
+        // #427: the line and the drawer show on the click; the server write follows.
+        const unit = typeof selectedVar.salePrice === 'number' && selectedVar.salePrice > 0 ? selectedVar.salePrice : selectedVar.price || 0;
+        showAddedLine(cart, selectedVar.sku, 1, product.name, unit, enrichment);
+        appState.showCart = true;
         const outcome = await addToCartWithOutcome(cart, selectedVar.sku, 1, enrichment);
-        // A rejected or unapplied add is not "added": show the cart's own error, keep the drawer shut, announce nothing.
+        // A rejected or unapplied add is not "added": the line is gone again (mirror), the drawer closes, the error shows, nothing is announced.
         if (outcome.kind !== 'applied') {
+          appState.showCart = false;
           addItemToOrderErrorSignal.value = (outcome.kind === 'error' && outcome.message) || cart.lastError || ADD_FAILED_MESSAGE;
           return;
         }
-        appState.showCart = true;
         loadCountryOnDemand(appState);
         const announcement = document.createElement('div');
         announcement.setAttribute('role', 'status');

@@ -295,6 +295,25 @@ export type AddOutcome =
 /** #401: the add-to-cart failure every PDP shows (announced via role=alert). */
 export const ADD_FAILED_MESSAGE = "Couldn't add to cart. Please try again.";
 
+/** #427 local first: put the line the shopper just added into the cart state on the click, before the server write, so the
+ *  drawer can open at once. The caller has already judged it purchasable from its own live stock read. The add's response
+ *  replaces it (server price and availability); a failed or unapplied add commits the mirror, which never had it. */
+export function showAddedLine(cartState: CartContextState, sku: string, quantity: number, name: string, unitPrice: number, enrichment?: CartLineEnrichment): void {
+  const lines = cartState.cart?.lines;
+  if (!lines) return;
+  const same = lines.find((l) => l.sku === sku);
+  if (same) {
+    same.quantity += quantity;
+    same.lineSubtotal = same.unitPrice * same.quantity;
+    same.lineTotal = same.lineSubtotal - (same.lineDiscount ?? 0);
+    return;
+  }
+  cartState.cart.lines = [
+    ...lines,
+    { ...enrichment, sku, name, unitPrice, quantity, lineSubtotal: unitPrice * quantity, lineDiscount: 0, lineTotal: unitPrice * quantity, available: true, availableQuantity: null } as (typeof lines)[number],
+  ];
+}
+
 export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddOutcome> => {
   await loadCartIfNeeded(cartState);
   cartState.isLoading = true;

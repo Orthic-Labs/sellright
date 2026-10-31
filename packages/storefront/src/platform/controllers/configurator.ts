@@ -6,7 +6,7 @@ import { $, untrack, useContext, useStore, useTask$, useVisibleTask$, type Reado
 import { isBrowser } from '@qwik.dev/core/build';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
-import { addToCartWithOutcome, useCart } from '~/contexts/CartContext';
+import { addToCartWithOutcome, showAddedLine, useCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { fetchProductStock, fetchProductStockEarly } from '~/sellright/catalog';
 import { track } from '~/sellright/analytics';
@@ -153,21 +153,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 			// already came from this page's live stock read. The add's own response then replaces the line (server price,
 			// availability); a failed add drops it again (the mirror never had it) and the drawer shows the error.
 			const enrichment = enrichmentFor(model, variant);
-			const unitPrice = effectivePriceOf(variant);
-			const lines = cart.cart?.lines;
-			if (lines) {
-				const same = lines.find((l) => l.sku === variant.sku);
-				if (same) {
-					same.quantity += quantity;
-					same.lineSubtotal = same.unitPrice * same.quantity;
-					same.lineTotal = same.lineSubtotal - (same.lineDiscount ?? 0);
-				} else {
-					cart.cart.lines = [
-						...lines,
-						{ ...enrichment, sku: variant.sku, name: model.name, unitPrice, quantity, lineSubtotal: unitPrice * quantity, lineDiscount: 0, lineTotal: unitPrice * quantity, available: true, availableQuantity: null } as (typeof lines)[number],
-					];
-				}
-			}
+			showAddedLine(cart, variant.sku, quantity, model.name, effectivePriceOf(variant), enrichment);
 			// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first.
 			if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
 			else appState.showCart = true;
