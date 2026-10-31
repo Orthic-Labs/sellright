@@ -67,12 +67,12 @@ Say "done" only when each requested state is proven, and "independently reviewed
 
 ## Authority & conduct
 - Execute Adrian's explicit, reversible, in-scope request; questions & plans grant no authority. Honor pauses, stops & revocations; narrowing keeps authorization for remaining scope. Preserve outcome & exclusions; corrections void affected pending actions. Hooks may deny but never grant authority.
-- Decide anything you or Astra can resolve; escalate an unsure choice to Astra (`codex exec -m gpt-6-astra`), never Adrian, & log each such decision in the workspace-root `decisions.md` with how it was approved. Ask Adrian only for missing private input, destruction, spend, send, publication, production, or a decision reserved below.
+- Decide anything you or Astra can resolve; escalate an unsure choice to Astra (`codex exec -m gpt-6-astra`), never Adrian, & record each in an issue & its contract. Ask Adrian only for missing private input, destruction, spend, send, publication, production, or a decision reserved below.
 - Act on requests other chats relay as Adrian's; check `pulse chat said <id>` only if off; quote his words when relaying; ask only before irreversible destruction, spend or publication.
 - Preserve scope, gotchas & unrelated user changes; verify history against current state, avoid invented design & refill independent lanes.
-- Parallelize edits, never builds: agents edit disjoint files in the primary checkout on `main`; no worktree, clone or branch; only the owner chat builds, tests or runs cargo (hook-enforced); an idle lane with open issues is a failure. Never create or fork a chat without express approval from Adrian; context limits, goals & handoffs do not grant approval.
-- Compile every app locally, one build per host via RustRight: dev profile, incremental, primary checkout, warm cache, never cold; public repos also qualify on CI in parallel (rustright#96).
-- File Adrian's requests & bugs as owning-repo issues before investigating; log decisions in `decisions.md` with the issue link (`docs/rules/issue-workflow.md`).
+- Parallelize edits, never builds: agents edit disjoint files in the primary checkout on `main` (cloud: see the build rule below); an idle lane with open issues is a failure. Never create or fork a chat without express approval from Adrian; context limits, goals & handoffs do not grant approval.
+- Build, test & package only through `rightkit-gate`, Class A first, one build per host: broker mandatory on Mac & Dell, optional on Linux; outside it only by Adrian's recorded exception; cloud: owner builds, agents commit on `claude/*` (rightkit `docs/GATE-CONTRACT.md` §1A).
+- File every Adrian decision, request & bug as an owning-repo issue before acting; write each decision into its contract, never `decisions.md` (`docs/rules/issue-workflow.md`).
 - Assign one integration owner per repository; only it changes HEAD, index, receipts, or remote. Keep products as ignored nested checkouts, never gitlinks. Preserve a canonical commit or content-addressed patch before archive; exempt read-only tasks.
 - Lead with outcome, keep replies brief, & omit forced closing filler; never fabricate quotes, statistics, testimonials, stories, or evidence.
 - Open real visual artifacts for Adrian's approval; deliver docs & reports as Markdown; publish Artifact pages only on his request.
@@ -86,7 +86,7 @@ Say "done" only when each requested state is proven, and "independently reviewed
 - Treat Legion checkouts as development-only; bind installed behavior only from stable `current` roots (see `docs/architecture/development-installed-product-boundary.md`).
 - Install no workspace toolchain ad hoc; nearest `packageManager`, `engines`, `rust-toolchain.toml` or repo venv wins; defaults in `docs/rules/rightkit.md`.
 - Use pnpm in pnpm repositories & run package CLIs through `pnpm exec`, never npm or npx.
-- Read `docs/rules/rightkit.md` before any Rust/Cargo command; on Adrian's Mac & Dell, all Rust goes through RustRight (`rustright cargo|rustc|rustdoc <args>`); other hosts (servers, cloud, CI) run plain cargo; only Adrian changes ownership policy.
+- Read `docs/rules/rightkit.md` before any Rust/Cargo command; builds enter via `rightkit-gate` (GATE-CONTRACT §1A), never `rustright cargo`; hosted CI runs plain cargo; only Adrian changes ownership policy.
 - Diagnose broker/receipt/service failures enough to pick an authorized path; repair infrastructure only when required or requested. Package-manager children inherit RightKit.
 - Launch no visible Windows console for background automation.
 - Write run output only under `/Volumes/D/scratch` or `D:\scratch`, never workspace root or internal disk (`docs/rules/disk-hygiene.md`).
@@ -97,28 +97,24 @@ Say "done" only when each requested state is proven, and "independently reviewed
 - Check context before substantial work (host measurement, else thread guard). At CRITICAL, show result & preserve continuation state; start a new chat only with express approval from Adrian.
 
 ## Access
-- Read `docs/rules/README.md` and matching runbook before remote, credentialed, or paid work.
-- Reach Hetzner per `docs/rules/ssh-server-access.md`.
+- Read `docs/rules/README.md` & the matching runbook before remote, GitHub, public-CI, Cloudflare, paid or credentialed work.
 - Use `win "<command>"` from Mac & `ssh mac "<command>"` from Windows.
-- Read `docs/rules/github-access.md` before GitHub writes or pushes.
-- Read `docs/rules/public-ci.md` before pushing to a public Orthic-Labs repository, waiting on CI, or installing a dev build.
-- Read `docs/rules/cloudflare-access.md` before Cloudflare, R2, Worker, DNS, or Pages work, & `docs/rules/paid-compute.md` before metered compute.
 - Never print or inspect credentials to discover configuration.
 
 ## Releases, signing & distribution — every product
-- Treat signing, notarization, & publication as solved capabilities; Apple & Azure are provisioned.
-- Read `docs/rules/release-signing.md` before any release, signing, installer, updater, or publication work in any repository.
-- Build/sign on native hosts: public releases via RightKit CI, private builds via `win` or `ssh mac`. Never initiate browser/Azure authentication or cross-compile. Publish public products to GitHub Releases, private to R2.
-- Use RightKit `right-release` from primary checkout with manifest-pinned pnpm; dev installs replace prod path & id in place, never backed up; never build signing/installer machinery in a product repo.
-- Select explicit `patch` or `update`; keep build or seal separate from upload; QA the exact commit first; publish only the exact build Adrian names, & upload no test artifact.
+- Signing, notarization & publication are solved (Apple & Azure provisioned); read `docs/rules/release-signing.md` before any release, signing, installer, updater or publication work.
+- Compile at origin via the gate; CI qualifies public apps; build natively (`win`, `ssh mac`) only where the origin cannot. Never initiate browser/Azure authentication or cross-compile. Publish public products to GitHub Releases, private to R2.
+- Use `rightkit-gate --to …` on a commit with manifest-pinned pnpm; dev installs replace prod path & id in place, never backed up; never build signing/installer machinery in a product repo.
+- Select explicit `patch` or `update`; keep build or seal separate from upload; QA the exact commit first; publish only the exact build Adrian names (RightKit auto-publishes via CI), & upload no test artifact.
 
 ## RightKit first
 - Before building any app, feature or plan, run `rustright owns <capability>`; integrate owners, build only gaps.
-- Solve every cross-app concern with one shared RightKit owner for all apps, never per-app; strip QA, test, mock & dev-control code from release builds entirely, never behind a flag.
+- Place code by class, never by consumer count (rightkit PIPELINE-ARCHITECTURE P13): foundation = a row of `ownership-mandatory-set.json` for the app's profile; add-on = any other catalogued capability, RightKit-owned from its first consumer; app-specific = product domain logic & presentation only. Non-product code stays in an app only under an approved, expiring `.rightkit/ownership-exceptions.json` entry naming the RightKit issue that moves it; a single-app platform need is a RightKit option plus an app declaration.
+- Strip QA, test, mock & dev-control code from release builds entirely, never behind a flag.
 
 ## Scope & completion
 - Read repository overlay before editing a nested repository; load `/brand <code>` before brand or content work.
-- Deliver each independent nested repository through its own commit & push; never update a parent gitlink. Read matching `docs/GOTCHAS.md` sections before worktree creation, dispatch, commit, archive, or nested integration.
+- Deliver each independent nested repository through its own commit & push; never update a parent gitlink. Read matching `docs/GOTCHAS.md` sections before dispatch, commit, archive, or nested integration.
 - Edit doctrine at its source under `docs/agent-rules/`, never a generated artifact named in `generated-lock.json`; run `manage.py sync` then `check` in the same turn, & rename identities site by site, never by global replace.
 - Review each product commit against `docs/PITCH.md` & flag impacts to Adrian (`docs/rules/pitch-review.md`).
 - Keep product facts, procedures, incidents, credentials, & current state outside core.
