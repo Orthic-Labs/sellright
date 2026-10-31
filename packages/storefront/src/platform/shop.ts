@@ -2,7 +2,7 @@
 // (head, onStaticGenerate). The shop route re-exports all three.
 import { routeLoader$, server$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { noStore, shellRender } from '~/platform/shell-render';
-import { loadBrowseCatalog } from '~/services/browse-catalog';
+import { liveBrowseCatalog, loadBrowseCatalog } from '~/services/browse-catalog';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
 import { siteUrl, theme } from '~/theme/theme.config';
@@ -34,7 +34,10 @@ export const useCatalogLoader = routeLoader$(async ({ error }) => {
   return { totalItems: parsed?.totalItems ?? 0, products: parsed ? parsed.products.map(shellShopItem) : [], fallback: false, deferred: true };
  }
  try {
-  const parsed = await loadBrowseCatalog();
+  // DP-6 (#425): /shop/ is dynamic and its listing is rendered from LIVE stock per request: the catalog list endpoint computes
+  // inStock from stock on_hand/allocated on every call (the same source as /stock), never the manifest snapshot. A failed read is a
+  // 503 (fail closed), never a stale listing.
+  const parsed = await liveBrowseCatalog();
   return { ...parsed, fallback: false, deferred: false };
  } catch {
   throw error(503, 'Catalog temporarily unavailable');

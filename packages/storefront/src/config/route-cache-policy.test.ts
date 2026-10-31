@@ -55,9 +55,10 @@ describe('getRouteCacheProfile', () => {
 	});
 
 	it('labels x-route-class with the ADR-0001 class (diagnostic only; the header stays no-store)', () => {
-		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
+		for (const pathname of ['/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('shell');
-		for (const pathname of ['/checkout', '/checkout/', '/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
+		// DP-6: /shop/ renders live stock per request.
+		for (const pathname of ['/shop', '/shop/', '/checkout', '/checkout/', '/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('dynamic');
 	});
 
@@ -165,8 +166,8 @@ describe('ADR-0001 route classes', async () => {
 	const q = (s = '') => new URLSearchParams(s);
 	const TABLE: Array<[string, string, 'products' | 'shop', 'shell' | 'dynamic' | 'data']> = [
 		['/', '', 'products', 'shell'],
-		['/shop', '', 'products', 'shell'],
-		['/shop/', '', 'products', 'shell'],
+		['/shop', '', 'products', 'dynamic'], // DP-6
+		['/shop/', '', 'products', 'dynamic'],
 		['/products/some-knife/', '', 'products', 'shell'],
 		['/products/some-knife', '', 'products', 'shell'],
 		['/collections/new/', '', 'products', 'shell'],
@@ -338,7 +339,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		} finally { await new Promise((resolve) => server.close(resolve)); }
 	};
 
-	const SHELL = ['/', '/shop/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
+	const SHELL = ['/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
 	const SIGNED_IN = { cookie: 'sr_cust=abc; sr_cust_csrf=x; countryCode=DE; sr_preview_tokenx=1; authToken=t', authorization: 'Bearer secret', 'cf-ipcountry': 'DE', 'x-qwik-nonce': 'attacker' };
 
 	it('SHELL_CACHE on: a signed-in request to every shell route gets the byte-identical body of an anonymous one, cacheable, no Set-Cookie', async () => {

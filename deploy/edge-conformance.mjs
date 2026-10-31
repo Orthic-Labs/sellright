@@ -31,7 +31,7 @@ let saved = 0;
 const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
 
 const ROWS = [
-	['shell', '/'], ['shell', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
+	['shell', '/'], ['dynamic', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
 	['shell', '/blog/'], ['shell', flag('--blog-post', null)], ['shell', '/about/'], ['shell', '/contact/'],
 	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['dynamic', '/checkout/'],
 	['dynamic', '/checkout/payment/'], ['dynamic', '/checkout/cart-link/'], ['dynamic', '/account/'], ['dynamic', '/sign-in/'],

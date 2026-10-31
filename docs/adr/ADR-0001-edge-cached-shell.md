@@ -13,6 +13,7 @@ Adrian, 2026-10-30: "actually even for checkout. the html, should be cached, sho
 - **DP-2** PDP JSON-LD availability is never in the shell; filled by the client.
 - **DP-3** Account pages are out of scope (they redirect on a cookie).
 - **DP-5** (2026-10-31, by measurement) `/checkout/` is `dynamic`. Its LCP is the visitor's order summary: uncached, the server renders it from the cart cookie (~0.4 s at m375); a cached shell must fetch it in the browser after hydration (~4.1-4.2 s at m375 even with one entry read). Adrian's 2026-10-30 rule "all pages except checkout cached" stands.
+- **DP-6** (2026-10-31, by measurement, #425) `/shop/` is `dynamic`. With stock out of the cached shell, the shell listed every product and the browser's live read then applied the default "in stock only" filter, removing the out-of-stock cards (Damned: 8 of 15) and shifting the grid (staging CLS 0.36 mobile, 0.52 desktop). The page now renders the in-stock listing on the server from LIVE stock per request (the catalog list endpoint computes `inStock` from stock on hand/allocated on every call, the same source as `/stock`; never the manifest snapshot), `private, no-store`. Approved by Ads for Adrian, 2026-10-31.
 - **DP-4** Stock rules are unchanged. The LOCKED doc only records that the shop's manifest read moves from SSR to the browser, still uncached (owner edits that doc).
 
 ## Invariants

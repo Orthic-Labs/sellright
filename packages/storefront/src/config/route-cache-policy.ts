@@ -2,11 +2,12 @@
  * The single place that decides cache headers for storefront responses (docs/adr/ADR-0001-edge-cached-shell.md).
  *
  * Route classes (ADR "Route classes"):
- *   shell   — `/`, `/shop/`, product pages (`/products/*`, and `/shop/<slug>/` when routes.json productPath is `/shop/:slug/`),
+ *   shell   — `/`, product pages (`/products/*`, and `/shop/<slug>/` when routes.json productPath is `/shop/:slug/`),
  *             `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, legal pages.
  *             The HTML is free of per-visitor data, stock and price (live values are read by the browser), so it MAY be stored
  *             at the edge — but only when SHELL_CACHE=1 and the finished response passes I-6 (below).
- *   dynamic — every other path (`/checkout/` itself (DP-5: its LCP is the visitor's order summary) and its steps, account, sign-in, search, track-order, verify, password routes, /api, /cache*),
+ *   dynamic — every other path (`/checkout/` itself (DP-5: its LCP is the visitor's order summary) and its steps, `/shop/` (DP-6: the
+ *             in-stock listing is rendered from live stock per request; a cached shell removed out-of-stock cards after load, CLS 0.36-0.52), account, sign-in, search, track-order, verify, password routes, /api, /cache*),
  *             any non-GET request, any preview request (preview_token query or sr_preview_token cookie), any shell path with a
  *             query other than ad-click tracking parameters (I-3), and every unclassified path (I-5 fail closed).
  *   data    — Qwik loader/action/server$ data (`q-loader-*.json`, `q-data.json`, `?qaction=`, `?qfunc=`) and `/v1/*`.
@@ -35,7 +36,7 @@ export interface RouteCacheProfile {
 	responseCacheControl: string;
 }
 
-export const CACHE_POLICY_VERSION = '2026-10-31.2';
+export const CACHE_POLICY_VERSION = '2026-10-31.3';
 
 // ─── switch ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ export const shellCacheControl = (ttlSeconds: number): string => `public, max-ag
 // ─── route classes ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Exact shell paths, matched with or without the trailing slash. */
-const SHELL_EXACT = ['/', '/shop', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog'];
+const SHELL_EXACT = ['/', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog'];
 const ONE_SEGMENT = '[^/]+';
 const DATA_PATH = /(^|\/)q-(loader|data|action)[^/]*\.json$/i;
 const DATA_QUERY = ['qaction', 'qfunc', 'qloaders', 'qdata'];
