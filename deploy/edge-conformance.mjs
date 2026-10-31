@@ -6,9 +6,12 @@
 //   dynamic -> `private, no-store` always.
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
-//        [--blog-post /blog/<slug>/] [--json]
+//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--json]
+// --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
+// purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
 // Exit 1 when any row fails. Sends no cookies; a second shell pass sends a fake signed-in cookie to prove it does not change the body.
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : dflt; };
@@ -16,6 +19,8 @@ const base = (args.find((a) => /^https?:\/\//.test(a)) ?? '').replace(/\/+$/, ''
 if (!base) { console.error('usage: edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product PATH] [--collection PATH] [--blog-post PATH] [--json]'); process.exit(2); }
 const expectShell = flag('--expect-shell', 'off');
 const json = args.includes('--json');
+const allowFile = flag('--allow', null);
+const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
 
 const ROWS = [
 	['shell', '/'], ['shell', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
@@ -49,7 +54,10 @@ const VALUE_PATTERNS = [
 	/"(?:price|priceWithTax|minPrice|maxPrice|salePrice|compareAtPrice|preOrderPrice|unitPrice|stockLevel)"\s*:\s*"?[1-9]/g,
 	/"inStock"\s*:\s*true/g,
 ];
-const valueHits = (body) => [...new Set(VALUE_PATTERNS.flatMap((re) => body.match(re) ?? []))].slice(0, 5);
+const valueHits = (body) => {
+	const scanned = ALLOWED_COPY.reduce((b, text) => b.replaceAll(text, ''), body);
+	return [...new Set(VALUE_PATTERNS.flatMap((re) => scanned.match(re) ?? []))].slice(0, 5);
+};
 
 async function get(path, headers = {}) {
 	const r = await fetch(`${base}${path}`, { headers: { 'user-agent': 'sellright-edge-conformance/1', ...headers }, redirect: 'manual' });
