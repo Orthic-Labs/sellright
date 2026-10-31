@@ -90,7 +90,8 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
 			...named,
 			url: variantUrl,
 			...(image ? { image: absoluteOn(ctx.siteOrigin, image) } : {}),
-			offers: { '@type': 'Offer', url: variantUrl, price: decimal(price), priceCurrency: model.currencyCode, itemCondition: NEW },
+			// ADR-0001 DP-1: a shell model (prices pending) states no offer; the merchant feed stays the crawl source for prices.
+			...(model.pricePending ? {} : { offers: { '@type': 'Offer', url: variantUrl, price: decimal(price), priceCurrency: model.currencyCode, itemCondition: NEW } }),
 		};
 	});
 	return {
@@ -147,9 +148,47 @@ const OG_AVAILABILITY: Record<string, ProductOgMeta['availability']> = {
  */
 export function productOgMeta(liveJsonLd: Record<string, unknown> | null, model: ModelProduct, brandName: string): ProductOgMeta {
 	const offer = liveJsonLd && typeof liveJsonLd.offers === 'object' && !Array.isArray(liveJsonLd.offers) ? (liveJsonLd.offers as Record<string, unknown>) : null;
-	const prices = model.variants.map(effectivePriceOf).filter((n) => Number.isFinite(n) && n >= 0);
+	// ADR-0001 DP-1: a shell model's prices are pending (zeroed): never a price tag from them.
+	const prices = model.pricePending ? [] : model.variants.map(effectivePriceOf).filter((n) => Number.isFinite(n) && n >= 0);
 	const price = typeof offer?.price === 'string' || typeof offer?.price === 'number' ? Number(offer.price).toFixed(2) : prices.length ? decimal(Math.min(...prices)) : undefined;
 	const currency = typeof offer?.priceCurrency === 'string' ? offer.priceCurrency : model.currencyCode;
 	const avail = typeof offer?.availability === 'string' ? OG_AVAILABILITY[offer.availability.replace(/^https?:\/\/schema\.org\//, '')] : undefined;
 	return { ...(price ? { price, currency } : {}), brand: brandName, condition: 'new', ...(avail ? { availability: avail } : {}) };
+}
+
+// ---------------------------------------------------------------------------------------------------- ADR-0001: offers off the shell
+
+/** The product JSON-LD for the cacheable shell: `offers` (price, availability) removed; the browser fills them after its live read. */
+export function withoutOffers<T>(schema: T): T {
+	if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+	const { offers: _offers, ...rest } = schema as Record<string, unknown>;
+	void _offers;
+	return rest as T;
+}
+
+/** The text of a JSON-LD script with live `offers` set on its Product (null when the text is not a Product schema). Pure. */
+export function jsonLdTextWithOffers(text: string, offers: unknown): string | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || (parsed as Record<string, unknown>)['@type'] !== 'Product') return null;
+	// `<` never appears raw inside a script element.
+	return JSON.stringify({ ...(parsed as Record<string, unknown>), offers }).replace(/</g, '\\u003c');
+}
+
+/** Fills the page's Product JSON-LD `offers` from a live read (browser). Returns how many scripts were updated. */
+export function fillJsonLdOffers(doc: Pick<Document, 'querySelectorAll'>, offers: unknown): number {
+	if (!offers || typeof offers !== 'object') return 0;
+	let n = 0;
+	doc.querySelectorAll('script[type="application/ld+json"]').forEach((el) => {
+		const next = jsonLdTextWithOffers(el.textContent ?? '', offers);
+		if (next !== null) {
+			el.textContent = next;
+			n++;
+		}
+	});
+	return n;
 }

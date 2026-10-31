@@ -1,4 +1,5 @@
-import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
+import { useLocation } from '@qwik.dev/router';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
 import { useShopListingOnLoad } from '~/platform/stock-triggers';
@@ -8,7 +9,9 @@ import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { shopCategoryFilters } from '~/theme/theme.config';
 import { categoryFacets, filterCategoryProducts } from '~/config/shop-categories';
-import { useCatalogLoader } from '~/platform/shop';
+import { readShopCatalog, useCatalogLoader } from '~/platform/shop';
+import { PRICE_PLACEHOLDER, useLiveRead } from '~/platform/live-values';
+import type { BrowseCatalog } from '~/services/browse-catalog';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
@@ -22,6 +25,13 @@ const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
 
 const BaseShopPage = component$(() => {
  const catalog = useCatalogLoader();
+ const location = useLocation();
+ // ADR-0001 §2: a deferred (shell) listing is read in the browser on load, from the manifest, no-store. Not deferred: no read.
+ const listingKey = useComputed$(() => (catalog.value.deferred ? location.url.pathname : null));
+ const liveCatalog = useLiveRead<BrowseCatalog>($(() => readShopCatalog()), listingKey);
+ /** The manifest listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
+ const listingProducts = (): CatalogListItem[] => (catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || []);
+ const listingPending = catalog.value.deferred && (liveCatalog.status === 'idle' || liveCatalog.status === 'loading');
 
  // Fallback API data (only used when manifest is missing or for text search) —
  // same native CatalogListItem[] shape as the manifest, so the grid never has
@@ -79,7 +89,7 @@ const BaseShopPage = component$(() => {
   // If the in-stock toggle was flipped, the live override from that moment
   // supersedes the manifest's inStock value.
   const override = liveStockOverride.value;
-  let products: CatalogListItem[] = (catalog.value.products || []).map(p =>
+  let products: CatalogListItem[] = listingProducts().map(p =>
    override && Object.prototype.hasOwnProperty.call(override, p.slug)
     ? { ...p, inStock: override[p.slug] }
     : p,
@@ -131,7 +141,8 @@ const BaseShopPage = component$(() => {
   const live = await fetchLiveListing((p) => searchProducts(p));
   if (live === null) console.error('[shop] Live stock read failed');
   if (gen !== listingGen.value) return live !== null;
-  liveStockOverride.value = liveListingAvailability((catalog.value.products || []).map((p) => p.slug), live);
+  const listed = catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || [];
+  liveStockOverride.value = liveListingAvailability(listed.map((p) => p.slug), live);
   return live !== null;
  });
 
@@ -198,7 +209,11 @@ const BaseShopPage = component$(() => {
      <span class="text-[var(--color-card-border)] text-xs">·</span>
 
      <span class="text-[13px] tracking-[0.5px] text-[var(--color-ink-soft)] font-body">
-      {inStockOnly.value
+      {listingPending && !searchTerm.value
+       ? (
+        // The count is stock-derived: the shell holds its place until the listing read lands.
+        <span aria-hidden="true" style={{ visibility: 'hidden' }}>Showing {PRICE_PLACEHOLDER}</span>
+       ) : inStockOnly.value
        ? (
         <>
          Showing{' '}
@@ -224,7 +239,23 @@ const BaseShopPage = component$(() => {
 
    {/* ── PRODUCT GRID ── */}
    <div class="max-w-[1920px] mx-auto">
-    {isSearching.value && displayProducts.length === 0 ? (
+    {listingPending && !searchTerm.value ? (
+     /* ADR-0001: the shell's listing space (two rows at every breakpoint) until the browser's manifest read lands */
+     <div
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
+      style={{ contain: 'layout' }}
+      data-listing-pending=""
+     >
+      <ProductCard skeleton slug="" />
+      <ProductCard skeleton slug="" />
+      <ProductCard skeleton slug="" />
+      <ProductCard skeleton slug="" />
+      <div class="hidden md:block"><ProductCard skeleton slug="" /></div>
+      <div class="hidden md:block"><ProductCard skeleton slug="" /></div>
+      <div class="hidden lg:block"><ProductCard skeleton slug="" /></div>
+      <div class="hidden lg:block"><ProductCard skeleton slug="" /></div>
+     </div>
+    ) : isSearching.value && displayProducts.length === 0 ? (
      /* Skeleton grid — only during API search */
      <div
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"

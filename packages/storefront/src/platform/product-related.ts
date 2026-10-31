@@ -3,7 +3,8 @@ import { routeLoader$ } from '@qwik.dev/router';
 import { normalizeBrowseCatalog } from '~/services/browse-catalog';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { PDP_RELATED } from '~/platform/brand-data';
-import { relatedRow, type RelatedRow } from './product-related-model';
+import { relatedRow, shellRelatedRow, type RelatedRow } from './product-related-model';
+import { shellRender } from '~/platform/shell-render';
 
 export type { RelatedCard, RelatedRow } from './product-related-model';
 
@@ -16,7 +17,9 @@ export const useRelatedProducts = routeLoader$(async ({ params }): Promise<Relat
 	const slug = (params.slug ?? '').replace(/\/$/, '');
 	try {
 		const catalog = normalizeBrowseCatalog(await readCatalogSnapshot<unknown>('shop-catalog.json'));
-		return relatedRow(catalog.products, slug);
+		const row = relatedRow(catalog.products, slug);
+		// ADR-0001 DP-1: the shell's row has no prices (the order stays the snapshot's, by price): platform/product.ts readProductValues.
+		return shellRender() ? shellRelatedRow(row) : row;
 	} catch {
 		return EMPTY;
 	}

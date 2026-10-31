@@ -9,6 +9,9 @@ import { ProductPageView } from './ProductPageView';
 import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
+import { applyVariantPrices, useLiveRead } from '~/platform/live-values';
+import { readProductValues, type VariantPrice } from '~/platform/product';
+import { useJsonLdOffersFill } from '~/platform/controllers/jsonld-offers';
 import { findVariant, getOptionGroups, isPaintedSoldOut, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -42,6 +45,21 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   // Manifest product-level in-stock hint (null when unknown). Only the pre-live paint trusts it; the live read is authoritative.
   const catalogInStock = loaderResult.catalogInStock ?? null;
   const liveStockLoaded = useSignal(false);
+  // ADR-0001 DP-1 (SHELL_CACHE=1): the shell's product carries no price (every price 0). The browser reads the prices once per view on
+  // load (no-store) and they render into the space the view holds; until then `pricesPending`. A failed read keeps the placeholder.
+  const valuesPending = loaderResult.valuesPending === true;
+  const pricesPending = useSignal(valuesPending);
+  const priceKey = useComputed$(() => (valuesPending ? product.slug : null));
+  const livePrices = useLiveRead<{ variants: VariantPrice[]; related: Record<string, number> }>($(() => readProductValues(product.slug)), priceKey);
+  useTask$(({ track }) => {
+    const status = track(() => livePrices.status);
+    if (status !== 'ready' || !livePrices.value) return;
+    product.variants = applyVariantPrices(product.variants, livePrices.value.variants);
+    pricesPending.value = false;
+  });
+  const relatedPrices = useComputed$(() => (livePrices.status === 'ready' ? livePrices.value?.related ?? {} : null));
+  // DP-1/DP-2: the Product JSON-LD offers (price, availability) come from a live read too.
+  useJsonLdOffersFill(product.slug, valuesPending);
   const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
   const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
   const currentImageIndex = useSignal(0);
@@ -352,6 +370,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     <ProductPageView
       addItemToOrderErrorSignal={addItemToOrderErrorSignal}
       catalogInStock={catalogInStock}
+      pricesPending={pricesPending}
+      relatedPrices={relatedPrices}
       enhancementError={enhancementError}
       isEnhancing={isEnhancing}
       refreshLiveStock={refreshLiveStock}

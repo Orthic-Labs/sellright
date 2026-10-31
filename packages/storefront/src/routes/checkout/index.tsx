@@ -3,6 +3,7 @@ import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
+import { fetchSessionCustomer } from '~/utils/session-customer';
 import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { canRestorePreferredCountry, resolveCheckoutCountry } from '~/components/checkout/checkout-country';
@@ -12,6 +13,7 @@ import { useCart, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartSto
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
 import { readCheckoutServerCart, serverCartShipCountry } from './summary-cart';
+import { shellRender } from '~/platform/shell-render';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
@@ -44,6 +46,9 @@ import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
  */
 export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) => {
   if (sharedMap.has('@loaderId')) return null;
+  // ADR-0001: with SHELL_CACHE=1 /checkout/ is a cacheable shell: no per-visitor cart and no prices in it. The summary renders its
+  // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). Off: unchanged.
+  if (shellRender()) return null;
   return readCheckoutServerCart(
     (path, init) => sellright().GET(path, init),
     cookie.get(TOKEN_COOKIE)?.value,
@@ -344,8 +349,10 @@ const CheckoutContent = component$(() => {
 
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
   const loadNormalCheckout = $(async (gen: number) => {
-    // A guest (no session the root layout could resolve for this request) has no profile to read: no /auth/me (#362).
-    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID;
+    // The customer is filled in the browser (ADR-0001: no identity in the cached shell), so it may not be known yet here: ask the
+    // storefront session endpoint, which makes no API call for a visitor without credentials (#362: no guest /auth/me).
+    const signedIn = appState.customer.id !== CUSTOMER_NOT_DEFINED_ID
+      || (await fetchSessionCustomer().catch(() => ({ status: 'unknown' as const }))).status === 'signed-in';
     const [customerData, countriesData] = await Promise.all([
       signedIn ? getMe().catch(() => null) : null,
       CountryService.getAvailableCountries().catch(() => []),

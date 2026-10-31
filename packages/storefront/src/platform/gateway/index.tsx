@@ -66,7 +66,7 @@ export const IDENTITY = obj({
 const POLICY = obj({ label: str, sub: str });
 const FACETS = arr(obj({ id: str, name: str, open: bool, values: arr(obj({ id: str, name: str, selected: bool })) }));
 export const FORM_STATE = obj({ status: lit('idle', 'submitting', 'success', 'error'), message: nul(str), turnstileRequired: bool, turnstileReady: bool });
-export const LISTING_CARD = obj({ slug: str, name: str, href: str, image: nul(str), priceCents: num, currencyCode: str });
+export const LISTING_CARD = obj({ slug: str, name: str, href: str, image: nul(str), priceCents: num, currencyCode: str, pricePending: opt(bool) });
 export const BLOG_CARD = obj({ slug: str, title: str, excerpt: nul(str), image: nul(str), publishedAt: nul(str), readingTime: num, href: str, tags: arr(str) });
 const REDEMPTION = nul(obj({ points: num, discountCents: num }));
 export const ORDER_SUMMARY = obj({
@@ -173,6 +173,8 @@ export const ProductCard = /*#__PURE__*/ gate('ProductCard', RawProductCard, {
 		preOrderPrice: opt(nul(num)),
 		isPreOrder: opt(bool),
 		inStock: opt(bool),
+		pending: opt(bool),
+		pricePending: opt(bool),
 		priority: opt(bool),
 		skeleton: opt(bool),
 		/** The product link (platform/product-path.ts); the card's own default is the /products/ path. */
@@ -189,6 +191,7 @@ export const Price = /*#__PURE__*/ gate('Price', RawPrice, {
 		forcedClass: opt(str),
 		originalPriceClass: opt(str),
 		currencyCode: opt(str),
+		pending: opt(bool),
 	}),
 });
 
@@ -222,6 +225,7 @@ export const HomeTeeSection = /*#__PURE__*/ gate('HomeTeeSection', RawHomeTeeSec
 				}),
 			),
 		),
+		pricePending: opt(bool),
 	}),
 });
 
@@ -333,8 +337,9 @@ export const VIEW_PRODUCT = obj({
 	availability: AVAILABILITY,
 	rating: nul(obj({ average: num, count: num })),
 	productId: nul(str),
+	pricePending: opt(bool),
 });
-export const PRODUCT_SUMMARY = obj({ key: str, slug: str, name: str, href: str, image: nul(str), priceRange: PRICE_RANGE, currencyCode: str });
+export const PRODUCT_SUMMARY = obj({ key: str, slug: str, name: str, href: str, image: nul(str), priceRange: PRICE_RANGE, currencyCode: str, pricePending: opt(bool) });
 export const VIEW_SELECTION = obj({ productKey: nul(str), options: arr(obj({ group: str, value: nul(str) })), variantSku: nul(str), quantity: num, preOrderConsent: bool });
 export const PURCHASE = obj({
 	stock: lit('unchecked', 'loading', 'ready', 'error'),

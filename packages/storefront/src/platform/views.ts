@@ -92,6 +92,8 @@ export interface ListingCard {
 	image: string | null;
 	priceCents: Cents;
 	currencyCode: string;
+	/** ADR-0001 DP-1: the live price is not read yet; `priceCents` is 0 and the view holds the price's space (no "$0"). */
+	pricePending?: boolean;
 }
 
 export interface HomeViewProps extends ConfiguratorActions {
@@ -221,6 +223,9 @@ export interface ViewProduct {
 	availability: Availability;
 	rating: { average: number; count: number } | null;
 	productId: string | null;
+	/** ADR-0001 DP-1: the cacheable shell carries no price; true until the browser's live read lands (every price field is 0 meanwhile,
+	 *  never to be shown). A view holds the price's space and shows nothing that reads as a price. */
+	pricePending?: boolean;
 }
 /** A sibling product on a product page: no stock. */
 export interface ProductSummary {
@@ -231,6 +236,8 @@ export interface ProductSummary {
 	image: string | null;
 	priceRange: { minCents: Cents; maxCents: Cents };
 	currencyCode: string;
+	/** As `ViewProduct.pricePending`. */
+	pricePending?: boolean;
 }
 export interface ViewSelection {
 	productKey: string | null;

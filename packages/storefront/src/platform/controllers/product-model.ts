@@ -136,6 +136,19 @@ export interface ModelProduct {
   /** #382: the catalog's product-level in-stock hint (null on the live path or when unknown). A first-paint hint for brand views
    *  only; purchase state still waits for the live read. */
   catalogInStock: boolean | null;
+  /** ADR-0001 DP-1: the shell copy of the model (SHELL_CACHE=1): every price is 0 and the stock hint null until the browser's live read
+   *  replaces the model. Absent = the model carries its real prices. */
+  pricePending?: boolean;
+}
+
+/** The shell copy of a model (ADR-0001 §2-§3): metadata kept, every price zeroed, the stock hint removed, marked `pricePending`. */
+export function redactModel(model: ModelProduct): ModelProduct {
+  return {
+    ...model,
+    variants: model.variants.map((v) => ({ ...v, priceCents: 0, salePriceCents: null, preOrderPriceCents: null })),
+    catalogInStock: null,
+    pricePending: true,
+  };
 }
 
 export interface SkuStock { inStock: boolean; availableQuantity: number | null }
@@ -308,6 +321,7 @@ export function projectViewProduct(model: ModelProduct, stock: ProductStock | un
     availability: productAvailability(model, stock),
     rating: model.rating ? { average: model.rating.average, count: model.rating.count } : null,
     productId: model.productId,
+    pricePending: model.pricePending === true,
   };
 }
 
@@ -321,6 +335,7 @@ export function projectSummary(model: ModelProduct): ProductSummary {
     image: model.images[0]?.url ?? null,
     priceRange: priceRange(model),
     currencyCode: model.currencyCode,
+    pricePending: model.pricePending === true,
   };
 }
 

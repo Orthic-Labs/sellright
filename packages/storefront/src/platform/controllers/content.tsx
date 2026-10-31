@@ -6,7 +6,9 @@ import { server$, useLocation } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { mountTurnstileOnIntent, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
-import { useFeaturedProducts } from '~/platform/home';
+import { readHomeValues, useFeaturedProducts } from '~/platform/home';
+import { useLiveRead } from '~/platform/live-values';
+import { hasPendingValues } from './configurator-model';
 import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/platform/blog';
 import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
@@ -17,7 +19,7 @@ import { buildBlogListView, buildBlogPostView } from './blog-view';
 import { projectFeatured, projectFormState, projectIdentity, seal } from './project';
 import { BlogListView, BlogPostView, ContactView, ContentView, HomeView, platformAction } from '~/platform/gateway';
 import type { BlogListViewProps, BlogPostViewProps, ContactViewProps, ContentViewProps, FormResult, FormState, HomeSpotlight, HomeViewProps } from '~/platform/views';
-import { useHomeSpotlight } from '~/platform/home-spotlight';
+import { readHomeSpotlight, useHomeSpotlight, type HomeSpotlightDetail } from '~/platform/home-spotlight';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
 
 const FORM_RESULTS: DispatchResults<FormResult> = {
@@ -185,13 +187,21 @@ export const BrandHomeMount = component$(() => {
 	// routes.json home.spotlight: the shared configurator over one product (its own live stock read, qidle). With no spotlight the
 	// configurator has no products: it reads nothing and every action is `invalid`.
 	const spotlight = useHomeSpotlight();
-	const c = useConfigurator(spotlight as ReadonlySignal<ConfiguratorLoaderValue>, 'spotlight');
-	const data = useComputed$(() =>
-		seal<Pick<HomeViewProps, 'identity' | 'featured'>>({
+	// ADR-0001: shell values (SHELL_CACHE=1) are read in the browser on load, no-store: the spotlight's prices through the configurator's
+	// source, the featured tiles' prices here. Off: neither read starts.
+	const spotKey = useComputed$(() => (hasPendingValues(spotlight.value, 'spotlight') ? 'spotlight' : null));
+	const spotLive = useLiveRead<HomeSpotlightDetail>($(() => readHomeSpotlight()), spotKey);
+	const featuredKey = useComputed$(() => (featured.value.valuesPending ? 'featured' : null));
+	const featuredLive = useLiveRead($(async () => (await readHomeValues()).featured), featuredKey);
+	const c = useConfigurator(spotlight as ReadonlySignal<ConfiguratorLoaderValue>, 'spotlight', spotLive);
+	const data = useComputed$(() => {
+		const pending = featured.value.valuesPending && featuredLive.status !== 'ready';
+		const items = featured.value.valuesPending && featuredLive.value ? featuredLive.value : featured.value.items;
+		return seal<Pick<HomeViewProps, 'identity' | 'featured'>>({
 			identity: projectIdentity(identity.value.identity) as HomeViewProps['identity'],
-			featured: projectFeatured(featured.value) as HomeViewProps['featured'],
-		}),
-	);
+			featured: projectFeatured(items).map((card) => (pending ? { ...card, pricePending: true } : card)) as HomeViewProps['featured'],
+		});
+	});
 	// Projected in the render body (a computed reading the configurator's projection loses its captures in production builds).
 	const v = c.project();
 	const product = spotlight.value ? (v.products[0] ?? null) : null;

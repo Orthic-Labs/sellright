@@ -1,4 +1,5 @@
 import { $, component$, useOnWindow, useSignal, useVisibleTask$ } from '@qwik.dev/core';
+import { PRICE_PLACEHOLDER } from '~/platform/live-values';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
 export const ProductMobileBar = component$((props: Record<string, any>) => {
@@ -36,7 +37,10 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
       <div class="sr-mobile-bar-meta">
         <div class="sr-mobile-bar-name">{product.name}</div>
         <div class="sr-mobile-bar-price">
-          {(() => {
+          {props.pricesPending?.value ? (
+            // ADR-0001 DP-1: the shell holds the price's place until the live read lands.
+            <span aria-hidden="true" style={{ visibility: 'hidden' }} data-price-pending="">{PRICE_PLACEHOLDER}</span>
+          ) : (() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
             const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;

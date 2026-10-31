@@ -1,7 +1,8 @@
 // A13: PDP platform code moved verbatim from src/routes/products/[...slug]/index.tsx (loaders, SEO head, static
 // generation). The PDP live-stock refresh itself (qidle, getProductStock) stays in ProductContent.tsx: it is a $ closure
 // over component signals and cannot move verbatim.
-import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
+import { routeLoader$, server$, type StaticGenerateHandler } from '@qwik.dev/router';
+import { noStore, shellRender } from '~/platform/shell-render';
 import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { getProductReviews } from '~/providers/shop/rewards/rewards';
@@ -11,13 +12,15 @@ import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { jsonLdProduct } from '~/services/sellright-seo';
-import { productPageContent } from '~/platform/brand-data';
+import { PDP_RELATED, productPageContent } from '~/platform/brand-data';
+import { relatedPricesOf, relatedRow } from '~/platform/product-related-model';
+import { normalizeBrowseCatalog } from '~/services/browse-catalog';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { theme, siteUrl } from '~/theme/theme.config';
-import { readCatalogGeneration } from '~/services/catalog-snapshot';
+import { readCatalogGeneration, readCatalogSnapshot } from '~/services/catalog-snapshot';
 import { catalogInStockOf, v1DetailFile, v2DetailFile } from '~/platform/catalog-stock-hint';
 import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
-import { withAbsoluteImages } from '~/platform/product-jsonld';
+import { withAbsoluteImages, withoutOffers } from '~/platform/product-jsonld';
 import { productMetaDescription } from '~/platform/product-meta';
 import { hasView } from '~/platform/gateway';
 
@@ -40,7 +43,27 @@ export interface ProductLoaderResult {
   /** #382: the manifest detail's product-level inStock (computed from stock levels at publish), so first paint does
    *  not show a whole product sold out before live stock answers; null on the live-API path and older manifests. */
   catalogInStock?: boolean | null;
+  /** ADR-0001 (SHELL_CACHE=1): the product's prices are redacted (0) and the stock hint removed; the page reads both in the browser
+   *  (`readProductValues`, the live stock read). Absent = the loader carries the prices, as before. */
+  valuesPending?: boolean;
 }
+
+/** One variant's live price fields, by SKU. */
+export interface VariantPrice { sku: string; price: number; salePrice: number | null; preOrderPrice: number | null }
+
+/** The shell copy of a product loader result (ADR-0001 §2-§3): prices zeroed, the stock hint removed, `valuesPending`. */
+export function shellProductResult<T extends ProductLoaderResult>(r: T): T {
+  return {
+    ...r,
+    product: { ...r.product, variants: r.product.variants.map((v) => ({ ...v, price: 0, salePrice: null, preOrderPrice: null, compareAtPrice: null })) },
+    catalogInStock: null,
+    valuesPending: true,
+  };
+}
+
+/** The live price fields of a product's variants. */
+export const variantPricesOf = (product: Pick<CatalogProduct, 'variants'>): VariantPrice[] =>
+  product.variants.map((v) => ({ sku: String(v.sku), price: Number(v.price) || 0, salePrice: v.salePrice ?? null, preOrderPrice: v.preOrderPrice ?? null }));
 
 // ─────────────────────────────────────────────────────────────────
 // Route loader — manifest-first with API fallback. Both paths return the
@@ -85,7 +108,7 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url,
   // refreshLiveStock hook on qidle — fast SSR shell, progressive stock enable
   // once the client checks in.
   const fromManifest = await productFromManifest(slug);
-  if (fromManifest) return fromManifest;
+  if (fromManifest) return shellRender() ? shellProductResult(fromManifest) : fromManifest;
 
   // No manifest: take the product id from the detail response and the rating from the reviews endpoint (null on any
   // failure — reviews must never block or fail the PDP shell). Both reads start together, not one after the other (#362).
@@ -97,7 +120,8 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url,
       return fail(404, { message: `Product not found: ${slug}` });
     }
     const reviews = await reviewsRead;
-    return { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
+    const result: ProductLoaderResult = { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
+    return shellRender() ? shellProductResult(result) : result;
   } catch (error) {
     // A real 404 came back as null above; anything thrown is the API failing (429, 5xx, network). Answer 503 so a brief outage
     // never tells crawlers the product is gone (#408: demo PDPs returned 404 while its API was rate-limiting).
@@ -119,8 +143,42 @@ export const useProductJsonLd = routeLoader$(async ({ params, url }) => {
   if (url.pathname.split('/')[1] !== PRODUCT_PREFIX) return null;
   const { slug } = cleanUpParams(params);
   if (!slug) return null;
-  return jsonLdProduct(slug);
+  const schema = await jsonLdProduct(slug);
+  // ADR-0001 DP-1/DP-2: the shell's Product JSON-LD has no offers (price, availability); the browser fills them (readProductOffers).
+  return shellRender() ? withoutOffers(schema) : schema;
 }, PAGE_LOADER_OPTIONS);
+
+const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9\-_]*$/;
+
+/** ADR-0001: a PDP's live prices in the browser (base PDP), from the same source the loader reads, per request, no-store. Null on failure. */
+export const readProductValues = server$(async function (slug: string): Promise<{ variants: VariantPrice[]; related: Record<string, number> } | null> {
+  noStore(this);
+  if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
+  const related = await relatedPricesFor(slug);
+  const fromManifest = await productFromManifest(slug);
+  if (fromManifest) return { variants: variantPricesOf(fromManifest.product), related };
+  const product = await getProductDetail(slug).catch(() => null);
+  return product ? { variants: variantPricesOf(product), related } : null;
+});
+
+/** The related row's prices (routes.json productPage.related), from the same snapshot the row loader reads; empty without it. */
+async function relatedPricesFor(slug: string): Promise<Record<string, number>> {
+  if (!PDP_RELATED) return {};
+  try {
+    return relatedPricesOf(relatedRow(normalizeBrowseCatalog(await readCatalogSnapshot<unknown>('shop-catalog.json')).products, slug));
+  } catch {
+    return {};
+  }
+}
+
+/** ADR-0001 DP-1/DP-2: the live Product JSON-LD offers (the API computes price and availability per request), no-store. */
+export const readProductOffers = server$(async function (slug: string): Promise<Record<string, unknown> | null> {
+  noStore(this);
+  if (typeof slug !== 'string' || !SAFE_SLUG_RE.test(slug)) return null;
+  const schema = await jsonLdProduct(slug).catch(() => null);
+  const offers = schema?.offers;
+  return offers && typeof offers === 'object' ? (offers as Record<string, unknown>) : null;
+});
 
 // ─────────────────────────────────────────────────────────────────
 // Head — identical to original (preserves generateImagePreloadLinks for LCP)

@@ -10,6 +10,8 @@ export interface RelatedCard {
 	href: string;
 	image: string | null;
 	priceCents: number;
+	/** ADR-0001 DP-1: the shell row carries no price (`priceCents` 0); the page's live read supplies it. */
+	pricePending?: boolean;
 }
 export interface RelatedRow {
 	heading: '' | 'You may also like';
@@ -32,3 +34,9 @@ export function relatedRow(products: readonly CatalogListItem[], slug: string, l
 		.map(toCard);
 	return { heading: items.length ? 'You may also like' : '', items };
 }
+
+/** The shell copy of a row: order and cards kept, prices removed. */
+export const shellRelatedRow = (row: RelatedRow): RelatedRow => ({ ...row, items: row.items.map((c) => ({ ...c, priceCents: 0, pricePending: true })) });
+
+/** The row's prices by slug (the live read's half of a shell row). */
+export const relatedPricesOf = (row: RelatedRow): Record<string, number> => Object.fromEntries(row.items.map((c) => [c.slug, c.priceCents]));
