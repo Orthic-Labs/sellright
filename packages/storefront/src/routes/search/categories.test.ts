@@ -115,3 +115,16 @@ describe('search category URL contract', () => {
     await expect(searchByCategories('', ['4'], categories, search)).rejects.toThrow('Catalog exceeds category search limit');
   });
 });
+
+describe('searchByCategories term length (#410)', () => {
+  it('a 1-character term is an empty result without an API call (the API requires 2+); 2+ and empty terms still search', async () => {
+    const search = vi.fn(async () => ({ items: [], total: 0 }));
+    expect(await searchByCategories('a', [], [], search)).toEqual({ items: [], total: 0 });
+    expect(await searchByCategories(' b ', [], [], search)).toEqual({ items: [], total: 0 });
+    expect(search).not.toHaveBeenCalled();
+    await searchByCategories('ab', [], [], search);
+    expect(search).toHaveBeenLastCalledWith({ term: 'ab', take: 60 });
+    await searchByCategories('', [], [], search);
+    expect(search).toHaveBeenLastCalledWith({ term: undefined, take: 60 });
+  });
+});

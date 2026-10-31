@@ -12,7 +12,11 @@ export async function searchByCategories(
   if (selectedIds.length && !categories.some(({ id }) => selectedIds.includes(id))) {
     return { items: [], total: 0 };
   }
-  const result = await searchProducts({ term: term || undefined, take: selectedIds.length ? 10000 : 60 });
+  // The API requires 2+ characters (PERF C13: a 1-character ILIKE scans the whole catalog) and answers 400 below that; a
+  // 1-character term is an empty result, not a 500 (#410).
+  const trimmed = term.trim();
+  if (trimmed.length === 1) return { items: [], total: 0 };
+  const result = await searchProducts({ term: trimmed || undefined, take: selectedIds.length ? 10000 : 60 });
   if (!selectedIds.length) return result;
 
   // Filter before limiting visible results: a matching category may occur
