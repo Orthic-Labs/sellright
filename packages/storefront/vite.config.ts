@@ -9,6 +9,7 @@ import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
 import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 import { preloadGraphPlugin } from './src/platform/preload-graph';
+import { buildGuardsPlugin } from './src/platform/build-guards';
 import { precompressPlugin } from './src/platform/precompress';
 
 const NO_GLOBAL_CSS = '\0sellright-no-global-css';
@@ -179,6 +180,9 @@ export default defineConfig((config) => {
       ...(commerceFlow === 'license' ? [noGlobalCssPlugin(fileURLToPath(new URL('./src', import.meta.url)))] : []),
       // Build-time .gz (level 9) + .br (q11) siblings, served by the /build handler in entry.express.tsx.
       ...(!isDev ? [precompressPlugin()] : []),
+      // Brand perf checks before bundling; after it, the CSS gate: the global stylesheet must carry the brand tokens and fonts
+      // (bedbed29). In the build itself so a brand build script that runs the steps one by one cannot skip it.
+      buildGuardsPlugin({ commerceFlow }),
     ],
     preview: {
       host: '0.0.0.0',

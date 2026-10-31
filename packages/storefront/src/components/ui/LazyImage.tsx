@@ -232,7 +232,7 @@ export const OptimizedImage = component$<OptimizedImageProps>(({
  src,
  alt,
  class: className = '',
- loading = 'lazy',
+ loading: loadingProp,
  priority = false,
  fetchPriority: fetchPriorityProp,
  decoding: decodingProp,
@@ -292,7 +292,7 @@ export const OptimizedImage = component$<OptimizedImageProps>(({
        alt={alt}
        width={width}
        height={height}
-       loading={loading}
+       loading={loadingProp ?? (priority ? 'eager' : 'lazy')}
        fetchPriority={fetchPriorityProp ?? (priority ? 'high' : undefined)}
        decoding={decodingProp ?? (priority ? 'sync' : 'async')}
        class={className}
