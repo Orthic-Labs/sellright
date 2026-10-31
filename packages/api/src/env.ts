@@ -136,6 +136,13 @@ const EnvSchema = z.object({
   CLOUDFLARE_ZONE_ID_BY_APP: optionalEnvString,
   CLOUDFLARE_API_TOKEN: optionalEnvString,
   CLOUDFLARE_API_TOKEN_BY_APP: optionalEnvString,
+  // Multi-host / multi-zone stores (one store served on several hosts in several Cloudflare zones). Optional:
+  // unset keeps today's single-host purge. STOREFRONT_HOSTS_BY_STORE is keyed by store slug with "|"-separated
+  // hosts, e.g. rightsites=store.heardright.app|store.viewright.cc (list must include the primary host);
+  // CLOUDFLARE_ZONE_ID_BY_HOST maps host -> zone id, e.g. store.heardright.app=<zone>,store.viewright.cc=<zone>
+  // (hosts not listed use the store's CLOUDFLARE_ZONE_ID[_BY_APP]). One API token covers all zones.
+  STOREFRONT_HOSTS_BY_STORE: optionalEnvString,
+  CLOUDFLARE_ZONE_ID_BY_HOST: optionalEnvString,
   // Internal admin cache-purge route (routes/admin-cache.ts). Compared with
   // crypto.timingSafeEqual, fail CLOSED (503) when unset — never fall back to
   // an unauthenticated purge endpoint.
