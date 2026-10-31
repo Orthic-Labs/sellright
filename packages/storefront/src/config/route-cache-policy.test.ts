@@ -369,7 +369,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 			const csp = r.headers.get('content-security-policy')!;
 			const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src '))!;
 			expect(scriptSrc).not.toMatch(/nonce-|unsafe-inline|strict-dynamic/);
-			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' https://js.stripe.com`)).toBe(true);
+			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' https://static.cloudflareinsights.com https://js.stripe.com`)).toBe(true);
 			expect(scriptSrc.match(/sha256-/g)).toHaveLength(2);
 		});
 	});

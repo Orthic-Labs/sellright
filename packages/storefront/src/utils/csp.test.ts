@@ -255,7 +255,7 @@ describe('ADR-0001 hash CSP for shell renders', async () => {
 
 	it('buildCsp without a nonce has no nonce source and never unsafe-inline for scripts; with one it is unchanged', () => {
 		const none = directive(buildCsp({ nonce: undefined }), 'script-src');
-		expect(none).toBe("script-src 'self' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(none).toBe("script-src 'self' https://static.cloudflareinsights.com https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
 		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
 	});
 

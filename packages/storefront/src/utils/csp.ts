@@ -57,6 +57,7 @@ export interface CspOptions {
 	youtubeEmbed?: boolean;
 }
 
+const CF_INSIGHTS_ORIGIN = 'https://static.cloudflareinsights.com';
 const withSources = (base: string, extra: string[] = []) => [base, ...extra].join(' ');
 
 export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, sheerIdEnabled, google, apple, analytics, youtubeEmbed }: CspOptions): string {
@@ -69,7 +70,9 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 		`default-src 'self'`,
 		// Collect.js (NMI) injects its own stylesheet from its host and, for Apple Pay, applepay.cdn-apple.com/jsapi
 		// (both verified in the live secure.nmi.com/token/Collect.js, 2026-10-26).
-		withSources(`script-src 'self'${nonce ? ` 'nonce-${nonce}'` : ''} https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
+		// Cloudflare Web Analytics injects its beacon at the edge: it copies the page nonce, so only the hash (shell) policy needs the
+		// origin (blocked on store.heardright.app with SHELL_CACHE=1, 2026-10-31). Its reports go to same-origin /cdn-cgi/rum.
+		withSources(`script-src 'self'${nonce ? ` 'nonce-${nonce}'` : ` ${CF_INSIGHTS_ORIGIN}`} https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com${turnstile}${sheerId}`, [...(google?.script ?? []), ...(apple?.script ?? []), ...(analytics?.script ?? [])]),
 		withSources(`style-src 'self' 'unsafe-inline' https://sandbox.nmi.com https://secure.nmi.com`, google?.style),
 		`img-src 'self' data: https:`,
 		// #400/#377: Apple Pay's button stylesheet (Collect.js / Stripe wallets) loads its font from applepay.cdn-apple.com.
