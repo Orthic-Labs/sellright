@@ -13,7 +13,7 @@ import { isBrowser } from '@qwik.dev/core/build';
 import { RequestHandler, routeLoader$, useLocation } from '@qwik.dev/router';
 import { ImageTransformerProps, useImageProvider } from 'qwik-image';
 import Menu from '~/components/menu/Menu';
-import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, IMAGE_RESOLUTIONS, AUTH_TOKEN, COUNTRY_COOKIE } from '~/constants';
+import { APP_STATE, IMAGE_RESOLUTIONS, COUNTRY_COOKIE } from '~/constants';
 import { ActiveCustomer, AppState } from '~/types';
 import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
@@ -28,12 +28,14 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CACHE_POLICY_VERSION, resolveRouteCacheProfile, vetoEdgeCache } from '~/config/route-cache-policy';
 import { sellright } from '~/sellright/client';
 import { srShopIdentity, srErrorStatus, type SrMaintenanceStatus } from '~/utils/sellright';
-import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
-import { theme, identityFromStaticTheme } from '~/theme/theme.config';
+import { identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
 import { AnalyticsMount } from '~/platform/controllers/analytics-mount';
 import { BRAND_HEAD } from '~/platform/brand-data';
 import { canRestorePreferredCountry } from '~/components/checkout/checkout-country';
+import { anonymousCustomer, fetchSessionCustomer, nextCustomer } from '~/utils/session-customer';
+import { getCookie } from '~/utils';
+import { CartService } from '~/services/CartService';
 
 /** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
 const HAS_ANALYTICS = !!BRAND_HEAD.analytics;
@@ -43,6 +45,9 @@ const HAS_ANALYTICS = !!BRAND_HEAD.analytics;
  *  only useful to identify a link-holder as trusted, never a session secret;
  *  keeping it readable also lets client nav propagate it if ever needed. */
 const PREVIEW_TOKEN_COOKIE = 'sr_preview_token';
+
+/** Set by GET /api/session/ while HttpOnly legacy transport exists (see ~/utils/session-customer.server.ts). */
+const LEGACY_HINT = /(?:^|;\s*)sr_legacy_cart=1(?:;|$)/;
 
 /**
  * Runtime store identity/theme (plan §1.9): fetched fresh per request from
@@ -67,6 +72,9 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 		cookie.set(PREVIEW_TOKEN_COOKIE, queryToken, { path: '/', maxAge: 60 * 60 * 24 * 30, sameSite: 'lax' });
 	}
 	const previewToken = queryToken ?? cookie.get(PREVIEW_TOKEN_COOKIE)?.value;
+	// ADR-0001: a preview request is `dynamic`. The remembered cookie unlocks an unpublished store just like the query
+	// parameter, so its render must never be shared either (I-2).
+	if (previewToken && !queryToken) vetoEdgeCache(headers, 'preview');
 	try {
 		const identity = await srShopIdentity(previewToken);
 		return { identity: normalizeIdentity(identity), notPublished: false };
@@ -86,7 +94,7 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
 	// params unless allow-listed, so the preview token must be declared.
 	search: ['preview_token'],
-	// The shell reads this loader (and the auth loader below) in the browser as well. With the router's default ('never')
+	// The shell reads this loader in the browser as well. With the router's default ('never')
 	// each read after load re-fetched it from the server, re-running it and its API call on every page (#362). The value
 	// is small and already rendered into the page. The maintenance loader keeps the default on purpose: passing options
 	// makes a loader skip query-only navigations, and maintenance must be re-read on every navigation.
@@ -124,28 +132,11 @@ export const useMaintenanceLoader = routeLoader$(async ({ headers }): Promise<Sr
 	}
 });
 
-/** Resolve imported credentials before SSR can paint a signed-out account state. */
-export const useAuthLoader = routeLoader$(async ({ cookie, headers, url, sharedMap }) => {
-	const countryCode = cookie.get(COUNTRY_COOKIE)?.value;
-	const hasLegacyTransport = !!(cookie.get('authToken')?.value || cookie.get('__vendure_session')?.value);
-	if (theme.isDemo || (!cookie.get(AUTH_TOKEN)?.value && !hasLegacyTransport)) {
-		return { isAuthenticated: false, countryCode, customer: null };
-	}
-	// HttpOnly legacy transport is invisible to JS. Presence prompts one proof-checked cart request, never authentication.
-	if (!cookie.get(AUTH_TOKEN)?.value && hasLegacyTransport) {
-		cookie.set('sr_legacy_cart', '1', { path: '/', maxAge: 3600, sameSite: 'lax', secure: url.protocol === 'https:' });
-	}
-	try {
-		const data = await bootstrapCustomer(headers, sharedMap);
-		vetoEdgeCache(headers, 'authenticated');
-		return { isAuthenticated: true, countryCode, customer: {
-			id: data.id, firstName: data.firstName ?? '', lastName: data.lastName ?? '', emailAddress: data.email,
-		} };
-	} catch (error) {
-		if (srErrorStatus(error) !== 401) throw error;
-		return { isAuthenticated: false, countryCode, customer: null };
-	}
-}, { serializationStrategy: 'always' });
+/*
+ * ADR-0001 §1 (I-2): nothing per visitor renders into the page. The signed-in customer, the `sr_legacy_cart` hint and the
+ * credential adoption that the old root auth loader did on every SSR now come from GET /api/session/ (no-store) in
+ * the browser (see ~/utils/session-customer.ts); the `countryCode` cookie is read in the browser below.
+ */
 
 
 // Component to render the global login modal
@@ -178,7 +169,6 @@ export default component$(() => {
 		resolutions: IMAGE_RESOLUTIONS,
 	});
 
-	const authData = useAuthLoader();
 	const identityData = useStoreIdentityLoader();
 	const maintenanceData = useMaintenanceLoader();
 
@@ -188,13 +178,14 @@ export default component$(() => {
 		showUserMenu: false,
 		showMobileUserMenu: false,
 		isLoading: false,
-		customer: (authData.value.customer ?? { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' }) as ActiveCustomer,
+		// Signed out until the browser's session read says otherwise (ADR-0001 I-2: no identity in the HTML).
+		customer: anonymousCustomer() as ActiveCustomer,
 		availableCountries: [],
 		shippingAddress: {
 			id: '',
 			city: '',
 			company: '',
-			countryCode: authData.value.countryCode || '',
+			countryCode: '',
 			fullName: '',
 			phoneNumber: '',
 			postalCode: '',
@@ -222,17 +213,37 @@ export default component$(() => {
 
 	useContextProvider(APP_STATE, state);
 
-	// Follow the session the root auth loader resolves on each navigation (e.g. /sign-in navigating on, or a sign-out):
-	// components read "signed in" from appState.customer instead of asking /auth/me again (#362). Fields the account area
-	// adds (phone) stay while it is the same customer.
-	useTask$(({ track }) => {
-		const customer = track(() => authData.value.customer);
-		if (!customer) {
-			if (state.customer.id !== CUSTOMER_NOT_DEFINED_ID) state.customer = { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' } as ActiveCustomer;
-			return;
+	// The signed-in customer, read in the browser (ADR-0001 I-2): once when the document starts, and again on each client
+	// navigation to a new path, where the old root loader re-ran (e.g. /sign-in navigating on). Components read "signed in"
+	// from appState.customer instead of asking /auth/me again (#362). Fields the account area adds (phone) stay while it is
+	// the same customer. A failed read changes nothing. No identity is kept beyond the page.
+	const session = useStore({ gen: 0 });
+	const readSession = $(async () => {
+		const gen = ++session.gen;
+		const hadLegacyHint = LEGACY_HINT.test(document.cookie);
+		const result = await fetchSessionCustomer();
+		if (gen !== session.gen) return;
+		const next = nextCustomer(state.customer, result);
+		if (next) state.customer = next as ActiveCustomer;
+		// The legacy-transport hint used to arrive with the page, before the cart booted. It now arrives with this read, so
+		// when it is new, boot the cart again once the current boot settles: the second boot sees the hint and runs the
+		// one-time legacy claim (a live read, like every boot).
+		if (!hadLegacyHint && LEGACY_HINT.test(document.cookie)) {
+			CartService.bootstrap().catch(() => undefined).then(() => CartService.bootstrap()).catch((e) => {
+				console.error('Layout: legacy cart claim failed:', e);
+			});
 		}
-		const same = state.customer.id === customer.id;
-		state.customer = { ...(same ? state.customer : {}), ...customer } as ActiveCustomer;
+	});
+	useOnDocument('qinit', $(() => {
+		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
+		const cookieCountry = getCookie(COUNTRY_COOKIE);
+		if (cookieCountry && !state.shippingAddress.countryCode) state.shippingAddress.countryCode = cookieCountry;
+		readSession();
+	}));
+	useTask$(({ track }) => {
+		track(() => location.url.pathname);
+		if (!isBrowser) return;
+		readSession();
 	});
 
 	// T3: Restore persisted country selection (qidle — lazy, no urgency)
