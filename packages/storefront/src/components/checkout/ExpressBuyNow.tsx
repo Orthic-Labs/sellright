@@ -92,6 +92,7 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 				onAvailability$={onAvailability$}
 				onPlaceOrder$={onPlaceOrder$}
 				onError$={onError$}
+				loadOn="interaction"
 				testId="express-buy-now-buttons"
 			/>
 			{error.value && <p role="alert" style="font-size:12px;margin-top:6px;">{error.value}</p>}

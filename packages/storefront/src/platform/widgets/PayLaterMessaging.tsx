@@ -7,7 +7,7 @@ import { APP_STATE } from '~/constants';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
 import { CheckoutPaymentMessaging } from '~/components/checkout/CheckoutPaymentMessaging';
 import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
-import { afterLoadIdleOrInteraction } from '~/utils/load-trigger';
+import { afterInteraction } from '~/utils/load-trigger';
 
 export interface PayLaterMessagingProps {
 	/** Price in minor units (cents), e.g. the selected variant's price. */
@@ -20,8 +20,8 @@ export const PayLaterMessaging = component$<PayLaterMessagingProps>((props) => {
 	const appState = useContext(APP_STATE);
 	const gateway = useSignal<{ configured: boolean; key: string } | null>(null);
 	useVisibleTask$(async () => {
-		// P7/V15: no gateway config, so no Stripe.js, until the page has loaded and gone idle (or the shopper interacts).
-		await afterLoadIdleOrInteraction();
+		// P7/V15: no gateway config, so no Stripe.js, until the shopper's first interaction (never at load/idle: Lighthouse LCP).
+		await afterInteraction();
 		try {
 			const cfg = await getShopConfig();
 			gateway.value = { configured: !!cfg.stripeConfigured, key: cfg.stripePublishableKey ?? '' };

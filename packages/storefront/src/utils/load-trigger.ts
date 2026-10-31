@@ -39,3 +39,16 @@ export function afterLoadIdleOrInteraction(opts: IdleTriggerOptions = {}): Promi
 		else window.addEventListener('load', onLoad, { once: true });
 	});
 }
+
+/** PDP variant: resolves ONLY on the first pointer/key/touch/scroll interaction — never on load, idle or a timer, so an
+ *  unattended page (a Lighthouse run) never fetches the SDK. Never resolves on the server. */
+export function afterInteraction(): Promise<void> {
+	if (typeof window === 'undefined' || typeof document === 'undefined') return new Promise<void>(() => {});
+	return new Promise<void>((resolve) => {
+		const finish = () => {
+			for (const ev of INTERACTION_EVENTS) window.removeEventListener(ev, finish, true);
+			resolve();
+		};
+		for (const ev of INTERACTION_EVENTS) window.addEventListener(ev, finish, { capture: true, passive: true, once: true });
+	});
+}
