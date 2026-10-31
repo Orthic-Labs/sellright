@@ -6,12 +6,13 @@
 //   dynamic -> `private, no-store` always.
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
-//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--json]
+//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--json]
 // --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
 // purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
 // Exit 1 when any row fails. Sends no cookies; a second shell pass sends a fake signed-in cookie to prove it does not change the body.
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : dflt; };
@@ -20,6 +21,10 @@ if (!base) { console.error('usage: edge-conformance.mjs <baseUrl> [--expect-shel
 const expectShell = flag('--expect-shell', 'off');
 const json = args.includes('--json');
 const allowFile = flag('--allow', null);
+// --save-dir: every fetched body is kept (so a later "what did the edge serve" question has evidence).
+const saveDir = flag('--save-dir', null);
+if (saveDir) mkdirSync(saveDir, { recursive: true });
+let saved = 0;
 const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
 
 const ROWS = [
@@ -43,7 +48,9 @@ const withoutInstance = (body) => {
 	const id = /q:instance="([^"]+)"/.exec(body)?.[1];
 	return (id ? body.replaceAll(id, 'QINSTANCE') : body)
 		.replace(/\/cdn-cgi\/l\/email-protection#[0-9a-f]+/g, '/cdn-cgi/l/email-protection#CF')
-		.replace(/data-cfemail="[0-9a-f]+"/g, 'data-cfemail="CF"');
+		.replace(/data-cfemail="[0-9a-f]+"/g, 'data-cfemail="CF"')
+		// Cloudflare JavaScript detections (bot management) inject a per-response ray id and token.
+		.replace(/__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+'\}/g, '__CF$cv$params={CF}');
 };
 
 // DP-1/I-1: a shell body carries no price and no stock. Flags currency amounts in markup or state and non-zero value fields in
@@ -54,17 +61,21 @@ const VALUE_PATTERNS = [
 	/"(?:price|priceWithTax|minPrice|maxPrice|salePrice|compareAtPrice|preOrderPrice|unitPrice|stockLevel)"\s*:\s*"?[1-9]/g,
 	/"inStock"\s*:\s*true/g,
 ];
-const valueHits = (body) => {
+// Blog pages are CMS writing (amounts in titles, excerpts and keywords are content, purged on edit): only the field patterns apply.
+const isBlog = (path) => /^\/blog(\/|$)/.test(path);
+const valueHits = (body, path = '') => {
 	const scanned = ALLOWED_COPY.reduce((b, text) => b.replaceAll(text, ''), body);
-	return [...new Set(VALUE_PATTERNS.flatMap((re) => scanned.match(re) ?? []))].slice(0, 5);
+	const patterns = isBlog(path) ? VALUE_PATTERNS.slice(2) : VALUE_PATTERNS;
+	return [...new Set(patterns.flatMap((re) => scanned.match(re) ?? []))].slice(0, 5);
 };
 
 async function get(path, headers = {}) {
 	const r = await fetch(`${base}${path}`, { headers: { 'user-agent': 'sellright-edge-conformance/1', ...headers }, redirect: 'manual' });
 	const body = await r.text();
+	if (saveDir) writeFileSync(join(saveDir, `${String(++saved).padStart(3, '0')}${headers.cookie ? '-signed' : ''}${path.replace(/[^a-z0-9]+/gi, '_')}.html`), body);
 	return { status: r.status, cc: r.headers.get('cache-control') ?? '', cf: r.headers.get('cf-cache-status') ?? '-', csp: r.headers.get('content-security-policy') ?? '',
 		setCookie: r.headers.get('set-cookie'), diag: r.headers.get('x-sr-edge') ?? '', hash: createHash('sha256').update(withoutInstance(body)).digest('hex').slice(0, 12),
-		values: valueHits(body) };
+		values: valueHits(body, path) };
 }
 
 const results = [];
