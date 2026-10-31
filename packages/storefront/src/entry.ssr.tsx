@@ -20,6 +20,7 @@ import { headOrderWriter } from './platform/head-order';
 import { clientDistDir, inlineStylesheetInjections, readBuiltCss } from './platform/inline-stylesheet.server';
 import { loadWarmScript } from './platform/warm-graph.server';
 import { earlyReadsStream } from './platform/early-reads.server';
+import { deferredLoaderInjections } from './platform/deferred-loader.server';
 
 // #425 step 2: the global stylesheet inline (platform/inline-stylesheet.server.ts), resolved once per manifest object.
 const distDir = import.meta.env.PROD ? clientDistDir(import.meta.url) : null;
@@ -64,14 +65,19 @@ export default function (opts: ExtendedRenderOptions) {
 	const stream = headOrderWriter(earlyReadsStream(opts.stream, opts.serverData?.url, nonce));
 	const base = withInlineStylesheet((opts.manifest as typeof manifest | undefined) ?? manifest);
 	// Per request: the warm script carries this render's nonce (a shell render has none; the express layer hashes it instead).
-	const renderManifest = base && warm
-		? { ...base, injections: [...(base.injections ?? []), { tag: 'script', location: 'head' as const, attributes: { ...(nonce ? { nonce } : {}), dangerouslySetInnerHTML: warm } }] }
-		: base;
+	// #425: Qwik's loader starts after the first frame (platform/deferred-loader.server.ts); the framework's own loader tag is off below.
+	const loaderSrc = base?.qwikLoader ? `/build/${base.qwikLoader}` : null;
+	const extra = [
+		...(loaderSrc ? deferredLoaderInjections(loaderSrc, nonce) : []),
+		...(warm ? [{ tag: 'script', location: 'head' as const, attributes: { ...(nonce ? { nonce } : {}), dangerouslySetInnerHTML: warm } }] : []),
+	];
+	const renderManifest = base && extra.length ? { ...base, injections: [...(base.injections ?? []), ...extra] } : base;
 	const result = renderToStream(<Root nonce={nonce} country={country} />, {
 		...opts,
 		manifest: renderManifest,
 		// #425 step 3: no speculative preloader (115-271 script requests per page); the warm graph above fetches what is needed.
 		preloader: false,
+		...(loaderSrc ? { qwikLoader: 'never' as const } : {}),
 		stream,
 		base: extractBase,
 		// Use container attributes to set attributes on the html tag.
