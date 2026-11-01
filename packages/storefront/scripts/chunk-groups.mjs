@@ -10,9 +10,9 @@ const AREAS = [
 	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
 	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
 	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],
-	// The configurator and stock read also drive the home spotlight add to cart; in the product bundle they loaded the whole product
+	// The configurator, stock read and a brand's own Configurator view (Rotten: product and shop) also drive the home spotlight add to cart; in the product bundle they loaded the whole product
 	// page's code on home (~17 KB br). Own small bundle: home loads it alone, the product page loads it beside product.
-	['configurator', /^platform\/(controllers\/)?(configurator|stock-read)/],
+	['configurator', /^(platform\/(controllers\/)?(configurator|stock-read)|brand\/configurator\/Configurator\.)/],
 	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout|hooks\/(useCheckout|checkout-stage|pre-submit-stock|zero-due)\b)/],
 	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/widgets\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
 	['product', /^(routes\/products\/|routes\/shop\/\[[^/]+\]\/|brand-slots\/(route\.product|pdp\.)|components\/reviews\/|platform\/(product|configurator|stock-read|content-review)|platform\/controllers\/(product|configurator|stock-read)|brand\/configurator\/)/],
