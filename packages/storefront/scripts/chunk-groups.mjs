@@ -10,13 +10,15 @@ const AREAS = [
 	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
 	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
 	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],
-	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout)/],
-	['cart', /^(components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/widgets\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
+	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout|hooks\/(useCheckout|checkout-stage|pre-submit-stock|zero-due)\b)/],
+	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/widgets\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
 	['product', /^(routes\/products\/|routes\/shop\/\[[^/]+\]\/|brand-slots\/(route\.product|pdp\.)|components\/reviews\/|platform\/(product|configurator|stock-read|content-review)|platform\/controllers\/(product|configurator|stock-read)|brand\/configurator\/)/],
 	['home', /^(routes\/index\.tsx|brand-slots\/route\.home|components\/home\/|platform\/(home|home-spotlight)\b|platform\/controllers\/home)/],
 	['shop', /^(routes\/(shop\/index|collections|search)|components\/(Filters|facet-filter-controls|filters-button|products)\b|platform\/shop\b|platform\/controllers\/shop)/],
 	['blog', /^(routes\/blog|brand-slots\/route\.blog|platform\/blog\b)/],
 	['account', /^(routes\/(account|sign-in|orders|forgot-password|password-reset|verify|affiliate)|components\/(auth|account|loyalty|order-tracking)\/)/],
+	// Legal and about pages (Privacy alone is ~32 KB of render code): their own bundle, not the shell bundle every page loads.
+	['legal', /^brand\/static-pages\./],
 	['shell', /^(root\.tsx|routes\/layout\.tsx|brand-slots\/(shell\.|legal\.)|components\/(header|footer|menu|head|icons|ui|buttons|modal)\/|contexts\/|hooks\/|brand\/|platform\/(stock-triggers|live-values|early-reads)\b|platform\/controllers\/shell)/],
 ];
 
