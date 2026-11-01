@@ -12,7 +12,8 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
-import { ORDER_TABS, orderTabCountsSql, orderTabSql } from './tabs-sql.js';
+import { ORDER_TABS, orderTabCountsSql, orderTabSql, pendingFulfillmentCountSql } from './tabs-sql.js';
+import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from './status-sql.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'tabs-sql.db.test.ts');
@@ -138,5 +139,18 @@ describe('orderTabCountsSql', () => {
 
   it('pins the fixture counts', async () => {
     expect(await setCounts(false)).toEqual({ tofulfil: 8, pre: 2, partial: 2, unpaid: 7, shipped: 3, refunded: 3, cancelled: 4, all: 25 });
+  });
+});
+
+describe('pendingFulfillmentCountSql', () => {
+  it('equals the dashboard per-row status predicate', async () => {
+    const [perRow, set] = await withStore(STORE, async (tx) => {
+      const a = await tx.execute(sql`select count(*)::int as n from "order" where "order"."deleted_at" is null and "order"."is_demo" = false
+        and "order"."status" in ('open', 'completed') and ${paymentStatusWithBalanceSql()} = 'paid' and ${fulfillmentStatusSql()} = 'unfulfilled'`);
+      const b = await tx.execute(pendingFulfillmentCountSql());
+      return [(a.rows[0] as { n: number }).n, (b.rows[0] as { n: number }).n];
+    });
+    expect(set).toBe(perRow);
+    expect(perRow).toBeGreaterThan(0); // the fixtures include paid, unshipped orders, so equality is not vacuous
   });
 });

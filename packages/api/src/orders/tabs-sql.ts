@@ -48,20 +48,19 @@ export function orderTabSql(tab: OrderTab): SQL {
 }
 
 /**
- * Tab counts for `GET /v1/admin/orders/tab-counts` in one set-based pass. `orderTabSql` evaluates its correlated
- * subqueries once per order row; counting every tab that way cost ~0.5 s on a 13.6k-order store (perf/pg F1). Here
- * each child table is aggregated once per order and the seven tabs filter those sums. Same rules as `orderTabSql` and
- * `paymentStatusWithBalanceSql`; tabs-sql.db.test.ts proves the counts match the per-row form, so a change to one side
- * must change the other.
+ * Per-order aggregates for the set-based admin counts: each child table is aggregated once per order (hash joins), not
+ * once per order row as the correlated `orderTabSql`/status-sql projections do (perf/pg F1, EGM PG-2). Defines CTE `t`
+ * with one row per order matching `where`: state, open_qty, open_pre, shipped, ordered_net and payment_status (the
+ * `paymentStatusWithBalanceSql` value). tabs-sql.db.test.ts proves the counts built on it match the per-row forms, so a
+ * change to one side must change the other.
  */
-export function orderTabCountsSql(opts: { excludeDemo: boolean }): SQL {
-  const live = opts.excludeDemo ? sql`"order"."deleted_at" is null and "order"."is_demo" = false` : sql`"order"."deleted_at" is null`;
-  const counts = ORDER_TABS.map((t) => sql`(count(*) filter (where ${aggregateTabSql(t)}))::int as ${sql.identifier(t)}`);
-  return sql`with ol as (
+function orderAggregatesSql(where: SQL): SQL {
+  return sql`ol as (
       select ol.order_id,
         sum(greatest(ol.quantity - ol.fulfilled_qty - ol.cancelled_qty, 0))::int as open_qty,
         coalesce(sum(greatest(ol.quantity - ol.fulfilled_qty - ol.cancelled_qty, 0)) filter (where pv.is_pre_order), 0)::int as open_pre,
-        sum(ol.fulfilled_qty)::int as shipped
+        sum(ol.fulfilled_qty)::int as shipped,
+        sum(greatest(ol.quantity - ol.cancelled_qty, 0))::int as ordered_net
       from order_line ol left join product_variant pv on pv.id = ol.variant_id group by ol.order_id),
     pay as (
       select p.order_id,
@@ -74,7 +73,8 @@ export function orderTabCountsSql(opts: { excludeDemo: boolean }): SQL {
       select r.order_id, sum(r.amount) as edit_ref from refund r
       where r.state <> 'Failed' and r.metadata->>'source' = ${EDIT_REFUND_SOURCE} group by r.order_id),
     t as (
-      select "order"."state" as state, coalesce(ol.open_qty, 0) as open_qty, coalesce(ol.open_pre, 0) as open_pre, coalesce(ol.shipped, 0) as shipped,
+      select "order"."state" as state, coalesce(ol.open_qty, 0) as open_qty, coalesce(ol.open_pre, 0) as open_pre,
+        coalesce(ol.shipped, 0) as shipped, coalesce(ol.ordered_net, 0) as ordered_net,
         -- Nested CASE: the TOASTed metadata is read only for a paid order that still owes money.
         case when "order"."state" in ('Paid', 'PartiallyRefunded')
                and ("order"."grand_total" - coalesce(pay.settled, 0) + coalesce(ref.edit_ref, 0)) > 0
@@ -87,11 +87,28 @@ export function orderTabCountsSql(opts: { excludeDemo: boolean }): SQL {
              else (case pay.latest when 'Authorized' then 'authorized' when 'Declined' then 'failed' when 'Failed' then 'failed' else 'pending' end)
         end as payment_status
       from "order" left join ol on ol.order_id = "order"."id" left join pay on pay.order_id = "order"."id" left join ref on ref.order_id = "order"."id"
-      where ${live})
+      where ${where})`;
+}
+
+/** Tab counts for `GET /v1/admin/orders/tab-counts` in one set-based pass (~0.5 s -> ~80 ms on a 13.6k-order store). */
+export function orderTabCountsSql(opts: { excludeDemo: boolean }): SQL {
+  const live = opts.excludeDemo ? sql`"order"."deleted_at" is null and "order"."is_demo" = false` : sql`"order"."deleted_at" is null`;
+  const counts = ORDER_TABS.map((t) => sql`(count(*) filter (where ${aggregateTabSql(t)}))::int as ${sql.identifier(t)}`);
+  return sql`with ${orderAggregatesSql(live)}
     select ${sql.join(counts, sql`, `)}, count(*)::int as "all" from t`;
 }
 
-/** `orderTabSql` over the per-order aggregates of `orderTabCountsSql` (columns of `t`). */
+/**
+ * The dashboard's "pending fulfilment" KPI (`GET /v1/admin/dashboard`): live, non-demo, open or completed orders whose
+ * payment status is `paid` and fulfilment status `unfulfilled` (`fulfillmentStatusSql`: units still ordered after
+ * removals, none shipped). Set-based twin of that per-row predicate, which cost ~280 ms per dashboard load on dd.
+ */
+export function pendingFulfillmentCountSql(): SQL {
+  return sql`with ${orderAggregatesSql(sql`"order"."deleted_at" is null and "order"."is_demo" = false and "order"."status" in ('open', 'completed')`)}
+    select count(*)::int as n from t where payment_status = 'paid' and ordered_net > 0 and shipped <= 0`;
+}
+
+/** `orderTabSql` over the per-order aggregates of `orderAggregatesSql` (columns of `t`). */
 function aggregateTabSql(tab: OrderTab): SQL {
   const paid = sql`state in ('Paid', 'PartiallyRefunded')`;
   switch (tab) {
