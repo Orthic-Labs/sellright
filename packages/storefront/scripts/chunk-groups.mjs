@@ -20,8 +20,8 @@ const AREAS = [
 	['shop', /^(routes\/(shop\/index|collections|search)|components\/(Filters|facet-filter-controls|filters-button|products)\b|platform\/shop\b|platform\/controllers\/shop)/],
 	['blog', /^(routes\/blog|brand-slots\/route\.blog|platform\/blog\b)/],
 	['account', /^(routes\/(account|sign-in|orders|forgot-password|password-reset|verify|affiliate)|components\/(auth|account|loyalty|order-tracking)\/)/],
-	// Legal and about pages (Privacy alone is ~32 KB of render code): their own bundle, not the shell bundle every page loads.
-	['legal', /^brand\/static-pages\./],
+	// Legal, about and story pages (Damned brand/static-pages, Rotten brand/pages: ~64-81 KB of render code): their own bundle, not the shell bundle every page loads.
+	['legal', /^brand\/(static-pages\.|pages\/)/],
 	['shell', /^(root\.tsx|routes\/layout\.tsx|brand-slots\/(shell\.|legal\.)|components\/(header|footer|menu|head|icons|ui|buttons|modal)\/|contexts\/|hooks\/|brand\/|platform\/(stock-triggers|live-values|early-reads)\b|platform\/controllers\/shell)/],
 ];
 
