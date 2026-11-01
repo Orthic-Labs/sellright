@@ -269,7 +269,8 @@ export default component$(() => {
 	});
 
 	// Ready = at least one line, shipping method + country chosen, and in stock. Mirrors the old disabled conditions.
-	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!shippingState.selectedMethod && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
+	// #427: the drawer's shipping quote is information, not a gate: checkout quotes shipping itself, so Checkout does not wait for it.
+	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
 
 	return (
 		<div>
@@ -503,17 +504,14 @@ export default component$(() => {
 												return;
 											}
 
-											if (!shippingState.selectedMethod) {
-												console.error('No shipping method selected');
-												return;
-											}
-
-											if (!appState.shippingAddress.countryCode) {
-												console.error('No country selected');
-												return;
-											}
-
-											await navigate('/checkout/');
+											// #427: a full document load, not a client navigation. The client route change waited on four
+											// loader round trips to the origin (two of them return nothing on a client fetch) and then the
+											// checkout's own reads (~2 s live); the document carries the order summary from its server cart
+											// read (TTFB ~0.36 s). The checkout quotes shipping itself, so the drawer's quote is not awaited.
+											// An add still being written (the drawer shows lines before the server has them) finishes
+											// first, so the server cart the checkout reads has every line.
+											for (let i = 0; cartState.isLoading && i < 100; i++) await new Promise((r) => setTimeout(r, 50));
+											window.location.assign('/checkout/');
 										} catch (error) {
 											console.error('Error navigating to checkout:', error);
 											appState.showCart = true;
