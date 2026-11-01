@@ -59,6 +59,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                 loading="lazy"
                 width={72} height={90}
                 responsive="thumbnail"
+                // Below the LCP image in priority (#429): visible, so the browser fetched them at High beside it.
+                fetchPriority="low"
               />
             </button>
           ))}
