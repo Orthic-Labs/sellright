@@ -60,9 +60,9 @@ describe('warm graph (#425 step 3)', () => {
 		// A product link warms the product closure on intent (hover, focus, touch).
 		expect(s).toContain("w('product')}");
 		expect(s).toContain("'touchstart'");
-		// The cart warms after load on product pages only; elsewhere on intent toward a cart or bag button.
-		expect(s).toContain("{w('cart',1);w('product',1)}");
-		expect(s).not.toContain("if(sd())return;w('cart',1)");
+		// The cart never warms after load; it warms on intent (cart or bag button, a product page's first touch or press).
+		expect(s).not.toContain("w('cart',1)");
+		expect(s).toContain("(e.type==='pointerdown'||e.type==='touchstart')");
 		expect(s).toContain("/cart|bag/i.test(");
 		expect(() => new Function(s)).not.toThrow();
 	});

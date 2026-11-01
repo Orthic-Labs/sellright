@@ -1,9 +1,10 @@
 // #425 step 3: Qwik's speculative preloader is off (entry.ssr.tsx `preloader: false`); this targeted warm graph replaces it.
 // With the preloader on, every dd/rh page fetched 115-271 script bundles (650-980 KB); Damned's previous storefront measured the same
 // switch (144 -> 55 script requests, no readiness loss, re-enabling it rejected: damned/docs/PERFORMANCE-2026-09-26/27.md). Like
-// that storefront, after window load and an idle slot the browser modulepreloads (low priority, never executed) only what the page
-// leads to: home its own closure; a product page its closure and the cart's render path (#427: the cart on every page was ~45 of
-// home's 70 script files). The cart also warms on intent toward any button labelled cart or bag (header cart, add to cart).
+// that storefront, after window load and an idle slot the browser modulepreloads (low priority, never executed) only the page's own
+// closure (home, product). The cart's render path (~45 files; #427: warmed on every page it was most of home's 70 script files and
+// put a product page at 92 against the previous storefront's 79) warms on intent: hover, focus or touch on a button labelled cart
+// or bag (header cart, add to cart), or a product page's first touch or press (an option pick or a scroll comes before the add).
 // Checkout's code warms on intent: a link to /checkout or an element marked
 // data-warm="checkout" (the cart's Checkout button; #427: warming it on every page load cost ~100 script files). A product link
 // warms the product page's code the same way (shop -> product ran ~6 serial ~0.3 s fetch waves live). Event handlers
@@ -62,9 +63,9 @@ export function warmGroups(m: Manifest, base = '/build/'): Record<WarmGroup, str
 export function warmScript(groups: Record<WarmGroup, string[]>): string {
 	return `(()=>{var g=${JSON.stringify(groups)},d={};function w(k,low){if(d[k])return;d[k]=1;var a=g[k]||[];for(var i=0;i<a.length;i++){var l=document.createElement('link');l.rel='modulepreload';l.href=a[i];if(low)l.fetchPriority='low';document.head.appendChild(l)}}` +
 		`function sd(){return!!(navigator.connection&&navigator.connection.saveData)}` +
-		`function after(){var f=function(){if(sd())return;var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p)){w('cart',1);w('product',1)}};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
+		`function after(){var f=function(){if(sd())return;var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
 		`document.readyState==='complete'?after():addEventListener('load',after,{once:true});` +
-		`function intent(e){if(sd())return;var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent))w('cart');var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
+		`function intent(e){if(sd())return;if((e.type==='pointerdown'||e.type==='touchstart')&&/^\\/(products|shop)\\/[^/]+\\/?$/.test(location.pathname))w('cart');var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent))w('cart');var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
 		`['pointerover','focusin','pointerdown','touchstart'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
 }
 
