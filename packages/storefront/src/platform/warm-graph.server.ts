@@ -36,7 +36,8 @@ const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
 		) &&
 			isRender(s)) ||
 		(s.displayName.endsWith('Link_component') && s.ctxName === 'component$'),
-	home: (s) => /^(routes\/index\.tsx|components\/home\/|brand-slots\/route\.home|platform\/controllers\/configurator)/.test(s.origin) && isRender(s),
+	// The configurator (home spotlight's add) is not here: it is the product group's, warmed on intent like the cart (#427).
+	home: (s) => /^(routes\/index\.tsx|components\/home\/|brand-slots\/route\.home)/.test(s.origin) && isRender(s),
 	// The product page's click handlers too (option pills, add to cart): the add-to-cart handler was itself a cold fetch.
 	product: (s) => PRODUCT.test(s.origin) && (isRender(s) || s.ctxKind === 'eventHandler'),
 	checkout: (s) =>
@@ -66,7 +67,7 @@ export function warmScript(groups: Record<WarmGroup, string[]>): string {
 		`function sd(){return!!(navigator.connection&&navigator.connection.saveData)}` +
 		`function after(){var f=function(){if(sd())return;var p=location.pathname;if(p==='/')w('home',1);else if(p.indexOf('/checkout')===0)w('checkout',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
 		`document.readyState==='complete'?after():addEventListener('load',after,{once:true});` +
-		`function intent(e){if((e.type==='pointerdown'||e.type==='touchstart')&&/^\\/(products|shop)\\/[^/]+\\/?$/.test(location.pathname))w('cart');var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent))w('cart');var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
+		`function intent(e){if((e.type==='pointerdown'||e.type==='touchstart')&&/^\\/(products|shop)\\/[^/]+\\/?$/.test(location.pathname))w('cart');var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent)){w('cart');if(location.pathname==='/')w('product')}var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
 		`['pointerover','focusin','pointerdown','touchstart'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
 }
 

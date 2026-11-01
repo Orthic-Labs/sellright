@@ -64,6 +64,8 @@ describe('warm graph (#425 step 3)', () => {
 		expect(s).not.toContain("w('cart',1)");
 		expect(s).toContain("(e.type==='pointerdown'||e.type==='touchstart')");
 		expect(s).toContain("/cart|bag/i.test(");
+		// On home a cart or bag button (the spotlight add) also warms the product group: the configurator is no longer in home.
+		expect(s).toContain("{w('cart');if(location.pathname==='/')w('product')}");
 		// Save-Data does not stop intent warming; the checkout page warms its own closure after load.
 		expect(s).toContain("function intent(e){if((e.type");
 		expect(s).toContain("else if(p.indexOf('/checkout')===0)w('checkout',1)");
