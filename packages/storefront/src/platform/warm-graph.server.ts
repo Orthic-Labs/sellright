@@ -24,10 +24,12 @@ const isRender = (s: ManifestSymbol) => s.ctxKind !== 'eventHandler' && RENDER_C
 const PRODUCT = /^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/|brand\/configurator\/)/;
 
 const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
+	// The cart toggle's own functions (platform/cart.ts useCartToggle, gateway bindAction) were two serial ~0.3 s fetches
+	// after the drawer code had warmed on the header cart hover (#427, live 2026-11-01).
 	// Everything the drawer renders, not only components/cart: shared ui and icons (image, quantity, trash, check), the
 	// express buttons, the cart service and the on-demand country read the add path awaits.
 	cart: (s) =>
-		(/^(components\/(cart|cart-contents|cart-totals|free-shipping-progress|ui|icons)\/|components\/checkout\/ExpressCheckout|contexts\/CartContext\.tsx|services\/CartService|utils\/addressStorage\.ts)/.test(
+		(/^(components\/(cart|cart-contents|cart-totals|free-shipping-progress|ui|icons)\/|components\/checkout\/ExpressCheckout|contexts\/CartContext\.tsx|services\/CartService|utils\/addressStorage\.ts|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/.test(
 			s.origin,
 		) &&
 			isRender(s)) ||

@@ -38,12 +38,13 @@ describe('warm graph (#425 step 3)', () => {
 				f: sym('routes/products/[...slug]/ProductPageView.tsx', 'onClick$', 'eventHandler'),
 				g: sym('components/checkout/StripeForm.tsx'),
 				h: sym('brand/configurator/Configurator.tsx', 'onClick$', 'eventHandler'),
+				i: sym('platform/cart.ts', '$', 'function'),
 			},
-			mapping: { a: 'q-a.js', b: 'q-b.js', c: 'q-c.js', d: 'q-d.js', e: 'q-e.js', f: 'q-f.js', g: 'q-g.js', h: 'q-h.js' },
+			mapping: { a: 'q-a.js', b: 'q-b.js', c: 'q-c.js', d: 'q-d.js', e: 'q-e.js', f: 'q-f.js', g: 'q-g.js', h: 'q-h.js', i: 'q-i.js' },
 			bundles: {},
 		};
 		const g = warmGroups(m);
-		expect(g.cart).toEqual(['/build/q-a.js', '/build/q-b.js', '/build/q-c.js', '/build/q-d.js', '/build/q-e.js']);
+		expect(g.cart).toEqual(['/build/q-a.js', '/build/q-b.js', '/build/q-c.js', '/build/q-d.js', '/build/q-e.js', '/build/q-i.js']);
 		expect(g.product).toEqual(['/build/q-f.js', '/build/q-h.js']);
 		expect(g.cart).not.toContain('/build/q-g.js');
 	});
