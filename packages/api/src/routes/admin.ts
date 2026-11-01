@@ -383,6 +383,8 @@ admin.openapi(
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
           openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(),
+          // A tab filter aggregates every order once; count the matches in the same pass instead of a second statement.
+          ...(tab ? { matchTotal: sql<number>`(count(*) over())::int` } : {}),
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -394,9 +396,11 @@ admin.openapi(
       const cntBase = (q
         ? tx.select({ n: sql<number>`count(*)::int` }).from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         : tx.select({ n: sql<number>`count(*)::int` }).from(s.order)).$dynamic();
-      const [cnt] = await (where ? cntBase.where(where) : cntBase);
+      // The window total rides on the page rows; only a page past the end (no rows) still needs the count statement.
+      const windowTotal = tab && rows.length ? (rows[0] as { matchTotal?: number }).matchTotal : undefined;
+      const [cnt] = windowTotal === undefined ? await (where ? cntBase.where(where) : cntBase) : [{ n: windowTotal }];
       return {
-        items: rows.map((r) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),
+        items: rows.map(({ matchTotal: _total, ...r }: typeof rows[number] & { matchTotal?: number }) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),
         total: cnt?.n ?? 0, page, pageSize,
       };
     });
