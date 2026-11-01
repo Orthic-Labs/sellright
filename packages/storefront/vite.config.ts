@@ -28,7 +28,8 @@ function noGlobalCssPlugin(srcDir: string): Plugin {
   };
 }
 
-import { sharedGroup } from './scripts/chunk-groups.mjs';
+import { areaSets, sharedAreaGroup } from './scripts/chunk-groups.mjs';
+const srAreaSets = new Map<string, string>();
 function chunkGroupsMap(): Record<string, string> {
   const suffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
   try { return JSON.parse(readFileSync(`chunk-groups${suffix}.json`, 'utf8')); } catch { return {}; }
@@ -111,9 +112,10 @@ export default defineConfig((config) => {
       // the brand storefronts run without it on Rolldown.
       rolldownOptions: {
         output: {
-          // #427: the downward-closed set of plain source modules shares one chunk (scripts/chunk-groups.mjs sharedGroup).
+          // #427: the downward-closed set of plain source modules shares one chunk per set of page areas that reach it
+          // (scripts/chunk-groups.mjs areaSets / sharedAreaGroup; the sets are computed in sr-area-sets below).
           // Client build only (sr-client-only-split below drops it from the server build, where it broke SSR mid-stream).
-          codeSplitting: { groups: [{ name: sharedGroup(), includeDependenciesRecursively: false }] },
+          codeSplitting: { groups: [{ name: sharedAreaGroup(srAreaSets), includeDependenciesRecursively: false }] },
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {
@@ -131,6 +133,15 @@ export default defineConfig((config) => {
       // #427: the express adapter sets build.ssr in its own config (ConfigEnv.isSsrBuild stays false there), so the server
       // build is detected here and keeps rolldown's default splitting: the shared group on the server build sent every page
       // a 500 mid-stream (9622bb24 live 2026-11-01, rolled back).
+      // #427: area sets for the shared chunks, from the whole module graph once parsing is done (chunking runs after).
+      {
+        name: 'sr-area-sets',
+        buildEnd() {
+          const ids = [...this.getModuleIds()];
+          srAreaSets.clear();
+          for (const [id, g] of areaSets({ ids, info: (id: string) => this.getModuleInfo(id) }, chunkGroupsMap())) srAreaSets.set(id, g);
+        },
+      },
       {
         name: 'sr-client-only-split',
         enforce: 'pre',

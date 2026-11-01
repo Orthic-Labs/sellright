@@ -59,6 +59,47 @@ export function sharedGroup() {
 	return (id, ctx) => (!OUTSIDE.test(id) && /[\\/]src[\\/]/.test(id) && closed(id, ctx, new Set()) ? 'sr-shared' : null);
 }
 
+/** Area sets per module (#427): a shared chunk per set of page areas that reach a module, so a page loads only the shared
+ *  code its areas use (one sr-shared chunk was 272 KB and loaded checkout code on the home page). Seeds: a Qwik segment's area
+ *  from the symbol map or its source path, a route module's area, a non-segment entry is the shell. Areas flow down static
+ *  imports to a fixpoint, so a module's set always contains its importers' sets: a chunk only imports chunks of supersets, and
+ *  any set containing the shell (loaded on every page) or two or more areas is one class (supersets stay in it), so no chunk
+ *  cycle can form. Measured on the Damned exp build against one shared chunk: home 218 -> 201 KB, product 251 -> 238 KB of
+ *  script on the wire, +1-2 files; per-pair chunks added files for no byte gain. Returns id -> group name. */
+export function areaSets(graph, symbolArea) {
+	const ids = [...graph.ids];
+	const areas = new Map(ids.map((id) => [id, new Set()]));
+	for (const id of ids) {
+		const info = graph.info(id);
+		if (!info) continue;
+		const seg = info.meta?.segment;
+		const rel = (id.match(/[\\/]src[\\/](.*)$/) ?? [])[1]?.replace(/\\/g, '/');
+		const a = seg ? (symbolArea[seg.hash]?.replace(/^sr-/, '') ?? (rel && areaOf(rel)) ?? 'x') : KEEP_OUT.test(id) ? ((rel && areaOf(rel)) ?? 'shell') : info.isEntry ? 'shell' : null;
+		if (a) areas.get(id).add(a);
+	}
+	for (let changed = true; changed; ) {
+		changed = false;
+		for (const id of ids) {
+			const from = areas.get(id);
+			if (!from.size) continue;
+			for (const d of graph.info(id)?.importedIds ?? []) {
+				const to = areas.get(d);
+				if (!to) continue;
+				for (const a of from) if (!to.has(a)) { to.add(a); changed = true; }
+			}
+		}
+	}
+	const out = new Map();
+	for (const [id, set] of areas) out.set(id, !set.size ? 'sr-x' : set.has('shell') || set.size >= 2 ? 'sr-shell' : 'sr-' + [...set].sort().join('-'));
+	return out;
+}
+
+/** sharedGroup with area-set names: `sets` is filled by the build (areaSets over the module graph) before chunking. */
+export function sharedAreaGroup(sets) {
+	const closed = sharedGroup();
+	return (id, ctx) => (closed(id, ctx) ? (sets.get(id) ?? 'sr-x') : null);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const m = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 	process.stdout.write(JSON.stringify(chunkGroups(m), null, 1) + '\n');
