@@ -1,6 +1,9 @@
 import { component$, type QRL } from '@qwik.dev/core';
 import { theme } from '~/theme/theme.config';
 
+/** Revision of the pre-generated asset variants (#425): bump when variants are re-encoded so cached URLs change. */
+export const ASSET_VARIANT_REV = 2;
+
 // Helper function to generate responsive srcset for hosted image assets
 export const generateResponsiveSources = (src: string, widths: number[] = [320, 640, 1024, 1280]) => {
   // Check if this is a hosted asset-store URL
@@ -21,23 +24,26 @@ export const generateResponsiveSources = (src: string, widths: number[] = [320, 
   const baseUrl = src.split('?')[0]; // Remove existing query params
   // Preserve cache-busting version param if present (e.g. ?v=1234567890)
   const vMatch = src.match(/[?&]v=([^&]+)/);
-  const vParam = vMatch ? `&v=${vMatch[1]}` : '';
+  // #425: `r` is the variant revision. The hosted variants are cached immutable for a year (browser and edge); the 2026-10-31
+  // re-encode (AVIF q50 -> 65/70, WebP/JPEG 85 for large and up) needs new URLs to reach browsers that cached the soft files.
+  // The asset server ignores parameters it does not use.
+  const vParam = `${vMatch ? `&v=${vMatch[1]}` : ''}&r=${ASSET_VARIANT_REV}`;
 
   // Map widths to appropriate hosted-asset presets
   // NOTE: w= param is ignored by PresetOnlyStrategy — dimensions come from preset only
-  // Presets size the LONG edge (card 400, small 640, medium 1024, large 1280, xl 1600). For the 4:5 product photos that is a
-  // real width of 320/512/819/1024/1280, so the width descriptors used by RESPONSIVE_CONFIGS are those real widths: labelling
-  // medium "640w" made a 375px slot at 2x (750px) pick large when medium (819px) already covers it.
+  // Presets size the LONG edge (thumb 160, card 400, small 640, medium 1024, large 1280, xl 1600, xxl 2048, ultra 2560). For the
+  // 4:5 product photos that is a real width of 128/320/512/819/1024/1280/1638/2048, so the width descriptors used by
+  // RESPONSIVE_CONFIGS are those real widths and each maps to the preset that actually has it (#425: a 1280w descriptor used to
+  // map to large, which is 1024 wide).
   const getPresetForWidth = (width: number) => {
     if (width <= 160) return 'thumb';
     if (width <= 320) return 'card';
     if (width <= 512) return 'small';
     if (width <= 819) return 'medium';
-    if (width <= 1280) return 'large';
-    if (width <= 1600) return 'xl';
-    if (width <= 2048) return 'xxl';
-    if (width <= 2560) return 'ultra';
-    return '4k';
+    if (width <= 1024) return 'large';
+    if (width <= 1280) return 'xl';
+    if (width <= 1638) return 'xxl';
+    return 'ultra';
   };
 
   // Quality tiers: thumbnails get 75 (small, less visible), cards 80, large/hero 85
@@ -82,13 +88,12 @@ export const generateResponsiveSources = (src: string, widths: number[] = [320, 
 
 // Predefined responsive configurations for common use cases
 export const RESPONSIVE_CONFIGS = {
-  // Product detail main image - capped at large (1024w real) to avoid slow AVIF transforms (xxl=6s, ultra=8s cold).
-  // 512/819/1024 = small/medium/large real widths of a 4:5 photo; a 375px slot at 2x (750px) now gets medium, not large.
+  // Product detail main image. #425: up to xxl (1638w real): the 1024w cap rendered a 1014px desktop slot at DPR 2+ with under
+  // half the pixels (Adrian: visibly soft). Variants are pre-generated on disk (no on-request transform). Phones pick by DPR
+  // again: the slot is the full width on phones (the 70vw cap made 2x/3x phones take medium).
   productMain: {
-    widths: [512, 819, 1024],
-    // #360: phones (2x and 3x DPR at 375-390px) get medium, not large: 70vw x DPR stays under the medium descriptor (819w). The
-    // 3x large AVIF was 200-470KB on Damned against the 150KB image budget; medium is visually indistinguishable at phone size.
-    sizes: '(max-width: 768px) 70vw, 1024px'
+    widths: [512, 819, 1024, 1280, 1638],
+    sizes: '(max-width: 768px) 100vw, 1024px'
   },
   // Product card images: 512 = small, 819 = medium (real widths of a 4:5 photo; card slot is object-cover 3:4, ~1.07x zoom)
   productCard: {
@@ -261,7 +266,7 @@ export const OptimizedImage = component$<OptimizedImageProps>(({
 
  // For hosted assets, ensure fallback src has format to avoid raw PNG
  const isHostedAsset = src && (src.includes('/assets/') || src.includes(theme.domain));
- const fallbackSrc = isHostedAsset ? `${src.split('?')[0]}?preset=large&format=jpg&q=80` : src;
+ const fallbackSrc = isHostedAsset ? `${src.split('?')[0]}?preset=large&format=jpg&q=80&r=${ASSET_VARIANT_REV}` : src;
 
  // Simple native picture element with all the smart responsive logic and format optimization
  return (

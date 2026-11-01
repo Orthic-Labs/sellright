@@ -4,13 +4,15 @@ import { generateImagePreloadLinks, generateResponsiveSources, RESPONSIVE_CONFIG
 const SRC = '/assets/store/media/preview/09/photo__preview.png';
 
 describe('responsive image presets (real preset widths)', () => {
-	it('PDP main: 375px slot at 2x resolves to medium, never xl; max preset is large', () => {
+	it('PDP main: each width maps to the preset that has it, up to xxl (1638w); variant revision on every URL (#425)', () => {
 		const set = generateResponsiveSources(SRC, RESPONSIVE_CONFIGS.productMain.widths).avifSrcset!;
-		expect(set).toContain('preset=small&format=avif');
-		expect(set).toContain('preset=medium&format=avif');
-		expect(set).toContain('preset=large&format=avif');
-		expect(set).not.toMatch(/preset=(xl|xxl)/);
 		expect(set).toMatch(/preset=medium[^,]* 819w/);
+		expect(set).toMatch(/preset=large[^,]* 1024w/);
+		expect(set).toMatch(/preset=xl[^,]* 1280w/);
+		expect(set).toMatch(/preset=xxl[^,]* 1638w/);
+		expect(set).not.toContain('preset=ultra');
+		for (const entry of set.split(', ')) expect(entry).toContain('&r=');
+		expect(RESPONSIVE_CONFIGS.productMain.sizes).toBe('(max-width: 768px) 100vw, 1024px');
 	});
 
 	it('product card: small + medium only', () => {
