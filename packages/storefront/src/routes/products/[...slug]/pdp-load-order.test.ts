@@ -101,3 +101,13 @@ describe('shop config and reviews stay off the PDP critical path', () => {
 		expect(r).not.toContain("strategy: 'document-ready'");
 	});
 });
+
+describe('the related row stays off the load (audit 2026-11-02)', () => {
+	it('related photos render only once the row nears the viewport, at related-card sizes', () => {
+		const s = code('routes/products/[...slug]/ProductPageView.tsx');
+		expect(s).toMatch(/whenNearViewport\(relatedRef\.value/);
+		expect(s).toMatch(/rp\.image && relatedNear\.value && <OptimizedImage[^>]*responsive="relatedCard"/);
+		expect(s).toContain('useSignal(false)');
+	});
+});
+

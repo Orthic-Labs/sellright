@@ -100,6 +100,12 @@ export const RESPONSIVE_CONFIGS = {
     widths: [512, 819],
     sizes: '(max-width: 768px) 50vw, 320px'
   },
+  // PDP related row: 2 columns on phones (~183px slot), 4 at desktop (~273px). The default widths sent phones the 819-wide
+  // medium for a 183px card (audit 2026-11-02).
+  relatedCard: {
+    widths: [320, 512, 819],
+    sizes: '(max-width: 768px) 50vw, 280px'
+  },
   // Thumbnail images - Added retina support (160 = thumb, 320 = card)
   thumbnail: {
     widths: [160, 320], // Added 2x density for crisp thumbnails

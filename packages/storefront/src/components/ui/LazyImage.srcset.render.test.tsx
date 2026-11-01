@@ -22,6 +22,14 @@ describe('responsive image presets (real preset widths)', () => {
 		expect(set).not.toContain('preset=large');
 	});
 
+	it('PDP related card: card for phones (320w), small and medium for desktop; never large (audit 2026-11-02)', () => {
+		const set = generateResponsiveSources(SRC, RESPONSIVE_CONFIGS.relatedCard.widths).avifSrcset!;
+		expect(set).toMatch(/preset=card[^,]* 320w/);
+		expect(set).toMatch(/preset=small[^,]* 512w/);
+		expect(set).toMatch(/preset=medium[^,]* 819w/);
+		expect(set).not.toContain('preset=large');
+	});
+
 	it('thumbnail: thumb + card (no small)', () => {
 		const set = generateResponsiveSources(SRC, RESPONSIVE_CONFIGS.thumbnail.widths).avifSrcset!;
 		expect(set).toContain('preset=thumb');
