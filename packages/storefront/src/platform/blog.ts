@@ -1,4 +1,5 @@
 // A13: blog index platform code moved verbatim from src/routes/blog/index.tsx (loader + SEO head).
+import { sanitizeBlogHtml } from '~/utils/sanitize';
 import { routeLoader$ } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
 import { getBlogPostBySlug, getBlogPosts, type BlogPostSummary } from '~/providers/shop/blog/blog';
@@ -24,7 +25,8 @@ export const useBlogPost = routeLoader$(async (requestEvent) => {
     if (renamed) throw requestEvent.redirect(301, renamed);
     const post = await getBlogPostBySlug(slug);
     if (!post) { requestEvent.status(404); return null; }
-    if (post.bodyHtml) post.bodyHtml = fixBodyHtml(post.bodyHtml);
+    // #427: sanitised here, on the server: the post view rebuilds the body in the browser, where no sanitiser ships.
+    if (post.bodyHtml) post.bodyHtml = sanitizeBlogHtml(fixBodyHtml(post.bodyHtml));
     return post;
 }, { serializationStrategy: 'always' });
 

@@ -1,6 +1,7 @@
 // A13: PDP platform code moved verbatim from src/routes/products/[...slug]/index.tsx (loaders, SEO head, static
 // generation). The PDP live-stock refresh itself (qidle, getProductStock) stays in ProductContent.tsx: it is a $ closure
 // over component signals and cannot move verbatim.
+import { sanitizeProductDescription } from '~/utils/sanitize';
 import { routeLoader$, server$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { noStore, shellRender } from '~/platform/shell-render';
 import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
@@ -86,6 +87,11 @@ export async function productFromManifest(slug: string, read = readCatalogGenera
   }
 }
 
+/** #427: the description sanitised here, on the server: the PDP renders it in the browser too, where no sanitiser ships. */
+function withCleanDescription<R extends { product: { description?: string | null } }>(r: R): R {
+  return { ...r, product: { ...r.product, description: sanitizeProductDescription(r.product.description ?? '') } };
+}
+
 export const useProductLoader = routeLoader$(async ({ params, fail, status, url, headers }) => {
   // Brand views PR2: a branded product page has its own loader (useBrandProductDetail), and a route that is not the configured
   // product path (routes.json productPath) serves no product. Neither case does any I/O here.
@@ -108,7 +114,7 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url,
   // refreshLiveStock hook on qidle — fast SSR shell, progressive stock enable
   // once the client checks in.
   const fromManifest = await productFromManifest(slug);
-  if (fromManifest) return shellRender() ? shellProductResult(fromManifest) : fromManifest;
+  if (fromManifest) return shellRender() ? shellProductResult(withCleanDescription(fromManifest)) : withCleanDescription(fromManifest);
 
   // No manifest: take the product id from the detail response and the rating from the reviews endpoint (null on any
   // failure — reviews must never block or fail the PDP shell). Both reads start together, not one after the other (#362).
@@ -121,7 +127,7 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status, url,
     }
     const reviews = await reviewsRead;
     const result: ProductLoaderResult = { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
-    return shellRender() ? shellProductResult(result) : result;
+    return shellRender() ? shellProductResult(withCleanDescription(result)) : withCleanDescription(result);
   } catch (error) {
     // A real 404 came back as null above; anything thrown is the API failing (429, 5xx, network). Answer 503 so a brief outage
     // never tells crawlers the product is gone (#408: demo PDPs returned 404 while its API was rate-limiting).
