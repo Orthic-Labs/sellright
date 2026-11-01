@@ -2,7 +2,7 @@ import { component$, type QRL } from '@qwik.dev/core';
 import { theme } from '~/theme/theme.config';
 
 /** Revision of the pre-generated asset variants (#425): bump when variants are re-encoded so cached URLs change. */
-export const ASSET_VARIANT_REV = 2;
+export const ASSET_VARIANT_REV = 3;
 
 // Helper function to generate responsive srcset for hosted image assets
 export const generateResponsiveSources = (src: string, widths: number[] = [320, 640, 1024, 1280]) => {
