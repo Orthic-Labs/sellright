@@ -40,7 +40,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -416,10 +416,9 @@ admin.openapi(
     const st = requireStore(admin, c);
     const { excludeDemo } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
-      const live = excludeDemo === '1' ? sql`${s.order.deletedAt} is null and ${s.order.isDemo} = false` : sql`${s.order.deletedAt} is null`;
-      const cols = Object.fromEntries(ORDER_TABS.map((t) => [t, sql<number>`(count(*) filter (where ${orderTabSql(t)}))::int`]));
-      const [row] = await tx.select({ ...cols, all: sql<number>`count(*)::int` }).from(s.order).where(live);
-      return row as Record<string, number>;
+      // One set-based pass (orders/tabs-sql.ts orderTabCountsSql), not per-row tab subqueries over every order.
+      const r = await tx.execute(orderTabCountsSql({ excludeDemo: excludeDemo === '1' }));
+      return (r as unknown as { rows: Array<Record<string, number>> }).rows[0]!;
     });
     return c.json(out as never, 200);
   }),
