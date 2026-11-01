@@ -12,7 +12,7 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
-import { ORDER_TABS, orderTabCountsSql, orderTabSql, pendingFulfillmentCountSql } from './tabs-sql.js';
+import { ORDER_TABS, orderTabCountsSql, orderTabFilterSql, orderTabSql, pendingFulfillmentCountSql } from './tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from './status-sql.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -152,5 +152,17 @@ describe('pendingFulfillmentCountSql', () => {
     });
     expect(set).toBe(perRow);
     expect(perRow).toBeGreaterThan(0); // the fixtures include paid, unshipped orders, so equality is not vacuous
+  });
+});
+
+describe('orderTabFilterSql', () => {
+  it.each([...ORDER_TABS])('selects the same orders as orderTabSql (%s)', async (tab) => {
+    const ids = (cond: ReturnType<typeof orderTabSql>) => withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`select "order"."code" from "order" where "order"."deleted_at" is null and ${cond} order by "order"."code"`);
+      return (r.rows as Array<{ code: string }>).map((x) => x.code);
+    });
+    const expected = await ids(orderTabSql(tab));
+    expect(await ids(orderTabFilterSql(tab))).toEqual(expected);
+    expect(expected.length).toBeGreaterThan(0);
   });
 });

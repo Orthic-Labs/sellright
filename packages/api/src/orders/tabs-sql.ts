@@ -50,7 +50,7 @@ export function orderTabSql(tab: OrderTab): SQL {
 /**
  * Per-order aggregates for the set-based admin counts: each child table is aggregated once per order (hash joins), not
  * once per order row as the correlated `orderTabSql`/status-sql projections do (perf/pg F1, EGM PG-2). Defines CTE `t`
- * with one row per order matching `where`: state, open_qty, open_pre, shipped, ordered_net and payment_status (the
+ * with one row per order matching `where`: id, state, open_qty, open_pre, shipped, ordered_net and payment_status (the
  * `paymentStatusWithBalanceSql` value). tabs-sql.db.test.ts proves the counts built on it match the per-row forms, so a
  * change to one side must change the other.
  */
@@ -73,7 +73,7 @@ function orderAggregatesSql(where: SQL): SQL {
       select r.order_id, sum(r.amount) as edit_ref from refund r
       where r.state <> 'Failed' and r.metadata->>'source' = ${EDIT_REFUND_SOURCE} group by r.order_id),
     t as (
-      select "order"."state" as state, coalesce(ol.open_qty, 0) as open_qty, coalesce(ol.open_pre, 0) as open_pre,
+      select "order"."id" as id, "order"."state" as state, coalesce(ol.open_qty, 0) as open_qty, coalesce(ol.open_pre, 0) as open_pre,
         coalesce(ol.shipped, 0) as shipped, coalesce(ol.ordered_net, 0) as ordered_net,
         -- Nested CASE: the TOASTed metadata is read only for a paid order that still owes money.
         case when "order"."state" in ('Paid', 'PartiallyRefunded')
@@ -96,6 +96,16 @@ export function orderTabCountsSql(opts: { excludeDemo: boolean }): SQL {
   const counts = ORDER_TABS.map((t) => sql`(count(*) filter (where ${aggregateTabSql(t)}))::int as ${sql.identifier(t)}`);
   return sql`with ${orderAggregatesSql(live)}
     select ${sql.join(counts, sql`, `)}, count(*)::int as "all" from t`;
+}
+
+/**
+ * The admin order list's `?tab=` filter (routes/admin.ts) as one set-based semi-join: the order ids whose aggregates
+ * pass `aggregateTabSql`. Same rows as `orderTabSql(tab)`, which ran its correlated subqueries for every order before
+ * the page's LIMIT, and again for the count (~135 ms per request on the default tab on dd). The 25-row page still
+ * projects open/shipped quantities per row.
+ */
+export function orderTabFilterSql(tab: OrderTab): SQL {
+  return sql`"order"."id" in (with ${orderAggregatesSql(sql`true`)} select id from t where ${aggregateTabSql(tab)})`;
 }
 
 /**

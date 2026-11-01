@@ -40,7 +40,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabFilterSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -370,7 +370,7 @@ admin.openapi(
       if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
-      if (tab) conds.push(orderTabSql(tab) as never);
+      if (tab) conds.push(orderTabFilterSql(tab) as never); // set-based; same rows as orderTabSql(tab)
       if (q) conds.push(orderSearchSql(q, 'customer') as never);
       const where = conds.length ? and(...conds) : undefined;
       const contactSql = orderContactSql('customer');
