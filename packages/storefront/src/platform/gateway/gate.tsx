@@ -163,8 +163,9 @@ function slotKeys(def: AnyGateDef, present: readonly string[]): string[] {
  */
 const SlotHost = component$<{ id: string; src: object }>((props) => {
 	const id = props.id;
-	const src = props.src;
-	const safe = useComputed$(() => { const r = SLOT_DEFS.get(id)!; return enter(r.slot, r.def, src).props; });
+	// `props.src` read inside the computed, so it tracks the prop: a caller that re-renders hands SlotHost new props (Rotten's product
+	// mount on each selection) and they are validated again. A captured `src` kept the first render's props.
+	const safe = useComputed$(() => { const r = SLOT_DEFS.get(id)!; return enter(r.slot, r.def, props.src).props; });
 	const reg = SLOT_DEFS.get(id)!;
 	const View = (getSlot(reg.slot) as AnyComponent | undefined) ?? reg.Fallback;
 	if (!View) return null;
