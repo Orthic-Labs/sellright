@@ -3,7 +3,8 @@
 // switch (144 -> 55 script requests, no readiness loss, re-enabling it rejected: damned/docs/PERFORMANCE-2026-09-26/27.md). Like
 // that storefront, after window load and an idle slot the browser modulepreloads (low priority, never executed) only the cart's render path
 // and the current page's interactive closure. Checkout's code warms on intent: a link to /checkout or an element marked
-// data-warm="checkout" (the cart's Checkout button; #427: warming it on every page load cost ~100 script files). Event handlers
+// data-warm="checkout" (the cart's Checkout button; #427: warming it on every page load cost ~100 script files). A product link
+// warms the product page's code the same way (shop -> product ran ~6 serial ~0.3 s fetch waves live). Event handlers
 // still load on demand. Code only: no stock, price or session read is started here.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,8 +59,8 @@ export function warmScript(groups: Record<WarmGroup, string[]>): string {
 		`function sd(){return!!(navigator.connection&&navigator.connection.saveData)}` +
 		`function after(){var f=function(){if(sd())return;w('cart',1);var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
 		`document.readyState==='complete'?after():addEventListener('load',after,{once:true});` +
-		`function intent(e){if(sd())return;var t=e.target,a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin===location.origin&&u.pathname.indexOf('/checkout')===0)w('checkout')}catch(x){}}` +
-		`['pointerover','focusin','pointerdown'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
+		`function intent(e){if(sd())return;var t=e.target,a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
+		`['pointerover','focusin','pointerdown','touchstart'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
 }
 
 /** The script for this build, from <distDir>/q-manifest.json (the runtime manifest strips symbol origins), or null. */

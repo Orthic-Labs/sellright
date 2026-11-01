@@ -55,6 +55,9 @@ describe('warm graph (#425 step 3)', () => {
 		// #427: checkout warms on intent only (a /checkout link or data-warm="checkout"), not after every page load.
 		expect(s).not.toContain("w('checkout',1)");
 		expect(s).toContain("getAttribute('data-warm')");
+		// A product link warms the product closure on intent (hover, focus, touch).
+		expect(s).toContain("w('product')}");
+		expect(s).toContain("'touchstart'");
 		expect(() => new Function(s)).not.toThrow();
 	});
 });
