@@ -72,3 +72,6 @@ lerna-debug.log*
 
 # Storefront e2e throwaway runtime (API cwd)
 e2e/.run/
+
+# #427 build-generated chunk map (scripts/build-client.mjs)
+chunk-groups*.json

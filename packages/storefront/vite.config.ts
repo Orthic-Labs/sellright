@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { qwikRouter } from '@qwik.dev/router/vite';
 import { qwikVite } from '@qwik.dev/core/optimizer';
 import { dirname } from 'node:path';
@@ -25,6 +26,12 @@ function noGlobalCssPlugin(srcDir: string): Plugin {
       return id === NO_GLOBAL_CSS ? 'export {};' : null;
     },
   };
+}
+
+import { areaOf as srAreaOf } from './scripts/chunk-groups.mjs';
+function chunkGroupsMap(): Record<string, string> {
+  const suffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
+  try { return JSON.parse(readFileSync(`chunk-groups${suffix}.json`, 'utf8')); } catch { return {}; }
 }
 
 export default defineConfig((config) => {
@@ -104,6 +111,22 @@ export default defineConfig((config) => {
       // the brand storefronts run without it on Rolldown.
       rolldownOptions: {
         output: {
+          // #427: plain source modules (not Qwik segments) shared by several chunks were split into ~190 tiny files. Group them
+          // by the same page areas as the segments (scripts/chunk-groups.mjs); Qwik's own runtime stays where Qwik puts it.
+          codeSplitting: process.env.SR_NO_SPLIT_GROUPS ? undefined : {
+            groups: [
+              {
+                name: (id: string) => {
+                  if (/@qwik\.dev|[\\/]@builder\.io/.test(id)) return null;
+                  if (/node_modules/.test(id)) return 'sr-vendor';
+                  const m = id.match(/[\\/]src[\\/](.*)$/);
+                  if (!m || /\.(tsx|ts|js)_/.test(m[1])) return null;
+                  return 'sr-shared';
+                },
+                minSize: 8 * 1024,
+              },
+            ],
+          },
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {
@@ -133,9 +156,8 @@ export default defineConfig((config) => {
         },
         srcDir: 'src',
         debug: false,
-        entryStrategy: {
-          type: 'smart',
-        },
+        // #427: page-area chunk groups from the previous pass (scripts/build-client.mjs); absent on a first build.
+        entryStrategy: { type: 'smart', manual: chunkGroupsMap() },
       }),
       // P7/V30: the rc.3 preloader has no probability cut-off and fetched ~410 bundles per page after load by following
       // lazy-QRL edges of the bundle graph. Keep static imports and route/symbol edges only, plus (L10) one flat edge from

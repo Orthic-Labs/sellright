@@ -21,7 +21,7 @@
 		"build:demo": "SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=demo VITE_SELLRIGHT_API_URL=http://172.22.0.1:4310 VITE_SELLRIGHT_PROD_URL=http://172.22.0.1:4310 VITE_SERVER_CART=1 VITE_DEMO_MODE=1 VITE_HOME_SPOTLIGHT_SLUG=studio-notebook VITE_HOME_FEATURE_SLUG=everyday-tote pnpm run build",
 		"build:runtime": "SELLRIGHT_DISABLE_SSG=1 pnpm run build",
 		"cleanup-sitemaps": "node scripts/cleanup-static-sitemaps.js",
-		"build.client": "vite build --logLevel warn",
+		"build.client": "node scripts/build-client.mjs",
 		"build.preview": "vite build --ssr src/entry.preview.tsx --logLevel warn",
 		"build.server": "vite build -c adapters/express/vite.config.mts --logLevel warn",
 		"build.types": "tsc --incremental --noEmit",
