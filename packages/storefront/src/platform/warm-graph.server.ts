@@ -18,7 +18,8 @@ export type WarmGroup = 'cart' | 'home' | 'product' | 'checkout';
 // task file put four serial ~0.75 s fetches on the add-to-cart click (#427, measured live 2026-11-01).
 const RENDER_CTX = new Set(['component$', 'useTask$', 'useVisibleTask$', 'useComputed$', 'useStyles$', '$']);
 const isRender = (s: ManifestSymbol) => s.ctxKind !== 'eventHandler' && RENDER_CTX.has(s.ctxName);
-const PRODUCT = /^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/)/;
+// brand/configurator: a brand's own configurator view (Rotten's overlay), whose add-to-cart click was a cold ~0.7 s fetch.
+const PRODUCT = /^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/|brand\/configurator\/)/;
 
 const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
 	// Everything the drawer renders, not only components/cart: shared ui and icons (image, quantity, trash, check), the
