@@ -248,7 +248,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
             // #408: every group is open from the start and can be chosen in any order. A value no purchasable variant has is
-            // disabled; one that only fails with the current choices stays clickable, marked unavailable (choosing it swaps).
+            // disabled and greyed. #426 (Adrian): a value another combination has never greys out; it looks like any other
+            // option, choosing it clears the conflicting choice (selectOptionValue), and only its label says it swaps.
             const purchasable = availableForGroup(product.variants, groups.value, groupIdx, []);
             const available = availableForGroup(product.variants, groups.value, groupIdx, selectedValues.value);
             const chosenVal = selectedValues.value[groupIdx];
@@ -270,7 +271,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const delta = priceDeltaLabel(product.variants, groups.value, val);
                         return (
                           <button key={val}
-                            class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
                             aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
@@ -291,7 +292,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const color = swatchColor(val);
                         return (
                           <button key={val}
-                            class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
                             aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
@@ -324,7 +325,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const pillPrice = optionPrice !== null ? `$${(optionPrice / 100).toFixed(0)}` : null;
                         return (
                           <button key={val}
-                            class={`sr-pill${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-pill${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
                             aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
