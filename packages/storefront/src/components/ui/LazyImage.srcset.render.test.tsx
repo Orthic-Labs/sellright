@@ -36,3 +36,11 @@ describe('responsive image presets (real preset widths)', () => {
 		expect(links[0].imagesizes).toBe(RESPONSIVE_CONFIGS.productMain.sizes);
 	});
 });
+
+describe('generateImagePreloadLinks priority (#429)', () => {
+	it('every LCP preload is fetchpriority high', () => {
+		const links = generateImagePreloadLinks(SRC, 'productMain', ['avif', 'webp', 'original']);
+		expect(links.length).toBe(3);
+		for (const l of links) expect(l.fetchpriority).toBe('high');
+	});
+});

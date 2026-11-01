@@ -151,7 +151,10 @@ export const generateImagePreloadLinks = (
     imagesrcset?: string; 
     imagesizes?: string;
     crossorigin?: string;
+    fetchpriority?: 'high';
   }> = [];
+  // These preloads exist for the LCP image only, so they are high priority (#429). Without it the preload went out at Low,
+  // the <img fetchpriority="high"> reused that Low request, and Damned's PDP LCP image queued behind its 2 KB thumbnails.
 
   // Add preload links for each requested format
   if (formats.includes('avif') && imageSources.avif) {
@@ -162,6 +165,7 @@ export const generateImagePreloadLinks = (
       type: 'image/avif',
       imagesrcset: imageSources.avifSrcset || undefined,
       imagesizes: config?.sizes,
+      fetchpriority: 'high',
       crossorigin: (src.includes(`${theme.domain}/assetspreview`) || !src.startsWith('/')) ? 'anonymous' : undefined,
     });
   }
@@ -174,6 +178,7 @@ export const generateImagePreloadLinks = (
       type: 'image/webp',
       imagesrcset: imageSources.webpSrcset || undefined,
       imagesizes: config?.sizes,
+      fetchpriority: 'high',
       crossorigin: (src.includes(`${theme.domain}/assetspreview`) || !src.startsWith('/')) ? 'anonymous' : undefined,
     });
   }
@@ -185,6 +190,7 @@ export const generateImagePreloadLinks = (
       href: imageSources.original,
       imagesrcset: imageSources.originalSrcset || undefined,
       imagesizes: config?.sizes,
+      fetchpriority: 'high',
       crossorigin: (src.includes(`${theme.domain}/assetspreview`) || !src.startsWith('/')) ? 'anonymous' : undefined,
     });
   }
