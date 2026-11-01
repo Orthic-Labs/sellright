@@ -166,6 +166,15 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { hostnames, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    // Agents may edit the store's name and tax, but never where it lives: storefrontUrl is the base of every customer
+    // password-reset and email-change link, and hostnames pick the store per Host and feed the credentialed CORS list.
+    // A leaked or prompt-injected agent token could otherwise redirect reset tokens to its own host (security audit
+    // 2026-11-02 H1). Field-level, so the route itself stays open to agents for the reversible fields.
+    if (admin.kind === 'agent' && (storefrontUrlRaw !== undefined || hostnames !== undefined)) {
+      await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'agent', entityId: admin.id,
+        action: 'denied', data: { method: 'PATCH', path: '/v1/admin/settings/store', group: 'identity', fields: [storefrontUrlRaw !== undefined && 'storefrontUrl', hostnames !== undefined && 'hostnames'].filter(Boolean) } }));
+      throw new HttpError(403, 'Agents cannot change the storefront URL or store hostnames; a human admin must.', 'AGENT_NOT_ALLOWED');
+    }
     let storefrontUrl: string | null | undefined;
     if (storefrontUrlRaw !== undefined) {
       if (storefrontUrlRaw === null || storefrontUrlRaw === '') storefrontUrl = null;
