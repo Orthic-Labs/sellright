@@ -55,7 +55,7 @@ describe('warm graph (#425 step 3)', () => {
 		expect(s).toContain('saveData');
 		expect(s).toContain("l.rel='modulepreload'");
 		// #427: checkout warms on intent only (a /checkout link or data-warm="checkout"), not after every page load.
-		expect(s).not.toContain("w('checkout',1)");
+		expect(s).not.toContain("w('cart',1);w('checkout',1)");
 		expect(s).toContain("getAttribute('data-warm')");
 		// A product link warms the product closure on intent (hover, focus, touch).
 		expect(s).toContain("w('product')}");
@@ -64,6 +64,9 @@ describe('warm graph (#425 step 3)', () => {
 		expect(s).not.toContain("w('cart',1)");
 		expect(s).toContain("(e.type==='pointerdown'||e.type==='touchstart')");
 		expect(s).toContain("/cart|bag/i.test(");
+		// Save-Data does not stop intent warming; the checkout page warms its own closure after load.
+		expect(s).toContain("function intent(e){if((e.type");
+		expect(s).toContain("else if(p.indexOf('/checkout')===0)w('checkout',1)");
 		expect(() => new Function(s)).not.toThrow();
 	});
 });

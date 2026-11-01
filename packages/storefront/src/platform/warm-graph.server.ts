@@ -8,7 +8,8 @@
 // Checkout's code warms on intent: a link to /checkout or an element marked
 // data-warm="checkout" (the cart's Checkout button; #427: warming it on every page load cost ~100 script files). A product link
 // warms the product page's code the same way (shop -> product ran ~6 serial ~0.3 s fetch waves live). Event handlers
-// still load on demand. Code only: no stock, price or session read is started here.
+// still load on demand. Code only: no stock, price or session read is started here. Save-Data skips the after-load warm only:
+// intent is the shopper asking for that code now, so it warms either way. The checkout page warms its own closure after load.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -63,9 +64,9 @@ export function warmGroups(m: Manifest, base = '/build/'): Record<WarmGroup, str
 export function warmScript(groups: Record<WarmGroup, string[]>): string {
 	return `(()=>{var g=${JSON.stringify(groups)},d={};function w(k,low){if(d[k])return;d[k]=1;var a=g[k]||[];for(var i=0;i<a.length;i++){var l=document.createElement('link');l.rel='modulepreload';l.href=a[i];if(low)l.fetchPriority='low';document.head.appendChild(l)}}` +
 		`function sd(){return!!(navigator.connection&&navigator.connection.saveData)}` +
-		`function after(){var f=function(){if(sd())return;var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
+		`function after(){var f=function(){if(sd())return;var p=location.pathname;if(p==='/')w('home',1);else if(p.indexOf('/checkout')===0)w('checkout',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
 		`document.readyState==='complete'?after():addEventListener('load',after,{once:true});` +
-		`function intent(e){if(sd())return;if((e.type==='pointerdown'||e.type==='touchstart')&&/^\\/(products|shop)\\/[^/]+\\/?$/.test(location.pathname))w('cart');var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent))w('cart');var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
+		`function intent(e){if((e.type==='pointerdown'||e.type==='touchstart')&&/^\\/(products|shop)\\/[^/]+\\/?$/.test(location.pathname))w('cart');var t=e.target,b=t&&t.closest?t.closest('button'):null;if(b&&/cart|bag/i.test((b.getAttribute('aria-label')||'')+' '+b.textContent))w('cart');var a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/checkout')===0)w('checkout');else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(u.pathname))w('product')}catch(x){}}` +
 		`['pointerover','focusin','pointerdown','touchstart'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
 }
 

@@ -38,7 +38,8 @@ export function chunkGroups(manifest) {
 // module did: "k is not a function", 2026-11-01). Qwik segments stay with Qwik's map above. Route modules, brand slots and
 // root.tsx stay out: the router loads them by dynamic import and grouping them left the home page's <main> empty on the client.
 const SEGMENT = /\.[mc]?[jt]sx?_[^/]+\.js(\?|$)/;
-const OUTSIDE = /node_modules|@qwik\.dev|^\0/;
+// Virtual modules (NUL-prefixed ids, virtual:*) are NOT outside: brand slots and brand data import src, so they are walked like source.
+const OUTSIDE = /node_modules|@qwik\.dev/;
 const KEEP_OUT = /[\\/]src[\\/](routes|brand-slots)[\\/]|[\\/]src[\\/]root\.tsx/;
 
 export function sharedGroup() {
