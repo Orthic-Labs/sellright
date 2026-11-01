@@ -89,8 +89,11 @@ export default component$(() => {
 		DEBOUNCE_DELAY: 500
 	});
 
+	// #427: no task in this component awaits the network. An awaiting useTask$ holds the component's render, so the drawer
+	// stayed shut until the country list, converted-cart lookup and shipping quote returned (1.1 s live after ADD TO CART).
+	// Each read now starts here and writes its signal when it lands; the drawer renders at once.
 	// T20: Restore country + load country list — useTask$ (runs once)
-	useTask$(async () => {
+	useTask$(() => {
 		if (!appState.shippingAddress.countryCode) {
 			const stored = CountryPreferenceService.getCountry();
 			appState.shippingAddress.countryCode = stored;
@@ -99,15 +102,16 @@ export default component$(() => {
 			countryCodeSignal.value = appState.shippingAddress.countryCode;
 		}
 		if (!appState.availableCountries || appState.availableCountries.length === 0) {
-			const countries = await CountryService.getAvailableCountries();
-			appState.availableCountries = countries as any[];
+			void CountryService.getAvailableCountries().then((countries) => {
+				appState.availableCountries = countries as any[];
+			});
 		}
 	});
 
 	// A converted cart is an order waiting to be paid (or finished): ask the server which, each time the drawer opens on
 	// one. Read-only; a failed lookup just keeps "Continue checkout" and offers no escape.
 	const convertedLookup = useSignal<ConvertedLookupState>(null);
-	useTask$(async ({ track, cleanup }) => {
+	useTask$(({ track, cleanup }) => {
 		const open = track(() => appState.showCart);
 		const status = track(() => cartState.cart.status);
 		const token = isBrowser ? CartService.token() : null;
@@ -118,23 +122,17 @@ export default component$(() => {
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
 		convertedLookup.value = 'loading';
-		const result = await CartService.lookupConvertedCheckout(token);
-		if (!cancelled) convertedLookup.value = result;
+		void CartService.lookupConvertedCheckout(token).then((result) => {
+			if (!cancelled) convertedLookup.value = result;
+		});
 	});
 	const banner = cartBannerFor(cartState.cart.status, convertedLookup.value);
 	// A converted cart gets its own footer (continue / edit / start new) instead of the checkout footer.
 	const convertedFooter = banner.continueCheckout || banner.editCart || banner.startNewCart;
 	const reopening = useSignal(false);
 
-	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
-
-	const isOutOfStock = useSignal(false);
-
-	// T20: Track out-of-stock via useTask$
-	useTask$(async ({ track }) => {
-		track(() => cartState.cart.lines);
-		isOutOfStock.value = await hasOutOfStockItems();
-	});
+	// T20: out-of-stock straight from the lines (fail closed: only an explicit available === true counts).
+	const isOutOfStock = useComputed$(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
 	// T20: Sync country code signal via useTask$
 	useTask$(({ track }) => {
@@ -165,7 +163,7 @@ export default component$(() => {
 	// Reactive shipping calculation — drives shippingState on every track change.
 	// Previously this was useResource$ which has beta.32 quirks where sync-body resources
 	// skip re-runs after first resolution. Plain useTask$ is reliable.
-	useTask$(async ({ track, cleanup }) => {
+	useTask$(({ track, cleanup }) => {
 		const countryCode = track(() => appState.shippingAddress.countryCode);
 		const cartVisible = track(() => appState.showCart);
 		// The quote is the server's, from the cart's own items and coupons; re-quote whenever either changes.
@@ -186,16 +184,17 @@ export default component$(() => {
 
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
-		const { method: selectedShippingMethod, freeShipping, failed } = await fetchCartShipping(countryCode, items, couponCodes);
-		if (cancelled) return;
-		// A failed quote is not remembered: the next cart change (or reopen) asks again.
-		shippingState.quoteKey = failed ? '' : quoteKey;
-		appState.freeShipping = freeShipping;
+		void fetchCartShipping(countryCode, items, couponCodes).then(({ method: selectedShippingMethod, freeShipping, failed }) => {
+			if (cancelled) return;
+			// A failed quote is not remembered: the next cart change (or reopen) asks again.
+			shippingState.quoteKey = failed ? '' : quoteKey;
+			appState.freeShipping = freeShipping;
 
-		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
-		shippingState.selectedMethod = selectedShippingMethod;
-		shippingState.lastCheckedCountry = countryCode;
-		shippingState.error = null;
+			shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
+			shippingState.selectedMethod = selectedShippingMethod;
+			shippingState.lastCheckedCountry = countryCode;
+			shippingState.error = null;
+		});
 	});
 
 	const calculationState = useStore({
