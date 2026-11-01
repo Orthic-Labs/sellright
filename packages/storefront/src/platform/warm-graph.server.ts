@@ -2,7 +2,8 @@
 // With the preloader on, every dd/rh page fetched 115-271 script bundles (650-980 KB); Damned's previous storefront measured the same
 // switch (144 -> 55 script requests, no readiness loss, re-enabling it rejected: damned/docs/PERFORMANCE-2026-09-26/27.md). Like
 // that storefront, after window load and an idle slot the browser modulepreloads (low priority, never executed) only the cart's render path
-// , the current page's interactive closure and the checkout closure (#427: the cart's Checkout is a button, so intent alone left a 12 s cold chain). Event handlers
+// and the current page's interactive closure. Checkout's code warms on intent: a link to /checkout or an element marked
+// data-warm="checkout" (the cart's Checkout button; #427: warming it on every page load cost ~100 script files). Event handlers
 // still load on demand. Code only: no stock, price or session read is started here.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,9 +56,9 @@ export function warmGroups(m: Manifest, base = '/build/'): Record<WarmGroup, str
 export function warmScript(groups: Record<WarmGroup, string[]>): string {
 	return `(()=>{var g=${JSON.stringify(groups)},d={};function w(k,low){if(d[k])return;d[k]=1;var a=g[k]||[];for(var i=0;i<a.length;i++){var l=document.createElement('link');l.rel='modulepreload';l.href=a[i];if(low)l.fetchPriority='low';document.head.appendChild(l)}}` +
 		`function sd(){return!!(navigator.connection&&navigator.connection.saveData)}` +
-		`function after(){var f=function(){if(sd())return;w('cart',1);var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1);w('checkout',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
+		`function after(){var f=function(){if(sd())return;w('cart',1);var p=location.pathname;if(p==='/')w('home',1);else if(/^\\/(products|shop)\\/[^/]+\\/?$/.test(p))w('product',1)};'requestIdleCallback'in window?requestIdleCallback(f,{timeout:2000}):setTimeout(f,200)}` +
 		`document.readyState==='complete'?after():addEventListener('load',after,{once:true});` +
-		`function intent(e){if(sd())return;var t=e.target,a=t&&t.closest?t.closest('a[href]'):null;if(!a)return;try{var u=new URL(a.href,location.href);if(u.origin===location.origin&&u.pathname.indexOf('/checkout')===0)w('checkout')}catch(x){}}` +
+		`function intent(e){if(sd())return;var t=e.target,a=t&&t.closest?t.closest('a[href],[data-warm]'):null;if(!a)return;var k=a.getAttribute('data-warm');if(k){w(k);return}try{var u=new URL(a.href,location.href);if(u.origin===location.origin&&u.pathname.indexOf('/checkout')===0)w('checkout')}catch(x){}}` +
 		`['pointerover','focusin','pointerdown'].forEach(function(t){document.addEventListener(t,intent,{capture:true,passive:true})})})()`;
 }
 

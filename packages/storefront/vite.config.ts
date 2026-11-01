@@ -28,7 +28,7 @@ function noGlobalCssPlugin(srcDir: string): Plugin {
   };
 }
 
-import { areaOf as srAreaOf } from './scripts/chunk-groups.mjs';
+import { sharedGroup } from './scripts/chunk-groups.mjs';
 function chunkGroupsMap(): Record<string, string> {
   const suffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
   try { return JSON.parse(readFileSync(`chunk-groups${suffix}.json`, 'utf8')); } catch { return {}; }
@@ -111,22 +111,8 @@ export default defineConfig((config) => {
       // the brand storefronts run without it on Rolldown.
       rolldownOptions: {
         output: {
-          // #427: plain source modules (not Qwik segments) shared by several chunks were split into ~190 tiny files. Group them
-          // by the same page areas as the segments (scripts/chunk-groups.mjs); Qwik's own runtime stays where Qwik puts it.
-          codeSplitting: process.env.SR_NO_SPLIT_GROUPS ? undefined : {
-            groups: [
-              {
-                name: (id: string) => {
-                  if (/@qwik\.dev|[\\/]@builder\.io/.test(id)) return null;
-                  if (/node_modules/.test(id)) return 'sr-vendor';
-                  const m = id.match(/[\\/]src[\\/](.*)$/);
-                  if (!m || /\.(tsx|ts|js)_/.test(m[1])) return null;
-                  return 'sr-shared';
-                },
-                minSize: 8 * 1024,
-              },
-            ],
-          },
+          // #427: the downward-closed set of plain source modules shares one chunk (scripts/chunk-groups.mjs sharedGroup).
+          codeSplitting: { groups: [{ name: sharedGroup(), includeDependenciesRecursively: false }] },
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {

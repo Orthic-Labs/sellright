@@ -32,6 +32,32 @@ export function chunkGroups(manifest) {
 	return Object.fromEntries(Object.entries(out).sort(([x], [y]) => (x < y ? -1 : 1)));
 }
 
+// #427: plain source modules shared by several segments were split into ~190 files under 3 KB. `sharedGroup` names the one
+// shared chunk they may join: a module joins only when every module it imports is outside src (Qwik, node_modules) or joins
+// too, so the shared chunk never imports a chunk that imports it and no evaluation-order cycle can form (grouping every source
+// module did: "k is not a function", 2026-11-01). Qwik segments stay with Qwik's map above. Route modules, brand slots and
+// root.tsx stay out: the router loads them by dynamic import and grouping them left the home page's <main> empty on the client.
+const SEGMENT = /\.[mc]?[jt]sx?_[^/]+\.js(\?|$)/;
+const OUTSIDE = /node_modules|@qwik\.dev|^\0/;
+const KEEP_OUT = /[\\/]src[\\/](routes|brand-slots)[\\/]|[\\/]src[\\/]root\.tsx/;
+
+export function sharedGroup() {
+	const memo = new Map();
+	const closed = (id, ctx, stack) => {
+		if (OUTSIDE.test(id)) return true;
+		if (SEGMENT.test(id) || KEEP_OUT.test(id) || stack.has(id)) return false;
+		const hit = memo.get(id);
+		if (hit !== undefined) return hit;
+		stack.add(id);
+		const info = ctx.getModuleInfo(id);
+		const ok = !!info && info.importedIds.every((d) => closed(d, ctx, stack));
+		stack.delete(id);
+		memo.set(id, ok);
+		return ok;
+	};
+	return (id, ctx) => (!OUTSIDE.test(id) && /[\\/]src[\\/]/.test(id) && closed(id, ctx, new Set()) ? 'sr-shared' : null);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const m = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 	process.stdout.write(JSON.stringify(chunkGroups(m), null, 1) + '\n');

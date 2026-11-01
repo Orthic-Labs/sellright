@@ -52,8 +52,9 @@ describe('warm graph (#425 step 3)', () => {
 		expect(s).toContain("addEventListener('load',after,{once:true})");
 		expect(s).toContain('saveData');
 		expect(s).toContain("l.rel='modulepreload'");
-		// #427: checkout warms after load too; the cart's Checkout control is a button, so link intent never fired (12 s live).
-		expect(s).toContain("w('checkout',1)}");
+		// #427: checkout warms on intent only (a /checkout link or data-warm="checkout"), not after every page load.
+		expect(s).not.toContain("w('checkout',1)");
+		expect(s).toContain("getAttribute('data-warm')");
 		expect(() => new Function(s)).not.toThrow();
 	});
 });

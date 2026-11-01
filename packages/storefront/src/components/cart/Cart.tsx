@@ -519,6 +519,7 @@ export default component$(() => {
 											isNavigatingToCheckout.value = false;
 										}
 									})}
+									data-warm="checkout"
 									disabled={isNavigatingToCheckout.value || !cartCheckoutReady}
 									aria-disabled={cartCheckoutReady ? 'false' : 'true'}
 									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
