@@ -112,6 +112,7 @@ export default defineConfig((config) => {
       rolldownOptions: {
         output: {
           // #427: the downward-closed set of plain source modules shares one chunk (scripts/chunk-groups.mjs sharedGroup).
+          // Client build only (sr-client-only-split below drops it from the server build, where it broke SSR mid-stream).
           codeSplitting: { groups: [{ name: sharedGroup(), includeDependenciesRecursively: false }] },
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
@@ -127,6 +128,17 @@ export default defineConfig((config) => {
       },
     },
     plugins: [
+      // #427: the express adapter sets build.ssr in its own config (ConfigEnv.isSsrBuild stays false there), so the server
+      // build is detected here and keeps rolldown's default splitting: the shared group on the server build sent every page
+      // a 500 mid-stream (9622bb24 live 2026-11-01, rolled back).
+      {
+        name: 'sr-client-only-split',
+        enforce: 'pre',
+        config(c) {
+          const out = c.build?.rolldownOptions?.output;
+          if (c.build?.ssr && out && !Array.isArray(out)) delete out.codeSplitting;
+        },
+      },
       // A17: validates src/brand-slots (or SELLRIGHT_BRAND_SLOTS_DIR) and serves virtual:sellright-brand-slots.
       brandSlotsPlugin(),
       // Brand views: validates src/brand/head.json and routes.json and serves virtual:sellright-brand-data (a missing file = defaults).
