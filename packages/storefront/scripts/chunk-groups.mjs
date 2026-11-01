@@ -28,7 +28,9 @@ const AREAS = [
 	['account', /^(routes\/(account|sign-in|orders|forgot-password|password-reset|verify|affiliate)|components\/(auth|account|loyalty|order-tracking)\/)/],
 	// Legal, about and story pages (Damned brand/static-pages, Rotten brand/pages: ~64-81 KB of render code): their own bundle, not the shell bundle every page loads.
 	['legal', /^brand\/(static-pages\.|pages\/)/],
-	['shell', /^(root\.tsx|routes\/layout\.tsx|brand-slots\/(shell\.|legal\.)|components\/(header|footer|menu|head|icons|ui|buttons|modal)\/|contexts\/|hooks\/|brand\/|platform\/(stock-triggers|live-values|early-reads)\b|platform\/controllers\/shell)/],
+	// Analytics runs on every page (analytics-mount and the modules only it imports): shell. Without an area they were 3-4 files
+	// under 2 KB on every page (#429).
+	['shell', /^(root\.tsx|routes\/layout\.tsx|brand-slots\/(shell\.|legal\.)|components\/(header|footer|menu|head|icons|ui|buttons|modal)\/|contexts\/|hooks\/|brand\/|platform\/(stock-triggers|live-values|early-reads)\b|platform\/controllers\/(shell|analytics-mount|conversion|loyalty|user-data|purchase-identity)\b|sellright\/analytics\b)/],
 ];
 
 export function areaOf(origin) {
