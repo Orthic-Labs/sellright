@@ -7,6 +7,9 @@ import { readFileSync } from 'node:fs';
 
 /** Area for a source origin (relative to src/), or null to leave the symbol where Qwik puts it. Order matters: first match wins. */
 const AREAS = [
+	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
+	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
+	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],
 	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout)/],
 	['cart', /^(components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/widgets\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
 	['product', /^(routes\/products\/|routes\/shop\/\[[^/]+\]\/|brand-slots\/(route\.product|pdp\.)|components\/reviews\/|platform\/(product|configurator|stock-read|content-review)|platform\/controllers\/(product|configurator|stock-read)|brand\/configurator\/)/],
