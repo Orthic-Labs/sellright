@@ -47,7 +47,8 @@ interface ToastContext {
    *  Pages don't read this directly — it's available for the in-app activity
    *  widget and tests. Always returns void. */
   recordEvent: (type: ToastEvent['type'], detail?: string) => void;
-  events: ToastEvent[];
+  /** The last 20 events. A getter over a ref, not state: recording an event must not re-render every consumer. */
+  getEvents: () => ToastEvent[];
 }
 
 export interface ToastEvent {
@@ -71,9 +72,8 @@ function nextId() { _seq += 1; return `t${Date.now().toString(36)}${_seq.toStrin
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [events, setEvents] = useState<ToastEvent[]>([]);
-  // Keep the latest events in a ref so tests can read it without subscribing to
-  // a state update that would itself trigger a re-render inside push().
+  // The latest events live in a ref only: as state they re-rendered every useToast() consumer on each toast and
+  // palette event, and nothing renders them.
   const eventsRef = useRef<ToastEvent[]>([]);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -90,7 +90,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     // #406: at most three on screen; the oldest gives way.
     setToasts((cur) => [...cur, toast].slice(-3));
     const evt: ToastEvent = { type: 'toast-pushed', at: Date.now(), detail: `${tone}:${input.title}` };
-    setEvents((cur) => [...cur.slice(-19), evt]);
     eventsRef.current = [...eventsRef.current.slice(-19), evt];
     const ttl = input.ttl ?? DEFAULT_TTL[tone];
     if (ttl > 0) {
@@ -102,7 +101,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const recordEvent = useCallback((type: ToastEvent['type'], detail?: string) => {
     const evt: ToastEvent = { type, at: Date.now(), detail };
-    setEvents((cur) => [...cur.slice(-19), evt]);
     eventsRef.current = [...eventsRef.current.slice(-19), evt];
   }, []);
 
@@ -121,8 +119,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return () => setToastBus(null);
   }, [success, error, info]);
 
-  const ctx = useMemo<ToastContext>(() => ({ push, dismiss, success, error, info, events, recordEvent }),
-    [push, dismiss, success, error, info, events, recordEvent]);
+  const getEvents = useCallback(() => eventsRef.current, []);
+  const ctx = useMemo<ToastContext>(() => ({ push, dismiss, success, error, info, recordEvent, getEvents }),
+    [push, dismiss, success, error, info, recordEvent, getEvents]);
 
   return (
     <Ctx.Provider value={ctx}>
