@@ -1,4 +1,3 @@
-import { maybeMock } from './qa-mocks.js';
 import { adminHref, isPublicAdminPath } from './lib/base-path';
 
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
@@ -36,6 +35,15 @@ function apiError(status: number, json: Record<string, unknown> | null | undefin
   return err;
 }
 
+/** QA mock builds only (VITE_QA_MOCK=1, `vite --mode qa`) and unit tests: decided at build time, so a production
+ *  build drops the mock fixtures entirely instead of shipping them in the entry chunk behind a runtime check. */
+const QA_MOCKS = import.meta.env.VITE_QA_MOCK === '1' || import.meta.env.MODE === 'test';
+async function qaMock(path: string, qs: URLSearchParams, init?: RequestInit): Promise<{ data: unknown; threw?: string } | null> {
+  if (!QA_MOCKS) return null;
+  const { maybeMock } = await import('./qa-mocks.js');
+  return maybeMock(path, qs, init);
+}
+
 /** POSTs that only read (dry runs): QA mode may mock them like GETs. Every writing POST still passes through. */
 const READ_ONLY_POSTS = new Set(['/import-tracking/preview']);
 
@@ -46,7 +54,7 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
   const pathOnly = path.split('?')[0]!;
   if (method === 'GET' || (method === 'POST' && READ_ONLY_POSTS.has(pathOnly))) {
     const qs = new URLSearchParams(path.includes('?') ? path.split('?').pop() || '' : '');
-    const mock = maybeMock(pathOnly, qs, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+    const mock = await qaMock(pathOnly, qs, { method, body: body === undefined ? undefined : JSON.stringify(body) });
     if (mock) {
       if (mock.threw) throw new ApiError(500, mock.threw);
       return mock.data as T;
@@ -89,7 +97,7 @@ export async function downloadFile(path: string, filename: string): Promise<void
 // The xlsx export streams, so it sends no counts; the CSV route still does. A missing header is null, not 0.
 export async function downloadExport(path: string): Promise<{ filename: string; orders: number | null; rows: number | null }> {
   // QA preview (VITE_QA_MOCK + ?qa=1 only): report a mocked download instead of fetching.
-  const mock = maybeMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
+  const mock = await qaMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
   if (mock) return mock.data as { filename: string; orders: number | null; rows: number | null };
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;

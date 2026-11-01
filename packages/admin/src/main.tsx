@@ -8,7 +8,6 @@ import './redesign/redesign.css';
 import { AuthProvider, useAuth } from './auth';
 import { Loading } from './components/ui';
 import { ToastProvider } from './components/Toast';
-import { CommandPalette } from './components/CommandPalette';
 
 // QA-only a11y helper (ra-014). Side-effect import: attaches
 // window.__runA11yAudit() so a devtools session (or future Playwright suite)
@@ -20,11 +19,13 @@ if ((import.meta as any).env?.MODE === 'qa') {
 }
 import Layout from './components/Layout';
 import { AppErrorBoundary } from './components/ErrorBoundary';
-import Login from './pages/Login';
+const Login = lazy(() => import('./pages/Login'));
+// Signed-in sessions never render Login; the palette mounts after sign-in. Both stay out of the entry chunk.
+const CommandPalette = lazy(() => import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const Setup = lazy(() => import('./pages/Setup'));
 const AcceptInvite = lazy(() => import('./pages/AcceptInvite'));
 
-// Route pages load on first visit, not in the first bundle (#362): signed-out screens and the shell stay eager.
+// Route pages load on first visit, not in the first bundle (#362); only the shell stays eager.
 const EnrollSecondFactor = lazy(() => import('./pages/EnrollSecondFactor'));
 const ReviewPasskeys = lazy(() => import('./pages/ReviewPasskeys'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
@@ -89,7 +90,7 @@ function Protected() {
       <Layout />
       {/* Global command palette — mounted outside Layout so it overlays
           everything and uses the same router context. */}
-      <CommandPalette />
+      <Suspense fallback={null}><CommandPalette /></Suspense>
     </>
   );
 }

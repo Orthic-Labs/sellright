@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Package, CreditCard, Mail, ArrowRight, Truck, AlertTriangle, Users, CheckCircle2, TrendingUp } from 'lucide-react';
 import { api, type Dashboard } from '../api';
 import { useAuth } from '../auth';
@@ -7,7 +7,6 @@ import { money, dateTime } from '../lib/format';
 import { halfPeriodDelta, periodWindows, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
 import { Badge, Loading, ErrorState, PageHeader, KpiCard, EmptyStateActionPanel } from '../components/ui';
 import SetupChecklist from '../components/SetupChecklist';
-import { adminHref } from '../lib/base-path';
 import { BUILTIN_VIEWS, EMPTY_FILTERS, filtersToParams } from '../lib/order-status';
 
 const unfulfilledView = BUILTIN_VIEWS.find((view) => view.id === 'unfulfilled')!;
@@ -49,6 +48,7 @@ function TrendSpark({ series, pick }: { series: TrendSeries; pick: (p: TrendSeri
 
 export default function Dashboard() {
   const { store } = useAuth();
+  const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', store?.slug],
     queryFn: () => api.get<Dashboard>('/dashboard'),
@@ -159,7 +159,7 @@ export default function Dashboard() {
             </tr></thead>
             <tbody>
               {data.recentOrders.map((o) => (
-                <tr key={o.code} className="row-link" onClick={() => location.assign(adminHref(`/orders/${encodeURIComponent(o.code)}`))}>
+                <tr key={o.code} className="row-link" onClick={() => navigate(`/orders/${encodeURIComponent(o.code)}`)}>
                   <td className="td font-medium">{o.code}</td>
                   <td className="td text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</td>
                   <td className="td text-gray-600 truncate">{o.email ?? '—'}</td>

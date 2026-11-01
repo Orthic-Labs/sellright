@@ -13,7 +13,7 @@ import { ThemeMenu } from '../theme';
 import { AppErrorBoundary } from './ErrorBoundary';
 import { Loading } from './ui';
 import { confirmLeave, useLeaveGuardRoot } from '../redesign/leave-guard';
-import { OPEN_PALETTE_EVENT } from './CommandPalette';
+import { OPEN_PALETTE_EVENT } from './palette-event';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
 interface NavItem { to: string; label: string; icon: IconType; end?: boolean; count?: 'tofulfil' }

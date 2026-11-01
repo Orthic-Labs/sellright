@@ -49,8 +49,9 @@ interface SearchResult {
 const RECENT_KEY = 'sr_palette_recent';
 const RECENT_MAX = 6;
 
-/** Window event that opens the palette (the top-bar search button, #406). */
-export const OPEN_PALETTE_EVENT = 'sellright:open-palette';
+import { OPEN_PALETTE_EVENT } from './palette-event';
+
+export { OPEN_PALETTE_EVENT };
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
