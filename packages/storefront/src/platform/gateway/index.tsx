@@ -40,7 +40,7 @@ import RawSearchFilters from '~/components/facet-filter-controls/Filters';
 import RawFiltersButton from '~/components/filters-button/FiltersButton';
 import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
 import type { JSXOutput } from '@qwik.dev/core';
-import { action, gate, gateValue, hasView, optionalAction, slotGate } from './gate';
+import { action, gate, hasView, optionalAction, slotGate } from './gate';
 import { anyOf, arr, bool, html, lit, nul, num, obj, opt, str } from './schema';
 import { ADD_RESULT } from './actions';
 
