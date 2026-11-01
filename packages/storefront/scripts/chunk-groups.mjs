@@ -45,7 +45,11 @@ export function chunkGroups(manifest) {
 		const a = areaOf(s.origin);
 		// A component named *Island (a live part of a page: a spotlight, a newsletter form) gets its own bundle in its area, so its
 		// client update loads only its code, not the whole page view it sits in (#427).
-		if (a) out[s.hash] = /(^|_)[A-Z][A-Za-z0-9]*Island_/.test(s.displayName ?? '') ? `sr-${a}-island` : `sr-${a}`;
+		// Stylesheet strings (useStyles$ segments) get their own bundle per area: the server already put them in the page's <style>,
+		// so the browser needs one only when a component first renders client-side. In the view's bundle, every re-render of the
+		// view loaded its CSS as JS (Rotten Configurator: 19 KB on home, shop and product, #429).
+		const name = s.displayName ?? '';
+		if (a) out[s.hash] = /(^|_)[A-Z][A-Za-z0-9]*Island_/.test(name) ? `sr-${a}-island` : s.ctxName === 'useStyles$' ? `sr-${a}-styles` : `sr-${a}`;
 	}
 	return Object.fromEntries(Object.entries(out).sort(([x], [y]) => (x < y ? -1 : 1)));
 }
