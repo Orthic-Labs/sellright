@@ -152,3 +152,35 @@ describe.skipIf(!isTestDb)('P1c review: plugin boundary bypasses', () => {
     } finally { app = saved; }
   });
 });
+
+describe.skipIf(!isTestDb)('security audit 2026-11-02 H1: agents cannot repoint the store', () => {
+  it('an agent is refused storefrontUrl and hostnames changes, and the refusal is audited', async () => {
+    const { token } = await agentToken();
+    for (const body of [{ storefrontUrl: 'https://evil.example.net' }, { hostnames: ['evil.example.net'] }, { name: 'Renamed', storefrontUrl: 'https://evil.example.net' }]) {
+      const res = await call('PATCH', '/v1/admin/settings/store', token, body);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AGENT_NOT_ALLOWED');
+    }
+    const { rows } = await pool.query(`SELECT name, config FROM store WHERE id = $1`, [STORE]);
+    expect(rows[0].name).toBe('P'); // the mixed body changed nothing
+    expect(rows[0].config?.storefrontUrl ?? null).toBeNull();
+    expect(rows[0].config?.hostnames ?? null).toBeNull();
+    // audit_log is FORCE RLS: read it inside the store scope, as the refusal wrote it
+    const db = await pool.connect();
+    try {
+      await db.query('BEGIN');
+      await db.query(`SELECT set_config('app.current_store', $1, true)`, [STORE]);
+      const denied = await db.query(`SELECT data FROM audit_log WHERE entity = 'agent' AND action = 'denied' AND data->>'path' = '/v1/admin/settings/store' ORDER BY at`);
+      expect(denied.rows.map((r) => r.data.fields)).toEqual([['storefrontUrl'], ['hostnames'], ['storefrontUrl']]);
+    } finally { await db.query('ROLLBACK'); db.release(); }
+  });
+
+  it('an agent can still edit the reversible store fields; a human manager can still set the storefront URL', async () => {
+    const { token } = await agentToken();
+    expect((await call('PATCH', '/v1/admin/settings/store', token, { name: 'Renamed by agent' })).status).toBe(200);
+    expect((await call('PATCH', '/v1/admin/settings/store', manager, { storefrontUrl: 'https://shop.example.com' })).status).toBe(200);
+    const { rows } = await pool.query(`SELECT name, config FROM store WHERE id = $1`, [STORE]);
+    expect(rows[0].name).toBe('Renamed by agent');
+    expect(rows[0].config.storefrontUrl).toBe('https://shop.example.com');
+  });
+});
