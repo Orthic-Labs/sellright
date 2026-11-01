@@ -128,14 +128,24 @@ export function gate<D extends Schema, A extends ActionMap = {}>(name: string, R
  * The props are validated either way, so a default build exercises the same checks.
  */
 export function slotGate<D extends Schema, A extends ActionMap = {}>(slot: SlotName, def: GateDef<D, A>, Fallback?: AnyComponent) {
-	SLOT_DEFS.set(slot, { def: def as unknown as AnyGateDef, Fallback });
+	// One slot can have several handles (route.product: found and missing), so the registry key is the slot plus its schema's hash,
+	// the same string on the server and in the browser.
+	const id = `${slot}:${schemaHash(def.data)}`;
+	SLOT_DEFS.set(id, { slot, def: def as unknown as AnyGateDef, Fallback });
 	// The handle reads nothing: reading the props here would subscribe the caller's whole render to every live value (#427).
-	const handle = (props: object): JSXOutput => <SlotHost slot={slot} src={props} />;
+	const handle = (props: object): JSXOutput => <SlotHost id={id} src={props} />;
 	return handle as unknown as (props: GateProps<D, A>) => JSXOutput;
 }
 
 /** #427: each slot's definition and fallback, by slot, so SlotHost's computed captures only the slot name and its source props. */
-const SLOT_DEFS = new Map<SlotName, { readonly def: AnyGateDef; readonly Fallback?: AnyComponent }>();
+const SLOT_DEFS = new Map<string, { readonly slot: SlotName; readonly def: AnyGateDef; readonly Fallback?: AnyComponent }>();
+
+/** FNV-1a over the schema's JSON: a short stable id for one handle definition (schemas are plain data). */
+function schemaHash(schema: Schema): string {
+	let h = 0x811c9dc5;
+	for (const c of JSON.stringify(schema)) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0;
+	return h.toString(36);
+}
 
 /** Every prop key a slot can receive: its schema's fields (each anyOf branch), its actions, and the keys present now. */
 function slotKeys(def: AnyGateDef, present: readonly string[]): string[] {
@@ -151,12 +161,12 @@ function slotKeys(def: AnyGateDef, present: readonly string[]): string[] {
  * view as one signal per prop. A live value that changes re-renders only what reads it in the view, not the whole view; before, each
  * change re-ran the caller and re-rendered the view with new objects (the home view's code and CSS loaded after load for it).
  */
-const SlotHost = component$<{ slot: SlotName; src: object }>((props) => {
-	const slot = props.slot;
+const SlotHost = component$<{ id: string; src: object }>((props) => {
+	const id = props.id;
 	const src = props.src;
-	const safe = useComputed$(() => enter(slot, SLOT_DEFS.get(slot)!.def, src).props);
-	const reg = SLOT_DEFS.get(slot)!;
-	const View = (getSlot(slot) as AnyComponent | undefined) ?? reg.Fallback;
+	const safe = useComputed$(() => { const r = SLOT_DEFS.get(id)!; return enter(r.slot, r.def, src).props; });
+	const reg = SLOT_DEFS.get(id)!;
+	const View = (getSlot(reg.slot) as AnyComponent | undefined) ?? reg.Fallback;
 	if (!View) return null;
 	const live: Record<string, unknown> = {};
 	// Data props: one computed per key, so a change to one value re-renders only what reads that value. A hook in a loop is safe here:
