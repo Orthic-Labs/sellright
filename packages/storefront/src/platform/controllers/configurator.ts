@@ -65,8 +65,8 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
 	const location = useLocation();
-	const first = sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode);
-	const start = initialFocus(first, location.url.searchParams);
+	// The initial focus only (untracked): read in the render body these would subscribe the mount to the live read (#427).
+	const start = untrack(() => initialFocus(sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), location.url.searchParams));
 	const ctl = useStore<ConfiguratorCtl>({
 		disposed: false,
 		admitted: [],

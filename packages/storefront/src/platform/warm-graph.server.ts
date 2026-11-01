@@ -25,7 +25,7 @@ const isRender = (s: ManifestSymbol) => s.ctxKind !== 'eventHandler' && RENDER_C
 // brand/configurator: a brand's own configurator view (Rotten's overlay), whose add-to-cart click was a cold ~0.7 s fetch.
 const PRODUCT = /^(routes\/products\/|routes\/shop\/\[slug\]\/|brand-slots\/route\.product|platform\/controllers\/(product|stock-read|configurator)|components\/reviews\/|brand\/configurator\/)/;
 
-const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
+const GROUPS: Record<WarmGroup, (s: ManifestSymbol, brandHome: boolean) => boolean> = {
 	// The cart toggle's own functions (platform/cart.ts useCartToggle, gateway bindAction) were two serial ~0.3 s fetches
 	// after the drawer code had warmed on the header cart hover (#427, live 2026-11-01).
 	// Everything the drawer renders, not only components/cart: shared ui and icons (image, quantity, trash, check), the
@@ -36,7 +36,12 @@ const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
 		) &&
 			isRender(s)) ||
 		(s.displayName.endsWith('Link_component') && s.ctxName === 'component$'),
-	home: (s) => /^(routes\/index\.tsx|components\/home\/|brand-slots\/route\.home|platform\/controllers\/configurator)/.test(s.origin) && isRender(s),
+	// A brand home view's live parts are *Island components (#427): only they re-render after load, so only they and their click handlers
+	// warm. The core home page (routes/index, components/home) warms only in a build without a brand home view: with one it never renders.
+	home: (s, brandHome) =>
+		(!brandHome && /^(routes\/index\.tsx|components\/home\/)/.test(s.origin) && isRender(s)) ||
+		(/^platform\/controllers\/configurator/.test(s.origin) && isRender(s)) ||
+		(/^brand-slots\/route\.home/.test(s.origin) && /(^|_)[A-Z][A-Za-z0-9]*Island_/.test(s.displayName) && (isRender(s) || s.ctxKind === 'eventHandler')),
 	// The product page's click handlers too (option pills, add to cart): the add-to-cart handler was itself a cold fetch.
 	product: (s) => PRODUCT.test(s.origin) && (isRender(s) || s.ctxKind === 'eventHandler'),
 	checkout: (s) =>
@@ -47,6 +52,7 @@ const GROUPS: Record<WarmGroup, (s: ManifestSymbol) => boolean> = {
 /** Per group, the hashed /build/ files of the matching symbols plus their static imports. */
 export function warmGroups(m: Manifest, base = '/build/'): Record<WarmGroup, string[]> {
 	const out = {} as Record<WarmGroup, string[]>;
+	const brandHome = Object.values(m.symbols).some((s) => s.origin.startsWith('brand-slots/route.home'));
 	for (const g of Object.keys(GROUPS) as WarmGroup[]) {
 		const seen = new Set<string>();
 		const add = (name: string | undefined) => {
@@ -54,7 +60,7 @@ export function warmGroups(m: Manifest, base = '/build/'): Record<WarmGroup, str
 			seen.add(name);
 			for (const dep of m.bundles[name]?.imports ?? []) add(dep);
 		};
-		for (const [hash, sym] of Object.entries(m.symbols)) if (GROUPS[g](sym)) add(m.mapping[hash]);
+		for (const [hash, sym] of Object.entries(m.symbols)) if (GROUPS[g](sym, brandHome)) add(m.mapping[hash]);
 		out[g] = [...seen].sort().map((n) => base + n);
 	}
 	return out;

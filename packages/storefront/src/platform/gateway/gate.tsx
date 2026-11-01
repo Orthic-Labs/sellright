@@ -6,7 +6,9 @@
 //   - refuses caller children: a component can read `props.children`, so L1 markup never crosses. A handle that needs children builds
 //     them itself from validated data (`compose`).
 // The checks live inside the handle, so an alias (`const View = ProductCardView`), a conditional choice or a render helper keeps them.
-import { $, type JSXOutput } from '@qwik.dev/core';
+import { $, component$, untrack, useComputed$, type JSXOutput } from '@qwik.dev/core';
+// The optimizer emits _wrapProp for `prop={signal.value}`; a slot's props are only known at runtime, so the gate calls it itself.
+import { _wrapProp } from '@qwik.dev/core/internal';
 import { getSlot } from '~/components/slots';
 import type { SlotName } from '~/components/slots/registry';
 import { checkHandle, invokeAction, type ActionHandle, type ActionName, type BoundAction } from './actions';
@@ -49,6 +51,16 @@ export function bindAction<N extends ActionName>(handle: ActionHandle<N>): Bound
 
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 /**
+ * #427: one bound QRL per handle object (checked every time, bound once). A caller that keeps its handles (a mount's `useConstant`) gets the
+ * same QRL on every validation, so a view reading the prop does not re-render; a caller that builds new handles gets new QRLs, as before.
+ */
+const BOUND = new WeakMap<object, unknown>();
+function boundFor(handle: ActionHandle): unknown {
+	let b = BOUND.get(handle);
+	if (!b) BOUND.set(handle, (b = bindAction(handle)));
+	return b;
+}
+/**
  * Qwik deletes a null-valued prop when it comes through a JSX spread or a dynamic expression (`_jsxSplit` "clean up null markers"), so
  * a nullable data prop the caller passed as `null` can arrive absent. A missing key whose schema accepts null is `null`.
  */
@@ -89,7 +101,7 @@ export function enter(name: string, def: AnyGateDef, props: object): { props: Re
 			if (!spec.optional) throw new GatewayError(`${name}.${key}`, 'a required action is missing');
 			continue;
 		}
-		bound[key] = bindAction(checkHandle(value, spec.names, `${name}.${key}`));
+		bound[key] = boundFor(checkHandle(value, spec.names, `${name}.${key}`));
 	}
 	if (def.compose) {
 		const composed = (def.compose as (d: unknown) => { props: Record<string, unknown>; children: JSXOutput })(safe);
@@ -116,14 +128,48 @@ export function gate<D extends Schema, A extends ActionMap = {}>(name: string, R
  * The props are validated either way, so a default build exercises the same checks.
  */
 export function slotGate<D extends Schema, A extends ActionMap = {}>(slot: SlotName, def: GateDef<D, A>, Fallback?: AnyComponent) {
-	const anyDef = def as unknown as AnyGateDef;
-	const handle = (props: object): JSXOutput => {
-		const entry = enter(slot, anyDef, props);
-		const View = (getSlot(slot) as AnyComponent | undefined) ?? Fallback;
-		return View ? <View {...entry.props} /> : null;
-	};
+	SLOT_DEFS.set(slot, { def: def as unknown as AnyGateDef, Fallback });
+	// The handle reads nothing: reading the props here would subscribe the caller's whole render to every live value (#427).
+	const handle = (props: object): JSXOutput => <SlotHost slot={slot} src={props} />;
 	return handle as unknown as (props: GateProps<D, A>) => JSXOutput;
 }
+
+/** #427: each slot's definition and fallback, by slot, so SlotHost's computed captures only the slot name and its source props. */
+const SLOT_DEFS = new Map<SlotName, { readonly def: AnyGateDef; readonly Fallback?: AnyComponent }>();
+
+/** Every prop key a slot can receive: its schema's fields (each anyOf branch), its actions, and the keys present now. */
+function slotKeys(def: AnyGateDef, present: readonly string[]): string[] {
+	const keys = new Set(present);
+	const fields = (s: Schema) => (s.t === 'object' ? Object.keys(s.fields) : []);
+	for (const k of def.data.t === 'anyOf' ? def.data.of.flatMap(fields) : fields(def.data)) keys.add(k);
+	for (const k of Object.keys(def.actions ?? {})) keys.add(k);
+	return [...keys];
+}
+
+/**
+ * #427: the slot's validated props as one computed (the same `enter` checks: detached data, bound actions, no children), handed to the
+ * view as one signal per prop. A live value that changes re-renders only what reads it in the view, not the whole view; before, each
+ * change re-ran the caller and re-rendered the view with new objects (the home view's code and CSS loaded after load for it).
+ */
+const SlotHost = component$<{ slot: SlotName; src: object }>((props) => {
+	const slot = props.slot;
+	const src = props.src;
+	const safe = useComputed$(() => enter(slot, SLOT_DEFS.get(slot)!.def, src).props);
+	const reg = SLOT_DEFS.get(slot)!;
+	const View = (getSlot(slot) as AnyComponent | undefined) ?? reg.Fallback;
+	if (!View) return null;
+	const live: Record<string, unknown> = {};
+	// Data props: one computed per key, so a change to one value re-renders only what reads that value. A hook in a loop is safe here:
+	// the keys come from the slot's schema (plus those present at the first render), the same list in the same order on every render.
+	// Actions: read untracked, as plain values. They change only when the caller re-renders, which hands SlotHost new props and re-runs
+	// this render; as signals, the first browser recompute (a new bound QRL) re-rendered every view that reads an action in its render.
+	const actions = reg.def.actions ?? {};
+	for (const k of slotKeys(reg.def, untrack(() => Object.keys(safe.value)))) {
+		// eslint-disable-next-line qwik/use-method-usage
+		live[k] = hasOwn(actions, k) ? untrack(() => safe.value[k]) : _wrapProp(useComputed$(() => safe.value[k]));
+	}
+	return <View {...live} />;
+});
 
 /** A non-component presentation value (a stylesheet string) checked against its schema once. */
 export const gateValue = <D extends Schema>(name: string, value: unknown, schema: D): Infer<D> => detach(schema, value, name);

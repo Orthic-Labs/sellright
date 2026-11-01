@@ -10,10 +10,11 @@ const manifest = {
 		s4: sym('routes/checkout/index.tsx'),
 		s5: sym('node_modules/@qwik.dev/router', 'component$', 'function', 'index.qwik.mjs_Link_component'),
 		s6: sym('routes/account/index.tsx'),
-		s7: sym('brand-slots/route.home.tsx'),
+		s7: sym('brand-slots/route.home.tsx', 'component$', 'function', 'route.home.tsx_SpotlightIsland_component'),
+		s8: sym('brand-slots/route.home.tsx', 'component$', 'function', 'route.home.tsx_route_home_component'),
 	},
-	mapping: { s1: 'q-cart.js', s2: 'q-cartclick.js', s3: 'q-pdp.js', s4: 'q-co.js', s5: 'q-link.js', s6: 'q-acct.js', s7: 'q-home.js' },
-	bundles: { 'q-cart.js': { imports: ['q-shared.js'] }, 'q-shared.js': { imports: ['q-cart.js'] }, 'q-pdp.js': {}, 'q-co.js': {}, 'q-link.js': {}, 'q-home.js': {} },
+	mapping: { s1: 'q-cart.js', s2: 'q-cartclick.js', s3: 'q-pdp.js', s4: 'q-co.js', s5: 'q-link.js', s6: 'q-acct.js', s7: 'q-home.js', s8: 'q-homeview.js' },
+	bundles: { 'q-cart.js': { imports: ['q-shared.js'] }, 'q-shared.js': { imports: ['q-cart.js'] }, 'q-pdp.js': {}, 'q-co.js': {}, 'q-link.js': {}, 'q-home.js': {}, 'q-homeview.js': {} },
 };
 
 describe('warm graph (#425 step 3)', () => {
@@ -25,6 +26,8 @@ describe('warm graph (#425 step 3)', () => {
 		expect(g.checkout).toEqual(['/build/q-co.js']);
 		expect(Object.values(g).flat()).not.toContain('/build/q-cartclick.js');
 		expect(Object.values(g).flat()).not.toContain('/build/q-acct.js');
+		// #427: a brand home view warms only its *Island parts; the server-rendered rest never runs in the browser.
+		expect(Object.values(g).flat()).not.toContain('/build/q-homeview.js');
 	});
 
 	it('cart warms everything the drawer renders and runs; product warms its click handlers (#427)', () => {

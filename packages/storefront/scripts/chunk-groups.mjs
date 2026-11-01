@@ -7,6 +7,9 @@ import { readFileSync } from 'node:fs';
 
 /** Area for a source origin (relative to src/), or null to leave the symbol where Qwik puts it. Order matters: first match wins. */
 const AREAS = [
+	// The slot gate renders on every page (SlotHost, bound actions): shell. In the cart area its SlotHost pulled the cart drawer
+	// bundle onto every page with a brand slot (#427).
+	['shell', /^platform\/gateway\/gate\./],
 	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
 	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
 	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],
@@ -35,7 +38,9 @@ export function chunkGroups(manifest) {
 	const out = {};
 	for (const s of Object.values(manifest.symbols)) {
 		const a = areaOf(s.origin);
-		if (a) out[s.hash] = `sr-${a}`;
+		// A component named *Island (a live part of a page: a spotlight, a newsletter form) gets its own bundle in its area, so its
+		// client update loads only its code, not the whole page view it sits in (#427).
+		if (a) out[s.hash] = /(^|_)[A-Z][A-Za-z0-9]*Island_/.test(s.displayName ?? '') ? `sr-${a}-island` : `sr-${a}`;
 	}
 	return Object.fromEntries(Object.entries(out).sort(([x], [y]) => (x < y ? -1 : 1)));
 }
