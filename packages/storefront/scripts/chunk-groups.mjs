@@ -16,8 +16,11 @@ const AREAS = [
 	// The configurator, stock read and a brand's own Configurator view (Rotten: product and shop) also drive the home spotlight add to cart; in the product bundle they loaded the whole product
 	// page's code on home (~17 KB br). Own small bundle: home loads it alone, the product page loads it beside product.
 	['configurator', /^(platform\/(controllers\/)?(configurator|stock-read)|brand\/configurator\/Configurator\.)/],
+	// The widgets a brand view places (pay-later line, express buy-now, restock form, reviews, rich content): their own small bundle.
+	// In the cart bundle, a product page using one loaded the whole cart drawer at load (Rotten PDP: ~44 KB, #429).
+	['widgets', /^platform\/widgets\//],
 	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout|hooks\/(useCheckout|checkout-stage|pre-submit-stock|zero-due)\b)/],
-	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/widgets\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
+	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
 	['product', /^(routes\/products\/|routes\/shop\/\[[^/]+\]\/|brand-slots\/(route\.product|pdp\.)|components\/reviews\/|platform\/(product|configurator|stock-read|content-review)|platform\/controllers\/(product|configurator|stock-read)|brand\/configurator\/)/],
 	['home', /^(routes\/index\.tsx|brand-slots\/route\.home|components\/home\/|platform\/(home|home-spotlight)\b|platform\/controllers\/home)/],
 	['shop', /^(routes\/(shop\/index|collections|search)|components\/(Filters|facet-filter-controls|filters-button|products)\b|platform\/shop\b|platform\/controllers\/shop)/],

@@ -4,7 +4,7 @@
 // an unsupported currency or country (#400), a non-positive amount, and whenever Stripe.js or the element fails to load.
 import { component$, useContext, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
-import { getShopConfig } from '~/providers/shop/checkout/checkout';
+import { getShopConfig } from '~/providers/shop/config';
 import { CheckoutPaymentMessaging } from '~/components/checkout/CheckoutPaymentMessaging';
 import { paymentMessagingOptions } from '~/components/checkout/payment-messaging';
 import { afterInteraction } from '~/utils/load-trigger';

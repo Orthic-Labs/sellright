@@ -9,7 +9,6 @@
  * legacy hand-rolled `sr()` helper and never a legacy shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
-import { earlyFetch } from '~/platform/early-reads';
 import { storedAttribution } from '~/sellright/attribution';
 import { orderTracking, pixelOppref, userDataEnabled } from '~/platform/controllers/user-data';
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
@@ -26,7 +25,6 @@ import type {
 	GatewayAttempt,
 	GatewayVerifyResult,
 	OrderSummary,
-	ShopConfig,
 	ShopShippingMethod,
 } from '~/sellright/types/checkout';
 
@@ -292,31 +290,7 @@ export const getOrder = async (code: string, receiptToken?: string, signal?: Abo
 	return nonEmpty(data, 'order') as OrderSummary;
 };
 
-const fetchShopConfig = async (): Promise<ShopConfig> => {
-	// Low fetch priority (lane 11): public store settings never compete with the page's image or its live stock read.
-	// #415: the page's first config read takes this document's early read of it (once, started at parse), else reads live.
-	const { data } = await sellright().GET('/v1/shop/config', { priority: 'low', fetch: earlyFetch });
-	return nonEmpty(data, 'shop config') as ShopConfig;
-};
-
-// One config read per page in the browser (#362): the PDP pay-later line, express buttons, cart drawer, checkout and
-// loyalty widgets each asked for it on their own. Public store settings only (no stock, prices or customer data). The
-// share is keyed to the page (path + query), so a client-side navigation reads it again, and a failed read is not kept.
-// Object-property holder (not a module-level `let`) so the minifier can't fold it. Never used on the server, where a
-// module value would outlive the request.
-const configShare: { page?: string; read?: Promise<ShopConfig> } = {};
-
-/** Public runtime config — decides whether Stripe is wired for this store. */
-export const getShopConfig = (): Promise<ShopConfig> => {
-	if (typeof window === 'undefined') return fetchShopConfig();
-	const page = window.location.pathname + window.location.search;
-	if (configShare.read && configShare.page === page) return configShare.read;
-	const read = fetchShopConfig();
-	configShare.page = page;
-	configShare.read = read;
-	read.catch(() => { if (configShare.read === read) configShare.read = undefined; });
-	return read;
-};
+export { getShopConfig } from '~/providers/shop/config';
 
 /**
  * Shipping methods for this cart and destination, quoted by the server from the cart's own items and coupons

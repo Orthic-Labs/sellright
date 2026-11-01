@@ -338,7 +338,9 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 
 	it('every client read checkout uses treats an empty body as a failed read', () => {
 		const provider = read('providers/shop/checkout/checkout.ts');
-		for (const what of ["'order'", "'shop config'", "'shipping-methods'", "'payment-intent'", "'pay'"]) expect(provider).toContain(`nonEmpty(data, ${what})`);
+		for (const what of ["'order'", "'shipping-methods'", "'payment-intent'", "'pay'"]) expect(provider).toContain(`nonEmpty(data, ${what})`);
+		// The shop config read moved to its own module (#429), with the same empty-body check.
+		expect(read('providers/shop/config.ts')).toMatch(/if \(data === null \|\| data === undefined\) throw new Error\('Empty shop config response'\)/);
 		expect(provider).not.toMatch(/data \?\? \[\]|data\?\.methods/);
 		const customer = read('services/customer.ts');
 		expect(customer).toMatch(/Empty auth\/me response/);

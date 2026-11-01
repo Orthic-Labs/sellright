@@ -90,7 +90,7 @@ describe('shop config and reviews stay off the PDP critical path', () => {
 		const l = code('components/loyalty/LoyaltyPdpEarn.tsx');
 		expect(l.indexOf('await afterLoadIdleOrInteraction()')).toBeGreaterThan(-1);
 		expect(l.indexOf('await afterLoadIdleOrInteraction()')).toBeLessThan(l.indexOf('loadLoyaltyProgram()'));
-		expect(code('providers/shop/checkout/checkout.ts')).toContain("sellright().GET('/v1/shop/config', { priority: 'low', fetch: earlyFetch })");
+		expect(code('providers/shop/config.ts')).toContain("sellright().GET('/v1/shop/config', { priority: 'low', fetch: earlyFetch })");
 	});
 
 	it('reviews read only near the viewport, at low priority, set up at idle (not document-ready)', () => {

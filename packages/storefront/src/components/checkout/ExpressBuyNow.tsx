@@ -1,11 +1,8 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import { createPaymentIntent, getShopConfig, placeOrder } from '~/providers/shop/checkout/checkout';
-import { refreshStockBeforeSubmit } from '~/hooks/pre-submit-stock';
-import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { getShopConfig } from '~/providers/shop/config';
 import { afterInteraction } from '~/utils/load-trigger';
 import { ExpressCheckout } from './ExpressCheckout';
 import { buyNowItems, expressGateway, type ExpressGateway, type ExpressOrderForm, type ExpressOrderResult } from './express-checkout';
-import { createBuyNowCart, detachedCartScope, placeExpressOrder } from './express-order';
 
 export interface ExpressBuyNowProps {
 	/** The variant the complete option selection resolves to; null (no complete selection) shows no button. */
@@ -35,11 +32,14 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 
 	useVisibleTask$(async ({ track }) => {
 		const currency = track(() => props.currency);
-		country.value = CountryPreferenceService.getCountry();
 		// Lane 11: no gateway config (GET /v1/shop/config) until the shopper's first interaction, never on the page's load: a buy-now
 		// needs a chosen variant anyway. The config read is shared per page (getShopConfig).
 		await afterInteraction();
 		try {
+			// The order, cart and country code load only now (#429): statically imported, they put the checkout and cart code on
+			// every product page at load.
+			const { CountryPreferenceService } = await import('~/services/CountryPreferenceService');
+			country.value = CountryPreferenceService.getCountry();
 			const cfg = await getShopConfig();
 			gateway.value = expressGateway({ gatewayConfigured: cfg.stripeConfigured, publishableKey: cfg.stripePublishableKey, currency });
 		} catch {
@@ -58,6 +58,7 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 		let stale = false;
 		cleanup(() => { stale = true; });
 		try {
+			const { createBuyNowCart } = await import('./express-order');
 			const token = await createBuyNowCart(items);
 			if (!stale) cartToken.value = token;
 		} catch {
@@ -72,6 +73,11 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 		if (!token) return { ok: false, message: 'Please choose your options and try again.' };
 		error.value = null;
 		const shipCountry = String(form.shippingAddress.country ?? '');
+		const [{ detachedCartScope, placeExpressOrder }, { placeOrder, createPaymentIntent }, { refreshStockBeforeSubmit }] = await Promise.all([
+			import('./express-order'),
+			import('~/providers/shop/checkout/checkout'),
+			import('~/hooks/pre-submit-stock'),
+		]);
 		return placeExpressOrder({
 			withCart: (fn) => fn(detachedCartScope(token, { shipCountry, shippingMethodCode: form.shippingMethodCode })),
 			validate: (scope) => refreshStockBeforeSubmit(scope),
@@ -82,7 +88,8 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 
 	return (
 		<div class="sr-express-buy-now" data-testid="express-buy-now">
-			<ExpressCheckout
+			{/* Mounted only with a configured gateway (after the first interaction), so its cart-bundle code never loads at page load (#429). */}
+			{gateway.value && <ExpressCheckout
 				gateway={gateway.value}
 				cartToken={cartToken.value}
 				country={country.value}
@@ -98,7 +105,7 @@ export const ExpressBuyNow = component$<ExpressBuyNowProps>((props) => {
 				onError$={onError$}
 				loadOn="interaction"
 				testId="express-buy-now-buttons"
-			/>
+			/>}
 			{error.value && <p role="alert" style="font-size:12px;margin-top:6px;">{error.value}</p>}
 		</div>
 	);

@@ -1,4 +1,4 @@
-import { getShopConfig } from '~/providers/shop/checkout/checkout';
+import { getShopConfig } from '~/providers/shop/config';
 import type { LoyaltyProgram } from '~/sellright/types/rewards';
 
 // One shop-config read per page load for the points widgets. Object-property
