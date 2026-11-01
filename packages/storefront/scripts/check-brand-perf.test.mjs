@@ -26,7 +26,7 @@ const TOKENS = ":root {\n  --brand-font-display: 'Cormorant Garamond', 'Cormoran
 const face = (family, weight, display, extra = '') => `@font-face {\n  ${display ? `font-display: ${display};` : ''}\n  font-family: '${family}';\n  font-weight: ${weight};\n  src: url('/fonts/${family.replace(/ /g, '-').toLowerCase()}-${weight}.woff2') format('woff2');${extra}\n}\n`;
 const FALLBACK = "@font-face { font-family: 'Cormorant Garamond Fallback'; src: local('Georgia'); size-adjust: 101.1%; }\n";
 const GOOD_FONTS = `@layer base {\n${face('Cormorant Garamond', 600, 'swap')}${face('Cormorant Garamond', 700, 'swap')}${face('Plex', 400, 'optional')}${FALLBACK}}\n`;
-const GOOD_HEAD = { fontPreloads: [{ href: '/fonts/cormorant-garamond-700.woff2', type: 'font/woff2', fetchpriority: 'high' }] };
+const GOOD_HEAD = {};
 const GOOD_HOME = 'export default () => (<section><picture><source srcset="a" /><img src="h.jpg" loading="eager" fetchPriority="high" /></picture><img src="b.jpg" loading="lazy" /></section>);\n';
 
 const good = (over = {}) => tree({ 'src/brand/tokens.css': TOKENS, 'src/brand/fonts.css': GOOD_FONTS, 'src/brand/head.json': GOOD_HEAD, 'src/brand-slots/route.home.tsx': GOOD_HOME, ...over });
@@ -102,30 +102,12 @@ test('src/brand/license.css (license flow) is not scanned', () => {
 });
 
 // 2c preload
-test('font-preload-high warns (never errors): 700 face not preloaded, or preloaded without fetchpriority high', () => {
-  const r1 = checkBrandPerf({ root: good({ 'src/brand/head.json': { fontPreloads: [] } }) });
-  assert.deepEqual(rules(r1), ['warning:font-preload-high']);
-  assert.equal(r1.errors.length, 0);
-  const r2 = checkBrandPerf({ root: good({ 'src/brand/head.json': { fontPreloads: [{ href: '/fonts/cormorant-garamond-700.woff2', type: 'font/woff2' }] } }) });
-  assert.deepEqual(rules(r2), ['warning:font-preload-high']);
-  assert.match(r2.warnings[0].message, /without fetchpriority "high"/);
-  const r3 = checkBrandPerf({ root: good({ 'src/brand/head.json': '' }) });
-  assert.deepEqual(rules(r3), ['warning:font-preload-high']);
-});
-
-test('font-preload-high follows the brand h1 weight (Rotten: headings 400) as well as 700', () => {
-  const tokens = `${TOKENS}@layer base { :where(h1, h2, h3) { font-family: var(--font-heading); font-weight: 400; } }\n`;
-  const fonts = `${face('Cormorant Garamond', 400, 'swap')}${face('Cormorant Garamond', 500, 'swap')}${FALLBACK}`;
-  const r = checkBrandPerf({ root: good({ 'src/brand/tokens.css': tokens, 'src/brand/fonts.css': fonts, 'src/brand/head.json': { fontPreloads: [] } }) });
-  assert.deepEqual(rules(r), ['warning:font-preload-high']);
-  assert.match(r.warnings[0].message, /400/);
-});
-
-test('font-preload-high: a variable face covering 700 needs the preload; no display 700/h1 face needs nothing', () => {
-  const variable = "@font-face { font-family: 'Cormorant Garamond'; font-display: swap; font-weight: 300 800; src: url('/fonts/cg-var.woff2?v=2') format('woff2'); }\n" + FALLBACK;
-  assert.deepEqual(rules(checkBrandPerf({ root: good({ 'src/brand/fonts.css': variable, 'src/brand/head.json': { fontPreloads: [{ href: '/fonts/cg-var.woff2', type: 'font/woff2', fetchpriority: 'high' }] } }) })), []);
-  const only600 = `${face('Cormorant Garamond', 600, 'swap')}${FALLBACK}`;
-  assert.deepEqual(rules(checkBrandPerf({ root: good({ 'src/brand/fonts.css': only600, 'src/brand/head.json': { fontPreloads: [] } }) })), []);
+test('font-preload warns (never errors) when head.json lists fontPreloads: core ignores them (#429)', () => {
+  const r = checkBrandPerf({ root: good({ 'src/brand/head.json': { fontPreloads: [{ href: '/fonts/cormorant-garamond-700.woff2', type: 'font/woff2', fetchpriority: 'high' }] } }) });
+  assert.deepEqual(rules(r), ['warning:font-preload']);
+  assert.equal(r.errors.length, 0);
+  assert.deepEqual(rules(checkBrandPerf({ root: good({ 'src/brand/head.json': { fontPreloads: [] } }) })), []);
+  assert.deepEqual(rules(checkBrandPerf({ root: good({ 'src/brand/head.json': '' }) })), []);
 });
 
 test('helpers: firstFamily and h1Weight', () => {
@@ -142,7 +124,7 @@ test('CLI: exit 1 on errors, 0 with warnings only', () => {
   const r1 = spawnSync(process.execPath, [SCRIPT, '--root', bad], { encoding: 'utf8' });
   assert.equal(r1.status, 1);
   assert.match(r1.stderr, /route\.home\.tsx:1:\d+ img-hero-lazy/);
-  const warn = good({ 'src/brand/head.json': { fontPreloads: [] } });
+  const warn = good({ 'src/brand/head.json': { fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2' }] } });
   const r2 = spawnSync(process.execPath, [SCRIPT, '--root', warn], { encoding: 'utf8' });
   assert.equal(r2.status, 0);
   assert.match(r2.stderr, /warning src\/brand\/head\.json/);

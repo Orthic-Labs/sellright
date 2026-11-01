@@ -20,8 +20,8 @@
 //                       or an animation whose first keyframe (from / 0%) has opacity 0 (a fade-in or JS reveal). The browser does
 //                       not paint the LCP element until it is visible. Animations on it may only transform. Rules inside
 //                       @media (prefers-reduced-motion) and :hover/:focus/:active states are ignored.
-//   font-preload-high   (warning) a display-family face at weight 700 or at the h1 weight (700 unless a brand rule on h1 sets it) has no
-//                       head.json fontPreloads entry for its file with fetchpriority "high".
+//   font-preload        (warning) head.json has fontPreloads: core ignores them. A font preload (and the Cloudflare Early Hint
+//                       built from it) held first paint ~1 s on mobile (Damned home Lighthouse 61-70 with it, 93-98 without, #429).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -343,25 +343,15 @@ export function checkFonts(root) {
     }
   }
 
-  if (display) {
-    const targets = [...new Set([700, h1Weight(cssTexts)])];
-    const hero = faces.filter((f) => same(f.family, display) && f.urls.length > 0 && f.style === 'normal' && targets.some((w) => weightCovers(f.weight, w)));
-    if (hero.length > 0) {
-      const headRel = 'src/brand/head.json';
-      let preloads = [];
-      try {
-        preloads = JSON.parse(fs.readFileSync(path.join(root, headRel), 'utf8')).fontPreloads ?? [];
-      } catch {
-        preloads = [];
-      }
-      for (const f of hero) {
-        const file = urlPath(f.urls.find((u) => /\.woff2$/i.test(urlPath(u))) ?? f.urls[0]);
-        const p = preloads.find((x) => x && urlPath(String(x.href)) === file);
-        if (!p || p.fetchpriority !== 'high') {
-          findings.push({ file: headRel, line: 1, col: 1, rule: 'font-preload-high', level: 'warning', message: `display face '${display}' ${f.weight} (${file}) ${p ? 'is preloaded without fetchpriority "high"' : 'is not in fontPreloads'}; add { "href": "${file}", "type": "font/woff2", "fetchpriority": "high" }` });
-        }
-      }
-    }
+  const headRel = 'src/brand/head.json';
+  let preloads = [];
+  try {
+    preloads = JSON.parse(fs.readFileSync(path.join(root, headRel), 'utf8')).fontPreloads ?? [];
+  } catch {
+    preloads = [];
+  }
+  if (preloads.length > 0) {
+    findings.push({ file: headRel, line: 1, col: 1, rule: 'font-preload', level: 'warning', message: 'fontPreloads is ignored: fonts are never preloaded (a preload held first paint, #429); remove it' });
   }
   return findings;
 }
