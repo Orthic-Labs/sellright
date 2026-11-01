@@ -112,7 +112,7 @@ describe('user data (#375)', () => {
 		beforeEach(async () => { localStorage.clear(); head_ = await import('~/platform/head-analytics'); });
 		const settle = () => new Promise((r) => setTimeout(r, 20));
 
-		it('#360/#425: gtm.js is inserted on the first interaction or right after the load event (no 4 s timer); the dataLayer is filled at once', () => {
+		it('#430: gtm.js is inserted only on the first interaction, never after load or on a timer; the dataLayer is filled at once', () => {
 			const { GTM_LOADER_SOURCE } = head_;
 			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
 			const d = {
@@ -127,18 +127,16 @@ describe('user data (#375)', () => {
 			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, w.setTimeout);
 			expect(w.dataLayer[w.dataLayer.length - 1]).toMatchObject({ event: 'gtm.js' });
 			expect(inserted).toHaveLength(0);
-			handlers.load!.forEach((cb) => cb());
+			expect(handlers.load).toBeUndefined();
+			timers.forEach((x) => x.cb());
 			expect(inserted).toHaveLength(0);
-			expect(timers.some((x) => x.ms === 4000)).toBe(false);
-			const t = timers.find((x) => x.ms === 0);
-			expect(t).toBeDefined();
-			t!.cb();
-			expect(inserted).toHaveLength(1);
 			handlers.pointerdown!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
+			handlers.scroll!.forEach((cb) => cb());
 			expect(inserted).toHaveLength(1);
 		});
 
-		it('#360: the first interaction inserts gtm.js before the after-load insert; the later one adds nothing', () => {
+		it('#360: the first interaction inserts gtm.js once; a loaded page alone inserts nothing', () => {
 			const { GTM_LOADER_SOURCE } = head_;
 			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
 			const d = {
