@@ -1,4 +1,4 @@
-import { component$, $, useSignal, useVisibleTask$, useContext } from '@qwik.dev/core';
+import { component$, $, useSignal, useContext, useTask$ } from '@qwik.dev/core';
 import type { QRL } from '@qwik.dev/core';
 import type { VerificationProgram } from './types';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
@@ -44,8 +44,8 @@ export default component$<SheerIdModalProps>(({ isOpen, program, onClose$, onVer
     sheerIdError.value = error;
   });
 
-  // Reset state when modal opens/closes
-  useVisibleTask$(({ track }) => {
+  // Reset state when modal opens/closes (plain state, no browser API: a lazy task, QWIK-TASK-AUDIT #7)
+  useTask$(({ track }) => {
     track(() => isOpen);
 
     if (!isOpen) {

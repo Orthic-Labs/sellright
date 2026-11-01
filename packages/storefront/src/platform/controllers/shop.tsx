@@ -44,7 +44,8 @@ export const BrandShopMount = component$(() => {
 	const inStockOnly = useSignal(true);
 	const override = useSignal<Record<string, boolean> | null>(null);
 	const listCtl = useStore<ActionCtl>({ disposed: false, admitted: [] });
-	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }));
+	// Only the unmount flag: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
+	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }), { strategy: 'document-idle' });
 
 	// One request generation for the automatic read and the toggle: only the latest response applies.
 	const listingGen = useSignal(0);

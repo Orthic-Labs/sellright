@@ -119,7 +119,8 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
 	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode))).products.map((p) => p.slug), fetchProductStock); });
 	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
-	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
+	// Only the unmount cleanup: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
+	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }), { strategy: 'document-idle' });
 
 	/** The projection for this render (the mount calls it in its render body: a computed read inside another computed lost its
 	 *  captures in the production build, Qwik 2 rc). It reads the store, the loader and the cart mirror, so a change re-renders. */

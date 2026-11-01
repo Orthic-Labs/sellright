@@ -28,7 +28,8 @@ export const BrandHeaderMount = component$(() => {
 	const toggleCart = useCartToggle();
 	const { openLoginModal } = useLoginModalActions();
 	const ctl = useStore<ActionCtl>({ disposed: false, admitted: [] });
-	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; }));
+	// Only the unmount flag: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
+	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; }), { strategy: 'document-idle' });
 
 	const data = useComputed$(() =>
 		seal<ShellData>({
