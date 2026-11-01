@@ -9,7 +9,6 @@ import { isBrowser } from '@qwik.dev/core/build';
 import { useCart, retireSettledCart, reopenCart } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
-import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShipping } from './cart-shipping';
@@ -102,7 +101,8 @@ export default component$(() => {
 			countryCodeSignal.value = appState.shippingAddress.countryCode;
 		}
 		if (!appState.availableCountries || appState.availableCountries.length === 0) {
-			void CountryService.getAvailableCountries().then((countries) => {
+			// #427: loaded on demand; a static import put CountryService and its countries.json (~14 KB raw) in every page's shared chunk.
+			void import('~/services/CountryService').then(({ CountryService }) => CountryService.getAvailableCountries()).then((countries) => {
 				appState.availableCountries = countries as any[];
 			});
 		}

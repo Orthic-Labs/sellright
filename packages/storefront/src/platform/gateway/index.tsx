@@ -35,7 +35,6 @@ import RawPrice from '~/components/products/Price';
 import { HomeHero as RawHomeHero } from '~/components/home/HomeHero';
 import { HomeServiceSection as RawHomeServiceSection, HomeTrustBar as RawHomeTrustBar } from '~/components/home/HomeSocialSections';
 import { HomeTeeSection as RawHomeTeeSection } from '~/components/home/HomeTeeSection';
-import { STYLES as RAW_HOMEPAGE_STYLES } from '~/components/home/homepage-styles';
 import RawShopFilters from '~/components/Filters';
 import RawSearchFilters from '~/components/facet-filter-controls/Filters';
 import RawFiltersButton from '~/components/filters-button/FiltersButton';
@@ -208,7 +207,7 @@ export const FiltersButton = /*#__PURE__*/ gate('FiltersButton', RawFiltersButto
 
 // ---------------------------------------------------------------------------------------------------- homepage
 
-export const homepageStyles: string = /*#__PURE__*/ gateValue('homepageStyles', RAW_HOMEPAGE_STYLES, str);
+// homepageStyles: platform/gateway/home-styles.ts (#427: defined here it shipped ~21 KB of home CSS in every page's shared chunk).
 export const HomeHero = /*#__PURE__*/ gate('HomeHero', RawHomeHero, { data: obj({ storeName: str, tagline: str, policies: obj({ shipping: POLICY, returns: POLICY }) }) });
 export const HomeTrustBar = /*#__PURE__*/ gate('HomeTrustBar', RawHomeTrustBar, { data: obj({ policies: obj({ shipping: POLICY, returns: POLICY, payment: POLICY }) }) });
 export const HomeServiceSection = /*#__PURE__*/ gate('HomeServiceSection', RawHomeServiceSection, { data: obj({}) });

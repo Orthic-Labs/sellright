@@ -63,9 +63,12 @@ export function sharedGroup() {
  *  code its areas use (one sr-shared chunk was 272 KB and loaded checkout code on the home page). Seeds: a Qwik segment's area
  *  from the symbol map or its source path, a route module's area, a non-segment entry is the shell. Areas flow down static
  *  imports to a fixpoint, so a module's set always contains its importers' sets: a chunk only imports chunks of supersets, and
- *  any set containing the shell (loaded on every page) or two or more areas is one class (supersets stay in it), so no chunk
- *  cycle can form. Measured on the Damned exp build against one shared chunk: home 218 -> 201 KB, product 251 -> 238 KB of
+ *  any set containing the shell (loaded on every page), or two or more areas including a browsing one (home, shop, product, blog),
+ *  is one class; supersets stay in it, so no chunk cycle can form. Sets of only cart/checkout/account keep their own chunk (they
+ *  folded into the shell too and put countries.json and the checkout services on every page). Measured on the Damned exp build against one shared chunk: home 218 -> 201 KB, product 251 -> 238 KB of
  *  script on the wire, +1-2 files; per-pair chunks added files for no byte gain. Returns id -> group name. */
+const BROWSE = new Set(['home', 'shop', 'product', 'blog']);
+
 export function areaSets(graph, symbolArea) {
 	const ids = [...graph.ids];
 	const areas = new Map(ids.map((id) => [id, new Set()]));
@@ -90,7 +93,7 @@ export function areaSets(graph, symbolArea) {
 		}
 	}
 	const out = new Map();
-	for (const [id, set] of areas) out.set(id, !set.size ? 'sr-x' : set.has('shell') || set.size >= 2 ? 'sr-shell' : 'sr-' + [...set].sort().join('-'));
+	for (const [id, set] of areas) out.set(id, !set.size ? 'sr-x' : set.has('shell') || (set.size >= 2 && [...set].some((x) => BROWSE.has(x))) ? 'sr-shell' : 'sr-' + [...set].sort().join('-'));
 	return out;
 }
 
