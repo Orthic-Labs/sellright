@@ -9,6 +9,7 @@ import { generateDocumentHead } from '~/utils';
 import { BRAND_HEAD, BRAND_ROUTES, DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath, type DeclaredContent } from '~/platform/content-routes';
 import type { SrStoreIdentity } from '~/utils/sellright';
+import { fitTitle, truncateAtWord } from '~/utils/seo-title';
 
 /** A JSON-LD object a brand declares for a page (allowlisted at build: see brand-data/static-schema.ts). */
 export type StaticSchema = { '@type': string | string[]; '@context'?: string; [key: string]: unknown };
@@ -108,10 +109,10 @@ const ROBOTS_NOINDEX = 'noindex, nofollow, noai, noimageai'; // utils/seo.ts
 /** Strips the ` | <store>` suffix createSEOHead adds. */
 const stripSuffix = (title: string, store: string) => (title.endsWith(` | ${store}`) ? title.slice(0, -` | ${store}`.length) : title);
 
-/** Title under a template. A title that already equals the store name or carries the suffix is left alone, as createSEOHead does. */
+/** Title under a template, held to the 60-character limit like createSEOHead (utils/seo-title.ts): the suffix is dropped first, then words. */
 const applyTemplate = (title: string, store: string, template: BrandHeadSpec['titleTemplate']): string => {
-	if (template === '%s') return stripSuffix(title, store);
-	return title === store || title.endsWith(` | ${store}`) ? title : `${title} | ${store}`;
+	if (template === '%s') return truncateAtWord(stripSuffix(title, store));
+	return fitTitle(title, store);
 };
 
 const preloadKey = (l: Link) => l.href ?? l.imagesrcset ?? '';

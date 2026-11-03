@@ -75,6 +75,25 @@ export function validateHeadData(value: unknown): BrandDataProblem[] {
 	return problems;
 }
 
+/**
+ * #408 item 5: two declared pages with the same <title> (case and spacing aside) compete in search and read as duplicates. Returns one
+ * message per repeated title naming every path that declares it. Advisory (the build warns, it does not fail).
+ */
+export function duplicateHeadTitles(value: unknown): string[] {
+	const routes = value as { content?: { path: string; head?: { title?: string } }[]; pages?: Record<string, { head?: { title?: string } }> };
+	const byTitle = new Map<string, { title: string; paths: string[] }>();
+	const add = (path: string, title: string | undefined) => {
+		if (!title) return;
+		const key = title.replace(/\s+/g, ' ').trim().toLowerCase();
+		const seen = byTitle.get(key) ?? { title, paths: [] };
+		seen.paths.push(path);
+		byTitle.set(key, seen);
+	};
+	for (const c of routes.content ?? []) add(c.path, c.head?.title);
+	for (const [path, page] of Object.entries(routes.pages ?? {})) add(path, page.head?.title);
+	return [...byTitle.values()].filter((e) => e.paths.length > 1).map((e) => `head.title ${JSON.stringify(e.title)} is declared on ${e.paths.join(' and ')}; give each page its own title`);
+}
+
 /** Problems with a parsed routes.json value. */
 export function validateRoutesData(value: unknown, opts: ValidateOptions): BrandDataProblem[] {
 	const file = 'src/brand/routes.json';
