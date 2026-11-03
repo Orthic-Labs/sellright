@@ -66,6 +66,11 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
     const script = documentRef.createElement('script');
     script.src = src;
     script.setAttribute('data-tokenization-key', tokenizationKey);
+    // #408: Collect.js reads its wallet probe settings from the tag at load; without them it logs
+    // "Could not create PaymentRequestAbstraction". No wallet buttons are configured; the amount is set server-side.
+    script.setAttribute('data-currency', 'USD');
+    script.setAttribute('data-country', 'US');
+    script.setAttribute('data-price', '0.00');
     script.async = true;
     // A failed load must not stay cached: the next call (the retry) has to request the script again, and the dead
     // script element must not linger in the head.
