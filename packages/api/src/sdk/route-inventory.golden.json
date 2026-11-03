@@ -1,5 +1,5 @@
 {
-  "count": 396,
+  "count": 398,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -330,6 +330,7 @@
     "POST /v1/setup/claim",
     "POST /v1/shop/account/address-drafts/{id}/complete",
     "POST /v1/shop/account/addresses",
+    "POST /v1/shop/account/apple",
     "POST /v1/shop/account/billing-portal",
     "POST /v1/shop/account/orders/{code}/returns",
     "POST /v1/shop/account/password",
@@ -340,6 +341,7 @@
     "POST /v1/shop/auth/login",
     "POST /v1/shop/auth/logout",
     "POST /v1/shop/auth/magic-link/consume",
+    "POST /v1/shop/auth/magic-link/consume-code",
     "POST /v1/shop/auth/magic-link/request",
     "POST /v1/shop/auth/passkey/grant/confirm",
     "POST /v1/shop/auth/passkey/grant/password",

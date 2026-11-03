@@ -39,6 +39,7 @@
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { enqueueReviewRequests } from '../reviews/review-request.js';
 
 export type AutoDeliverOpts = { apply: boolean; days: number; log?: (m: string) => void; batchLimit?: number; maxOrders?: number };
 
@@ -154,6 +155,8 @@ export async function autoDeliverStore(
             data: { days },
           })),
         );
+        // #315: ask each delivered order's customer for a review (same txn; one email per order via the outbox dedupe key).
+        await enqueueReviewRequests(tx, storeId, orderIds);
       }
 
       return due.length;

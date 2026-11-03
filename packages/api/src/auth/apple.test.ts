@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
-import { _resetAppleJwksCache, appleAuthoritativeForEmail, appleClientIds, appleServicesId, verifyAppleIdentityToken } from './apple.js';
+import { _resetAppleJwksCache, appleAuthoritativeForEmail, appleClientIds, appleServicesId, verifyAppleIdentityToken, isAppleRelayIdentity } from './apple.js';
 import { env } from '../env.js';
 
 const AUD = 'com.example.app';
@@ -160,5 +160,21 @@ describe('appleServicesId (admin Settings web Services ID)', () => {
   });
   it('an explicit per-store opt-out still wins', () => {
     expect(appleClientIds({ auth: { appleClientId: false, appleServicesId: 'com.store.web' } })).toEqual([]);
+  });
+});
+
+describe('isAppleRelayIdentity (#349: a relay address never links by email)', () => {
+  it('is true for the is_private_email flag or the relay domain, in any case', () => {
+    expect(isAppleRelayIdentity({ email: 'x@icloud.com', isPrivateRelay: true })).toBe(true);
+    expect(isAppleRelayIdentity({ email: 'abc@privaterelay.appleid.com', isPrivateRelay: false })).toBe(true);
+    expect(isAppleRelayIdentity({ email: 'abc@PrivateRelay.AppleID.com', isPrivateRelay: false })).toBe(true);
+    expect(isAppleRelayIdentity({ email: null, isPrivateRelay: true })).toBe(true);
+  });
+  it('is false for ordinary and Apple-hosted real addresses, and for no email', () => {
+    expect(isAppleRelayIdentity({ email: 'me@icloud.com', isPrivateRelay: false })).toBe(false);
+    expect(isAppleRelayIdentity({ email: 'me@me.com', isPrivateRelay: false })).toBe(false);
+    expect(isAppleRelayIdentity({ email: 'me@corp.example', isPrivateRelay: false })).toBe(false);
+    expect(isAppleRelayIdentity({ email: 'me@notprivaterelay.appleid.com.evil.example', isPrivateRelay: false })).toBe(false);
+    expect(isAppleRelayIdentity({ email: null, isPrivateRelay: false })).toBe(false);
   });
 });

@@ -70,6 +70,17 @@ export async function consumeMagicLink(token: string): Promise<LoginResult> {
 	}
 }
 
+/** Sign in with the one-time code from the same email (#350), for browsers where the link cannot be opened: the email
+ *  address plus the code. A wrong, expired or used code (and an unknown address) are one 409 -> `invalid_token`. */
+export async function consumeMagicLinkCode(email: string, code: string): Promise<LoginResult> {
+	try {
+		const { data } = await sellright().POST('/v1/shop/auth/magic-link/consume-code', { body: { email, code } });
+		return { ok: true, customer: data!.customer };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'invalid_token' }) };
+	}
+}
+
 export type RegisterInput = {
 	email: string;
 	password: string;

@@ -196,6 +196,16 @@ export function createPublicAuthCases(fixture: Fixture): MatrixCase[] {
           'consumed mailbox capability verifies customer', 'state');
       });
     } },
+    { key: 'POST /v1/shop/auth/magic-link/consume-code', contract: 'capability', async prepare(principal) {
+      const s = await seed(false), capability = await issue(s, 'magic_link');
+      const code = /letter-spacing:4px;text-align:center">(\d{6})</.exec(String((capability.mail.payload as Json).html))?.[1];
+      assert.ok(code, 'real magic-link email carries the one-time code');
+      return request('/v1/shop/auth/magic-link/consume-code', principal, { email: s.email, code }, async (response: Response, proof: MatrixProof) => {
+        await sessionResponse(response, proof, s, true, s.sessionHashes); await consumed(capability.row.id, proof);
+        proof.equal((await rows('SELECT email_verified FROM customer WHERE id=$1', [s.id]))[0]!.email_verified, true,
+          'consumed mailbox code verifies customer', 'state');
+      });
+    } },
     { key: 'GET /v1/shop/auth/check-email', contract: 'public', async prepare(principal) {
       const s = await seed(), before = await rows('SELECT * FROM customer WHERE id=$1', [s.id]);
       return { url: '/v1/shop/auth/check-email?email=' + encodeURIComponent(s.email), env: peer(), init: { headers: headers(principal) }, async verify(response: Response, proof: MatrixProof) {

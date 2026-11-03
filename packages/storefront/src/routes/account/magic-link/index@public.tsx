@@ -1,5 +1,6 @@
 import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { consumeMagicLink } from '~/providers/shop/account/account';
+import { signInDestination } from '~/utils/sign-in-next';
 import { createSEOHead } from '~/utils/seo';
 
 export const head = () =>
@@ -23,7 +24,7 @@ export default component$(() => {
 		}
 		const result = await consumeMagicLink(token);
 		if (result.ok) {
-			window.location.replace('/account');
+			window.location.replace(signInDestination()); // ?next= (same-site paths only), else /account
 			return;
 		}
 		message.value = result.code === 'invalid_token' ? 'This sign-in link is invalid, expired, or already used.' : result.message;

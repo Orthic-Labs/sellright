@@ -346,6 +346,22 @@ export function createCustomerCases(fixture: Fixture, options: CustomerCaseOptio
           snapshot: fixture.snapshot, verify: deny };
       },
     }])) as Record<MatrixPrincipal, MatrixCell> });
+  // #349: linking Sign in with Apple needs the customer's own session; header identities carry none. The signed-in
+  // positive path (real RS256 verification, link, conflicts) is covered in auth/apple.db.test.ts.
+  cases.push({ key: 'POST /v1/shop/account/apple', contract: 'customer',
+    cells: Object.fromEntries(PRINCIPALS.map(principal => [principal, {
+      effect: 'deny' as const, status: 401, errorCode: 'NOT_AUTHENTICATED', async prepare() {
+        const s = await target(), before = await fixture.snapshot();
+        return { url: '/v1/shop/account/apple', init: { method: 'POST', headers: fixture.requestHeaders[principal],
+          body: JSON.stringify({ identityToken: 'matrix-unverified-apple-identity-token' }) },
+          snapshot: fixture.snapshot, async verify(response: Response, proof: MatrixProof) {
+            await deny(response, proof);
+            proof.equal((await source.rows('SELECT apple_user_id FROM customer WHERE id=$1', [s.customerId]))[0]?.apple_user_id ?? null, null,
+              'denied link binds no Apple identity', 'state');
+            proof.equal(await fixture.snapshot(), before, 'denied link changes no DB/files/provider state', 'state');
+          } };
+      },
+    }])) as Record<MatrixPrincipal, MatrixCell> });
   return cases;
 }
 

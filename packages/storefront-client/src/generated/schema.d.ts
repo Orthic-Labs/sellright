@@ -17123,6 +17123,78 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/shop/account/apple": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link Sign in with Apple to my account */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        identityToken: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Linked (also when this account already holds this Apple identity) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            linked: true;
+                        };
+                    };
+                };
+                /** @description Unauthenticated, or invalid Apple identity token (APPLE_TOKEN_INVALID) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description CSRF */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), email unverified (EMAIL_UNVERIFIED), this Apple identity belongs to another account (APPLE_ALREADY_LINKED), or this account holds a different one (APPLE_ACCOUNT_MISMATCH) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/account/billing-portal": {
         parameters: {
             query?: never;
@@ -17612,7 +17684,9 @@ export interface paths {
                                     lineTotal: number;
                                     name: string;
                                     productName: string | null;
+                                    productSlug: string | null;
                                     quantity: number;
+                                    reviewed: boolean;
                                     shipDate: string | null;
                                     shipDateLabel: string | null;
                                     sku: string;
@@ -18226,7 +18300,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN) */
+                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -18719,6 +18793,80 @@ export interface paths {
                 };
                 /** @description Invalid/expired/used or not enabled */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/auth/magic-link/consume-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exchange the emailed one-time code (with the email address) for a session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        code: string;
+                        /** Format: email */
+                        email: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            customer: {
+                                email: string;
+                                emailVerified: boolean;
+                                firstName: string | null;
+                                id: string;
+                                isMigrated: boolean;
+                                lastName: string | null;
+                                phone: string | null;
+                                title: string | null;
+                            };
+                            token: string;
+                        };
+                    };
+                };
+                /** @description Invalid/expired/used code or not enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };

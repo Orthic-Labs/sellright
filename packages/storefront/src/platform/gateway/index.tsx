@@ -92,6 +92,7 @@ export const ORDER_SUMMARY = obj({
 	items: arr(obj({
 		sku: str, name: str, productName: nul(str), quantity: num, unitPrice: num, lineTotal: num,
 		image: nul(str), isPreOrder: bool, shipDate: nul(str), shipDateLabel: nul(str),
+		productSlug: nul(str), reviewed: bool,
 	})),
 });
 

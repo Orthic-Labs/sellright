@@ -15,4 +15,12 @@ describe('canReviewLine', () => {
 		expect(canReviewLine(processing, { productSlug: 'x', reviewed: false })).toBe(false);
 		expect(canReviewLine(delivered, { productSlug: null, reviewed: false })).toBe(false);
 	});
+	it('works from an order history row (#315): fulfillmentStatus only, no fulfillment rows', () => {
+		const row = (fulfillmentStatus: string | null) => ({ state: 'Paid', fulfillments: [], fulfillmentStatus });
+		expect(canReviewLine(row('delivered'), { productSlug: 'x', reviewed: false })).toBe(true);
+		expect(canReviewLine(row('fulfilled'), { productSlug: 'x', reviewed: false })).toBe(true);
+		expect(canReviewLine(row('unfulfilled'), { productSlug: 'x', reviewed: false })).toBe(false);
+		expect(canReviewLine(row('delivered'), { productSlug: 'x', reviewed: true })).toBe(false);
+		expect(canReviewLine(row('delivered'), { productSlug: undefined, reviewed: undefined })).toBe(false);
+	});
 });
