@@ -3,6 +3,7 @@ import type { JsonLdSchema } from '~/types/seo.types';
 import { injectJsonLdSchemas, debugJsonLdSchemas } from './schema-injection';
 import { identityFromStaticTheme } from '~/theme/theme.config';
 import type { SrStoreIdentity } from './sellright';
+import { fitTitle } from './seo-title';
 
 interface SEOConfig {
   title: string;
@@ -78,10 +79,8 @@ export const createSEOHead = ({
   }
 
   const head: DocumentHead = {
-    title:
-      title === identity.storeName || title.endsWith(` | ${identity.storeName}`)
-        ? title
-        : `${title} | ${identity.storeName}`,
+    // #408: at most 60 characters. The brand suffix is dropped when it would not fit; a longer title is cut at a word.
+    title: fitTitle(title, identity.storeName),
     meta: [
       { name: 'description', content: description },
       { property: 'og:type', content: ogType },

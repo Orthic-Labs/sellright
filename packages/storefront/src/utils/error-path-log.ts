@@ -61,6 +61,8 @@ export const createErrorPathLog = (opts: { perMinute?: number; write?: Writer; n
 		const t0 = now();
 		res.on('finish', () => {
 			if (!shouldLog(res.statusCode)) return;
+			// A handler that already wrote its own sampled line for this response (#332 unknown server-function QRL) opts out.
+			if (res.locals?.quietNotFound) return;
 			const t = now();
 			if (!admit(t)) return;
 			write(`[http-error] ${JSON.stringify({

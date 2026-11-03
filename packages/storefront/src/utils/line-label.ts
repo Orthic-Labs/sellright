@@ -7,6 +7,12 @@ export type LineNames = { productName?: string | null; variantName: string };
 
 const OPTION_SEPARATOR = /\s*-\s+/;
 
+/**
+ * One option separator in cart lines (#401): the add path reads "Small / Storm grey", the server's variant name after a sync or
+ * reload reads "Small - Storm grey". Both show as "Small / Storm grey"; hyphens inside a word ("Button-Up") stay.
+ */
+export const normalizeOptionSeparators = (label: string): string => label.split(/\s+-\s+/).join(' / ');
+
 /** The variant part on its own (no product prefix), options joined by " · "; '' when it adds nothing. */
 export function variantLabel(names: LineNames): string {
 	const product = names.productName?.trim() ?? '';

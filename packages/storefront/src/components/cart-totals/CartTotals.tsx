@@ -1,7 +1,7 @@
 import { $, component$, useSignal, useComputed$, useTask$, type Signal } from '@qwik.dev/core';
 
 import { useCart, applyCoupon, removeCoupon, COUPON_MAX_LENGTH, type CartContextState } from '~/contexts/CartContext';
-import { formatPrice } from '~/utils';
+import { formatPrice, formatShippingPrice } from '~/utils';
 import { TrashIcon, Alert } from '~/platform/gateway';
 import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
 import type { Cart } from '~/sellright/types/cart';
@@ -183,7 +183,7 @@ export default component$<{
 				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
 					<dt>Shipping</dt>
 					<dd class="font-medium text-[rgba(253,250,246,0.6)]">
-						{shippingKnown.value ? (shipping.value === 0 ? 'Free' : formatPrice(shipping.value || 0, currencyCode)) : 'Calculated at next step'}
+						{shippingKnown.value ? formatShippingPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
 					</dd>
 				</div>
 				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
@@ -206,7 +206,7 @@ export default component$<{
       <div class="flex items-center justify-between">
         <dt>Shipping fee</dt>
         <dd class="font-medium text-gray-900">
-          {shippingKnown.value ? (shipping.value === 0 ? 'Free' : formatPrice(shipping.value || 0, currencyCode)) : 'Calculated at next step'}
+          {shippingKnown.value ? formatShippingPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
         </dd>
       </div>
 

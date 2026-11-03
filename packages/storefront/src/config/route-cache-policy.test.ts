@@ -105,7 +105,7 @@ describe('hashed build assets', () => {
 		const assets = src.indexOf("app.use(`/assets`");
 		const rootStatic = src.indexOf('rootStatic(req, res, next)');
 		const failClosed = src.indexOf('res.setHeader(\'Cache-Control\', NO_STORE_CACHE_CONTROL)');
-		const router = src.indexOf('app.use(router)');
+		const router = src.indexOf('app.use(createServerFunctionGuard()(router))');
 		expect(build).toBeGreaterThan(-1);
 		expect(assets).toBeGreaterThan(-1);
 		expect(rootStatic).toBeGreaterThan(-1);
@@ -529,7 +529,7 @@ describe('ADR-0001 wiring in entry.express.tsx', () => {
 		const cookieCtx = src.indexOf('sellrightRequestCookie.run(');
 		const failClosed = src.indexOf("res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL)");
 		const check = src.indexOf('app.use(createShellCacheMiddleware(');
-		const router = src.indexOf('app.use(router)');
+		const router = src.indexOf('app.use(createServerFunctionGuard()(router))');
 		expect(strip).toBeGreaterThan(-1);
 		expect(strip).toBeLessThan(nonce);
 		expect(strip).toBeLessThan(cookieCtx);

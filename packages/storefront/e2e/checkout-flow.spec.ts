@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { placeOrderButton } from './support/flows';
 
 /**
  * End-to-end coverage for the native SellRight checkout, run against the
@@ -111,8 +112,7 @@ test.describe('checkout', () => {
 
 		// Pre-submit: LOCKED rule requires a live stock re-check right before
 		// this click succeeds. Click PLACE ORDER (pre-submit).
-		const placeOrder = page.getByRole('button', { name: /continue to payment|place order/i });
-		await placeOrder.click();
+		await placeOrderButton(page).click();
 
 		// Payment step reached: either a real payment method mounted (radio
 		// selector and/or a PAY button for the store's configured gateway), or
@@ -124,7 +124,7 @@ test.describe('checkout', () => {
 		// is NOT asserted here — see the coordinator notes for a manual/live
 		// gateway verification.
 		await expect(
-			page.getByRole('button', { name: /^pay/i })
+			page.getByRole('button', { name: /^(pay\b|place order)/i })
 				.or(page.getByText(/no payment method is configured/i))
 				.or(page.getByRole('radio', { name: /^(stripe|nmi|sezzle)$/i }))
 				.first(),

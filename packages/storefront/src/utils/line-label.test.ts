@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { orderLineLabel, variantLabel } from './line-label';
+import { normalizeOptionSeparators, orderLineLabel, variantLabel } from './line-label';
 
 describe('order line label (#346)', () => {
 	it('names the product, then the variant options', () => {
@@ -12,5 +12,18 @@ describe('order line label (#346)', () => {
 	});
 	it('keeps lines without a product snapshot as they are', () => {
 		expect(orderLineLabel({ productName: null, variantName: 'Djinn - Black G10, D2' })).toBe('Djinn - Black G10, D2');
+	});
+});
+
+describe('cart line option separator (#401)', () => {
+	it('shows the add path and the server name the same way', () => {
+		expect(normalizeOptionSeparators('Small / Storm grey')).toBe('Small / Storm grey');
+		expect(normalizeOptionSeparators('Small - Storm grey')).toBe('Small / Storm grey');
+		expect(normalizeOptionSeparators('Medium - Midnight black - Long')).toBe('Medium / Midnight black / Long');
+	});
+
+	it('keeps a hyphen inside a word', () => {
+		expect(normalizeOptionSeparators('Button-Up - Navy')).toBe('Button-Up / Navy');
+		expect(normalizeOptionSeparators('Navy')).toBe('Navy');
 	});
 });

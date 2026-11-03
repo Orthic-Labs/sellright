@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Plugin } from 'vite';
-import { validateHeadData, validateHostsData, validateLicenseData, validateRoutesData, type BrandDataProblem } from './validate';
+import { duplicateHeadTitles, validateHeadData, validateHostsData, validateLicenseData, validateRoutesData, type BrandDataProblem } from './validate';
 
 export const BRAND_DATA_VIRTUAL_ID = 'virtual:sellright-brand-data';
 export const DEFAULT_BRAND_DATA_DIR = 'src/brand';
@@ -66,6 +66,7 @@ export function loadBrandData(root: string, dataDir: string, slotsDir: string): 
 	if (routes !== null && problems.every((p) => p.file !== 'src/brand/routes.json')) {
 		problems.push(...validateRoutesData(routes, { routeDirs: listRouteDirs(root), hasContentView: fs.existsSync(path.join(slotsDir, 'route.content.tsx')), hasShopView: fs.existsSync(path.join(slotsDir, 'route.shop.tsx')), hasProductView: fs.existsSync(path.join(slotsDir, 'route.product.tsx')), hasHomeView: fs.existsSync(path.join(slotsDir, 'route.home.tsx')) }));
 	}
+	if (routes !== null && problems.every((p) => p.file !== 'src/brand/routes.json')) for (const message of duplicateHeadTitles(routes)) console.warn(`[brand-data] src/brand/routes.json: ${message}`);
 	const hosts = readJsonFile(path.join(dataDir, 'hosts.json'), 'src/brand/hosts.json', problems);
 	if (hosts !== null && problems.every((p) => p.file !== 'src/brand/hosts.json')) problems.push(...validateHostsData(hosts));
 	const license = readJsonFile(path.join(dataDir, 'license.json'), 'src/brand/license.json', problems);
