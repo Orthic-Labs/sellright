@@ -31,7 +31,7 @@ import { currentLeaseSignal, pool, withStore } from '../db/client.js';
 import { LockSetUnstable, withLockedSet } from '../db/locks.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { sweepStaleStripeIntents, sweepStaleBalanceIntents, sweepOrphanPreMints, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
-import { cancelUnpaidOrderInSet, unpaidCancellablePredicate } from '../orders/cancel-unpaid.js';
+import { CANCEL_SOURCE_RELEASE_STALE, cancelUnpaidOrderInSet, unpaidCancellablePredicate } from '../orders/cancel-unpaid.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -103,7 +103,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
           if (!stale.length) return { count: 0, released: 0 };
 
           const released = await cancelUnpaidOrderInSet(tx, held, {
-            storeId: st.id, orderId, actor: 'system:reservation-expiry', reason: { reason: 'stale_unpaid', ttlMin },
+            storeId: st.id, orderId, actor: 'system:reservation-expiry', reason: { reason: 'stale_unpaid', ttlMin }, cancelSource: CANCEL_SOURCE_RELEASE_STALE,
             stripeDiscoverable: requireDiscovery, apply,
           });
           return { count: 1, released };

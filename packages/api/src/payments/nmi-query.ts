@@ -1,6 +1,7 @@
 import { DOMParser, type Element } from '@xmldom/xmldom';
 import { boundedGatewayResponse, gatewayIdentity, nmiEnvironment, type GatewayAccount, type GatewayFetch } from './gateway-account.js';
 import type { PaymentResult } from './provider.js';
+import { nmiQueryShowsTestCard } from './nmi-test-mode.js';
 
 type Query = { account: GatewayAccount; orderReference: string; providerRef?: string | null; amount: number; currency: string; operation?: 'charge' | 'refund' };
 const unresolved = (ref: string | null, reason: string): PaymentResult => ({
@@ -61,7 +62,10 @@ export function verifyNmiQuery(xml: string, input: Query): PaymentResult {
     if (input.account.mode === 'live' && (['N', 'C'].includes(value(transaction, 'avs_response')) ||
         value(transaction, 'csc_response') === 'N')) return unresolved(ref, 'card_verification_reversal_required');
     if (!['complete', 'pendingsettlement'].includes(condition)) return unresolved(ref, 'transaction_not_captured');
-    return { state: 'Settled', providerRef: ref, metadata: { gateway: gatewayIdentity(input.account), condition } };
+    // #378: an approved charge made with a documented NMI test card was run in NMI test mode (nothing was processed).
+    const testCard = nmiQueryShowsTestCard({ ccBin: value(transaction, 'cc_bin'), ccNumber: value(transaction, 'cc_number') });
+    return { state: 'Settled', providerRef: ref, metadata: { gateway: gatewayIdentity(input.account), condition,
+      ...(testCard ? { testMode: { detected: true, source: 'query:documented-test-card' } } : {}) } };
   } catch { return unresolved(fallback, 'invalid_query_response'); }
 }
 
