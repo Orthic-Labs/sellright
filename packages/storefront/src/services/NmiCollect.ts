@@ -30,6 +30,10 @@ export interface NmiCollectJs {
     placeholderCss?: Record<string, string>;
     invalidCss?: Record<string, string>;
     timeoutDuration?: number;
+    /** Collect.js builds its wallet (PaymentRequest) probe from these; without them it logs an error on every configure. */
+    currency?: string;
+    country?: string;
+    price?: string;
     validationCallback?: (field: string, valid: boolean, message: string) => void;
     /** Inline variant: fires once the card number validates, with the card details Collect.js looked up for it. */
     lookUpCallback?: (card: { type?: string } | null | undefined) => void;
@@ -190,6 +194,10 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
       invalidCss: { color: '#b3261e' },
       // A tokenization that never answers ends in timeoutCallback (a retryable error), not an endless "Processing".
       timeoutDuration: 20000,
+      // #408: Collect.js always probes PaymentRequest (wallets) and console.errors "Could not create
+      // PaymentRequestAbstraction" unless currency, price and country are valid. No wallet fields are configured, so
+      // the values only satisfy that probe; the charge amount is set server-side.
+      currency: 'USD', country: 'US', price: '0.00',
       // The lookup runs only when a listener wants the brand: it is an extra request to the gateway per validated number.
       ...(listeners?.onCardBrand ? { lookUpCallback: (card: { type?: string } | null | undefined) => listeners.onCardBrand?.(normalizeCardBrand(card?.type)) } : {}),
       validationCallback: (field, valid, message) => {
