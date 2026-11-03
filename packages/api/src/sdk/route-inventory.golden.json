@@ -1,5 +1,5 @@
 {
-  "count": 396,
+  "count": 397,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -330,6 +330,7 @@
     "POST /v1/setup/claim",
     "POST /v1/shop/account/address-drafts/{id}/complete",
     "POST /v1/shop/account/addresses",
+    "POST /v1/shop/account/apple",
     "POST /v1/shop/account/billing-portal",
     "POST /v1/shop/account/orders/{code}/returns",
     "POST /v1/shop/account/password",

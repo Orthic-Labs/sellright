@@ -140,6 +140,16 @@ export function appleAuthoritativeForEmail(a: Pick<AppleIdentity, 'email' | 'ema
   return APPLE_MAIL_DOMAINS.has(a.email.slice(at + 1).trim().toLowerCase());
 }
 
+/** True when the identity's address is an Apple Hide My Email relay (flag from the token, or the relay domain itself).
+ *  A relay address is minted per app and can never match an account created another way, so it must never be used to
+ *  find and link an existing account by email — linking happens through the signed-in endpoint instead. */
+export function isAppleRelayIdentity(a: Pick<AppleIdentity, 'email' | 'isPrivateRelay'>): boolean {
+  if (a.isPrivateRelay) return true;
+  if (!a.email) return false;
+  const at = a.email.lastIndexOf('@');
+  return at > 0 && a.email.slice(at + 1).trim().toLowerCase() === 'privaterelay.appleid.com';
+}
+
 /** Test seam: reset the memoized JWKS (so a test can mock fetch and re-fetch). */
 export function _resetAppleJwksCache(): void {
   cachedJwks = null;

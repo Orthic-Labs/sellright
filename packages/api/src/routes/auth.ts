@@ -10,7 +10,7 @@ import { customerToken, resolveLegacySession, createSession, deleteSession, reso
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
 import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity } from '../auth/google.js';
 import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
-import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
+import { appleAuthoritativeForEmail, appleClientIds, isAppleRelayIdentity, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, legacyCustomerToken, clearReadableLegacyToken, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
 import { checkEmailRetryAfter, clientIp, customerAuthIpRetryAfter, loginRetryAfter, recordCustomerAuthIpFailure, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -274,7 +274,7 @@ auth.openapi(
 // caller already proved CURRENT control of the address (the authoritative-domain
 // check, or a click on the fresh-verification link); only then may an existing
 // account be linked by email.
-type SignInOutcome = { kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> };
+type SignInOutcome = { kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'no_email' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> };
 async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, g: Pick<GoogleIdentity, 'sub' | 'email' | 'firstName' | 'lastName'>, mailboxProven: boolean): Promise<SignInOutcome> {
   // Match by googleSub first, then link by email, else create.
   let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
@@ -335,6 +335,9 @@ function signInOutcomeResponse(c: Parameters<typeof errJson>[0], st: StoreCtx, o
   }
   if (out.kind === 'not_linkable') {
     return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
+  }
+  if (out.kind === 'no_email') {
+    return errJson(c, 409, 'APPLE_EMAIL_REQUIRED', 'Apple did not share an email address for this sign-in — sign in with a sign-in link or your password, then link Apple from your account');
   }
   setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
   return c.json({ token: out.token, customer: out.customer }, 200);
@@ -457,11 +460,14 @@ auth.openapi(
 // Find-or-link-or-create for an Apple identity. `mailboxProven` is true when the caller already proved CURRENT control
 // of the address (Apple authoritative for it, or a click on the confirmation link); only then may an existing account
 // be linked by email. apple_user_id is read/written via raw SQL (see the route comment below).
-async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
+async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean; isPrivateRelay?: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
   const { sub, email: appleEmail, emailVerified } = apple;
+  // A Hide My Email relay address never matches an account by email (it was minted for this app alone); an existing
+  // account is linked to the Apple identity through the signed-in POST /v1/shop/account/apple instead.
+  const linkByEmail = !!appleEmail && !isAppleRelayIdentity({ email: appleEmail, isPrivateRelay: apple.isPrivateRelay ?? false });
   type CustomerRow = { id: string; email: string; title: string | null; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
   let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-  if (!cust && appleEmail) {
+  if (!cust && appleEmail && linkByEmail) {
     // SEC: an identity naming an address without mailbox proof was matched by subject a moment ago and has since been
     // unbound; it may neither link nor create.
     if (!mailboxProven) return { kind: 'not_linkable' };
@@ -482,8 +488,8 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     // (different per-team `sub` for the same Apple ID, e.g. after a
     // bundle-id / audience change) no longer relinks to their account by
     // email: they get 409 EMAIL_TAKEN and must sign in another way. There
-    // is no signed-in "link Apple" endpoint yet, so the 409 message points
-    // only at sign-in methods that exist; it does not promise a link step.
+    // is the signed-in POST /v1/shop/account/apple, so the 409 message points
+    // at the sign-in methods that exist today.
     if (byEmail) {
       if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
       if (byEmail.apple_user_id && byEmail.apple_user_id !== sub) {
@@ -534,7 +540,7 @@ auth.openapi(
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED)', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
@@ -579,7 +585,7 @@ auth.openapi(
         await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), to, { url, providerName: 'Apple', providerEmail: to, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
         return { kind: 'verify_sent' };
       }
-      return completeAppleSignIn(tx, st, apple, authoritative);
+      return completeAppleSignIn(tx, st, apple, authoritative); // apple carries isPrivateRelay
     });
     if (out.kind === 'verify_sent') {
       await gate?.record();

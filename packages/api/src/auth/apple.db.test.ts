@@ -9,6 +9,8 @@
  *   3. A valid token creates a passwordless customer + session, keyed by sub;
  *      repeat sign-ins (Private Relay, no email) resolve the SAME account.
  *   4. An existing customer is linked by email then matched by sub afterward.
+ *   5. #349: a Private Relay address never links by email; a first-time identity with no email is a 409 (no
+ *      placeholder account); POST /v1/shop/account/apple links an identity to the signed-in account.
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
@@ -21,6 +23,8 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { auth } from '../routes/auth.js';
+import { account } from '../routes/account.js';
+import { createSession } from './session.js';
 import { _resetAppleJwksCache } from './apple.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -48,6 +52,7 @@ function appleJwt(over: Record<string, unknown> = {}): string {
 
 const app = new OpenAPIHono();
 app.route('/', auth);
+app.route('/', account);
 const hdr = (slug: string) => ({ 'content-type': 'application/json', 'x-store-slug': slug });
 const signIn = (slug: string, identityToken: string) =>
   app.request('/v1/shop/auth/apple', { method: 'POST', headers: hdr(slug), body: JSON.stringify({ identityToken }) });
@@ -135,11 +140,26 @@ describe('POST /v1/shop/auth/apple', () => {
     expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
   });
 
-  it('links a Private Relay address that already belongs to an account', async () => {
-    const custId = await seed('abc123@privaterelay.appleid.com', true);
+  it('never links a Private Relay address to an account by email (#349): 409, no binding, no session', async () => {
+    await seed('abc123@privaterelay.appleid.com', true);
     const res = await signIn(SLUG_APPLE, appleJwt({ email: 'abc123@privaterelay.appleid.com', is_private_email: 'true' }));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('EMAIL_TAKEN');
+    expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
+    expect(await count('abc123@privaterelay.appleid.com')).toBe(1);
+  });
+
+  it('treats the relay domain as a relay even when the token omits the is_private_email flag (#349)', async () => {
+    await seed('flagless@privaterelay.appleid.com', true);
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'flagless@privaterelay.appleid.com' }));
+    expect(res.status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
+  });
+
+  it('creates a fresh account for a relay address nobody holds yet', async () => {
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'fresh1@privaterelay.appleid.com', is_private_email: 'true' }));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(custId);
+    expect((await appleRow(STORE_APPLE, 'sub-abc-123'))?.email).toBe('fresh1@privaterelay.appleid.com');
   });
 
   it('rejects a token with an unverified email (401), creating nothing', async () => {
@@ -235,11 +255,15 @@ describe('POST /v1/shop/auth/apple', () => {
     expect((await appleRow(STORE_APPLE, 'sub-abc-123'))?.id).toBe(custId);
   });
 
-  it('falls back to an opaque placeholder email when Apple omits one', async () => {
+  it('409s a first-time identity that carries no email instead of minting a placeholder account (#349)', async () => {
     const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'sub-noemail' }));
-    expect(res.status).toBe(200);
-    const row = await appleRow(STORE_APPLE, 'sub-noemail');
-    expect(row?.email).toBe('apple-sub-noemail@no-email.invalid');
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('APPLE_EMAIL_REQUIRED');
+    expect(res.headers.get('set-cookie')).not.toMatch(/sr_cust/);
+    expect(await appleRow(STORE_APPLE, 'sub-noemail')).toBeUndefined();
+    const n = await withStore(STORE_APPLE, async (tx) => Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE store_id = ${STORE_APPLE}`)).rows[0]!.n));
+    expect(n).toBe(0);
+    expect((await pool.query('SELECT 1 FROM "session"')).rowCount).toBe(0);
   });
 });
 
@@ -405,9 +429,11 @@ describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
     expect(await outbox()).toEqual([]);
   });
 
-  it('an identity with no email (Private Relay repeat) still takes the direct path', async () => {
+  it('an already-bound identity with no email (Private Relay repeat) still takes the direct path', async () => {
+    const custId = await seedC('repeat@corp.example', 'ap-noemail');
     const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-noemail' }));
     expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(custId);
     expect(await outbox()).toEqual([]);
   });
 
@@ -508,5 +534,80 @@ describe('POST /v1/shop/auth/apple review follow-ups', () => {
     expect(statuses).toContain(429);
     const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-bound-th', email: 'bound-th@corp.example' }));
     expect(res.status).toBe(200);
+  });
+});
+
+// --- #349: POST /v1/shop/account/apple links a verified Apple identity to the signed-in account ------------------------
+describe('POST /v1/shop/account/apple', () => {
+  const link = (slug: string, bearer: string | null, identityToken: string) =>
+    app.request('/v1/shop/account/apple', { method: 'POST', headers: { ...hdr(slug), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) }, body: JSON.stringify({ identityToken }) });
+  const sessionFor = (customerId: string) => withStore(STORE_APPLE, (tx) => createSession(tx, STORE_APPLE, customerId));
+  const customerSeed = (email: string, opts: { verified?: boolean; appleSub?: string | null } = {}) =>
+    withStore(STORE_APPLE, async (tx) => {
+      const r = await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified, apple_user_id) VALUES (${STORE_APPLE}, ${email}, ${opts.verified ?? true}, ${opts.appleSub ?? null}) RETURNING id`);
+      return (r.rows[0] as { id: string }).id;
+    });
+  const code = async (res: Response) => ((await res.json()) as { error: { code: string } }).error.code;
+
+  it('401s without a session', async () => {
+    const res = await link(SLUG_APPLE, null, appleJwt({ sub: 'link-a' }));
+    expect(res.status).toBe(401);
+    expect(await code(res)).toBe('NOT_AUTHENTICATED');
+  });
+
+  it('links the identity to the signed-in account (relay address and all); the next Apple sign-in resolves to it', async () => {
+    const custId = await customerSeed('magic@corp.example');
+    const tok = await sessionFor(custId);
+    const jwt = appleJwt({ sub: 'link-b', email: 'hide-me@privaterelay.appleid.com', is_private_email: 'true' });
+    const res = await link(SLUG_APPLE, tok, jwt);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ linked: true });
+    expect((await appleRow(STORE_APPLE, 'link-b'))?.id).toBe(custId);
+    // No second account was created and the account keeps its own email.
+    expect((await appleRow(STORE_APPLE, 'link-b'))?.email).toBe('magic@corp.example');
+    const again = await signIn(SLUG_APPLE, jwt);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { customer: { id: string } }).customer.id).toBe(custId);
+  });
+
+  it('is idempotent for the identity the account already holds', async () => {
+    const custId = await customerSeed('idem@corp.example');
+    const tok = await sessionFor(custId);
+    expect((await link(SLUG_APPLE, tok, appleJwt({ sub: 'link-c' }))).status).toBe(200);
+    expect((await link(SLUG_APPLE, tok, appleJwt({ sub: 'link-c' }))).status).toBe(200);
+  });
+
+  it('refuses an Apple identity already linked to another account (APPLE_ALREADY_LINKED), changing nothing', async () => {
+    const other = await customerSeed('other@corp.example', { appleSub: 'link-d' });
+    const custId = await customerSeed('mine@corp.example');
+    const res = await link(SLUG_APPLE, await sessionFor(custId), appleJwt({ sub: 'link-d' }));
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe('APPLE_ALREADY_LINKED');
+    expect((await appleRow(STORE_APPLE, 'link-d'))?.id).toBe(other);
+  });
+
+  it('refuses to replace the Apple identity an account already holds (APPLE_ACCOUNT_MISMATCH)', async () => {
+    const custId = await customerSeed('held@corp.example', { appleSub: 'link-e1' });
+    const res = await link(SLUG_APPLE, await sessionFor(custId), appleJwt({ sub: 'link-e2' }));
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe('APPLE_ACCOUNT_MISMATCH');
+    expect(await appleRow(STORE_APPLE, 'link-e2')).toBeUndefined();
+    expect((await appleRow(STORE_APPLE, 'link-e1'))?.id).toBe(custId);
+  });
+
+  it('refuses an unverified account (EMAIL_UNVERIFIED): a binding made now would pass to whoever verifies the address', async () => {
+    const custId = await customerSeed('squat@corp.example', { verified: false });
+    const res = await link(SLUG_APPLE, await sessionFor(custId), appleJwt({ sub: 'link-f' }));
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe('EMAIL_UNVERIFIED');
+    expect(await appleRow(STORE_APPLE, 'link-f')).toBeUndefined();
+  });
+
+  it('rejects a token for another audience (401) and links nothing', async () => {
+    const custId = await customerSeed('aud@corp.example');
+    const res = await link(SLUG_APPLE, await sessionFor(custId), appleJwt({ sub: 'link-g', aud: 'com.evil.other-app' }));
+    expect(res.status).toBe(401);
+    expect(await code(res)).toBe('APPLE_TOKEN_INVALID');
+    expect(await appleRow(STORE_APPLE, 'link-g')).toBeUndefined();
   });
 });
