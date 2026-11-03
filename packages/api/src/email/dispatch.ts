@@ -224,9 +224,11 @@ export async function enqueueEmailVerify(tx: Tx, storeId: string, store: StoreEm
  *  dead link, and delivery retries through the outbox instead of dropping. */
 export async function enqueueMagicLink(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   url: string; ttlMinutes: number; isNewAccount?: boolean; dedupeKey?: string;
+  /** One-time code redeemable with the recipient address (#350), shown beside the link. */
+  code?: string;
 }): Promise<boolean> {
   const ctx = emailCtx(store);
-  const rendered = magicLinkAccess(ctx, { url: data.url, ttlMinutes: data.ttlMinutes, isNewAccount: data.isNewAccount ?? false });
+  const rendered = magicLinkAccess(ctx, { url: data.url, ttlMinutes: data.ttlMinutes, isNewAccount: data.isNewAccount ?? false, code: data.code });
   const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.MAGIC_LINK,
     dedupeKey: data.dedupeKey,

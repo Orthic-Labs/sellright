@@ -272,4 +272,28 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		expect(bad.ok).toBe(false);
 		if (!bad.ok) expect(bad.code).toBe('invalid_token');
 	});
+
+	it('consumeMagicLinkCode posts email + code, returns the customer, and maps 409 to invalid_token and 429 to rate_limited', async () => {
+		const mockedFetch = vi.fn(async () =>
+			jsonResponse(200, { token: 't', customer: { id: 'c1', email: 'a@b.com', firstName: null, lastName: null, phone: null, emailVerified: true, isMigrated: false } }),
+		);
+		vi.stubGlobal('fetch', mockedFetch);
+		const { consumeMagicLinkCode } = await import('./account');
+		const ok = await consumeMagicLinkCode('a@b.com', '042917');
+		expect(ok).toEqual({ ok: true, customer: expect.objectContaining({ id: 'c1' }) });
+		expect(urlOf(mockedFetch)).toContain('/v1/shop/auth/magic-link/consume-code');
+		expect(await bodyOf(mockedFetch)).toEqual({ email: 'a@b.com', code: '042917' });
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'MAGIC_LINK_INVALID', message: 'used' } })));
+		vi.resetModules();
+		const bad = await (await import('./account')).consumeMagicLinkCode('a@b.com', '000000');
+		expect(bad.ok).toBe(false);
+		if (!bad.ok) expect(bad.code).toBe('invalid_token');
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, { error: { code: 'RATE_LIMITED', message: 'slow down' } })));
+		vi.resetModules();
+		const limited = await (await import('./account')).consumeMagicLinkCode('a@b.com', '000000');
+		expect(limited.ok).toBe(false);
+		if (!limited.ok) expect(limited.code).toBe('rate_limited');
+	});
 });

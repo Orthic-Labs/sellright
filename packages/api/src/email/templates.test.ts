@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { FEDERATED_LINK_TTL_MS } from '../auth/federated-link.js';
-import { federatedLinkConfirm, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
+import { federatedLinkConfirm, magicLinkAccess, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
 
 const store: StoreCtx = {
   name: 'Brand B',
@@ -82,4 +82,21 @@ describe('federatedLinkConfirm', () => {
       }
     });
   }
+});
+
+describe('magicLinkAccess one-time code (#350)', () => {
+  const base = { url: 'https://b-brand.example/sign-in/confirm?token=abc', ttlMinutes: 15, isNewAccount: false };
+  it('shows the code beside the link, with the email it goes with and the single-use rule', () => {
+    const m = magicLinkAccess(store, { ...base, code: '042917' });
+    expect(m.html).toContain('>042917<');
+    expect(m.html).toContain('https://b-brand.example/sign-in/confirm?token=abc');
+    expect(m.text).toContain('042917');
+    expect(m.text).toContain('15 minutes');
+    expect(m.html).toContain('using either one cancels the other');
+  });
+  it('renders exactly as before when there is no code', () => {
+    const m = magicLinkAccess(store, base);
+    expect(m.html).not.toContain('code');
+    expect(m.html).not.toContain('letter-spacing');
+  });
 });

@@ -75,12 +75,16 @@ export const emailVerify = (store: StoreCtx, data: { url: string }) =>
 // Passwordless sign-in (ported from RightSites). Sent when a customer asks for
 // a sign-in link — and downstream flows may pass isNewAccount when the account
 // was created implicitly (e.g. by a purchase), so the copy can say so.
-export const magicLinkAccess = (store: StoreCtx, data: { url: string; ttlMinutes: number; isNewAccount: boolean }) =>
+// `code` (#350): the one-time code redeemable with this address where the link cannot open the app or storefront.
+export const magicLinkAccess = (store: StoreCtx, data: { url: string; ttlMinutes: number; isNewAccount: boolean; code?: string }) =>
   wrap(store, data.isNewAccount ? `Your ${store.name} account is ready` : 'Sign in to your account',
     `<p>${data.isNewAccount
       ? `Your ${escape(store.name)} account is ready — no password needed. Use the link below within ${data.ttlMinutes} minutes to access your account.`
       : `Use this link within ${data.ttlMinutes} minutes to sign in to your ${escape(store.name)} account. No password needed.`}</p>
-     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Sign in</a></p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Sign in</a></p>${data.code ? `
+     <p>Or type this code on the sign-in page, with this email address, within ${data.ttlMinutes} minutes:</p>
+     <p style="margin:12px 0;padding:12px 16px;background:${colorsOf(store).surface};border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:24px;letter-spacing:4px;text-align:center">${escape(data.code)}</p>
+     <p>The link and the code work once, and using either one cancels the other.</p>` : ''}
      <p>If you didn't request this, you can ignore this email.</p>`);
 
 // Confirmation link for a federated (Google/Apple) sign-in the provider could not vouch for. Names the provider and the

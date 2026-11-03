@@ -281,3 +281,155 @@ describe('POST /v1/shop/auth/magic-link/request — Turnstile gate', () => {
     expect(vi.mocked(verifyTurnstileToken)).not.toHaveBeenCalled();
   });
 });
+
+// --- #350: the one-time code in the same email --------------------------------------------------------------------------
+const consumeCode = (slug: string, email: string, code: string) =>
+  app.request('/v1/shop/auth/magic-link/consume-code', { method: 'POST', headers: hdr(slug), body: JSON.stringify({ email, code }) });
+
+function codeFromOutbox(row: OutboxRow): string {
+  const m = /letter-spacing:4px;text-align:center">(\d{6})</.exec(row.payload.html ?? '');
+  expect(m, 'magic-link email carries a 6-digit code').toBeTruthy();
+  return m![1]!;
+}
+const wrongCode = (code: string) => (code === '000000' ? '000001' : '000000');
+const errCode = async (res: Response) => ((await res.json()) as { error: { code: string } }).error.code;
+
+describe('one-time code (#350)', () => {
+  it('the email carries a code that redeems with the email: session, mailbox verified, token row used', async () => {
+    const custId = await seedCustomer(STORE_ON, 'code1@b.test');
+    expect((await req(SLUG_ON, 'code1@b.test')).status).toBe(200);
+    const [mail] = await outbox(STORE_ON);
+    const code = codeFromOutbox(mail!);
+    const raw = rawFromOutbox(mail!);
+
+    const res = await consumeCode(SLUG_ON, 'code1@b.test', code);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { token: string; customer: { id: string; emailVerified: boolean } };
+    expect(body.customer.id).toBe(custId);
+    expect(body.customer.emailVerified).toBe(true);
+    expect(body.token.length).toBeGreaterThan(20);
+    expect(res.headers.get('set-cookie')).toMatch(/sr_cust=/);
+    expect((await tokenRow(STORE_ON, raw))?.used_at).toBeInstanceOf(Date);
+    expect(await sessionCount(STORE_ON, custId)).toBe(1);
+  });
+
+  it('accepts the code with spaces or a hyphen, and any email casing', async () => {
+    await seedCustomer(STORE_ON, 'code2@b.test');
+    await req(SLUG_ON, 'code2@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    expect((await consumeCode(SLUG_ON, 'Code2@B.test', `${code.slice(0, 3)} ${code.slice(3)}`)).status).toBe(200);
+  });
+
+  it('is single use, and redeeming the code burns the link too', async () => {
+    await seedCustomer(STORE_ON, 'code3@b.test');
+    await req(SLUG_ON, 'code3@b.test');
+    const [mail] = await outbox(STORE_ON);
+    const code = codeFromOutbox(mail!);
+    expect((await consumeCode(SLUG_ON, 'code3@b.test', code)).status).toBe(200);
+    const again = await consumeCode(SLUG_ON, 'code3@b.test', code);
+    expect(again.status).toBe(409);
+    expect(await errCode(again)).toBe('MAGIC_LINK_INVALID');
+    expect((await consume(SLUG_ON, rawFromOutbox(mail!))).status).toBe(409);
+  });
+
+  it('redeeming the link burns the code too', async () => {
+    await seedCustomer(STORE_ON, 'code4@b.test');
+    await req(SLUG_ON, 'code4@b.test');
+    const [mail] = await outbox(STORE_ON);
+    expect((await consume(SLUG_ON, rawFromOutbox(mail!))).status).toBe(200);
+    expect((await consumeCode(SLUG_ON, 'code4@b.test', codeFromOutbox(mail!))).status).toBe(409);
+  });
+
+  it('stores only a hash of the code, on the link row', async () => {
+    await seedCustomer(STORE_ON, 'code5@b.test');
+    await req(SLUG_ON, 'code5@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    const rows = await withStore(STORE_ON, async (tx) =>
+      (await tx.execute(sql`SELECT payload, expires_at, created_at FROM customer_token WHERE kind = 'magic_link'`)).rows as Array<{ payload: { codeHash: string } | null; expires_at: Date; created_at: Date }>);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload?.codeHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(rows[0]!.payload)).not.toContain(code);
+  });
+
+  it('a wrong code, an unknown email and a malformed code are the same 409, and mint no session', async () => {
+    await seedCustomer(STORE_ON, 'code6@b.test');
+    await req(SLUG_ON, 'code6@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    const results = [
+      await consumeCode(SLUG_ON, 'code6@b.test', wrongCode(code)),
+      await consumeCode(SLUG_ON, 'nobody6@b.test', code),
+      await consumeCode(SLUG_ON, 'code6@b.test', 'abc'),
+    ];
+    const bodies: unknown[] = [];
+    for (const r of results) { expect(r.status).toBe(409); expect(r.headers.get('set-cookie')).toBeNull(); bodies.push(await r.json().then((b) => ({ ...(b as { error: object }).error, requestId: undefined }))); }
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
+    expect((await pool.query('SELECT 1 FROM "session"')).rowCount).toBe(0);
+    // The right code still works afterwards (a few misses do not burn it).
+    expect((await consumeCode(SLUG_ON, 'code6@b.test', code)).status).toBe(200);
+  });
+
+  it('an expired code 409s', async () => {
+    await seedCustomer(STORE_ON, 'code7@b.test');
+    await req(SLUG_ON, 'code7@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    await withStore(STORE_ON, (tx) => tx.execute(sql`UPDATE customer_token SET expires_at = now() - interval '1 minute' WHERE kind = 'magic_link'`));
+    expect((await consumeCode(SLUG_ON, 'code7@b.test', code)).status).toBe(409);
+  });
+
+  it('a newer request supersedes the earlier code but leaves the earlier link working', async () => {
+    await seedCustomer(STORE_ON, 'code8@b.test');
+    await req(SLUG_ON, 'code8@b.test');
+    // The outbox dedupes nothing here (no dedupe key), so a second request mails a second link + code.
+    await req(SLUG_ON, 'code8@b.test');
+    const [first, second] = await outbox(STORE_ON);
+    const c1 = codeFromOutbox(first!), c2 = codeFromOutbox(second!);
+    if (c1 !== c2) {
+      expect((await consumeCode(SLUG_ON, 'code8@b.test', c1)).status).toBe(409);
+      expect((await consume(SLUG_ON, rawFromOutbox(first!))).status).toBe(200);
+      // The first link was redeemed; the newest code is a separate row and still redeems.
+      expect((await consumeCode(SLUG_ON, 'code8@b.test', c2)).status).toBe(200);
+    }
+  });
+
+  it('is scoped to the store: another store with the same email cannot redeem it', async () => {
+    await seedCustomer(STORE_ON, 'code9@b.test');
+    await seedCustomer(STORE_ON2, 'code9@b.test');
+    await req(SLUG_ON, 'code9@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    expect((await consumeCode(SLUG_ON2, 'code9@b.test', code)).status).toBe(409);
+    expect((await consumeCode(SLUG_ON, 'code9@b.test', code)).status).toBe(200);
+  });
+
+  it('409s MAGIC_LINK_DISABLED on a store that has not opted in', async () => {
+    const res = await consumeCode(SLUG_OFF, 'off@b.test', '123456');
+    expect(res.status).toBe(409);
+    expect(await errCode(res)).toBe('MAGIC_LINK_DISABLED');
+  });
+
+  it('two concurrent redemptions of one code yield exactly one session', async () => {
+    const custId = await seedCustomer(STORE_ON, 'code10@b.test');
+    await req(SLUG_ON, 'code10@b.test');
+    const code = codeFromOutbox((await outbox(STORE_ON))[0]!);
+    const statuses = (await Promise.all([consumeCode(SLUG_ON, 'code10@b.test', code), consumeCode(SLUG_ON, 'code10@b.test', code)])).map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(await sessionCount(STORE_ON, custId)).toBe(1);
+  });
+
+  it('throttles guesses per email: after 8 misses even the right code is refused (429), while the link still works', async () => {
+    await seedCustomer(STORE_ON, 'code11@b.test');
+    await req(SLUG_ON, 'code11@b.test');
+    const [mail] = await outbox(STORE_ON);
+    const code = codeFromOutbox(mail!);
+    for (let i = 0; i < 8; i++) expect((await consumeCode(SLUG_ON, 'code11@b.test', wrongCode(code))).status).toBe(409);
+    const locked = await consumeCode(SLUG_ON, 'code11@b.test', code);
+    expect(locked.status).toBe(429);
+    expect(await errCode(locked)).toBe('RATE_LIMITED');
+    expect((await consume(SLUG_ON, rawFromOutbox(mail!))).status).toBe(200);
+  });
+
+  it('counts misses for an unknown address too, so the throttle never reveals whether an account exists', async () => {
+    for (let i = 0; i < 8; i++) expect((await consumeCode(SLUG_ON, 'ghost11@b.test', '123456')).status).toBe(409);
+    expect((await consumeCode(SLUG_ON, 'ghost11@b.test', '123456')).status).toBe(429);
+  });
+});
