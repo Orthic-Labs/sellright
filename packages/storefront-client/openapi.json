@@ -14,6 +14,9 @@
           "ADDRESS_NOT_FOUND",
           "ALREADY_REVIEWED",
           "AMOUNT_MISMATCH",
+          "APPLE_ACCOUNT_MISMATCH",
+          "APPLE_ALREADY_LINKED",
+          "APPLE_EMAIL_REQUIRED",
           "APPLE_SIGNIN_NOT_CONFIGURED",
           "APPLE_TOKEN_INVALID",
           "AUTH_REQUIRED",
@@ -34,6 +37,7 @@
           "CSRF_INVALID",
           "AGENT_NOT_ALLOWED",
           "DOWNLOAD_NOT_FOUND",
+          "EMAIL_UNVERIFIED",
           "DOWNLOADS_NOT_CONFIGURED",
           "EMAIL_NOT_VERIFIED",
           "EMAIL_SAME",
@@ -9639,11 +9643,13 @@
                 "properties": {
                   "token": {
                     "type": "string",
-                    "minLength": 20
+                    "minLength": 20,
+                    "maxLength": 512
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8
+                    "minLength": 8,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -9760,11 +9766,13 @@
                 "properties": {
                   "newEmail": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -16984,7 +16992,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 12
+                    "minLength": 12,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -17162,10 +17171,12 @@
                 "properties": {
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "totp": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   }
                 },
                 "required": [
@@ -26540,8 +26551,10 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "minLength": 1
-                    }
+                      "minLength": 1,
+                      "maxLength": 253
+                    },
+                    "maxItems": 50
                   },
                   "storefrontUrl": {
                     "type": "string",
@@ -28118,7 +28131,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "setupId": {
                     "type": "string",
@@ -28207,11 +28221,13 @@
                 "type": "object",
                 "properties": {
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -28299,7 +28315,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -32123,7 +32140,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 10
+                    "minLength": 10,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -32439,11 +32457,13 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 10
+                    "minLength": 10,
+                    "maxLength": 1024
                   },
                   "currentPassword": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "totp": {
                     "type": "string"
@@ -35513,6 +35533,15 @@
             },
             "required": false,
             "name": "turnstileToken",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "required": false,
+            "name": "rt",
             "in": "query"
           }
         ],

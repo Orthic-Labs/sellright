@@ -36,7 +36,13 @@ export const clientIpOf = (
 	return cleanIp(req.socket?.remoteAddress) ?? 'unknown';
 };
 
-/** Admits at most `limit` server-function POSTs per IP per window; everything else (GETs, pages) is untouched. */
+/** A loopback or private peer: the deployment's own proxy (nginx, Docker gateway), never a shopper. */
+const isProxyPeer = (ip: string): boolean =>
+	ip === 'unknown' || ip === '::1' || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || /^f[cd]/i.test(ip);
+
+/** Admits at most `limit` server-function POSTs per IP per window; everything else (GETs, pages) is untouched.
+ *  Behind a proxy whose x-real-ip is not trusted, every shopper shares the proxy's address: limiting that would throttle
+ *  the whole site at once, so such requests are not limited (the unknown-QRL 404 guard still applies). */
 export const createServerFunctionRateLimit = (
 	opts: { limit?: number; windowMs?: number; now?: () => number; maxTracked?: number; env?: Record<string, string | undefined> } = {},
 ): RequestHandler => {
@@ -49,6 +55,7 @@ export const createServerFunctionRateLimit = (
 		if (!isServerFunctionPost(req)) return next();
 		const t = now();
 		const ip = clientIpOf(req, opts.env);
+		if (isProxyPeer(ip)) return next();
 		let slot = hits.get(ip);
 		if (!slot || t - slot.start >= windowMs) {
 			if (!slot && hits.size >= maxTracked) {

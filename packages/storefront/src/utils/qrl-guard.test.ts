@@ -94,6 +94,17 @@ describe('createServerFunctionRateLimit', () => {
 		expect(run(req()).next).toHaveBeenCalledTimes(1);
 	});
 
+	it('does not limit an untrusted proxy peer (every shopper would share its address)', () => {
+		const limiter = createServerFunctionRateLimit({ limit: 1, env: {} });
+		for (const remoteAddress of ['127.0.0.1', '172.22.0.1', '::1', '10.0.0.5']) {
+			for (let i = 0; i < 3; i++) {
+				const next = vi.fn();
+				limiter(req({ socket: { remoteAddress } }) as never, makeRes() as never, next);
+				expect(next).toHaveBeenCalledTimes(1);
+			}
+		}
+	});
+
 	it('never limits GETs or other POSTs', () => {
 		const limiter = createServerFunctionRateLimit({ limit: 1, env: {} });
 		for (let i = 0; i < 5; i++) {
