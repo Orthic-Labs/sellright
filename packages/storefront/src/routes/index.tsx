@@ -239,7 +239,7 @@ const BaseHomePage = component$(() => {
                 required
                 disabled={nlState.value === 'sending'}
               />
-              <div id="nl-turnstile" class="min-h-[65px] w-full"></div>
+              <div id="nl-turnstile" class="w-full"></div>
               <button
                 type="submit"
                 class="nl-submit"

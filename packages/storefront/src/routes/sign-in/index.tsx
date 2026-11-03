@@ -430,7 +430,7 @@ export default component$(() => {
 						</div>
 					)}
 
-					<div id="turnstile-container" class={showWidget && TURNSTILE_SITE_KEY ? 'min-h-[65px] flex justify-center mt-5' : 'hidden'}></div>
+					<div id="turnstile-container" class={showWidget && TURNSTILE_SITE_KEY ? 'flex justify-center mt-5' : 'hidden'}></div>
 
 					{showWidget && error.value && (
 						<div class="mt-5">

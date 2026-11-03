@@ -247,7 +247,7 @@ export default component$<LoginModalProps>(({
         <div class="bg-[#FDFAF6] rounded-[3px] border border-[#D8D1C7] shadow-none overflow-hidden">
           <div class="px-6 py-6">
 
-            <div id="modal-turnstile" class={['email', 'signin', 'signup', 'setup'].includes(step.value) ? 'min-h-[65px] flex justify-center mb-4' : 'hidden'}></div>
+            <div id="modal-turnstile" class={['email', 'signin', 'signup', 'setup'].includes(step.value) ? 'flex justify-center mb-4' : 'hidden'}></div>
             {step.value === 'email' && (
               <div class="space-y-4 font-body">
                 <div class="text-center mb-2">

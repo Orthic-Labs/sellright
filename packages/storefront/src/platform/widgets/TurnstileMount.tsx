@@ -10,5 +10,5 @@ export const TURNSTILE_CONTAINER_ID: Record<TurnstileTarget, string> = {
 };
 
 export const TurnstileMount = component$<{ for: TurnstileTarget; class?: string }>((props) => (
-	<div id={TURNSTILE_CONTAINER_ID[props.for]} class={props.class ?? 'min-h-[65px]'} />
+	<div id={TURNSTILE_CONTAINER_ID[props.for]} class={props.class} />
 ));

@@ -94,7 +94,7 @@ const BaseContactPage = component$(() => {
 										</div>
 
 										{/* Turnstile */}
-										<div id="turnstile-container" class="min-h-[65px]"></div>
+										<div id="turnstile-container"></div>
 
 										{formState.value === 'error' && (
 											<p class="text-red-600 text-sm font-['IBM_Plex_Sans']">{errorMessage.value}</p>
