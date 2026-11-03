@@ -108,7 +108,7 @@ adminSecurity.openapi(
     method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA with the 6-digit code for this session\'s pending secret (the current password only when the session is not freshly signed in); returns one-time recovery codes',
     request: { body: { content: J(z.object({
       code: z.string().max(16),
-      password: z.string().min(1).optional(),
+      password: z.string().min(1).max(1024).optional(),
       /** The setupId of the QR the user scanned (from /2fa/setup); a superseded one answers SETUP_EXPIRED. */
       setupId: z.string().min(16).max(128).optional(),
       /** Legacy API clients: confirm a secret they hold themselves (always with the current password). */
@@ -154,7 +154,7 @@ adminSecurity.openapi(
 adminSecurity.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/2fa/disable', summary: 'Disable 2FA (current password + a TOTP or recovery code)',
-    request: { body: { content: J(z.object({ code: z.string(), password: z.string().min(1) })) } },
+    request: { body: { content: J(z.object({ code: z.string().max(64), password: z.string().min(1).max(1024) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized / wrong password', ...errBody },
       403: { description: '2FA required by policy', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: tooMany },
   }),
@@ -186,7 +186,7 @@ adminSecurity.openapi(
 adminSecurity.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/2fa/recovery-codes', summary: 'Replace the recovery codes (current password + a TOTP or recovery code; a passkey-only account: a recovery code or a fresh passkey step-up); returns the new codes once',
-    request: { body: { content: J(z.object({ code: z.string().max(64).optional(), password: z.string().min(1) })) } },
+    request: { body: { content: J(z.object({ code: z.string().max(64).optional(), password: z.string().min(1).max(1024) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ recoveryCodes: z.array(z.string()) })) }, 401: { description: 'Unauthorized / wrong password', ...errBody },
       403: { description: 'step_up_required (passkey-only account without a code)', ...errBody }, 409: { description: 'Bad code or 2FA not enabled', ...errBody }, 429: tooMany },
   }),

@@ -114,7 +114,7 @@ customerTokens.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/auth/reset-password',
     summary: 'Reset password using a one-time token',
-    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20), password: z.string().min(8) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20).max(512), password: z.string().min(8).max(1024) }) } } } },
     responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
@@ -206,7 +206,7 @@ customerTokens.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/auth/request-email-change',
     summary: 'Request an email-address change (verification link goes to the NEW address)',
-    request: { body: { content: { 'application/json': { schema: z.object({ newEmail: z.string().email(), password: z.string().min(1) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ newEmail: z.string().email().max(254), password: z.string().min(1).max(1024) }) } } } },
     responses: {
       200: { description: 'Verification email enqueued', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       401: { description: 'Unauthenticated or wrong password', content: { 'application/json': { schema: apiErrorSchema() } } },

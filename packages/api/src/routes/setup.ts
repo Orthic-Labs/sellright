@@ -64,7 +64,7 @@ setup.openapi(
           token: z.string().min(1),
           email: z.string().email(),
           name: z.string().min(1).max(200),
-          password: z.string().min(12),
+          password: z.string().min(12).max(1024),
         })),
       },
     },
