@@ -225,6 +225,9 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		
 		if (fieldName === 'countryCode') {
 			dropdownState.pendingCountryCode = value as string;
+			// Saved at once (the address update below stays debounced): checkout entry seeds the country from this preference
+			// ~0.6 s after the form shows, and a pick still waiting on the debounce was overwritten by the cart's country (e2e 2026-11-03).
+			if (value) CountryPreferenceService.setCountry(value as string);
 			
 			if (dropdownState.debounceTimer !== null) {
 				clearTimeout(dropdownState.debounceTimer);

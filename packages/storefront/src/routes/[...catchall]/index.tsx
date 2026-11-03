@@ -17,13 +17,19 @@ export const onGet: RequestHandler = async ({ status, url }) => {
 	if (hasContentViewFor(url.pathname) && matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return;
 	// Return proper 404 status for catchall routes (prevents Google soft 404s)
 	// Skip for legacy redirect paths — they throw redirect() before reaching here
-	if (!url.pathname.startsWith('/order-status')) {
+	if (!url.pathname.startsWith('/order-status') && !url.pathname.startsWith('/checkout/order-received')) {
 		status(404);
 	}
 };
 
 // Handle legacy redirects before showing 404
 export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
+        // WooCommerce order-received links (old order emails and bookmarks, /checkout/order-received/<id>/?key=...): the old
+        // order id is not a SellRight order code, so send the shopper to order tracking instead of a 404.
+        if (url.pathname.startsWith('/checkout/order-received')) {
+                throw redirect(301, '/track-order');
+        }
+
         // Handle legacy /order-status emails
         if (url.pathname.startsWith('/order-status')) {
                 const orderCode = url.searchParams.get('orderCode');
