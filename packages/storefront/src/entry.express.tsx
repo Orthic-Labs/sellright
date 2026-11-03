@@ -18,6 +18,7 @@ import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
 import { precompressedStatic } from"./utils/precompressed-static";
 import { createErrorPathLog } from "./utils/error-path-log";
+import { createServerFunctionGuard, createServerFunctionRateLimit } from "./utils/qrl-guard";
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { socialSignInIdsForHost, storeGatewaysForHost } from "./utils/social-sign-in.server";
@@ -302,8 +303,11 @@ app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRO
 // unless SHELL_CACHE=1 marked this request a shell render.
 app.use(shellRenderUrl);
 
+// #332: per-IP limit on server-function POSTs (429), and an unknown/unloadable QRL (Q6) is a 404 with one sampled warn line.
+app.use(createServerFunctionRateLimit({ limit: Number(process.env.SELLRIGHT_SERVER_FN_PER_MINUTE) || 60 }));
+
 // Use Qwik Router's page and endpoint request handler
-app.use(router);
+app.use(createServerFunctionGuard()(router));
 
 // Use Qwik Router's 404 handler
 app.use(notFound);
