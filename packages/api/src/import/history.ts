@@ -208,7 +208,9 @@ export function buildImportedEditBasis(input: {
       } : closedShortfall ? shortfallMarker(retainedHistoryV1.sourceDigest) : {}) };
     }
     const editBasisV1 = { ...payload, sourceDigest: digest(payload) };
-    return { orderId: target.id, editBasisV1, ...(closedShortfall ? shortfallMarker(editBasisV1.sourceDigest) : {}) };
+    return closedShortfall
+      ? { orderId: target.id, editBasisV1, ...shortfallMarker(editBasisV1.sourceDigest) }
+      : { orderId: target.id, editBasisV1 };
   });
 }
 

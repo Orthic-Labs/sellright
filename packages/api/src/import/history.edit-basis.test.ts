@@ -61,7 +61,7 @@ describe('imported edit basis source capture', () => {
       referencedDetachedShippingLines: [], surcharges: [{ sourceId: '3', sourceRecord: input.surcharges[0]!.sourceRecord }] });
     const { sourceDigest, ...payload } = retained;
     expect(sourceDigest).toBe(digest(payload));
-    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+    expect((capture as { financialReconciliationV1?: unknown }).financialReconciliationV1).toEqual({ version: 1, status: 'required',
       reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest });
     expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
     const changed = fixture();
@@ -356,7 +356,7 @@ describe('imported payment shortfall on closed source orders (#405)', () => {
     const capture = buildImportedEditBasis(shortfallInput(state))[0]!;
     expect(capture).toHaveProperty('editBasisV1');
     expect(capture).not.toHaveProperty('retainedHistoryV1');
-    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+    expect((capture as { financialReconciliationV1?: unknown }).financialReconciliationV1).toEqual({ version: 1, status: 'required',
       reasons: ['IMPORTED_PAYMENT_SHORTFALL'], sourceDigest: capture.editBasisV1!.sourceDigest });
     expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
   });
@@ -374,7 +374,7 @@ describe('imported payment shortfall on closed source orders (#405)', () => {
   it('keeps the HEADER_CHARGE_CONTRADICTION marker when the order is both contradictory and short', () => {
     const input = shortfallInput('Delivered');
     Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unresolved' } });
-    expect(buildImportedEditBasis(input)[0]!.financialReconciliationV1).toMatchObject({ reasons: ['HEADER_CHARGE_CONTRADICTION'] });
+    expect((buildImportedEditBasis(input)[0] as { financialReconciliationV1?: unknown }).financialReconciliationV1).toMatchObject({ reasons: ['HEADER_CHARGE_CONTRADICTION'] });
   });
 
   it('marks a retained (detached shipping) closed order too, bound to its retained digest', () => {
