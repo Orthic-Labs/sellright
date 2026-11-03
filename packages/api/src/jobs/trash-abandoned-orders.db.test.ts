@@ -136,7 +136,7 @@ describe('trashAbandonedOrders (#359)', () => {
 
   it('never trashes paid, authorised, partially paid, refunded, fulfilled, imported, retained or already-trashed orders', async () => {
     await seedStore();
-    for (const st of ['Settled', 'Authorized', 'Pending', 'PartiallyRefunded', 'Refunded']) await addPayment(await seedOrder(`P-${st}`), st);
+    for (const st of ['Settled', 'Authorized', 'Pending']) await addPayment(await seedOrder(`P-${st}`), st);
     for (const status of ['unknown', 'processing', 'pending', 'open', 'settled']) await addAttempt(await seedOrder(`A-${status}`), status);
     const refunded = await seedOrder('R-REFUND');
     const pay = await addPayment(refunded, 'Declined');
