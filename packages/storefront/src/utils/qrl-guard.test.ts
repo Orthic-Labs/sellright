@@ -165,3 +165,20 @@ describe('createServerFunctionGuard', () => {
 		expect(spy).toHaveBeenCalledTimes(1);
 	});
 });
+
+// Last: building a guard patches console.error once, which must not happen before the spy-based test above.
+describe('createServerFunctionGuard knownHashes', () => {
+	it('answers 404 for a server-function hash outside the build, before the router runs', () => {
+		const lines: string[] = [];
+		const guard = createServerFunctionGuard({ write: (l) => lines.push(l), knownHashes: new Set(['known1']) });
+		const router = vi.fn();
+		const wrapped = guard(router as never);
+		const res = makeRes();
+		wrapped(req({ url: '/shop/?qfunc=stale9', headers: { 'x-qrl': 'stale9', 'content-type': 'application/qwik-json' } }) as never, res as never, vi.fn());
+		expect(router).not.toHaveBeenCalled();
+		expect(res.statusCode).toBe(404);
+		expect(lines).toHaveLength(1);
+		wrapped(req({ url: '/shop/?qfunc=known1', headers: { 'x-qrl': 'known1', 'content-type': 'application/qwik-json' } }) as never, makeRes() as never, vi.fn());
+		expect(router).toHaveBeenCalledTimes(1);
+	});
+});

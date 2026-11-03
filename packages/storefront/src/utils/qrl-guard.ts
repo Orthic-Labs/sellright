@@ -93,13 +93,23 @@ const patchConsoleOnce = (): void => {
 	console.error = filtered;
 };
 
+/** The server-function hash a POST names: the `X-QRL` header, else the `qfunc` query value. */
+export const serverFunctionHash = (req: Pick<Request, 'url' | 'headers'>): string => {
+	const h = req.headers['x-qrl'];
+	if (typeof h === 'string' && h) return h;
+	const q = (req.url || '').indexOf('?');
+	return q >= 0 ? new URLSearchParams((req.url || '').slice(q + 1)).get('qfunc') ?? '' : '';
+};
+
 /**
  * Wraps the Qwik router: a server-function POST whose QRL cannot be loaded answers 404 (not 500) and writes one warn
  * line, at most `perMinute` of them (a dropped count is reported when the window rolls). Other requests and other
  * errors go to `next` exactly as before.
+ * `knownHashes` (the build manifest's symbol hashes) rejects an id this build never had before the router runs: the
+ * Qwik 2 router answers a failed server function with its own 500 and never hands the error on.
  */
 export const createServerFunctionGuard = (
-	opts: { perMinute?: number; write?: Writer; now?: () => number } = {},
+	opts: { perMinute?: number; write?: Writer; now?: () => number; knownHashes?: ReadonlySet<string> } = {},
 ) => {
 	const perMinute = opts.perMinute ?? 6;
 	const write: Writer = opts.write ?? ((line) => process.stderr.write(line + '\n'));
@@ -126,6 +136,13 @@ export const createServerFunctionGuard = (
 	return (router: RequestHandler): RequestHandler =>
 		(req, res, next) => {
 			if (!isServerFunctionPost(req)) return router(req, res, next);
+			if (opts.knownHashes?.size && !opts.knownHashes.has(serverFunctionHash(req))) {
+				warn(clientIpOf(req));
+				res.locals.quietNotFound = true;
+				res.setHeader('Cache-Control', 'private, no-store');
+				res.status(404).type('text/plain').send('Not found');
+				return;
+			}
 			return inServerFunction.run(true, () =>
 				router(req, res, (err?: unknown) => {
 					if (err && isUnknownQrlError(err) && !res.headersSent) {
