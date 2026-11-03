@@ -33,11 +33,15 @@ import { err as logErr } from '../lib/logger.js';
 export const disputeRoutes = new OpenAPIHono();
 disputeRoutes.use('/v1/webhooks/nmi/*', bodyLimit({ maxSize: 262144 }));
 
-/** NMI signature format: `t=<unix-seconds>,s=<hex-hmac>` over `t.rawBody`. */
-export function verifyNmiSignature(rawBody: string, signature: string | undefined, signingKey: string): boolean {
+/** A signature older (or further in the future) than this is rejected, so a captured webhook cannot be replayed later. */
+export const NMI_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+
+/** NMI signature format: `t=<unix-seconds>,s=<hex-hmac>` over `t.rawBody`. `t` must be within 5 minutes of `nowMs`. */
+export function verifyNmiSignature(rawBody: string, signature: string | undefined, signingKey: string, nowMs: number = Date.now()): boolean {
   if (!signingKey || !signature) return false;
-  const m = /^t=([^,]+),s=([a-f0-9]+)$/i.exec(signature);
+  const m = /^t=(\d{1,12}),s=([a-f0-9]+)$/i.exec(signature);
   if (!m) return false;
+  if (Math.abs(nowMs / 1000 - Number(m[1])) > NMI_SIGNATURE_TOLERANCE_SECONDS) return false;
   const expected = createHmac('sha256', signingKey).update(`${m[1]}.${rawBody}`).digest('hex');
   const received = m[2]!.toLowerCase();
   return expected.length === received.length && timingSafeEqual(Buffer.from(expected), Buffer.from(received));

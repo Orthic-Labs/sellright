@@ -20,14 +20,24 @@ function sign(body: string, key = KEY, t = '1700000000') {
 
 describe('verifyNmiSignature', () => {
   const body = '{"event_type":"chargeback.batch.complete"}';
+  const NOW = 1700000000 * 1000; // the signed timestamp used by sign()
   it('accepts a valid t=,s= signature; rejects everything else', () => {
-    expect(verifyNmiSignature(body, sign(body), KEY)).toBe(true);
-    expect(verifyNmiSignature(body, sign(body, 'wrong-key'), KEY)).toBe(false);
-    expect(verifyNmiSignature(body, sign('{"event_type":"other"}'), KEY)).toBe(false); // body tampered
-    expect(verifyNmiSignature(body, undefined, KEY)).toBe(false);
-    expect(verifyNmiSignature(body, 'garbage', KEY)).toBe(false);
-    expect(verifyNmiSignature(body, 't=1,s=zzzz', KEY)).toBe(false);
-    expect(verifyNmiSignature(body, sign(body), '')).toBe(false); // no key configured → fail closed
+    expect(verifyNmiSignature(body, sign(body), KEY, NOW)).toBe(true);
+    expect(verifyNmiSignature(body, sign(body, 'wrong-key'), KEY, NOW)).toBe(false);
+    expect(verifyNmiSignature(body, sign('{"event_type":"other"}'), KEY, NOW)).toBe(false); // body tampered
+    expect(verifyNmiSignature(body, undefined, KEY, NOW)).toBe(false);
+    expect(verifyNmiSignature(body, 'garbage', KEY, NOW)).toBe(false);
+    expect(verifyNmiSignature(body, 't=1,s=zzzz', KEY, NOW)).toBe(false);
+    expect(verifyNmiSignature(body, sign(body), '', NOW)).toBe(false); // no key configured → fail closed
+  });
+  it('rejects a correctly signed timestamp older than 5 minutes (replay), and one far in the future', () => {
+    expect(verifyNmiSignature(body, sign(body), KEY, NOW + 4 * 60 * 1000)).toBe(true);
+    expect(verifyNmiSignature(body, sign(body), KEY, NOW + 5 * 60 * 1000 + 1000)).toBe(false);
+    expect(verifyNmiSignature(body, sign(body), KEY, NOW - 6 * 60 * 1000)).toBe(false);
+    expect(verifyNmiSignature(body, sign(body), KEY)).toBe(false); // real clock: a 2023 timestamp is stale
+  });
+  it('rejects a non-numeric timestamp even when the HMAC is valid for it', () => {
+    expect(verifyNmiSignature(body, sign(body, KEY, 'abc'), KEY, NOW)).toBe(false);
   });
 });
 

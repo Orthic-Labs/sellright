@@ -21,7 +21,7 @@ let cachedJwks: { at: number; keys: AppleJwk[] } | null = null;
 
 async function fetchAppleJwks(): Promise<AppleJwk[]> {
   if (cachedJwks && Date.now() - cachedJwks.at < JWKS_CACHE_TTL_MS) return cachedJwks.keys;
-  const res = await fetch(APPLE_JWKS_URL);
+  const res = await fetch(APPLE_JWKS_URL, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`apple jwks fetch failed: ${res.status}`);
   const body = (await res.json()) as { keys: AppleJwk[] };
   cachedJwks = { at: Date.now(), keys: body.keys };
