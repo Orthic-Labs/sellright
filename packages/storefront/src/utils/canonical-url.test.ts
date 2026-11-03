@@ -91,7 +91,7 @@ describe('createCanonicalUrlMiddleware', () => {
 		const rootStatic = src.indexOf('rootStatic(req, res, next)');
 		const failClosed = src.indexOf("res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL)");
 		const canonical = src.indexOf('createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS))');
-		const router = src.indexOf('app.use(router)');
+		const router = src.indexOf('app.use(createServerFunctionGuard()(router))');
 		expect(canonical).toBeGreaterThan(-1);
 		expect(canonical).toBeGreaterThan(rootStatic);
 		expect(canonical).toBeGreaterThan(failClosed);
