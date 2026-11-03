@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@qwik.dev/router';
 import { requireCacheAdminToken, CACHE_ADMIN_TOKEN_HEADER } from '~/utils/cache-admin-auth';
+import { resolveVisitorIp } from '~/utils/sellright-visitor-ip.server';
 
 // Thin proxy to the real Cloudflare purge route on the SellRight API
 // (packages/api/src/routes/admin-cache.ts). This used to point at
@@ -9,8 +10,8 @@ import { requireCacheAdminToken, CACHE_ADMIN_TOKEN_HEADER } from '~/utils/cache-
 // independent, constant-time token check; requireCacheAdminToken() here is a
 // second, storefront-side gate so an unauthenticated caller never even
 // reaches the proxy hop.
-export const onPost: RequestHandler = async ({ request, json }) => {
-	const auth = requireCacheAdminToken(request);
+export const onPost: RequestHandler = async ({ request, json, clientConn }) => {
+	const auth = requireCacheAdminToken(request, resolveVisitorIp({ headers: request.headers, socketIp: clientConn?.ip }));
 	if (!auth.ok) {
 		throw json(auth.status, { success: false, error: auth.error });
 	}
@@ -35,7 +36,8 @@ export const onPost: RequestHandler = async ({ request, json }) => {
 				'content-type': 'application/json',
 				[CACHE_ADMIN_TOKEN_HEADER]: token,
 			},
-			body: JSON.stringify({ storeSlug, ...body }),
+			// the store is fixed by this deployment's env: a caller-supplied storeSlug must never override it
+			body: JSON.stringify({ ...body, storeSlug }),
 		});
 		status = backendResponse.status;
 		const text = await backendResponse.text();

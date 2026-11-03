@@ -146,7 +146,9 @@ const EnvSchema = z.object({
   // Internal admin cache-purge route (routes/admin-cache.ts). Compared with
   // crypto.timingSafeEqual, fail CLOSED (503) when unset — never fall back to
   // an unauthenticated purge endpoint.
-  CACHE_ADMIN_TOKEN: optionalEnvString,
+  // Shared machine secret for POST /v1/admin/cache/purge, reachable from the public internet: when set it must be a long
+  // random value (security audit 2026-11-02). Unset still fails closed (503) in the route.
+  CACHE_ADMIN_TOKEN: z.preprocess(emptyToUndefined, z.string().min(32, 'CACHE_ADMIN_TOKEN must be at least 32 characters (use a random 48+ character value)').optional()),
   // Cart lifecycle (CART-04 — owner decision 2026-09-24: 24h retention for
   // idle carts, converted carts/orders untouched):
   //   CART_TTL_DAYS      — hard TTL written to cart.expires_at on every
