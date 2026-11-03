@@ -153,9 +153,14 @@ services:
       PORT: 3300
       OUTBOUND_SELF_IPS: ${OUTBOUND_SELF_IPS:-}
       # Runtime serves requests as the non-owner app role (NOSUPERUSER
-      # NOBYPASSRLS). The privileged migration URL below is used ONLY by the
-      # migrate/bootstrap steps in `command`; index.js never sees it. The API
-      # asserts at boot that its runtime role is not superuser/BYPASSRLS.
+      # NOBYPASSRLS). The privileged migration URL below is present in the
+      # container ONLY while the migrate/bootstrap steps in `command` run (and
+      # for `sellright update`'s one-shot `run --rm api` migrate): the wrapper
+      # unsets it immediately before `exec node dist/index.js`, so the
+      # long-running process environment does not contain the owner credential.
+      # (It stays visible to `docker inspect` on the host; a separate one-shot
+      # service would be needed to remove it from the service definition too.)
+      # The API asserts at boot that its runtime role is not superuser/BYPASSRLS.
       DATABASE_URL: postgresql://sellright_app:${POSTGRES_APP_PASSWORD}@postgres:5432/sellright
       DATABASE_URL_MIGRATE: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
@@ -240,13 +245,14 @@ services:
     networks: [private]
     # Same lifecycle as the Dockerfile CMD, but schema migrations and the
     # create-only bootstrap run as the privileged migration role while the
-    # request-serving process keeps the non-owner DATABASE_URL.
+    # request-serving process keeps only the non-owner DATABASE_URL.
     command:
       - sh
       - -c
       - |
         DATABASE_URL="$${DATABASE_URL_MIGRATE}" node dist/scripts/migrate.js &&
         DATABASE_URL="$${DATABASE_URL_MIGRATE}" node dist/scripts/bootstrap.js &&
+        unset DATABASE_URL_MIGRATE &&
         exec node dist/index.js
 
   admin:
