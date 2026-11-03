@@ -4,11 +4,13 @@ import { getOrders } from '~/services/customer';
 import type { AccountOrderSummary } from '~/sellright/types/account';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { formatPrice } from '~/utils';
+import { productPath } from '~/platform/product-path';
+import { reviewEntryPath } from '~/utils/rewards';
 import { orderLineLabel } from '~/utils/line-label';
 import { shippingDateText } from '~/utils/shipping-label';
 import type { PreOrderFacts } from '~/utils/order-display';
 import { OrderCardView, ShoppingBagIcon, hasView } from '~/platform/gateway';
-import { ChevronDownIcon, formatDate, getStatusDisplay, getStatusIcon, listTrackingInfo, type OrderHistoryFacts } from './order-display';
+import { ChevronDownIcon, canReviewLine, formatDate, getStatusDisplay, getStatusIcon, listTrackingInfo, type OrderHistoryFacts } from './order-display';
 import { OrdersSkeleton } from './OrdersSkeleton';
 import { projectOrder } from '~/platform/controllers/project';
 import { displayOrderCode } from '~/utils/order-code';
@@ -202,6 +204,9 @@ export default component$(() => {
 																		</div>
 																	)}
 																</div>
+																{canReviewLine({ state: order.state, fulfillments: [], fulfillmentStatus: order.fulfillmentStatus }, item) && item.productSlug && (
+																	<a href={reviewEntryPath(productPath(item.productSlug))} class="text-sm underline text-[var(--color-accent)] whitespace-nowrap" data-testid="write-review-link">Write a review</a>
+																)}
 																<p class="font-medium text-gray-900 text-sm">{formatPrice(item.lineTotal, order.currency)}</p>
 															</div>
 														))}

@@ -17684,7 +17684,9 @@ export interface paths {
                                     lineTotal: number;
                                     name: string;
                                     productName: string | null;
+                                    productSlug: string | null;
                                     quantity: number;
+                                    reviewed: boolean;
                                     shipDate: string | null;
                                     shipDateLabel: string | null;
                                     sku: string;

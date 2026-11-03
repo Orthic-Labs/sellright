@@ -11,7 +11,7 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, loadOrderLinesBatch, summarizeOrderForList, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
-import { normalizeEmail } from '../auth/email.js';
+import { reviewedProductSlugs } from '../reviews/reviews.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
@@ -146,6 +146,8 @@ account.openapi(
           items: z.array(z.object({
             sku: z.string(), name: z.string(), productName: z.string().nullable(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
             image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(), shipDateLabel: z.string().nullable(),
+            // #315: lets the order history link each line to its product's write-review entry.
+            productSlug: z.string().nullable(), reviewed: z.boolean(),
           })),
         })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
@@ -187,6 +189,7 @@ account.openapi(
       const ids = items.map((o) => o.id);
       const linesByOrder = await loadOrderLinesBatch(tx, ids);
       const fulfillmentsByOrder = await loadOrderFulfillmentsBatch(tx, ids);
+      const reviewedSlugs = await reviewedProductSlugs(tx, cust, [...linesByOrder.values()].flat().flatMap((l) => (l.productSlug ? [l.productSlug] : [])));
       return {
         total,
         items: items.map((o) => {
@@ -197,7 +200,7 @@ account.openapi(
             code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null,
             subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, shippingMethodName: o.shippingMethodName,
             ...list,
-            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel })),
+            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel, productSlug: l.productSlug, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) })),
           };
         }),
       };
@@ -319,11 +322,7 @@ account.openapi(
       if (!order) return { kind: 'notfound' as const };
       const baseLines = await loadOrderLines(tx, order.id);
       // Whether this customer already reviewed each line's product (any status): the review form is refused as a duplicate then.
-      const slugs = [...new Set(baseLines.flatMap((l) => (l.productSlug ? [l.productSlug] : [])))];
-      const reviewedRows = slugs.length ? await tx.select({ slug: s.product.slug }).from(s.productReview)
-        .innerJoin(s.product, eq(s.productReview.productId, s.product.id))
-        .where(and(inArray(s.product.slug, slugs), or(eq(s.productReview.customerId, cust.id), eq(s.productReview.authorEmail, normalizeEmail(cust.email))))) : [];
-      const reviewedSlugs = new Set(reviewedRows.map((r) => r.slug));
+      const reviewedSlugs = await reviewedProductSlugs(tx, cust, baseLines.flatMap((l) => (l.productSlug ? [l.productSlug] : [])));
       const lines = baseLines.map((l) => ({ ...l, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) }));
       const payments = await loadOrderPayments(tx, order.id);
       const fulfillments = await loadOrderFulfillments(tx, order.id);

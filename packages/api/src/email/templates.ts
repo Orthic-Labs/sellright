@@ -180,11 +180,21 @@ export const pointsEarned = (store: StoreCtx, data: {
 // off, guest review, or verified-buyer-only rule) — then no points copy.
 export const reviewApproved = (store: StoreCtx, data: {
   productName: string; points: number; balance: number | null; productUrl?: string;
+  /** The product page shows its public reviews block (enough approved reviews): link straight to it with #reviews. */
+  reviewsVisible?: boolean;
 }) =>
   wrap(store, 'Your review is live',
     `<p>Thanks for reviewing <strong>${escape(data.productName)}</strong>. Your review has been approved and is now published.</p>
      ${data.points > 0 ? `<p>We added <strong>${data.points.toLocaleString('en-US')} points</strong> to your account${data.balance != null ? ` (balance: ${data.balance.toLocaleString('en-US')} points)` : ''}.</p>` : ''}
-     ${data.productUrl ? `<p><a href="${escape(data.productUrl)}">View your review</a></p>` : ''}`);
+     ${data.productUrl ? `<p><a href="${escape(data.reviewsVisible ? `${data.productUrl}#reviews` : data.productUrl)}">View your review</a></p>` : ''}`);
+
+// #315: ask for a review after an order is delivered. Each link opens the product page's write-review entry
+// (`?review=1`), which works under the public-reviews threshold too.
+export const reviewRequest = (store: StoreCtx, data: { code: string; items: Array<{ name: string; url: string }> }) =>
+  wrap(store, `How was your order ${data.code}?`,
+    `<p>Your order <strong>${escape(data.code)}</strong> has been delivered. If you have a minute, tell other shoppers what you thought:</p>
+     <ul style="padding-left:18px">${data.items.map((i) => `<li><a href="${escape(i.url)}">Review ${escape(i.name)}</a></li>`).join('')}</ul>
+     <p>Thanks for shopping with ${escape(store.name)}.</p>`);
 
 // Order editing (G13): "your order was updated". `changes` is a pre-rendered,
 // human list of what changed (the server builds it from the line diff). When a

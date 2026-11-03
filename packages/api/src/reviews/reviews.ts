@@ -14,7 +14,7 @@
  *    source_ref), by the transition into `approved`.
  */
 import { z } from '@hono/zod-openapi';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -56,6 +56,10 @@ export type ReviewInput = z.infer<typeof ReviewInputSchema>;
 
 const stripControl = (v: string) => v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+$/g, '');
 
+/** Platform default: a product page shows its public reviews block (and so the #reviews anchor exists) only from this many
+ *  approved reviews. Mirrors the storefront's MIN_REVIEWS_TO_SHOW (utils/rewards.ts). */
+export const MIN_REVIEWS_TO_SHOW = 5;
+
 export interface Aggregate { average: number; count: number; distribution: Record<'1' | '2' | '3' | '4' | '5', number> }
 const emptyAggregate = (): Aggregate => ({ average: 0, count: 0, distribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 } });
 
@@ -82,6 +86,20 @@ export async function aggregatesForProducts(tx: Tx, storeId: string, productIds:
 
 export async function aggregateForProduct(tx: Tx, storeId: string, productId: string): Promise<Aggregate> {
   return (await aggregatesForProducts(tx, storeId, [productId])).get(productId) ?? emptyAggregate();
+}
+
+/**
+ * Which of the given product slugs this customer has already reviewed (any status; the review form is refused as a
+ * duplicate then). Matches by account id or by the normalized account email, like the duplicate guard on submit.
+ * Shared by the order detail lines and the order list.
+ */
+export async function reviewedProductSlugs(tx: Tx, customer: { id: string; email: string }, slugs: string[]): Promise<Set<string>> {
+  const unique = [...new Set(slugs)];
+  if (!unique.length) return new Set();
+  const rows = await tx.select({ slug: s.product.slug }).from(s.productReview)
+    .innerJoin(s.product, eq(s.productReview.productId, s.product.id))
+    .where(and(inArray(s.product.slug, unique), or(eq(s.productReview.customerId, customer.id), eq(s.productReview.authorEmail, normalizeEmail(customer.email)))));
+  return new Set(rows.map((r) => r.slug));
 }
 
 export interface PublicReview {
@@ -205,8 +223,10 @@ export async function approveReview(tx: Tx, input: {
   if (!wasApproved) {
     const [prod] = await tx.select({ name: s.product.name, slug: s.product.slug }).from(s.product).where(eq(s.product.id, r.productId)).limit(1);
     const balance = r.customerId ? (await loyaltyBalance(tx, r.customerId)).available : null;
+    // The update above is in this tx, so the count includes this review. Under the threshold the reviews block is hidden and a #reviews link would land nowhere.
+    const reviewsVisible = (await aggregateForProduct(tx, input.storeId, r.productId)).count >= MIN_REVIEWS_TO_SHOW;
     await enqueueReviewApproved(tx, input.storeId, input.store, r.authorEmail, {
-      productName: prod?.name ?? 'your purchase', productSlug: prod?.slug ?? '', points: bonus.points, balance,
+      productName: prod?.name ?? 'your purchase', productSlug: prod?.slug ?? '', points: bonus.points, balance, reviewsVisible,
       dedupeKey: `review_approved:${r.id}`,
     });
   }

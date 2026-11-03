@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { FEDERATED_LINK_TTL_MS } from '../auth/federated-link.js';
-import { federatedLinkConfirm, magicLinkAccess, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
+import { federatedLinkConfirm, magicLinkAccess, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, reviewRequest, type StoreCtx } from './templates.js';
 
 const store: StoreCtx = {
   name: 'Brand B',
@@ -98,5 +98,27 @@ describe('magicLinkAccess one-time code (#350)', () => {
     const m = magicLinkAccess(store, base);
     expect(m.html).not.toContain('code');
     expect(m.html).not.toContain('letter-spacing');
+  });
+});
+
+describe('reviewRequest (#315)', () => {
+  it('links each product to its write-review entry and escapes names', () => {
+    const m = reviewRequest(store, { code: 'B-7', items: [
+      { name: 'Knife', url: 'https://b-brand.example/shop/knife/?review=1' },
+      { name: '<b>Fork</b>', url: 'https://b-brand.example/shop/fork/?review=1' },
+    ] });
+    expect(m.subject).toContain('B-7');
+    expect(m.html).toContain('href="https://b-brand.example/shop/knife/?review=1"');
+    expect(m.html).toContain('href="https://b-brand.example/shop/fork/?review=1"');
+    expect(m.html).not.toContain('<b>Fork</b>');
+  });
+});
+
+describe('reviewApproved #reviews anchor (#315)', () => {
+  const data = { productName: 'Knife', points: 0, balance: null, productUrl: 'https://b-brand.example/shop/knife/' };
+  it('adds #reviews only when the product page shows its reviews block', () => {
+    expect(reviewApproved(store, { ...data, reviewsVisible: true }).html).toContain('href="https://b-brand.example/shop/knife/#reviews"');
+    expect(reviewApproved(store, { ...data, reviewsVisible: false }).html).toContain('href="https://b-brand.example/shop/knife/"');
+    expect(reviewApproved(store, data).html).not.toContain('#reviews');
   });
 });

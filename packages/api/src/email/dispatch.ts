@@ -35,6 +35,7 @@ import {
   orderBalanceDue,
   pointsEarned,
   reviewApproved,
+  reviewRequest,
   trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
@@ -64,6 +65,8 @@ export const EMAIL_KIND = {
   ORDER_BALANCE_DUE: 'order_balance_due',
   POINTS_EARNED: 'points_earned',
   REVIEW_APPROVED: 'review_approved',
+  /** #315: after an order is delivered, links to each product's write-review entry. */
+  REVIEW_REQUEST: 'review_request',
   /** Free-trial Pro key. Production sends it inline via sendTrialKey (apps.ts);
    *  this outbox kind exists for the health canary (PLAN 7.16) only. */
   TRIAL_LICENSE_KEY: 'trial_license_key',
@@ -328,8 +331,31 @@ export async function enqueuePointsEarned(tx: Tx, storeId: string, store: StoreE
   });
 }
 
+/** #315: ask the customer to review what they received. `items` are the order's distinct products; each link is the
+ *  product page's write-review entry (`?review=1`), built from the store's own product path like the approved email. */
+export async function enqueueReviewRequest(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  code: string; items: Array<{ name: string; slug: string }>; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const seo = seoConfigFromStore({ name: store.name, config: store.config });
+  const rendered = reviewRequest(ctx, {
+    code: data.code,
+    items: data.items.map((i) => ({ name: i.name, url: `${ctx.storefrontUrl}${productPath(seo, i.slug)}?review=1` })),
+  });
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.REVIEW_REQUEST,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
 export async function enqueueReviewApproved(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   productName: string; productSlug: string; points: number; balance: number | null; dedupeKey?: string;
+  /** The product page shows its reviews block (approved count at/over the threshold): the link gets #reviews. */
+  reviewsVisible?: boolean;
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   // The store's own product path (seo.productUrlPattern), as the sitemap and JSON-LD use it.
