@@ -304,13 +304,32 @@ export interface ShippingQuote {
 	freeShipping: { threshold: number; remaining: number } | null;
 }
 
-export const getShippingQuote = async (
+// One request per distinct quote: the drawer, the checkout form's typing and its blur each asked for the same quote, so a ZIP
+// entry sent POST /v1/shop/shipping-methods three times (e2e 2026-11-03). Identical requests share the one in flight and reuse
+// its answer for QUOTE_REUSE_MS; any change to country, lines or coupons is a new request.
+const QUOTE_REUSE_MS = 1500;
+let lastQuote: { key: string; at: number; promise: Promise<ShippingQuote> } | null = null;
+
+export const getShippingQuote = (
 	countryCode: string,
 	items: readonly { sku: string; quantity: number }[],
 	couponCodes: readonly string[] = [],
 ): Promise<ShippingQuote> => {
 	const lines = items.filter((i) => i.sku && i.quantity > 0).map((i) => ({ sku: i.sku, quantity: i.quantity }));
-	if (!countryCode || lines.length === 0) return { methods: [], freeShipping: null };
+	if (!countryCode || lines.length === 0) return Promise.resolve({ methods: [], freeShipping: null });
+	const key = JSON.stringify([countryCode.toUpperCase(), lines, [...couponCodes]]);
+	if (lastQuote && lastQuote.key === key && Date.now() - lastQuote.at < QUOTE_REUSE_MS) return lastQuote.promise;
+	const promise = fetchShippingQuote(countryCode, lines, couponCodes);
+	lastQuote = { key, at: Date.now(), promise };
+	promise.catch(() => { if (lastQuote?.promise === promise) lastQuote = null; });
+	return promise;
+};
+
+const fetchShippingQuote = async (
+	countryCode: string,
+	lines: { sku: string; quantity: number }[],
+	couponCodes: readonly string[],
+): Promise<ShippingQuote> => {
 	const { data } = await sellright().POST('/v1/shop/shipping-methods', {
 		body: { country: countryCode.toUpperCase(), items: lines, ...(couponCodes.length ? { couponCodes: [...couponCodes] } : {}) },
 	});
