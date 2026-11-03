@@ -4,6 +4,12 @@ import type { ImportContext } from './context.js';
 import { vendureProratedUnitPriceWithTax, type VendureLineSnapshotInput } from './vendure-money.js';
 import { parseDate } from './store.js';
 import { digest } from './artifacts.js';
+import { usableTenderRawSql } from '../payments/tender.js';
+
+/** Marker reason (#405): a closed source order whose settled payments do not cover its total. Presence of the marker keeps the shortfall out of balance-due. */
+export const IMPORTED_PAYMENT_SHORTFALL = 'IMPORTED_PAYMENT_SHORTFALL';
+/** Source (Vendure) order states in which the order is closed: nothing is outstanding on it any more. */
+const CLOSED_SOURCE_STATES: ReadonlySet<string> = new Set(['Delivered', 'Refunded']);
 
 export interface EditBasisSourceOrder {
   id: string; selected: boolean; sourceRecord: string;
@@ -29,6 +35,8 @@ export function buildImportedEditBasis(input: {
   channels: readonly EditBasisSourceRecord[]; orderChannels: readonly EditBasisSourceOrderChannel[];
   shippingMethods: readonly EditBasisSourceRecord[];
   targetOrders: readonly EditBasisTargetOrder[]; targetLines: readonly EditBasisTargetLine[];
+  /** Target order ids whose settled payments are less than the order total (#405). */
+  paymentShortfallOrderIds?: ReadonlySet<string>;
 }) {
   const sourceId = (value: unknown): string => {
     if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
@@ -183,6 +191,12 @@ export function buildImportedEditBasis(input: {
       throw new Error('Invalid imported financial projection classification');
     }
     const financialContradiction = projection !== undefined && projectionStatus !== 'exact-header';
+    // #405: a closed source order that was settled for less than its total is history, not money owed.
+    const sourceState = (target.metadata as { vendure: { state?: unknown } }).vendure.state;
+    const closedShortfall = !financialContradiction && input.paymentShortfallOrderIds?.has(target.id) === true &&
+      typeof sourceState === 'string' && CLOSED_SOURCE_STATES.has(sourceState);
+    const shortfallMarker = (sourceDigest: string) => ({ financialReconciliationV1: { version: 1 as const, status: 'required' as const,
+      reasons: [IMPORTED_PAYMENT_SHORTFALL], sourceDigest } });
     if (detached.length || financialContradiction) {
       // Archive exact history without granting operational carrier ownership.
       const retained = { ...payload, reason: detached.length ? 'DETACHED_SHIPPING_LINE' as const : 'HEADER_CHARGE_CONTRADICTION' as const,
@@ -191,9 +205,10 @@ export function buildImportedEditBasis(input: {
       return { orderId: target.id, retainedHistoryV1, ...(financialContradiction ? {
         financialReconciliationV1: { version: 1 as const, status: 'required' as const,
           reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest: retainedHistoryV1.sourceDigest },
-      } : {}) };
+      } : closedShortfall ? shortfallMarker(retainedHistoryV1.sourceDigest) : {}) };
     }
-    return { orderId: target.id, editBasisV1: { ...payload, sourceDigest: digest(payload) } };
+    const editBasisV1 = { ...payload, sourceDigest: digest(payload) };
+    return { orderId: target.id, editBasisV1, ...(closedShortfall ? shortfallMarker(editBasisV1.sourceDigest) : {}) };
   });
 }
 
@@ -242,7 +257,11 @@ async function captureImportedEditBasis(ctx: ImportContext, targetLines: readonl
         AND l."shippingMethodId" IS NOT NULL) ORDER BY m.id`, [ids]) as EditBasisSourceRecord[];
   const surcharges = await ctx.q(`SELECT c.id::text AS id, c."orderId"::text AS "orderId", to_jsonb(c)::text AS "sourceRecord"
     FROM surcharge c WHERE c."orderId"::text=ANY($1::text[]) ORDER BY c.id`, [ids]) as EditBasisSourceChild[];
-  const captures = buildImportedEditBasis({ storeId: ctx.storeId, sourceKey: ctx.sourceKey, id: ctx.id,
+  // #405: payments were imported with the orders; same tender rule as balanceDueSql() (no edit refunds exist yet).
+  const shortfall = await ctx.tx.execute(sql`SELECT o.id FROM "order" o WHERE o.store_id = ${ctx.storeId}
+    AND o.grand_total - coalesce((SELECT sum(p.amount) FROM payment p WHERE p.order_id = o.id AND ${usableTenderRawSql('p')}), 0) > 0`);
+  const paymentShortfallOrderIds = new Set((shortfall as unknown as { rows: Array<{ id: string }> }).rows.map(row => row.id));
+  const captures = buildImportedEditBasis({ paymentShortfallOrderIds, storeId: ctx.storeId, sourceKey: ctx.sourceKey, id: ctx.id,
     channelId: String(ctx.channelId), currency: ctx.currency, channels, orderChannels, shippingMethods,
     orders, lines, shippingLines, surcharges, targetOrders, targetLines });
   const targetsById = new Map(targetOrders.map(order => [order.id, order]));
