@@ -1,6 +1,7 @@
 import { pool } from './db/client.js';
 import { env } from './env.js';
 import { log, err as logErr } from './lib/logger.js';
+import { isSuffixEligibleHostname } from './lib/store-hostnames.js';
 import { Client } from 'pg';
 
 export interface StoreCtx {
@@ -312,12 +313,25 @@ export function normalizeHost(rawHost: string | undefined | null): string | null
  * suffix-match semantics. DB-free and unit-testable (OPS-1).
  */
 export function hostMatchesAny(host: string, hostnames: readonly string[]): boolean {
+  return hostMatchScore(host, hostnames) > 0;
+}
+
+/**
+ * Match strength of `host` against one store's hostname list: 0 = no match, EXACT_MATCH for an exact entry, otherwise
+ * the length of the longest matching parent-domain entry. A bare label ("com") never suffix-matches: only an entry with
+ * at least one dot can claim its subdomains (security audit 2026-11-02, tenant routing).
+ */
+const EXACT_MATCH = 1_000_000;
+export function hostMatchScore(host: string, hostnames: readonly string[]): number {
   const needle = host.toLowerCase();
-  return hostnames.some((h) => {
-    const suffix = h.trim().toLowerCase();
-    if (!suffix) return false;
-    return needle === suffix || needle.endsWith(`.${suffix}`);
-  });
+  let best = 0;
+  for (const h of hostnames) {
+    const entry = h.trim().toLowerCase();
+    if (!entry) continue;
+    if (needle === entry) return EXACT_MATCH;
+    if (isSuffixEligibleHostname(entry) && needle.endsWith(`.${entry}`) && entry.length > best) best = entry.length;
+  }
+  return best;
 }
 
 /** Parse env.STORE_HOST_STRIP_PREFIXES ("www,buy,get,store") into a lowercase
@@ -398,11 +412,28 @@ async function scanStoresForHost(host: string): Promise<StoreCtx | null> {
   const r = await pool.query<StoreCtx>(
     'SELECT id, slug, name, currency, tax_rate AS "taxRate", tax_inclusive AS "taxInclusive", shipping_taxable AS "shippingTaxable", config FROM store',
   );
-  for (const row of r.rows) {
+  // Deterministic: the best match across ALL stores wins (exact entry first, then the longest parent-domain entry),
+  // the literal host before the prefix-stripped one, and ties break on slug then id — never on heap order.
+  return pickBestStoreForHost(r.rows, host, stripped);
+}
+
+/** Pure selection used by scanStoresForHost; exported for unit tests. */
+export function pickBestStoreForHost<T extends { id: string; slug: string; config?: unknown }>(rows: readonly T[], host: string, stripped: string = host): T | null {
+  let best: { row: T; score: number } | null = null;
+  const consider = (row: T, score: number) => {
+    if (score <= 0) return;
+    if (!best || score > best.score || (score === best.score && compareStores(row, best.row) < 0)) best = { row, score };
+  };
+  for (const row of rows) {
     const hostnames = hostnamesFromConfig(row.config);
-    if (hostMatchesAny(host, hostnames) || (stripped !== host && hostMatchesAny(stripped, hostnames))) return row;
+    consider(row, hostMatchScore(host, hostnames) * 2);
+    if (stripped !== host) consider(row, hostMatchScore(stripped, hostnames));
   }
-  return null;
+  return best ? (best as { row: T }).row : null;
+}
+
+function compareStores(a: { id: string; slug: string }, b: { id: string; slug: string }): number {
+  return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
