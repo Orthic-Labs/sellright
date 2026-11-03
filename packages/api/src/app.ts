@@ -533,6 +533,15 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (Array.isArray(zodIssues)) {
       return c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param: zodIssues[0]?.path?.map(String).join('.') || undefined }), 400);
     }
+    // A malformed id in the path or query (e.g. /v1/admin/products/null) reaches Postgres as invalid uuid syntax
+    // (SQLSTATE 22P02, wrapped by drizzle as the cause). The id names no row: answer 404, not 500.
+    // Any other 22P02 (a bad enum or number value) is the client's input error: 400.
+    const pg = [err, (err as { cause?: unknown }).cause].find((e) => (e as { code?: string } | null)?.code === '22P02') as { message?: string } | undefined;
+    if (pg) {
+      return /\buuid\b/i.test(pg.message ?? '')
+        ? c.json(errorEnvelope(c, 'NOT_FOUND', 'not found'), 404)
+        : c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request'), 400);
+    }
     // A malformed JSON body read with c.req.json() inside a handler is also the client's error.
     if (err instanceof SyntaxError && /JSON/i.test(err.message)) {
       return c.json(errorEnvelope(c, 'INVALID_JSON', 'request body is not valid JSON'), 400);
