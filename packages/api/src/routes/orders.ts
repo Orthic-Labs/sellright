@@ -17,7 +17,7 @@ import { amountDueForOrder } from '../payments/settle.js';
 import { summarizeEdit } from '../orders/balance-summary.js';
 
 /** Constant-time string compare (avoids leaking the receipt token via timing). */
-function tokensMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+export function tokensMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a || !b) return false;
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
