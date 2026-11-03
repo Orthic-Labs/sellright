@@ -19,7 +19,7 @@ import { snapshotGuard } from"./utils/snapshot-guard";
 import { precompressedStatic } from"./utils/precompressed-static";
 import { createErrorPathLog } from "./utils/error-path-log";
 import { createServerFunctionGuard, createServerFunctionRateLimit } from "./utils/qrl-guard";
-import { manifest as qwikManifest } from '@qwik-client-manifest';
+import { readFileSync } from 'node:fs';
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { socialSignInIdsForHost, storeGatewaysForHost } from "./utils/social-sign-in.server";
@@ -308,8 +308,16 @@ app.use(shellRenderUrl);
 app.use(createServerFunctionRateLimit({ limit: Number(process.env.SELLRIGHT_SERVER_FN_PER_MINUTE) || 60 }));
 
 // Use Qwik Router's page and endpoint request handler
-// #332: every server-function hash this build ships; an id outside it (a replayed old build) is a 404 before the router.
-const knownServerFunctionHashes = new Set(Object.values(qwikManifest?.symbols ?? {}).map((sym) => sym.hash));
+// #332: every symbol hash this build ships (dist/q-manifest.json; the '@qwik-client-manifest' import is empty in this
+// entry); an id outside it (a replayed old build) is a 404 before the router. No manifest: the check is off.
+const knownServerFunctionHashes = (() => {
+	try {
+		const m = JSON.parse(readFileSync(join(distDir, 'q-manifest.json'), 'utf8')) as { symbols?: Record<string, { hash?: string }> };
+		return new Set(Object.values(m.symbols ?? {}).flatMap((sym) => (sym.hash ? [sym.hash] : [])));
+	} catch {
+		return new Set<string>();
+	}
+})();
 app.use(createServerFunctionGuard({ knownHashes: knownServerFunctionHashes })(router));
 
 // Use Qwik Router's 404 handler
