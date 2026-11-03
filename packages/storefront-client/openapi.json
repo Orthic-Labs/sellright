@@ -7494,7 +7494,7 @@
             }
           },
           "409": {
-            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)",
+            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7681,6 +7681,120 @@
           },
           "409": {
             "description": "Invalid/expired/used or not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/auth/magic-link/consume-code": {
+      "post": {
+        "summary": "Exchange the emailed one-time code (with the email address) for a session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "email",
+                  "code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "customer": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "firstName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lastName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "phone": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "isMigrated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "email",
+                        "title",
+                        "firstName",
+                        "lastName",
+                        "phone",
+                        "emailVerified",
+                        "isMigrated"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "customer"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid/expired/used code or not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -10239,6 +10353,13 @@
                                 "shipDateLabel": {
                                   "type": "string",
                                   "nullable": true
+                                },
+                                "productSlug": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "reviewed": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": [
@@ -10251,7 +10372,9 @@
                                 "image",
                                 "isPreOrder",
                                 "shipDate",
-                                "shipDateLabel"
+                                "shipDateLabel",
+                                "productSlug",
+                                "reviewed"
                               ]
                             }
                           }
@@ -11004,6 +11127,83 @@
           },
           "409": {
             "description": "Password changed meanwhile (CREDENTIAL_CHANGED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/apple": {
+      "post": {
+        "summary": "Link Sign in with Apple to my account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identityToken": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 16384
+                  }
+                },
+                "required": [
+                  "identityToken"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Linked (also when this account already holds this Apple identity)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "linked": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "linked"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated, or invalid Apple identity token (APPLE_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), email unverified (EMAIL_UNVERIFIED), this Apple identity belongs to another account (APPLE_ALREADY_LINKED), or this account holds a different one (APPLE_ACCOUNT_MISMATCH)",
             "content": {
               "application/json": {
                 "schema": {

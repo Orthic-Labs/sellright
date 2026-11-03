@@ -17155,7 +17155,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** @constant */
+                            /** @enum {boolean} */
                             linked: true;
                         };
                     };
@@ -18300,7 +18300,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN) */
+                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED) */
                 409: {
                     headers: {
                         [name: string]: unknown;
