@@ -1,4 +1,4 @@
-// #332: Qwik server-function ($server / server$) POSTs. A replayed id from an old build (the Vendure-era site) made the
+// #332: Qwik server-function ($server / server$) POSTs. A replayed id from an old build (the previous platform) made the
 // router throw `QWIK ERROR Code(Q6) ... qrl failed to load`, which surfaced as a 500 with a full stack trace per request
 // (200-500 a minute from one IP). Two guards, both pure and unit-tested:
 //   1. a per-IP rate limit on server-function POSTs (429 + Retry-After);
