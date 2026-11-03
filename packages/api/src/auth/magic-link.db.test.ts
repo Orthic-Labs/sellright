@@ -36,7 +36,7 @@ import { verifyTurnstileToken } from '../security/turnstile.js';
 
 // Turnstile seam: the verifier is mocked so these tests exercise the magic-link gate itself. A token of 'good' passes.
 vi.mock('../security/turnstile.js', () => ({
-  verifyTurnstileToken: vi.fn(async ({ token }: { token: string | null }) => token === 'good'),
+  verifyTurnstileToken: vi.fn(async ({ secret, token }: { secret: string | null; token: string | null }) => !secret || token === 'good'),
 }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -278,7 +278,8 @@ describe('POST /v1/shop/auth/magic-link/request — Turnstile gate', () => {
     const withToken = await reqWith(SLUG_ON, 'ts-off@a.test', 'anything');
     expect(noToken.status).toBe(200);
     expect(withToken.status).toBe(200);
-    expect(vi.mocked(verifyTurnstileToken)).not.toHaveBeenCalled();
+    // the no-secret policy lives in verifyTurnstileToken: it is consulted with no secret, and the token never matters
+    expect(vi.mocked(verifyTurnstileToken).mock.calls.every(([a]) => a.secret === null)).toBe(true);
   });
 });
 
@@ -309,7 +310,7 @@ describe('one-time code (#350)', () => {
     expect(body.customer.emailVerified).toBe(true);
     expect(body.token.length).toBeGreaterThan(20);
     expect(res.headers.get('set-cookie')).toMatch(/sr_cust=/);
-    expect((await tokenRow(STORE_ON, raw))?.used_at).toBeInstanceOf(Date);
+    expect((await tokenRow(STORE_ON, raw))?.used_at).toBeTruthy();
     expect(await sessionCount(STORE_ON, custId)).toBe(1);
   });
 

@@ -259,7 +259,7 @@ describe('POST /v1/shop/auth/apple', () => {
     const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'sub-noemail' }));
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('APPLE_EMAIL_REQUIRED');
-    expect(res.headers.get('set-cookie')).not.toMatch(/sr_cust/);
+    expect(res.headers.get('set-cookie') ?? '').not.toMatch(/sr_cust/);
     expect(await appleRow(STORE_APPLE, 'sub-noemail')).toBeUndefined();
     const n = await withStore(STORE_APPLE, async (tx) => Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE store_id = ${STORE_APPLE}`)).rows[0]!.n));
     expect(n).toBe(0);
