@@ -1,13 +1,14 @@
 import type { RequestHandler } from '@qwik.dev/router';
 import { requireCacheAdminToken } from '~/utils/cache-admin-auth';
+import { resolveVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { productPath } from '~/platform/product-path';
 
 /** API page-size maximum for /v1/shop/catalog/products, and how many product pages one warm run visits. */
 const CATALOG_PAGE = 100;
 const WARM_PRODUCT_LIMIT = 500;
 
-export const onPost: RequestHandler = async ({ request, json }) => {
-	const auth = requireCacheAdminToken(request);
+export const onPost: RequestHandler = async ({ request, json, clientConn }) => {
+	const auth = requireCacheAdminToken(request, resolveVisitorIp({ headers: request.headers, socketIp: clientConn?.ip }));
 	if (!auth.ok) {
 		throw json(auth.status, { success: false, error: auth.error });
 	}

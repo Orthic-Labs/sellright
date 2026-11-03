@@ -238,8 +238,8 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
               Shipping Address
             </h3>
             <div class="text-[#645541] space-y-1 text-sm">
-              <p class="font-medium text-[#141210]">{order.shippingAddress.fullName}</p>
-              <p>{order.shippingAddress.line1}</p>
+              {order.shippingAddress.fullName && <p class="font-medium text-[#141210]">{order.shippingAddress.fullName}</p>}
+              {order.shippingAddress.line1 && <p>{order.shippingAddress.line1}</p>}
               {order.shippingAddress.line2 && (
                 <p>{order.shippingAddress.line2}</p>
               )}

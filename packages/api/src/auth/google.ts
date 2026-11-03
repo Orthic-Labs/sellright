@@ -15,7 +15,8 @@ const GOOGLE_MAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
 /** Verify a Google Identity Services ID token via Google's tokeninfo endpoint —
  *  validates signature + expiry server-side; we additionally check `aud`. */
 export async function verifyGoogleIdToken(credential: string, clientId: string): Promise<GoogleIdentity | null> {
-  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+  // A slow upstream must not hold the login request open (security audit 2026-11-02).
+  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) return null;
   const p = (await res.json()) as { aud?: string; sub?: string; email?: string; email_verified?: string | boolean; hd?: unknown; given_name?: string; family_name?: string };
   if (!p.sub || !p.email || p.aud !== clientId) return null;

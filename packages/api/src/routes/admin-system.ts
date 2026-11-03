@@ -150,7 +150,7 @@ async function auditSystemAction(admin: { email: string; stores: { storeId: stri
 adminSystem.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/step-up', summary: 'Re-verify password (+ TOTP if enabled); unlocks step-up-gated actions for 5 minutes',
-    request: { body: { content: J(z.object({ password: z.string().min(1), totp: z.string().optional() })) } },
+    request: { body: { content: J(z.object({ password: z.string().min(1).max(1024), totp: z.string().max(64).optional() })) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       401: { description: 'Invalid password or 2FA code', ...errBody },

@@ -75,7 +75,7 @@ import { isAgentToken, resolveAgentByToken } from './auth/admin-api-token.js';
 import { CACHE_ADMIN_TOKEN_HEADER } from './routes/admin-cache.js';
 import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
-import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
+import { isAllowedAdminCorsOrigin, isAllowedShopCorsOrigin } from './cors-origins.js';
 import { bodyLimit } from 'hono/body-limit';
 import { isPoolTimeout, locksPool, poolGauges } from './db/client.js';
 import { admissionGauges } from './jobs/admission.js';
@@ -226,7 +226,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // P2: the credentialed admin API only answers CORS for EXACT configured origins (cors-origins.ts).
     const allowed = !origin ? false
       : c.req.path === '/v1/admin' || c.req.path.startsWith('/v1/admin/') ? isAllowedAdminCorsOrigin(origin)
-      : await isAllowedCorsOrigin(origin);
+      : await isAllowedShopCorsOrigin({ method: c.req.method, header: (n) => c.req.header(n) }, origin);
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,

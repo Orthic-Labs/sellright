@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { devDefaultStore, hostMatchesAny, normalizeHost, stripHostPrefix } from './store-context.js';
+import { devDefaultStore, hostMatchesAny, normalizeHost, pickBestStoreForHost, stripHostPrefix } from './store-context.js';
 
 describe('devDefaultStore', () => {
   it('defaults to "damned" when env.DEV_DEFAULT_STORE_SLUG is unset (identical to the prior hardcoded value)', () => {
@@ -85,5 +85,41 @@ describe('stripHostPrefix', () => {
   it('strips at most one label, never iterating', () => {
     // Only the leading "buy." is a candidate; "www" nested one level in is left alone.
     expect(stripHostPrefix('buy.www.example.com', ['www', 'buy'])).toBe('www.example.com');
+  });
+});
+
+describe('hostMatchesAny: bare labels never suffix-match (audit 2026-11-02)', () => {
+  it('an entry "com" does not claim *.com', () => {
+    expect(hostMatchesAny('victim.com', ['com'])).toBe(false);
+    expect(hostMatchesAny('com', ['com'])).toBe(true); // exact only
+  });
+});
+
+describe('pickBestStoreForHost: deterministic resolution', () => {
+  const row = (id: string, slug: string, hostnames: string[]) => ({ id, slug, config: { hostnames } });
+  it('prefers an exact entry over a parent-domain entry, regardless of row order', () => {
+    const parent = row('1', 'a', ['example.com']);
+    const exact = row('2', 'b', ['shop.example.com']);
+    expect(pickBestStoreForHost([parent, exact], 'shop.example.com')?.slug).toBe('b');
+    expect(pickBestStoreForHost([exact, parent], 'shop.example.com')?.slug).toBe('b');
+  });
+  it('prefers the longest suffix', () => {
+    const a = row('1', 'a', ['example.com']);
+    const b = row('2', 'b', ['shop.example.com']);
+    expect(pickBestStoreForHost([a, b], 'x.shop.example.com')?.slug).toBe('b');
+    expect(pickBestStoreForHost([b, a], 'x.shop.example.com')?.slug).toBe('b');
+  });
+  it('ties break on slug, not row order', () => {
+    const a = row('1', 'alpha', ['same.example']);
+    const b = row('2', 'beta', ['same.example']);
+    expect(pickBestStoreForHost([b, a], 'same.example')?.slug).toBe('alpha');
+  });
+  it('the literal host beats the prefix-stripped host', () => {
+    const a = row('1', 'a', ['example.com']);
+    const b = row('2', 'b', ['www.example.com']);
+    expect(pickBestStoreForHost([a, b], 'www.example.com', 'example.com')?.slug).toBe('b');
+  });
+  it('returns null when nothing matches', () => {
+    expect(pickBestStoreForHost([row('1', 'a', ['example.com'])], 'other.test')).toBeNull();
   });
 });

@@ -78,9 +78,32 @@ install_cosign() {
     aarch64) cosign_arch=arm64 ;;
     *) die "unsupported architecture for cosign: $arch" ;;
   esac
-  curl -fsSL -o /usr/local/bin/cosign \
-    "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${cosign_arch}"
-  chmod +x /usr/local/bin/cosign
+  base="https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}"
+  tmp=$(mktemp)
+  curl -fsSL -o "$tmp" "${base}/cosign-linux-${cosign_arch}"
+  # cosign is the trust anchor for every later image-signature check (security audit 2026-11-02), so the binary is
+  # verified by SHA-256 before it is made executable. The default version's digests are pinned here (copied from the
+  # release's cosign_checksums.txt); for any other COSIGN_VERSION the release checksums file is fetched and used instead
+  # (that only guards against a corrupted or swapped binary, not a compromised release: pin it in your own mirror).
+  expected=$(cosign_pinned_sha256 "$COSIGN_VERSION" "$cosign_arch")
+  if [ -z "$expected" ]; then
+    log "No pinned checksum for cosign ${COSIGN_VERSION}; using the release's cosign_checksums.txt"
+    expected=$(curl -fsSL "${base}/cosign_checksums.txt" | awk -v f="cosign-linux-${cosign_arch}" '$2 == f { print $1 }')
+  fi
+  [ -n "$expected" ] || { rm -f "$tmp"; die "could not determine the expected SHA-256 for cosign ${COSIGN_VERSION} (${cosign_arch})"; }
+  actual=$(sha256sum "$tmp" | awk '{ print $1 }')
+  [ "$actual" = "$expected" ] || { rm -f "$tmp"; die "cosign checksum mismatch (expected $expected, got $actual); refusing to install"; }
+  install -m 0755 "$tmp" /usr/local/bin/cosign
+  rm -f "$tmp"
+}
+
+# SHA-256 of the official release binary. $1 = version, $2 = amd64|arm64. Empty when this version is not pinned.
+cosign_pinned_sha256() {
+  case "$1/$2" in
+    2.4.1/amd64) printf '%s' 8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b ;;
+    2.4.1/arm64) printf '%s' 3b2e2e3854d0356c45fe6607047526ccd04742d20bd44afb5be91fa2a6e7cb4a ;;
+    *) printf '' ;;
+  esac
 }
 
 # `sellright update`'s cosign_verify_images (deploy/sellright.sh) resolves

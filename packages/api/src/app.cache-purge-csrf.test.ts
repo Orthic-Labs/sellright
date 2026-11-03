@@ -22,7 +22,7 @@ vi.mock('./auth/rate-limit.js', async (importOriginal) => ({
 vi.mock('./auth/admin-session.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./auth/admin-session.js')>(), resolveAdmin: state.resolveAdmin,
 }));
-vi.mock('./cors-origins.js', () => ({ isAllowedCorsOrigin: async () => false, isAllowedAdminCorsOrigin: () => false }));
+vi.mock('./cors-origins.js', () => ({ isAllowedCorsOrigin: async () => false, isAllowedAdminCorsOrigin: () => false, isAllowedShopCorsOrigin: async () => false }));
 vi.mock('./maintenance.js', () => ({ isMaintenanceOn: () => false, maintenanceInfo: () => ({ maintenance: false }) }));
 
 const PATH = '/v1/admin/cache/purge';
@@ -53,7 +53,8 @@ describe('full-app cache-purge machine credential & CSRF boundary', () => {
     const res = await request(buildHttpApp(), { [CACHE_ADMIN_TOKEN_HEADER]: token });
     expect(res.status).toBe(401);
     expect(await res.json()).toMatchObject({ error: { message: 'invalid or missing cache admin token' } });
-    expect(state.retryAfter).not.toHaveBeenCalled();
+    // Security audit 2026-11-02: every guess spends the per-IP budget before the compare.
+    expect(state.retryAfter).toHaveBeenCalledWith('unknown', 'cache-purge');
   });
 
   it('rejects a missing token at admission & never uses a session cookie as cache authorization', async () => {
@@ -63,7 +64,8 @@ describe('full-app cache-purge machine credential & CSRF boundary', () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toMatchObject({ error: { message: 'invalid or missing cache admin token' } });
     expect(state.resolveAdmin).toHaveBeenCalledWith('present');
-    expect(state.retryAfter).not.toHaveBeenCalled();
+    // The handler's per-IP budget counts these attempts too (security audit 2026-11-02).
+    expect(state.retryAfter).toHaveBeenCalledWith('unknown', 'cache-purge');
     expect(poolsInitialised()).toBe(false);
   });
 
@@ -75,7 +77,7 @@ describe('full-app cache-purge machine credential & CSRF boundary', () => {
     expect(state.retryAfter).not.toHaveBeenCalled();
   });
 
-  it('keeps the shared rate limiter after authentication', async () => {
+  it('applies the shared rate limiter before the token compare', async () => {
     state.retryAfter.mockResolvedValue(42);
     const res = await request(buildHttpApp(), { [CACHE_ADMIN_TOKEN_HEADER]: TOKEN });
     expect(res.status).toBe(429);

@@ -6,6 +6,7 @@ import type { EngineContext, EnginePlugin, ExactRouteCorsPolicy } from './sdk/in
 vi.mock('./cors-origins.js', () => ({
   isAllowedCorsOrigin: async (origin: string) => origin === 'https://default.example',
   isAllowedAdminCorsOrigin: (origin: string) => origin === 'https://admin.example',
+  isAllowedShopCorsOrigin: async (_req: unknown, origin: string | undefined) => origin === 'https://default.example',
 }));
 vi.mock('./maintenance.js', () => ({ isMaintenanceOn: () => false, maintenanceInfo: () => ({ maintenance: false }) }));
 

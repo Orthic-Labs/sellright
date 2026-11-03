@@ -61,14 +61,16 @@ adminCache.openapi(
     const expected = env.CACHE_ADMIN_TOKEN;
     if (!expected) throw new HttpError(503, 'CACHE_ADMIN_TOKEN is not configured');
 
-    const provided = c.req.header(CACHE_ADMIN_TOKEN_HEADER);
-    if (!tokenMatches(expected, provided)) throw new HttpError(401, 'invalid or missing cache admin token');
-
+    // Security audit 2026-11-02: the per-IP budget is spent BEFORE the token is compared, so every guess (right or
+    // wrong) counts and a caller cannot brute-force the shared secret at wire speed.
     const retryAfter = await attemptRetryAfter(clientIp(c), 'cache-purge');
     if (retryAfter > 0) {
       c.header('retry-after', String(retryAfter));
       throw new HttpError(429, 'rate limited — try again shortly');
     }
+
+    const provided = c.req.header(CACHE_ADMIN_TOKEN_HEADER);
+    if (!tokenMatches(expected, provided)) throw new HttpError(401, 'invalid or missing cache admin token');
 
     const { storeSlug, urls: requested } = c.req.valid('json');
 
