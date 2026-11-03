@@ -5,7 +5,7 @@ import { OrderReturnsPanel } from '~/components/account/OrderReturns';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { getOrderByCode } from '~/services/customer';
 import type { AccountOrderDetail } from '~/sellright/types/account';
-import { formatPrice } from '~/utils';
+import { formatPrice, formatShippingPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { productPath } from '~/platform/product-path';
 import { reviewEntryPath } from '~/utils/rewards';
@@ -148,7 +148,7 @@ export default component$(() => {
 				<div class="flex items-center justify-between">
 					<dt class="text-sm">Shipping</dt>
 					<dd class="text-sm font-medium">
-						{o ? formatPrice(o.shippingTotal, o.currency) : <div class="h-4 w-16 bg-gray-200 rounded animate-pulse" />}
+						{o ? formatShippingPrice(o.shippingTotal, o.currency) : <div class="h-4 w-16 bg-gray-200 rounded animate-pulse" />}
 					</dd>
 				</div>
 				{o && o.discountTotal > 0 && (

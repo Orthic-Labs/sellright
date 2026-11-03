@@ -3,7 +3,7 @@ import { useNavigate } from '@qwik.dev/router';
 import { getOrders } from '~/services/customer';
 import type { AccountOrderSummary } from '~/sellright/types/account';
 import { OptimizedImage } from '~/components/ui/LazyImage';
-import { formatPrice } from '~/utils';
+import { formatPrice, formatShippingPrice } from '~/utils';
 import { orderLineLabel } from '~/utils/line-label';
 import { shippingDateText } from '~/utils/shipping-label';
 import type { PreOrderFacts } from '~/utils/order-display';
@@ -215,7 +215,7 @@ export default component$(() => {
 															)}
 															<div class="flex justify-between">
 																<span class="text-gray-600">Shipping{row.shippingMethodName ? ` (${row.shippingMethodName})` : ''}</span>
-																<span class="text-gray-900">{formatPrice(row.shippingTotal ?? 0, order.currency)}</span>
+																<span class="text-gray-900">{formatShippingPrice(row.shippingTotal ?? 0, order.currency)}</span>
 															</div>
 															{(row.taxTotal ?? 0) > 0 && (
 																<div class="flex justify-between"><span class="text-gray-600">Tax</span><span class="text-gray-900">{formatPrice(row.taxTotal ?? 0, order.currency)}</span></div>

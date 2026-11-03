@@ -10,7 +10,7 @@ import { ActiveCustomer, FacetWithValues } from '~/types';
 
 export const getRandomInt = (max: number) => Math.floor(Math.random() * max);
 
-export { formatPrice } from './price-format';
+export { formatPrice, formatShippingPrice } from './price-format';
 
 export function formatCustomPrice(value = 0, currencyCode?: string) {
 	return new Intl.NumberFormat('en-US', {

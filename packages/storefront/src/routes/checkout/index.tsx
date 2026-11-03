@@ -963,7 +963,7 @@ const CheckoutContent = component$(() => {
         <p>Your total changed. Review updated amounts before placing your order.</p>
         <dl class="space-y-1">
           <div class="flex justify-between gap-4"><dt>Discount</dt><dd>{formatCents(srState.quoteChange.quote.discountTotal)}</dd></div>
-          <div class="flex justify-between gap-4"><dt>Shipping</dt><dd>{formatCents(srState.quoteChange.quote.shippingTotal)}</dd></div>
+          <div class="flex justify-between gap-4"><dt>Shipping</dt><dd>{srState.quoteChange.quote.shippingTotal === 0 ? 'Free' : formatCents(srState.quoteChange.quote.shippingTotal)}</dd></div>
           <div class="flex justify-between gap-4"><dt>Tax</dt><dd>{formatCents(srState.quoteChange.quote.taxTotal)}</dd></div>
           <div class="flex justify-between gap-4"><dt>Updated total</dt><dd>{formatCents(srState.quoteChange.quote.grandTotal)}</dd></div>
         </dl>
