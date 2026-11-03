@@ -132,6 +132,21 @@ describe('addLine — blind append', () => {
 		expect(res.cart.subtotal).toBe(5000); // server-priced mirror wins
 		expect(res.dropped).toEqual([]);
 	});
+
+	it('the first add announces the added line, never the empty cart it created for it', async () => {
+		enqueue(
+			respond(200, serverCart({ lines: [], subtotal: 0, grandTotal: 0 })), // POST /cart (ensureCart): a new cart is empty
+			respond(200, serverCart({ revision: 2 })), // PATCH lines
+		);
+		const seen: number[] = [];
+		const off = CartService.onChange(() => seen.push(CartService.getCart().lines.length));
+		try {
+			await CartService.addLine('SKU1', 1);
+		} finally {
+			off();
+		}
+		expect(seen).toEqual([1]);
+	});
 });
 
 describe('updateLine — revisioned absolute set', () => {

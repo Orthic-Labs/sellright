@@ -420,7 +420,7 @@ export class CartService {
    * the snapshot, the request that produced it and the cookie all name the same token; otherwise a response for T
    * cannot touch U's mirror. Returns the SKUs that vanished unexpectedly, or `null` when it did not apply.
    */
-  private static install(server: ServerCart, requestToken: string, expectedRemoval?: string): string[] | null {
+  private static install(server: ServerCart, requestToken: string, expectedRemoval?: string, quiet = false): string[] | null {
     if (server.token !== requestToken || this.readTokenCookie() !== requestToken) return null;
     // A new snapshot: a shipping quote of an earlier read no longer belongs to the mirror (`recordLiveRead` sets this read's).
     this.readShippingQuote = null;
@@ -439,7 +439,7 @@ export class CartService {
       if (!next.has(sku)) this.enrichment.delete(sku);
     }
     this.persistCount(server.token, this.cart.lines.reduce((sum, line) => sum + line.quantity, 0));
-    this.notify();
+    if (!quiet) this.notify();
     return dropped;
   }
 
@@ -596,7 +596,10 @@ export class CartService {
     const { data } = await sellright().POST('/v1/shop/cart', { body: {} });
     if (!data) throw new CartError(undefined, 'Could not create a cart');
     this.writeTokenCookie(data.token);
-    this.install(data, data.token);
+    // Quiet: a cart is only ever created for the mutation that follows it, which installs and announces its own result
+    // (or the caller commits the mirror on failure). Announcing the new EMPTY cart replaced the line the PDP had just shown
+    // locally, so every first add flashed "Your cart is empty" in the drawer for ~0.7 s (e2e 2026-11-03, 8/8 first adds).
+    this.install(data, data.token, undefined, true);
     return data.token;
   }
 
