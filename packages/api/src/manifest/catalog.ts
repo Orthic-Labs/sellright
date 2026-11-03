@@ -428,6 +428,22 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
   result ??= await publish(await fullPayload());
   if (args.purge !== false) {
     const seo = seoConfigFromStore({ name: store.name, config: store.config });
+    // #420: a product-triggered publication that fell back to a full rebuild (no reusable snapshot, or a stale identity)
+    // still knows the products that triggered it. Purge their pages by URL first: a URL purge takes effect in well
+    // under a second, a whole-host purge took ~37 s to reach the edge (live Rotten edit, 2026-11-04). The host purge
+    // below still runs, so nothing the full rebuild touched stays cached.
+    if (!scopedPublished && wantsScope) {
+      const known = await withStore(store.id, async (tx) => {
+        const ids = [...new Set([
+          ...await productIdsForVariants(tx, store.id, args.variantIds ?? []),
+          ...await productIdsInStore(tx, store.id, args.productIds ?? []),
+        ])];
+        return ids.length ? { slugs: await slugsForProductIds(tx, store.id, ids), collections: await collectionSlugsForProducts(tx, store.id, ids) } : null;
+      });
+      if (known?.slugs.length) {
+        await purgeAfterPublish(args.storeSlug, { productPaths: known.slugs.map((slug) => productPath(seo, slug)), collectionSlugs: known.collections });
+      }
+    }
     // ADR-0001 I-4: a scoped publication knows its products (page, collections, /, /shop/); a full rebuild does not,
     // so it purges the whole host.
     const outcome = await purgeAfterPublish(args.storeSlug, scopedPublished
