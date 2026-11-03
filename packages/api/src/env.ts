@@ -351,6 +351,10 @@ const EnvSchema = z.object({
   JOBS_PURGE_CANCELLED_APPLY: z.enum(['0', '1']).optional(),
   // purge-cancelled-orders job: hours an order stays Cancelled before it is deleted. Default 24.
   JOBS_PURGE_CANCELLED_HOURS: z.coerce.number().int().positive().optional(),
+  // trash-abandoned-orders job (#359): actually move release-stale-cancelled orders to the trash (default: dry-run log only).
+  JOBS_TRASH_ABANDONED_APPLY: z.enum(['0', '1']).optional(),
+  // trash-abandoned-orders job: minutes after the release-stale cancellation before the order is trashed. Default 60.
+  JOBS_TRASH_ABANDONED_MINUTES: z.coerce.number().int().positive().optional(),
   // PAYMENT-TIMING §5.4 (decision X-10): age after which an unconfirmed Stripe PaymentIntent is cancelled at Stripe. Default 60.
   PAYMENT_INTENT_DEADLINE_MIN: z.coerce.number().int().positive().optional(),
   // webhook-reaper job: actually reset stuck processing rows (default: dry-run).
