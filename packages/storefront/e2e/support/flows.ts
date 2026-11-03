@@ -48,8 +48,27 @@ export async function fillShipping(page: Page, email: string, who = { first: 'Ad
 	}).toPass({ timeout: 30_000 });
 }
 
-export const placeOrderButton = (page: Page) => page.getByRole('button', { name: /continue to payment|place order/i });
-export const payButton = (page: Page) => page.getByRole('button', { name: /^pay/i });
+/**
+ * The payment section: once the details are valid the checkout mounts the card controls inside #payment-method-section and
+ * their button (PLACE ORDER, with the total once known) is the one a shopper presses. The page also carries an
+ * aria-disabled desktop CTA (.checkout-cta-inline) and a sticky mobile CTA (.sticky-cta-bar) with the same PLACE ORDER
+ * label, so an unscoped name match is a strict-mode violation (#403). The button label "Continue to payment" no longer exists.
+ */
+const paymentSection = (page: Page) => page.locator('#payment-method-section');
+/** The CTAs outside the payment section (desktop inline + mobile sticky). They are aria-disabled until the details are valid. */
+export const outerCtas = (page: Page) => page.locator('.checkout-cta-inline, .sticky-cta-bar').getByRole('button', { name: /^place order/i });
+
+/**
+ * The one PLACE ORDER that can be pressed now: the payment section's button when the card controls are mounted, otherwise
+ * (nothing due, or details not yet valid) the outer CTA that is not aria-disabled. Never both: the page hides the outer
+ * CTAs while the payment controls are mounted.
+ */
+export const placeOrderButton = (page: Page) =>
+	paymentSection(page).getByRole('button', { name: /^place order/i })
+		.or(outerCtas(page).and(page.locator(':not([aria-disabled="true"])')));
+
+/** The payment section's pay button (labelled PLACE ORDER, optionally with the total); the old "PAY" label is gone. */
+export const payButton = (page: Page) => paymentSection(page).getByRole('button', { name: /^(pay\b|place order)/i });
 
 /** Click PLACE ORDER and capture what POST /v1/shop/checkout answered (the order code + receipt token the UI holds). */
 export async function placeOrder(page: Page): Promise<{ code: string; receiptToken: string; grandTotal: number }> {
