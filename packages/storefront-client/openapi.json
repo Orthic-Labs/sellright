@@ -16930,6 +16930,444 @@
         }
       }
     },
+    "/v1/hub/session": {
+      "post": {
+        "summary": "Saved accounts (#355): start or resume this browser's hub session; returns the CSRF token for hub mutations",
+        "responses": {
+          "200": {
+            "description": "Hub session ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "csrf": {
+                      "type": "string"
+                    },
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "csrf",
+                    "targets"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many new sessions from this address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/accounts": {
+      "get": {
+        "summary": "Saved accounts (#355): the configured servers and the accounts saved in this hub session",
+        "responses": {
+          "200": {
+            "description": "Targets and saved accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "targetId": {
+                            "type": "string"
+                          },
+                          "targetLabel": {
+                            "type": "string"
+                          },
+                          "adminEmail": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          },
+                          "lastUsedAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "targetId",
+                          "targetLabel",
+                          "adminEmail",
+                          "expiresAt",
+                          "lastUsedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "targets",
+                    "accounts"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/enrol": {
+      "post": {
+        "summary": "Saved accounts (#355): begin adding an account on a configured server; navigate to redirectTo to sign in there",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "targetId": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "targetId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The target's sign-in handoff page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "redirectTo": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "redirectTo"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/callback/{targetId}": {
+      "get": {
+        "summary": "Saved accounts (#355): the target sends the browser here with a one-use code; the hub redeems it and returns to the saved-accounts screen",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "required": true,
+            "name": "targetId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "required": false,
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "required": false,
+            "name": "iss",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Back to the hub admin with enrolled=<account id> or error=<reason>"
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/accounts/{slotId}": {
+      "delete": {
+        "summary": "Saved accounts (#355): forget one saved account and sign its session out on the target",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "required": true,
+            "name": "slotId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled, or no such saved account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/signout": {
+      "post": {
+        "summary": "Saved accounts (#355): sign out of the hub; every saved account is signed out on its server",
+        "responses": {
+          "200": {
+            "description": "Signed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/setup/status": {
       "get": {
         "summary": "Whether this installation still needs claiming",
@@ -18246,6 +18684,10 @@
                     "minimum": 0,
                     "exclusiveMinimum": true,
                     "maximum": 36500
+                  },
+                  "expectedUpdatedAt": {
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -18262,10 +18704,14 @@
                   "properties": {
                     "id": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "id"
+                    "id",
+                    "updatedAt"
                   ]
                 }
               }
@@ -18283,6 +18729,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -18369,6 +18825,10 @@
                   "onHand": {
                     "type": "integer",
                     "minimum": 0
+                  },
+                  "expectedOnHand": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 },
                 "required": [
@@ -18413,6 +18873,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stock changed since loaded",
             "content": {
               "application/json": {
                 "schema": {

@@ -370,3 +370,8 @@ export function isTrustedIngressPeer(c: { env?: unknown }): boolean {
   const trusted = (env.TRUSTED_PROXY_CIDRS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   return trusted.length ? inCidrs(peer, trusted) : isLocalProxyAddress(peer);
 }
+
+/** #355 hub: new hub sessions per IP (an anonymous call creates a row; 30 per 15 min bounds the noise). */
+export async function reserveHubSessionCreate(ip: string): Promise<number> {
+  return rateLimitBackend().consume('hub-session', rateLimitIpKey(ip), 15 * 60 * 1000, 30);
+}

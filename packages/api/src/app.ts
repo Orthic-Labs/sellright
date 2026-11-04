@@ -16,6 +16,7 @@ import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { adminHandoff } from './routes/admin-handoff.js';
+import { hub } from './routes/hub.js';
 import { setup } from './routes/setup.js';
 import { adminSystem } from './routes/admin-system.js';
 import { adminSystemInfo } from './routes/admin-system-info.js';
@@ -604,6 +605,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
   app.route('/', adminHandoff); // #355: saved-account hub sign-in handoff (target side)
+  app.route('/', hub); // #355 phase 2: saved-account hub (broker side; off unless HUB_* are set)
   app.route('/', setup); // one-click install: pre-auth claim (404s once claimed)
   app.route('/', adminSystem); // one-click install: setup checklist, Publish readiness, recovery-kit download
   app.route('/', adminSystemInfo); // read-only build-info + effective-config (config/v1) — owner only

@@ -1,4 +1,4 @@
-/** Enrolled-only 391-route regression scope. Full 393-route B2.8 gate lives in dedicated authorization-matrix project. */
+/** Enrolled-only 402-route regression scope. Full 404-route B2.8 gate lives in dedicated authorization-matrix project. */
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,7 @@ import { createContentCases } from './authorization-matrix.content-cases.testkit
 import { createCustomerCases, createCustomerControls } from './authorization-matrix.customer-cases.testkit.js';
 import { createOrderCases } from './authorization-matrix.order-cases.testkit.js';
 import { createIdentityCases, runIdentityControls } from './authorization-matrix.identity-cases.testkit.js';
+import { createHubCases } from './authorization-matrix.hub-cases.testkit.js';
 import { createPublicReadCases, prepareSheeridCustomerControl } from './authorization-matrix.public-read-cases.testkit.js';
 import { createConfigurationCases } from './authorization-matrix.configuration-cases.testkit.js';
 import { createCartCases, createCartControls } from './authorization-matrix.cart-cases.testkit.js';
@@ -92,7 +93,7 @@ beforeAll(async () => {
   customerOptions = { billingPortal: createProviderBillingPortal(fixture, transport) };
   const legacyContactSecret = randomBytes(32).toString('hex'), legacyIssuedBefore = Date.now() + 3600000;
   process.env.LEGACY_CONTACT_COMPAT_JSON = JSON.stringify({ [fixture.storeId]: { secret: legacyContactSecret, issuedBefore: legacyIssuedBefore } });
-  cases = [...createReadCases(fixture), ...createMutationCases(fixture), ...createPermissionCases(fixture), ...createContentCases(fixture), ...createCustomerCases(fixture, customerOptions), ...createOrderCases(fixture), ...createIdentityCases(fixture), ...createPublicReadCases(fixture), ...createResourceCases(fixture), ...createBoundaryCases(fixture), ...createCartCases(fixture), ...createIntegrationCases(fixture), ...createAccountCreditCases(fixture), ...createPublicAuthCases(fixture), ...createLicenseCases(fixture), ...createConfigurationCases(fixture), ...createReconciliationCases(fixture), ...createStorefrontCases(fixture), ...createWebhookCases(fixture), ...createAssetCases(fixture), ...createProviderCases(fixture, transport), ...createPaymentCases(fixture, transport), ...createFederatedCases(fixture, federated), ...createLegacyContactCases(fixture, { legacyContactSecret, legacyIssuedBefore }), ...createSheerIdWebhookCases(fixture, transport), ...createSheerIdRevokeCases(fixture), ...apple.cases];
+  cases = [...createReadCases(fixture), ...createMutationCases(fixture), ...createPermissionCases(fixture), ...createContentCases(fixture), ...createCustomerCases(fixture, customerOptions), ...createOrderCases(fixture), ...createIdentityCases(fixture), ...createHubCases(fixture), ...createPublicReadCases(fixture), ...createResourceCases(fixture), ...createBoundaryCases(fixture), ...createCartCases(fixture), ...createIntegrationCases(fixture), ...createAccountCreditCases(fixture), ...createPublicAuthCases(fixture), ...createLicenseCases(fixture), ...createConfigurationCases(fixture), ...createReconciliationCases(fixture), ...createStorefrontCases(fixture), ...createWebhookCases(fixture), ...createAssetCases(fixture), ...createProviderCases(fixture, transport), ...createPaymentCases(fixture, transport), ...createFederatedCases(fixture, federated), ...createLegacyContactCases(fixture, { legacyContactSecret, legacyIssuedBefore }), ...createSheerIdWebhookCases(fixture, transport), ...createSheerIdRevokeCases(fixture), ...apple.cases];
 }, 300_000);
 afterAll(async () => {
   try {
@@ -238,7 +239,7 @@ describe('B2.8 enrolled-only authorization regressions — excludes fresh-instal
 
   it('declares exact enrolled-only scope; full setup qualification belongs to dedicated fresh-DB lane', () => {
     const actual = matrixRouteKeys(engine!.app), keys = new Set(cases.map(c => c.key));
-    expect(cases).toHaveLength(391);
+    expect(cases).toHaveLength(402);
     expect(actual.filter(key => !keys.has(key))).toEqual(['GET /v1/setup/status', 'POST /v1/setup/claim']);
     const normalize = (path: string) => path.split('/').map(segment => segment.replace(/^:([A-Za-z0-9_]+)(?:\{[^}]*\})?/, '{$1}')).join('/');
     assertMatrixComplete({

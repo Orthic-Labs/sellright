@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { parseHandoffClients, parseHandoffIssuer } from './auth/admin-handoff-config.js';
+import { parseHubOrigin, parseHubTargets, parseHubVaultKeys } from './auth/hub-config.js';
 import { isIP } from 'node:net';
 import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
 import { assertAllowedSenders, parseSenderDomainList } from './email/sender-policy.js';
@@ -424,6 +425,10 @@ const EnvSchema = z.object({
   // exact callback URL (no prefix or wildcard match) and the hex sha256 of the client secret.
   ADMIN_HANDOFF_ISSUER: z.preprocess(emptyToUndefined, z.string().url().optional()),
   ADMIN_HANDOFF_CLIENTS: optionalEnvString,
+  // #355 phase 2: this server as a saved-account hub (auth/hub.ts). Off unless all three are set.
+  HUB_ORIGIN: optionalEnvString,
+  HUB_TARGETS: optionalEnvString,
+  HUB_VAULT_KEYS: optionalEnvString,
   // P2: request body cap for the whole API (bytes); the admin asset upload has its own larger cap.
   API_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   // P2: exact extra origins allowed to call /v1/admin cross-origin (comma-separated, scheme://host[:port]).
@@ -483,6 +488,9 @@ const EnvSchema = z.object({
   for (const [path, check] of [
     ['ADMIN_HANDOFF_CLIENTS', () => parseHandoffClients(raw.ADMIN_HANDOFF_CLIENTS, production)],
     ['ADMIN_HANDOFF_ISSUER', () => raw.ADMIN_HANDOFF_ISSUER && parseHandoffIssuer(raw.ADMIN_HANDOFF_ISSUER, production)],
+    ['HUB_ORIGIN', () => raw.HUB_ORIGIN && parseHubOrigin(raw.HUB_ORIGIN, production)],
+    ['HUB_TARGETS', () => parseHubTargets(raw.HUB_TARGETS, production)],
+    ['HUB_VAULT_KEYS', () => parseHubVaultKeys(raw.HUB_VAULT_KEYS)],
   ] as const) {
     try { check(); } catch (e) { ctx.addIssue({ code: 'custom', path: [path], message: (e as Error).message }); }
   }
