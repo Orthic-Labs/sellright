@@ -293,6 +293,9 @@ const BaseShopPage = component$(() => {
          inStock={gridPending ? undefined : item.inStock}
          priority={index === 0}
          eager={index > 0 && index < 4}
+         /* #425: on a slow link the first card's image (the LCP) shared bandwidth with every eager card; the second card stays at normal
+            priority (same row on mobile), the rest of the first desktop row loads after them. */
+         lowPriority={index >= 2 && index < 4}
          salePrice={gridPending ? null : item.pricingVariant?.salePrice ?? null}
          preOrderPrice={gridPending ? null : item.pricingVariant?.preOrderPrice ?? null}
          isPreOrder={!gridPending && !!item.pricingVariant?.isPreOrder}

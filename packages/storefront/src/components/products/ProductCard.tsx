@@ -34,6 +34,8 @@ interface ProductCardProps {
   priority?: boolean;
   /** Other above-the-fold cards: eager and discoverable, normal fetch priority. */
   eager?: boolean;
+  /** #425: an eager card that must not compete with the LCP image for bandwidth: fetchpriority=low. */
+  lowPriority?: boolean;
   skeleton?: boolean;
   /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
   href?: string;
@@ -50,6 +52,7 @@ export default component$((props: ProductCardProps) => {
 		slug,
 		priority = false,
 		eager = false,
+		lowPriority = false,
 		skeleton = false,
 		salePrice = null,
 		preOrderPrice = null,
@@ -107,7 +110,7 @@ export default component$((props: ProductCardProps) => {
 							height={500}
 							loading={priority || eager ? 'eager' : 'lazy'}
 							priority={priority}
-							fetchPriority={priority ? 'high' : 'auto'}
+							fetchPriority={priority ? 'high' : lowPriority ? 'low' : 'auto'}
 							decoding="async"
 							responsive="productCard"
 							alt={name}
