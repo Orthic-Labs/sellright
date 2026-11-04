@@ -34,7 +34,7 @@ beforeEach(() => { get.mockReset(); });
 describe('/api/live/checkout-summary/', () => {
 	it('is never cacheable: private no-store for browser and edge, Vary: Cookie, a dynamic route class that can never be a shell', async () => {
 		get.mockResolvedValue({ data: serverCart() });
-		for (const cookies of [{}, { sr_cart: 'tok_srv' }]) {
+		for (const cookies of [{}, { sr_cart: 'tok_srv' }] as Record<string, string>[]) {
 			const { headers } = await call(cookies);
 			expect(headers.get('cache-control')).toBe(NO_STORE_CACHE_CONTROL);
 			expect(headers.get('cache-control')).not.toMatch(/public|s-maxage|max-age=[1-9]/);
@@ -48,7 +48,7 @@ describe('/api/live/checkout-summary/', () => {
 	});
 
 	it('no sr_cart cookie: an empty-cart answer, no API call', async () => {
-		for (const cookies of [{}, { sr_cart: '' }, { countryCode: 'DE' }]) {
+		for (const cookies of [{}, { sr_cart: '' }, { countryCode: 'DE' }] as Record<string, string>[]) {
 			const { out } = await call(cookies);
 			expect(out).toEqual({ status: 200, body: { cart: null } });
 		}

@@ -58,7 +58,7 @@ describe('readCheckoutServerCart', () => {
   });
 
   it('reads the checkout quote live on every call (no reuse)', async () => {
-    const get = vi.fn(async () => ({ data: serverCart() }));
+    const get = vi.fn(async (..._args: unknown[]) => ({ data: serverCart() }));
     const a = await readCheckoutServerCart(get, 'tok_srv', 'US');
     const b = await readCheckoutServerCart(get, 'tok_srv', 'US');
     expect(a?.grandTotal).toBe(5800);
@@ -173,7 +173,7 @@ describe('showsEmptyCart (LCP: the empty view paints from SSR when there is no c
 
 describe('readCheckoutSummaryCart: one function for the document loader and /api/live/checkout-summary/', () => {
   it('reads the same cart, with the same ship country, as the server-rendered summary', async () => {
-    const get = vi.fn(async () => ({ data: serverCart() }));
+    const get = vi.fn(async (..._args: unknown[]) => ({ data: serverCart() }));
     const viaCookies = await readCheckoutSummaryCart(get, 'tok_srv', 'de');
     const direct = await readCheckoutServerCart(get, 'tok_srv', serverCartShipCountry('de'));
     expect(viaCookies).toEqual(direct);
@@ -181,7 +181,7 @@ describe('readCheckoutSummaryCart: one function for the document loader and /api
     expect(get.mock.calls[0]![1]).toMatchObject({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'DE' } } });
   });
   it('no cart cookie: null, no API call; an invalid country cookie quotes the default', async () => {
-    const get = vi.fn(async () => ({ data: serverCart() }));
+    const get = vi.fn(async (..._args: unknown[]) => ({ data: serverCart() }));
     expect(await readCheckoutSummaryCart(get, undefined, 'DE')).toBeNull();
     expect(await readCheckoutSummaryCart(get, '', 'DE')).toBeNull();
     expect(get).not.toHaveBeenCalled();
