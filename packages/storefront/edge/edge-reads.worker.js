@@ -24,6 +24,16 @@ export const isDocumentGet = (request) => request.method === 'GET' && (request.h
 	// The ADR-0001 edge-conformance watcher (deploy/edge-conformance.mjs) audits what the CACHE holds: it gets the shell untouched.
 	&& !(request.headers.get('user-agent') || '').includes('sellright-edge-conformance');
 
+/** #425: a checkout request with no cart cookie. The cached checkout shell cannot know there is no cart and paints the form first
+ *  (the uncached render paints the empty-cart view straight from the server: routes/checkout useCheckoutNoCartCookie). Such a
+ *  request is sent to the uncached render instead: a query URL is never a shell (route-cache-policy), and the URL the browser shows
+ *  is unchanged. Bots, crawlers and audits land here; a shopper with a cart keeps the edge-cached path. */
+export function noCartCheckout(request) {
+	const url = new URL(request.url);
+	return url.pathname === '/checkout/' && !url.search && !/(?:^|;\s*)sr_cart=[^;\s]/.test(request.headers.get('cookie') || '');
+}
+export const NO_CART_PARAM = 'sr_nocart';
+
 /** The live reads a cached shell declares: its `Link` entries with rel=preload and as=fetch, same-origin paths only. The storefront
  *  derives that header from the same plan its early script runs (early-reads.ts earlyReadsLinkHeader), so these are exactly the reads
  *  the page would start, for any store and page, with no list kept here. */
@@ -110,6 +120,11 @@ export function composedHeaders(headers, keys, request) {
 export default {
 	async fetch(request) {
 		if (!isDocumentGet(request)) return fetch(request);
+		if (noCartCheckout(request)) {
+			const url = new URL(request.url);
+			url.searchParams.set(NO_CART_PARAM, '1');
+			return fetch(new Request(url.toString(), request));
+		}
 		const res = await fetch(request); // a cached shell: a cache HIT, its headers in a few ms
 		try {
 			if (res.status !== 200 || !(res.headers.get('x-sr-edge') || '').startsWith('cacheable') || !(res.headers.get('content-type') || '').includes('text/html')) return res;

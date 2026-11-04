@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { composedHeaders, edgeBlock, geoCookie, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
+import { NO_CART_PARAM, composedHeaders, edgeBlock, geoCookie, noCartCheckout, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
 import { CHECKOUT_SUMMARY_URL, EDGE_READS_META, buildEarlyReadsPlan, earlyReadsLinkHeader, liveReadUrl, type EarlyReadsContext } from './early-reads';
 
 const req = (url: string, init: { headers?: Record<string, string>; method?: string; cf?: { country?: string } } = {}) => {
@@ -66,6 +66,15 @@ describe('#425 edge reads Worker', () => {
 		expect(geoCookie(req('https://s.test/checkout/'))).toBeNull();
 		const h = composedHeaders(new Headers({ 'x-sr-edge': 'cacheable' }), ['/a/'], req('https://s.test/checkout/', { cf: { country: 'in' } }));
 		expect(h.get('set-cookie')).toBe('countryCode=IN; Path=/; Max-Age=2592000; SameSite=Lax; Secure');
+	});
+	it('a checkout request without a cart cookie goes to the uncached render (empty-cart view from the server)', () => {
+		expect(NO_CART_PARAM).toBe('sr_nocart');
+		expect(noCartCheckout(req('https://s.test/checkout/'))).toBe(true);
+		expect(noCartCheckout(req('https://s.test/checkout/', { headers: { cookie: 'countryCode=IN' } }))).toBe(true);
+		expect(noCartCheckout(req('https://s.test/checkout/', { headers: { cookie: 'a=1; sr_cart=tok' } }))).toBe(false);
+		expect(noCartCheckout(req('https://s.test/checkout/', { headers: { cookie: 'sr_cart=' } }))).toBe(true);
+		expect(noCartCheckout(req('https://s.test/checkout/?x=1'))).toBe(false);
+		expect(noCartCheckout(req('https://s.test/shop/'))).toBe(false);
 	});
 	it('the block is inert JSON with no `<` in it, and parses back to the same value', () => {
 		const text = JSON.stringify({ name: '</script><img src=x onerror=alert(1)>', s: String.fromCharCode(0x2028) });
