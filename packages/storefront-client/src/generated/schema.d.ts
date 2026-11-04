@@ -20765,6 +20765,11 @@ export interface paths {
                             quantity: number;
                             sku: string;
                         }[];
+                        /** @enum {string} */
+                        pricingIntent?: "preview" | "checkout";
+                        redeemPoints?: number;
+                        shipCountry?: string;
+                        shippingMethodCode?: string;
                     };
                 };
             };

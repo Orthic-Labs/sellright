@@ -26,6 +26,7 @@ import {
 } from '@sellright/storefront-client';
 import { apiBase, storeResolutionHeaders } from '~/utils/sellright';
 import { sellrightRequestCookie } from '~/utils/sellright-request-context.server';
+import { activationGate } from '~/utils/prerender';
 
 export type { paths, components };
 export type Schemas = components['schemas'];
@@ -54,6 +55,8 @@ configureSellRightClient({
 	forwardedHost: () => storeResolutionHeaders()['x-forwarded-host'],
 	getCsrfToken: readCsrfCookie,
 	timeoutMs: 8000,
+	// #425: a prerendered page sends no API request until it is activated (utils/prerender.ts); every other document: no wait.
+	ready: () => (isServer ? undefined : activationGate()),
 });
 
 /** Create a client for this request — same zero-argument shape (and same

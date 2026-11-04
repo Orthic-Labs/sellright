@@ -8,6 +8,7 @@ import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { addToCartWithOutcome, showAddedLine, useCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
+import { usePreloadCartDrawer } from './cart-preload';
 import { fetchProductStock, fetchProductStockEarly } from '~/sellright/catalog';
 import { track } from '~/sellright/analytics';
 import { ADD_RESULT } from '~/platform/gateway/actions';
@@ -119,6 +120,8 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
 	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode))).products.map((p) => p.slug), fetchProductStock); });
 	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
+	// #425: at idle, the cart drawer's code and the visitor country, ahead of the Add to cart tap.
+	usePreloadCartDrawer();
 	// Only the unmount cleanup: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
 	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }), { strategy: 'document-idle' });
 

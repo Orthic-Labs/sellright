@@ -96,6 +96,18 @@ describe('the script in the browser', () => {
 		expect(store()!.h).toBe('/products/oni/?utm_source=x');
 		expect(Object.keys(store()!.r)).toEqual(started(m));
 	});
+	it('#425: a document being prerendered starts no read (its consumers read live after activation)', () => {
+		document.cookie = 'sr_cart=tok%2F1; Path=/';
+		Object.defineProperty(document, 'prerendering', { value: true, configurable: true });
+		try {
+			const m = runScript('/checkout/', damned);
+			expect(started(m)).toEqual([]);
+			expect(store()!.r).toEqual({});
+		} finally {
+			delete (document as unknown as { prerendering?: boolean }).prerendering;
+		}
+		expect(started(runScript('/checkout/', damned)).length).toBeGreaterThan(0);
+	});
 	it('session only with a session marker cookie', () => {
 		expect(started(runScript('/blog/', damned))).toEqual([]);
 		document.cookie = 'sr_cust_csrf=abc; Path=/';

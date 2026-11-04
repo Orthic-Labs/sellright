@@ -20,6 +20,7 @@
 import { sellright, SellRightError } from '~/sellright/client';
 import { resolveAssetPath } from '~/sellright/types/catalog';
 import { srMe, srErrorStatus, srLegacyCartMigration } from '~/utils/sellright';
+import { activationGate } from '~/utils/prerender';
 import { CountryPreferenceService } from './CountryPreferenceService';
 import { classifyOrderState } from './order-state';
 import { theme } from '~/theme/theme.config';
@@ -333,6 +334,10 @@ export class CartService {
    *  when Web Locks are missing: there is no synchronous fallback that could be claimed safe. */
   private static async exclusive<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.hasLocks()) throw new CartError('unsupported', UNSUPPORTED_MESSAGE);
+    // #425: a prerendered checkout waits to be shown BEFORE it asks for the origin-wide cart lock: held for a hidden page it would
+    // block the visible tab's cart changes, and its live cart read must be the one made at activation (see utils/prerender.ts).
+    const activation = activationGate();
+    if (activation) await activation;
     return navigator.locks.request(CART_LOCK, { mode: 'exclusive' }, async () => {
       this.lockHeld = true;
       try {
@@ -603,6 +608,21 @@ export class CartService {
     return data.token;
   }
 
+  /** The first add of a browser with no cart: one POST that creates the cart holding `sku` x `quantity`, answered with the
+   *  server-priced snapshot (same shape and pricing as the lines PATCH). Writes the cookie on success, like `createCart`; nothing is
+   *  retried after an uncertain result. Resolves to `null` when a legacy transfer already created the cart (the caller then
+   *  appends the ordinary way). */
+  private static async createSeeded(sku: string, quantity: number): Promise<{ token: string; data: ServerCart } | null> {
+    this.assertHeld();
+    if (await this.migrateLegacyInLock()) return null;
+    const { data } = await sellright().POST('/v1/shop/cart', {
+      body: { items: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
+    });
+    if (!data) throw new CartError(undefined, 'Could not create a cart');
+    this.writeTokenCookie(data.token);
+    return { token: data.token, data };
+  }
+
   /** Ensure the mirror's revision is live (cold start reads it via GET). */
   private static async ensureRevision(token: string): Promise<number> {
     if (this.cart.token === token && this.cart.revision) return this.cart.revision;
@@ -707,12 +727,19 @@ export class CartService {
     return this.exclusive(async () => {
       this.setEnrichment(sku, enrichment);
       return this.reopeningConverted(async () => {
-        const token = await this.ensureCart();
+        // #425: a browser with no cart yet creates it WITH this line in one POST (the cart API seeds a new cart exactly as the
+        // lines PATCH would answer), not create-then-append: one round trip fewer on the first add. A saved legacy cart is
+        // transferred first (as `createCart` does); then the cookie names a cart and the ordinary append below runs.
+        const seeded = this.readTokenCookie() ? null : await this.createSeeded(sku, quantity);
+        const token = seeded?.token ?? (await this.ensureCart());
         try {
-          const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
-            params: { path: { token } },
-            body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
-          });
+          let data: ServerCart | undefined = seeded?.data;
+          if (!seeded) {
+            ({ data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
+              params: { path: { token } },
+              body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
+            }));
+          }
           if (!data) throw new CartError(undefined, "Couldn't add item to cart");
           const quoted = await this.inQuoteContext(data, token);
           const installed = this.install(quoted, token);
@@ -749,6 +776,13 @@ export class CartService {
   /** Remove a line entirely — sugar for `updateLine(sku, 0)`; takes no lock of its own (updateLine owns it). */
   static removeLine(sku: string): Promise<CartMutationResult> {
     return this.updateLine(sku, 0);
+  }
+
+  /** Resolves once every cart operation already queued has finished (the exclusive lock is FIFO). With no Web Locks there is nothing
+   *  queued to wait for. Used before leaving for checkout so the server cart the checkout reads holds every line the shopper added. */
+  static settled(): Promise<void> {
+    if (!this.hasLocks()) return Promise.resolve();
+    return this.exclusive(async () => undefined);
   }
 
   /** Re-fetch the server-priced cart (live stock/price/coupon) — used for the

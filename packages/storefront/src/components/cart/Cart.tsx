@@ -6,7 +6,8 @@ import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
 import { isBrowser } from '@qwik.dev/core/build';
-import { useCart, retireSettledCart, reopenCart } from '~/contexts/CartContext';
+import { useCart, retireSettledCart, reopenCart, awaitCartWrites } from '~/contexts/CartContext';
+import { syncCheckoutPrerender } from '~/utils/prerender';
 import { CartService } from '~/services/CartService';
 import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
@@ -81,6 +82,29 @@ export default component$(() => {
 		};
 		frame = requestAnimationFrame(focusPanel);
 	}, { strategy: 'document-ready' });
+
+	// #425: the checkout prerender. While the drawer is open and the cart exists on the server, is not being changed and holds lines, the
+	// browser may prerender /checkout/ (Speculation Rules) so the Checkout tap activates a page that is already built. The key is
+	// everything the prerendered page would show of this cart; any change (an add, a quantity, a coupon, the destination, a failed write)
+	// makes the key differ or null, which discards the stale prerender (utils/prerender.ts), and a closed drawer drops it. Nothing from
+	// the prerendered page is trusted: its live cart read runs at activation (a prerendered document does no API work until shown).
+	useVisibleTask$(({ track }) => {
+		const open = track(() => appState.showCart);
+		const loading = track(() => cartState.isLoading);
+		const pending = track(() => cartState.pendingAdds ?? 0);
+		const token = track(() => cartState.cart.token);
+		const revision = track(() => cartState.cart.revision);
+		const status = track(() => cartState.cart.status);
+		const lineCount = track(() => cartState.cart.lines.length);
+		const coupons = track(() => (cartState.cart.couponCodes ?? []).join(','));
+		const country = track(() => appState.shippingAddress.countryCode);
+		const exists = !!token && token === CartService.token();
+		syncCheckoutPrerender(
+			open && isInEditableUrl && !loading && pending === 0 && status === 'active' && lineCount > 0 && exists
+				? [token, revision, coupons, country].join('|')
+				: null,
+		);
+	}, { strategy: 'document-idle' });
 
 	const dropdownState = useStore({
 		pendingCountryCode: '',
@@ -454,8 +478,10 @@ export default component$(() => {
 								<div class="space-y-1 mb-2">
 									<div class="flex justify-between items-baseline">
 										<span class="text-[11px] tracking-[0.05em] text-[#6B6459] uppercase">Subtotal</span>
+										{/* #425: while an add is still being written the server has not priced the cart: no subtotal (the line above
+										    shows the page's own price), never the stale one. */}
 										<span class="text-[13px] font-medium text-[#1A1A1A] tabular-nums">
-											{formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
+											{(cartState.pendingAdds ?? 0) > 0 ? '—' : formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
 										</span>
 									</div>
 
@@ -477,7 +503,7 @@ export default component$(() => {
 									</div>
 
 									{/* Total with shipping */}
-									{shippingState.selectedMethod && (
+									{shippingState.selectedMethod && (cartState.pendingAdds ?? 0) === 0 && (
 										<div class="flex justify-between items-baseline pt-1.5 border-t border-[#E5E0D8]">
 											<span class="text-[11px] tracking-[0.05em] text-[#1A1A1A] uppercase font-semibold">Total</span>
 											<span class="text-[15px] font-semibold text-[#1A1A1A] tabular-nums">
@@ -508,9 +534,11 @@ export default component$(() => {
 											// loader round trips to the origin (two of them return nothing on a client fetch) and then the
 											// checkout's own reads (~2 s live); the document carries the order summary from its server cart
 											// read (TTFB ~0.36 s). The checkout quotes shipping itself, so the drawer's quote is not awaited.
-											// An add still being written (the drawer shows lines before the server has them) finishes
-											// first, so the server cart the checkout reads has every line.
-											for (let i = 0; cartState.isLoading && i < 100; i++) await new Promise((r) => setTimeout(r, 50));
+											// #425: the drawer shows the added line (and this control is live) before the server has the cart.
+											// Leave only once every write has finished and the server cart exists with the lines shown: a tap
+											// during the add waits for it, and a failed add (its line is rolled back) stays here. The tap
+											// then activates the prerendered checkout when one was armed (utils/prerender.ts) or loads it.
+											if (!(await awaitCartWrites(cartState))) return;
 											window.location.assign('/checkout/');
 										} catch (error) {
 											console.error('Error navigating to checkout:', error);

@@ -1975,6 +1975,23 @@
                       "maxLength": 255
                     },
                     "maxItems": 100
+                  },
+                  "pricingIntent": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "checkout"
+                    ]
+                  },
+                  "shippingMethodCode": {
+                    "type": "string"
+                  },
+                  "redeemPoints": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "shipCountry": {
+                    "type": "string"
                   }
                 }
               }

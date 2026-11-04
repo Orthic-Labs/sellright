@@ -4,6 +4,7 @@ import { getProductStock } from '~/providers/shop/products/products';
 import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
 import { useCart, addToCartWithOutcome, showAddedLine, ADD_FAILED_MESSAGE } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
+import { usePreloadCartDrawer } from '~/platform/controllers/cart-preload';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
 import { hasAuthoritativeRestockStock } from '~/platform/controllers/restock-form';
@@ -27,6 +28,8 @@ const PLACEHOLDER_IMAGE: GalleryImage = { preview: '/asset_placeholder.webp' };
 export const ProductContent = component$(({ loaderResult }: { loaderResult: ProductLoaderResult | { failed: true; message?: string } | null | undefined }) => {
   const appState = useContext(APP_STATE);
   const cart = useCart();
+  // #425: at idle, the cart drawer code and the visitor country, ahead of the Add to cart tap.
+  usePreloadCartDrawer();
   if (!loaderResult || 'failed' in loaderResult || !('product' in loaderResult) || !loaderResult.product) {
     return (
       <div class="min-h-[50vh] flex flex-col items-center justify-center py-16 px-4">

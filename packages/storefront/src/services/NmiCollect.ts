@@ -9,6 +9,7 @@
  * The account environment selects the host independently of payment mode;
  * the tokenization key comes from GET /v1/shop/config (gateways.nmi).
  */
+import { activationGate } from '~/utils/prerender';
 
 declare global {
   interface Window { CollectJS?: NmiCollectJs }
@@ -58,6 +59,9 @@ export const COLLECT_LOAD_TIMEOUT_MS = 15000;
 /** Load the Collect.js script once per tokenization key. */
 export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', doc?: Document, environment?: 'sandbox' | 'production', timeoutMs = COLLECT_LOAD_TIMEOUT_MS): Promise<NmiCollectJs> {
   if (typeof window === 'undefined') return Promise.reject(new Error('Collect.js is browser-only'));
+  // #425: a prerendered checkout starts no payment widget (a third-party script and its hosted-field iframes) until it is shown.
+  const activation = activationGate();
+  if (activation) return activation.then(() => loadCollectJs(tokenizationKey, mode, doc, environment, timeoutMs));
   const src = collectJsSrc(mode, environment);
   const key = `${src}:${tokenizationKey}`;
   if (inflight && inflight.key === key) return inflight.promise;

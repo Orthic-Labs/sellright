@@ -1,3 +1,4 @@
+import { whenActivated } from '~/utils/prerender';
 import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@qwik.dev/core';
 import { paymentElementOptions } from './payment-element-options';
 // S5: the `pure` entry injects Stripe.js only when loadStripe() is called; the package root injects it as soon as this
@@ -76,6 +77,8 @@ export const StripePaymentElement = component$<StripePaymentElementProps>((props
 			await (props.onInitError$ ?? props.onError$)(message, mountGen.value);
 		};
 		try {
+			await whenActivated(); // #425: no Stripe.js in a prerendered checkout until it is shown
+			if (disposed.value) return;
 			const stripe: Stripe | null = await loadStripe(props.publishableKey);
 			if (disposed.value) return;
 			if (!stripe) {

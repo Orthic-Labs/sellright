@@ -835,3 +835,40 @@ describe('cart estimate — live stock availability', () => {
     expect(unavailable).toEqual([]);
   });
 });
+
+// ── First add in one round trip: POST /v1/shop/cart with its first line ────
+// The storefront creates a cart for a shopper's first add with this one call instead of create-then-PATCH. It must answer
+// exactly as the PATCH lines call does for the same line (server price, availability, quote options), or the drawer would
+// show a different cart depending on which path ran.
+describe('POST /v1/shop/cart seeded with its first line answers like PATCH lines', () => {
+  const strip = (c: Record<string, unknown>) => {
+    const { token: _t, revision: _r, quoteHash: _q, ...rest } = c;
+    return rest;
+  };
+
+  it('same priced lines, totals and availability as create-empty then PATCH the same line', async () => {
+    const seeded = await (await app.request('/v1/shop/cart', { method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 2 }] }) })).json() as Record<string, unknown>;
+    const empty = await (await app.request('/v1/shop/cart', { method: 'POST', headers: hdr(), body: JSON.stringify({}) })).json() as { token: string };
+    const patched = await (await app.request(`/v1/shop/cart/${empty.token}/lines`, {
+      method: 'PATCH', headers: hdr(), body: JSON.stringify({ lines: [{ sku: SKU, quantity: 2 }] }),
+    })).json() as Record<string, unknown>;
+    expect(strip(seeded)).toEqual(strip(patched));
+    expect((seeded.lines as Array<{ sku: string; quantity: number }>)).toMatchObject([{ sku: SKU, quantity: 2 }]);
+  });
+
+  it('honours the quote options the PATCH call takes (checkout intent, destination)', async () => {
+    const seeded = await (await app.request('/v1/shop/cart', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], pricingIntent: 'checkout', shipCountry: 'US' }),
+    })).json() as { pricingIntent: string; lines: unknown[] };
+    expect(seeded.pricingIntent).toBe('checkout');
+    expect(seeded.lines).toHaveLength(1);
+  });
+
+  it('a zero-quantity or absent items array still creates an empty cart (older clients)', async () => {
+    for (const body of [{}, { items: [] }, { items: [{ sku: SKU, quantity: 0 }] }]) {
+      const res = await app.request('/v1/shop/cart', { method: 'POST', headers: hdr(), body: JSON.stringify(body) });
+      expect(res.status).toBe(200);
+      expect((await res.json() as { lines: unknown[] }).lines).toHaveLength(0);
+    }
+  });
+});

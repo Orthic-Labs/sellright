@@ -1,3 +1,4 @@
+import { whenActivated } from '~/utils/prerender';
 import { component$, useSignal, useVisibleTask$, type QRL } from '@qwik.dev/core';
 import type { StripeElements, StripeExpressCheckoutElement } from '@stripe/stripe-js';
 import { loadStripe } from '@stripe/stripe-js/pure';
@@ -142,6 +143,8 @@ export const ExpressCheckout = component$<ExpressCheckoutProps>((props) => {
 			// P7/V15: Stripe.js is not part of the critical load — it loads once the page has loaded and gone idle, or on the
 			// shopper's first interaction. The element stays hidden until `ready`, as before.
 			await (props.loadOn === 'interaction' ? afterInteraction() : afterLoadIdleOrInteraction());
+			if (disposed) return;
+			await whenActivated(); // #425: no Stripe.js in a prerendered checkout until it is shown
 			if (disposed) return;
 			const stripe = await loadStripe(key);
 			if (disposed || !stripe) return;

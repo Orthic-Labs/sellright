@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHECKOUT_ANCHOR, CHECKOUT_REGION, pruneBundleGraph, type BundleGraph } from './preload-graph';
+import { CART_ANCHOR, CART_REGION, CART_SEEDS, CHECKOUT_ANCHOR, CHECKOUT_REGION, pruneBundleGraph, type BundleGraph } from './preload-graph';
 
 // Decode the flat graph the same way the rc.3 preloader does (preloader.mjs `F`): name -> [{dep, probability}].
 const decode = (g: BundleGraph) => {
@@ -96,5 +96,62 @@ describe('pruneBundleGraph (P7/V30)', () => {
 			for (const o of ['src/components/header/header.tsx', 'src/routes/products/[...slug]/index.tsx', 'src/components/ui/index.ts'])
 				expect(CHECKOUT_REGION.test(o)).toBe(false);
 		});
+	});
+});
+
+describe('cart-drawer closure (#425)', () => {
+	// idle.js: the product page's cart-preload task (anchor), static util. handler.js: the add handler (seed). cc.js: the layout's cart wrapper
+	// (seed). cart.js: the drawer component (seed), static cartutil.js, dynamic contents.js. contents.js (region): dynamic slot.js (region),
+	// dynamic gateway.js (region, which has a dynamic edge to a brand view that is NOT drawer code: reviews.js).
+	// page.js (the product page, not an anchor): dynamic reviews.js. other.js: a page bundle with no anchor.
+	const names = ['idle.js', 'util.js', 'handler.js', 'cc.js', 'cart.js', 'cartutil.js', 'contents.js', 'slot.js', 'gateway.js', 'reviews.js', 'page.js', 'other.js'];
+	const deps: Record<string, (string | number)[]> = {
+		'idle.js': ['util.js', -8, 'reviews.js'], 'util.js': [], 'handler.js': [], 'cc.js': [-9, 'cart.js'], 'cart.js': ['cartutil.js', -9, 'contents.js'],
+		'cartutil.js': [], 'contents.js': [-9, 'slot.js', 'gateway.js'], 'slot.js': [], 'gateway.js': [-9, 'reviews.js'], 'reviews.js': [],
+		'page.js': [-9, 'reviews.js'], 'other.js': [-9, 'cart.js'],
+	};
+	const at: Record<string, number> = {};
+	let pos = 0;
+	for (const n of names) { at[n] = pos; pos += 1 + deps[n].length; }
+	const graph: BundleGraph = [];
+	for (const n of names) { graph.push(n); for (const d of deps[n]) graph.push(typeof d === 'number' ? d : at[d]); }
+	const origins: Record<string, string[]> = {
+		'idle.js': ['src/platform/controllers/cart-preload.ts_usePreloadCartDrawer_useVisibleTask_abc.js'],
+		'util.js': ['src/utils/addressStorage.ts'],
+		'handler.js': ['src/routes/products/[...slug]/ProductContent.tsx_ProductContent_component_handleAddToCart_abc.js'],
+		'cc.js': ['src/components/cart/ConditionalCart.tsx_ConditionalCart_component_abc.js'],
+		'cart.js': ['src/components/cart/Cart.tsx_Cart_component_abc.js'],
+		'cartutil.js': ['src/components/cart/cart-shipping.ts'],
+		'contents.js': ['src/components/cart-contents/CartContents.tsx_CartContents_component_abc.js'],
+		'slot.js': ['src/brand-slots/cart.free-shipping-progress.tsx_x_abc.js'],
+		'gateway.js': ['src/platform/gateway/index.tsx'],
+		'reviews.js': ['src/components/reviews/Reviews.tsx'],
+		'page.js': ['src/routes/products/[...slug]/index.tsx'],
+		'other.js': ['src/routes/other/index.tsx'],
+	};
+	const cl = { origins: (n: string) => origins[n], anchor: CART_ANCHOR, anchorMode: 'any' as const, seeds: CART_SEEDS, region: CART_REGION, probability: 0.8 };
+	const g1 = decode(pruneBundleGraph(graph, cl));
+	const names1 = (n: string) => g1[n].map((d) => d.dep);
+
+	it('the anchor gets the drawer, the add handler and the layout wrapper, and everything the drawer code reaches, as lazy edges', () => {
+		expect(g1['idle.js'].filter((d) => d.p === 0.8).map((d) => d.dep).sort()).toEqual(['cart.js', 'cartutil.js', 'cc.js', 'contents.js', 'gateway.js', 'handler.js', 'slot.js']);
+		expect(g1['idle.js'].find((d) => d.dep === 'util.js')).toEqual({ dep: 'util.js', p: 1 }); // its own static import stays certain
+	});
+	it('never adds the anchor\'s own lazy edge or non-drawer code reached through the drawer (reviews.js)', () => {
+		expect(names1('idle.js')).not.toContain('reviews.js');
+	});
+	it('every other bundle is exactly as P7 left it: pages without the anchor preload no drawer', () => {
+		const plain = decode(pruneBundleGraph(graph));
+		for (const n of names.filter((x) => x !== 'idle.js')) expect(g1[n]).toEqual(plain[n]);
+		expect(names1('other.js')).toEqual([]);
+	});
+	it('composes with the checkout closure', () => {
+		const both = decode(pruneBundleGraph(graph, [{ origins: (n) => origins[n], anchor: CHECKOUT_ANCHOR, region: CHECKOUT_REGION, probability: 0.8 }, cl]));
+		expect(both['idle.js']).toEqual(g1['idle.js']);
+	});
+	it('matches the real segment names the build produces', () => {
+		expect(CART_SEEDS.test('src/platform/controllers/configurator.ts_useConfigurator_onAddToCart_abc.js')).toBe(true);
+		expect(CART_SEEDS.test('src/contexts/CartContext.tsx_addToCartWithOutcome_abc.js')).toBe(true);
+		expect(CART_SEEDS.test('src/routes/checkout/index.tsx_Checkout_component_abc.js')).toBe(false);
 	});
 });

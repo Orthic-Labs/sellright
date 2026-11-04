@@ -1,3 +1,4 @@
+import { whenActivated } from '~/utils/prerender';
 import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 // S5: `pure` defers Stripe.js until loadStripe() runs (only when messaging options exist); the package root injects it
 // on import, which loaded it on every checkout/PDP even with no Stripe gateway configured.
@@ -33,6 +34,8 @@ export const CheckoutPaymentMessaging = component$<{ options: PaymentMessagingOp
 			ready.value = false;
 		});
 		try {
+			await whenActivated(); // #425: no Stripe.js in a prerendered checkout until it is shown
+			if (disposed) return;
 			const stripe = await loadStripe(key);
 			if (disposed || !stripe) return;
 			element = stripe.elements().create('paymentMethodMessaging', { amount: first.amount, currency: first.currency, countryCode: first.countryCode });

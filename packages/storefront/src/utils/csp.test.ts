@@ -255,8 +255,8 @@ describe('ADR-0001 hash CSP for shell renders', async () => {
 
 	it('buildCsp without a nonce has no nonce source and never unsafe-inline for scripts; with one it is unchanged', () => {
 		const none = directive(buildCsp({ nonce: undefined }), 'script-src');
-		expect(none).toBe("script-src 'self' https://static.cloudflareinsights.com https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
-		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(none).toBe("script-src 'self' 'inline-speculation-rules' https://static.cloudflareinsights.com https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'inline-speculation-rules' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
 	});
 
 	it('finds exactly the executable inline scripts (not src, JSON-LD or Qwik data)', () => {
@@ -274,5 +274,15 @@ describe('ADR-0001 hash CSP for shell renders', async () => {
 		expect(withScriptHashes(csp, [])).toBe("default-src 'self'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'");
 		expect(() => withScriptHashes("script-src 'self' 'unsafe-inline'", [])).toThrow();
 		expect(() => withScriptHashes("default-src 'self'", [])).toThrow();
+	});
+});
+
+describe('#425 inline speculation rules', () => {
+	it('script-src admits inline speculation rules (the checkout prerender) in the nonce and the shell policy, never unsafe-inline', () => {
+		for (const nonce of ['abc', undefined]) {
+			const d = directive(buildCsp({ nonce }), 'script-src');
+			expect(d).toContain("'inline-speculation-rules'");
+			expect(d).not.toContain("'unsafe-inline'");
+		}
 	});
 });
