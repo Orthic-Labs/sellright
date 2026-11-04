@@ -182,3 +182,13 @@ describe('createServerFunctionGuard knownHashes', () => {
 		expect(router).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('clientIpOf with BEHIND_CLOUDFLARE', () => {
+	it('uses CF-Connecting-IP only when the peer is the local proxy, and never the forwarded host switch', () => {
+		const env = { BEHIND_CLOUDFLARE: '1' };
+		expect(clientIpOf(req({ headers: { 'cf-connecting-ip': '203.0.113.7' }, socket: { remoteAddress: '172.22.0.1' } }) as never, env)).toBe('203.0.113.7');
+		expect(clientIpOf(req({ headers: { 'cf-connecting-ip': '203.0.113.7' }, socket: { remoteAddress: '198.51.100.9' } }) as never, env)).toBe('198.51.100.9');
+		expect(clientIpOf(req({ headers: { 'cf-connecting-ip': 'not-an-ip' }, socket: { remoteAddress: '127.0.0.1' } }) as never, env)).toBe('127.0.0.1');
+		expect(clientIpOf(req({ headers: { 'cf-connecting-ip': '203.0.113.7' }, socket: { remoteAddress: '127.0.0.1' } }) as never, {})).toBe('127.0.0.1');
+	});
+});

@@ -6,7 +6,7 @@
 // Server-only: imported by entry.express.tsx.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { cleanIp } from './sellright-visitor-ip.server';
+import { isLocalProxyPeer, visitorIpFrom } from './sellright-visitor-ip.server';
 
 type Writer = (line: string) => void;
 
@@ -28,17 +28,10 @@ export const isUnknownQrlError = (err: unknown): boolean => {
 export const clientIpOf = (
 	req: { headers: Request['headers']; socket?: { remoteAddress?: string } },
 	env: Record<string, string | undefined> = process.env,
-): string => {
-	if (env.SELLRIGHT_TRUST_FORWARDED_HOST === '1') {
-		const fromProxy = cleanIp(req.headers['x-real-ip']);
-		if (fromProxy) return fromProxy;
-	}
-	return cleanIp(req.socket?.remoteAddress) ?? 'unknown';
-};
+): string => visitorIpFrom((name) => req.headers[name], req.socket?.remoteAddress, env) ?? 'unknown';
 
 /** A loopback or private peer: the deployment's own proxy (nginx, Docker gateway), never a shopper. */
-const isProxyPeer = (ip: string): boolean =>
-	ip === 'unknown' || ip === '::1' || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || /^f[cd]/i.test(ip);
+const isProxyPeer = (ip: string): boolean => ip === 'unknown' || isLocalProxyPeer(ip);
 
 /** Admits at most `limit` server-function POSTs per IP per window; everything else (GETs, pages) is untouched.
  *  Behind a proxy whose x-real-ip is not trusted, every shopper shares the proxy's address: limiting that would throttle
