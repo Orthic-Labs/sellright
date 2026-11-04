@@ -62,7 +62,7 @@ export function useNewsletterForm() {
 			port,
 			{
 				post: async (body) => {
-					const res = await fetch('/newsletter-signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+					const res = await fetch('/api/newsletter-signup/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 					return { ok: res.ok, status: res.status };
 				},
 				onSuccess: () => { email.value = ''; },

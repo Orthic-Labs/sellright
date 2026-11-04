@@ -27,7 +27,7 @@ const fail = (port: FormPort, message: string, reason: Exclude<FormResult, { ok:
 };
 
 export interface NewsletterDeps {
-	/** POST /newsletter-signup. Rejects on a network failure. */
+	/** POST /api/newsletter-signup/ (#386: nginx 404s /newsletter-signup). Rejects on a network failure. */
 	post(body: { email: string; honeypot: string; turnstileToken: string }): Promise<{ ok: boolean; status: number }>;
 	/** Runs after a successful signup (the base page clears its email field). */
 	onSuccess(): void;
