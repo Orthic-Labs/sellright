@@ -8,6 +8,8 @@ import { createSEOHead } from '~/utils/seo';
 import { siteUrl, theme } from '~/theme/theme.config';
 import { hasView } from '~/platform/gateway';
 import { DETAIL_PRODUCTS } from '~/platform/brand-data';
+import { firstCardImage } from '~/platform/shop-first-card';
+import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
 import { useConfiguratorDetail, type ConfiguratorDetail } from '~/platform/configurator-detail';
 import { productGroupSchema } from '~/platform/product-jsonld';
 import { redactListItem } from '~/platform/live-values';
@@ -73,6 +75,9 @@ export const readShopCatalog = server$(async function () {
 
 export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: unknown) => unknown }) => {
  const searchTerm = url.searchParams.get('q') || '';
+ // #425: the first card's image is preloaded at high priority from <head> (same responsive sources as its <img>), so on a slow link it
+ // no longer queues behind fonts, scripts and the other cards (cached shell, live A/B: LCP 1016 -> 1292 ms without it).
+ const firstImage = !searchTerm && !hasView('route.shop') && resolveValue ? firstCardImage(resolveValue(useCatalogLoader) as Parameters<typeof firstCardImage>[0]) : null;
  // A branded shop (route.shop view): one platform-built ProductGroup per configurator product, from the page's own catalog
  // generation, with the brand's declared facts (no availability: platform/product-jsonld.ts).
  // Server build only (import.meta.env.SSR is folded by the client build, unlike core's runtime isServer; the ProductGroup JSON-LD is crawl data): product-jsonld.ts stays out of the client bundle.
@@ -94,6 +99,7 @@ export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: 
   canonical: `${siteUrl}/shop/`,
   ogUrl: `${siteUrl}/shop/`,
   noindex: !!searchTerm,
+  links: firstImage ? generateImagePreloadLinks(firstImage, 'productCard', ['avif']) : [],
   schemas: [
    breadcrumbSchema,
    ...(!searchTerm ? [{
