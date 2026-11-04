@@ -26,7 +26,7 @@ const isStylesheet = (i: GlobalInjections) => i.tag === 'link' && i.attributes?.
  *  and keeps the file itself as a <link> at the end of <body>. #427: client navigation (cart -> checkout) dropped the inline
  *  <style>, leaving the next page unstyled; the body link (same rules, cached after the first visit) keeps every navigated page
  *  styled. #425: the body link starts as media="print" so it never blocks first paint (Lighthouse counted it as render-blocking,
- *  ~450 ms FCP on mobile); routes/layout.tsx switches it to "all" at start-up idle, before any client navigation can happen. */
+ *  ~450 ms FCP on mobile); routes/layout.tsx switches it to "all" on the first interaction, before any client navigation can happen. */
 export function inlineStylesheetInjections(injections: GlobalInjections[], read: (href: string) => string | null): GlobalInjections[] {
 	const out: GlobalInjections[] = [];
 	const keep: GlobalInjections[] = [];

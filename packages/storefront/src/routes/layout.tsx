@@ -255,8 +255,13 @@ export default component$(() => {
 		// F1: header blur and scroll-timeline effects switch on only after load + first paint (html.sr-fx).
 		enablePostPaintEffects();
 		// #425/#427: the global stylesheet link loads as media="print" (never render-blocking; the same rules are inline). It applies
-		// from here on, so a client navigation that drops the inline <style> still has the rules.
-		document.querySelectorAll<HTMLLinkElement>('link[data-sr-global][media="print"]').forEach((l) => { l.media = 'all'; });
+		// on the first interaction, which every client navigation starts with, so a navigation that drops the inline <style> still
+		// has the rules. Not at idle: re-applying the whole sheet restyles the page, a long task on the shop grid at load.
+		const applyGlobalSheet = () => {
+			for (const t of ['pointerdown', 'keydown', 'touchstart']) document.removeEventListener(t, applyGlobalSheet, true);
+			document.querySelectorAll<HTMLLinkElement>('link[data-sr-global][media="print"]').forEach((l) => { l.media = 'all'; });
+		};
+		for (const t of ['pointerdown', 'keydown', 'touchstart']) document.addEventListener(t, applyGlobalSheet, { capture: true, passive: true });
 		LocalAddressService.setupCrossTabSync();
 		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
 		const cookieCountry = getCookie(COUNTRY_COOKIE);
