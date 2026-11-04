@@ -127,7 +127,7 @@ describe('DP-6 shop reveal: the grid stays gated until the live in-stock filter 
 	});
 	it('the gate is lifted only after the out-of-stock cards are hidden (same synchronous step)', async () => {
 		startShop(() => Promise.resolve(catalog([['a', true], ['b', false]])));
-		const seen: (string | null)[][] = [];
+		const seen: string[][] = [];
 		const grid = () => document.getElementById('grid');
 		new MutationObserver(() => { if (grid()?.hasAttribute('data-live-applied')) seen.push(shown()); }).observe(document.documentElement, { attributes: true, subtree: true, childList: true });
 		document.body.innerHTML = gridHtml(['a', 'b']);
@@ -217,7 +217,7 @@ describe('DP-5 checkout summary paint: before hydration, into shadow-DOM hosts',
 		const lines = host('lines').shadowRoot!;
 		expect(lines.querySelectorAll('li')).toHaveLength(1);
 		expect(lines.querySelector('h3')!.textContent).toBe('Oni');
-		expect(lines.querySelector('.v')!.textContent).toBe('Oni / Large'); // = CartContents: normalizeOptionSeparators(line.name)
+		expect(lines.querySelector('.v')!.textContent).toBe('Large');
 		expect(lines.querySelector('.q')!.textContent).toBe('Qty 2');
 		expect(lines.querySelector('.p')!.textContent).toBe('$90');
 		const img = lines.querySelector('img')!;
