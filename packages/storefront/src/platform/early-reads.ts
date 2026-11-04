@@ -155,7 +155,7 @@ export const EARLY_LINK_MAX = 6;
 export const earlyLinkEntry = (url: string): string => `<${url}>; rel=preload; as=fetch; crossorigin=use-credentials`;
 
 /** A same-origin path + query made of URL-safe characters only (nothing that could break out of `<...>` or split the header). */
-const LINK_SAFE_URL = /^\/[A-Za-z0-9\-._~\/?=&%]*$/;
+const LINK_SAFE_URL = /^\/[A-Za-z0-9\-._~/?=&%]*$/;
 
 /**
  * The `Link` response header of an ADR-0001 SHELL render of `/shop/` or `/checkout/`, derived from the same plan the early script runs
