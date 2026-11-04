@@ -14,7 +14,7 @@ describe('inline global stylesheet (#425 step 2)', () => {
 		expect(out[0]).toBe(other);
 		expect(out[1]).toEqual({ tag: 'style', location: 'head', attributes: { 'data-sr-global': '', dangerouslySetInnerHTML: ':root{--x:1}' } });
 		// #427: the file stays linked at the end of <body> so client navigation keeps the page styled.
-		expect(out[2]).toEqual({ tag: 'link', location: 'body', attributes: { rel: 'stylesheet', href: '/build/style-A.css', 'data-sr-global': '' } });
+		expect(out[2]).toEqual({ tag: 'link', location: 'body', attributes: { rel: 'stylesheet', href: '/build/style-A.css', media: 'print', 'data-sr-global': '' } });
 		expect(out).toHaveLength(3);
 	});
 

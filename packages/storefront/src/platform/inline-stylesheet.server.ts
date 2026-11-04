@@ -24,8 +24,9 @@ const isStylesheet = (i: GlobalInjections) => i.tag === 'link' && i.attributes?.
 
 /** Replaces each stylesheet <link> injection with an inline <style> of the same file, in the same position (same cascade order),
  *  and keeps the file itself as a <link> at the end of <body>. #427: client navigation (cart -> checkout) dropped the inline
- *  <style>, leaving the next page unstyled; the body link (same rules, nothing after it to block, cached after the first visit)
- *  keeps every navigated page styled. */
+ *  <style>, leaving the next page unstyled; the body link (same rules, cached after the first visit) keeps every navigated page
+ *  styled. #425: the body link starts as media="print" so it never blocks first paint (Lighthouse counted it as render-blocking,
+ *  ~450 ms FCP on mobile); routes/layout.tsx switches it to "all" at start-up idle, before any client navigation can happen. */
 export function inlineStylesheetInjections(injections: GlobalInjections[], read: (href: string) => string | null): GlobalInjections[] {
 	const out: GlobalInjections[] = [];
 	const keep: GlobalInjections[] = [];
@@ -36,7 +37,7 @@ export function inlineStylesheetInjections(injections: GlobalInjections[], read:
 			continue;
 		}
 		out.push({ tag: 'style', location: i.location, attributes: { 'data-sr-global': '', dangerouslySetInnerHTML: css } });
-		keep.push({ tag: 'link', location: 'body', attributes: { rel: 'stylesheet', href: i.attributes!.href, 'data-sr-global': '' } });
+		keep.push({ tag: 'link', location: 'body', attributes: { rel: 'stylesheet', href: i.attributes!.href, media: 'print', 'data-sr-global': '' } });
 	}
 	return [...out, ...keep];
 }
