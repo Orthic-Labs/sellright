@@ -108,7 +108,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
                 {formattedTotal || (props.pageLoading.value ? (
                   <>
                     {paintHosts && <span data-sr-host="total" />}
-                    <span class="inline-block animate-pulse" data-sr-skel="" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" />
+                    <span class="inline-block animate-pulse" data-sr-skel={paintHosts ? '' : undefined} style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" />
                   </>
                 ) : '')}
               </span>

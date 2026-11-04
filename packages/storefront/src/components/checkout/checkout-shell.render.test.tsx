@@ -134,8 +134,8 @@ describe('/checkout/ shell (#412)', () => {
 	it('DP-5 rollback render (switch off, or /checkout/ in SHELL_CACHE_EXCLUDE): no paint host, no skeleton marker: the server-rendered summary as before', async () => {
 		for (const server of [null, serverRead]) {
 			const document = await render(server);
-			expect(document.querySelector('[data-sr-host]')).toBeNull();
-			expect(document.querySelector('[data-sr-skel]')).toBeNull();
+			expect(document.querySelector('[data-sr-host]')).toBeFalsy();
+			expect(document.querySelector('[data-sr-skel]')).toBeFalsy();
 		}
 		expect((await render(serverRead)).querySelector('.checkout-left')!.innerHTML).toContain('45.67'); // L11: the total is in the server HTML
 	});
