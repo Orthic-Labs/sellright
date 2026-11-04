@@ -383,12 +383,16 @@ const CheckoutContent = component$(() => {
   // Forget everything bound to the previous order (store fields, method lock via phase, confirm triggers, consent, init
   // failure). Run on every transition out of a resume state that is NOT a resume of the same order.
   const resetOrderState = $(async () => {
+    // #403: remount the payment controls only when they may hold a previous order's state. On a plain checkout entry
+    // there is none, and bumping the key there mounted a second card form during hydration (the replaced one was never
+    // cleaned up, so Collect.js was configured twice).
+    const stale = !!srState.code || paymentInit.failed;
     await resetOrder();
     stripeConfirmTrigger.value = 0;
     gatewayConfirmTrigger.value = 0;
     totalConfirmed.value = false;
     paymentInit.failed = false;
-    paymentInit.key = paymentInit.key + 1;
+    if (stale) paymentInit.key = paymentInit.key + 1;
   });
 
   // Resume the ORIGINAL order of a converted cart: its own view and payment initialisation, never the new-order form

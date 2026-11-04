@@ -22,7 +22,14 @@ export async function goToCheckout(page: Page): Promise<void> {
 	await expect(page.getByRole('heading', { name: /shipping details/i })).toBeVisible();
 }
 
-export async function fillShipping(page: Page, email: string, who = { first: 'Ada', last: 'Lovelace' }): Promise<void> {
+/**
+ * `cardReady: false` for a spec whose card fields never become available (Collect.js init failure): the details are then
+ * proven by the card form mounting, since PLACE ORDER stays disabled until the fields load.
+ */
+export async function fillShipping(page: Page, email: string, who = { first: 'Ada', last: 'Lovelace' }, opts: { cardReady?: boolean } = {}): Promise<void> {
+	const detailsValid = (timeout: number) => opts.cardReady === false
+		? expect(paymentSection(page).locator('.nmi-card-form')).toBeVisible({ timeout })
+		: expect(placeOrderButton(page)).toBeEnabled({ timeout });
 	// The form hydrates (and the signed-in lookup resolves) a beat after it first paints, and a re-render in that window
 	// clears typed values — so fill, then prove the values stuck and the form validates, retrying the whole fill otherwise.
 	await expect(async () => {
@@ -38,13 +45,13 @@ export async function fillShipping(page: Page, email: string, who = { first: 'Ad
 		await page.keyboard.press('Tab');
 		await expect(page.getByLabel(/email address/i)).toHaveValue(email, { timeout: 1_500 });
 		await expect(page.getByLabel(/^first name$/i).first()).toHaveValue(who.first, { timeout: 1_500 });
-		await expect(placeOrderButton(page)).toBeEnabled({ timeout: 3_000 });
+		await detailsValid(3_000);
 		// Settle, then prove it again: a value typed before the form's handlers were loaded is only in the DOM and
 		// disappears on the next render, which is exactly what a hurried script (not a person) can trigger.
 		await page.waitForTimeout(600);
 		await expect(page.getByLabel(/email address/i)).toHaveValue(email, { timeout: 1_500 });
 		await expect(page.getByLabel(/^last name$/i).first()).toHaveValue(who.last, { timeout: 1_500 });
-		await expect(placeOrderButton(page)).toBeEnabled({ timeout: 1_500 });
+		await detailsValid(1_500);
 	}).toPass({ timeout: 30_000 });
 }
 
@@ -79,10 +86,16 @@ export async function placeOrder(page: Page): Promise<{ code: string; receiptTok
 	return (await res.json()) as { code: string; receiptToken: string; grandTotal: number };
 }
 
-/** PAY (NMI) and wait for the confirmation page to show the order. */
+/**
+ * Pay (NMI) and wait for the confirmation page to show the order. With the card controls mounted, PLACE ORDER in the payment
+ * section creates the order AND submits the card in one click (#403), so the shopper is usually on the confirmation page
+ * already; only an order placed from the outer CTA (card controls not yet mounted) still needs its own pay click.
+ */
 export async function payAndConfirm(page: Page, code: string): Promise<void> {
-	await clickPay(page);
-	await expect(page).toHaveURL(new RegExp(`/checkout/confirmation/${code}`), { timeout: 20_000 });
+	const confirmation = new RegExp(`/checkout/confirmation/${code}`);
+	const landed = await page.waitForURL(confirmation, { timeout: 10_000 }).then(() => true, () => false);
+	if (!landed) await clickPay(page);
+	await expect(page).toHaveURL(confirmation, { timeout: 20_000 });
 	await expect(page.getByRole('heading', { name: /thank you/i })).toBeVisible({ timeout: 20_000 });
 }
 
@@ -105,4 +118,14 @@ export async function clickPay(page: Page): Promise<void> {
 	const consent = page.getByRole('checkbox', { name: /i confirm i will be charged/i });
 	if (await consent.isVisible().catch(() => false)) await consent.check();
 	await payButton(page).click();
+}
+
+/**
+ * After PLACE ORDER with a declining card entered: the one-click path has already submitted it; an order placed from the outer
+ * CTA (card controls not mounted yet) still needs the pay click. Waits for the decline message either way.
+ */
+export async function expectDeclined(page: Page): Promise<void> {
+	const declined = page.getByText(/try a different card/i).first();
+	if (!(await declined.waitFor({ timeout: 8_000 }).then(() => true, () => false))) await clickPay(page);
+	await expect(declined).toBeVisible({ timeout: 15_000 });
 }

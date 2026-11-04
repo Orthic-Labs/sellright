@@ -121,9 +121,9 @@ test.describe('#7 last-unit race', () => {
 			expect(await api.stock(sku)).toMatchObject({ onHand: 1, allocated: 1, available: 0 });
 			const lines = await readRows<{ code: string; state: string }>(api, `SELECT o.code, o.state FROM order_line l JOIN "order" o ON o.id = l.order_id WHERE l.variant_sku = $1`, [sku]);
 			expect(lines).toHaveLength(1);
-			expect(lines[0]!.state).toBe('PendingPayment');
+			// One click places and pays when the card form is mounted (#403); otherwise the order waits for the pay click.
+			expect(['PendingPayment', 'Paid']).toContain(lines[0]!.state);
 
-			await expect(payButton(winner)).toBeVisible();
 			await payAndConfirm(winner, lines[0]!.code);
 			expect((await api.order(lines[0]!.code)).state).toBe('Paid');
 			expect(await api.stock(sku)).toMatchObject({ onHand: 1, allocated: 1, available: 0 });

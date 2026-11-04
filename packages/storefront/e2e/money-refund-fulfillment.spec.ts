@@ -113,11 +113,12 @@ test.describe('#5 partial fulfillment with tracking + notify', () => {
 		const mail = await eventually(async () => (await mock.mails()).find((m) => m.envelopeTo.includes(email) && (m.text + m.html).includes(tracking)), 'shipping email with the tracking number');
 		expect(mail.subject).toContain(placed.code);
 
-		// The remaining line ships later: a second webhook, no second email (notify off), order fully fulfilled.
-		await api.post(`/orders/${placed.code}/fulfillments`, { lines: [{ orderLineId: mug.id, quantity: 1 }], trackingCode: `${tracking}B`, carrier: 'UPS', notifyCustomer: false });
+		// The remaining line ships later: a second webhook and, since every shipment emails the customer (#380: no opt-out),
+		// a second shipping email; the order is fully fulfilled.
+		await api.post(`/orders/${placed.code}/fulfillments`, { lines: [{ orderLineId: mug.id, quantity: 1 }], trackingCode: `${tracking}B`, carrier: 'UPS' });
 		await eventually(async () => (await mock.hooks()).filter((h) => JSON.parse(h.body).payload?.code === placed.code).length === 2, 'second order.shipped delivery');
 		expect((await api.order(placed.code)).fulfillmentStatus).toBe('fulfilled');
-		expect(await readRows(api, `SELECT 1 FROM email_outbox WHERE recipient = $1 AND kind = 'shipping_notification'`, [email])).toHaveLength(1);
+		expect(await readRows(api, `SELECT 1 FROM email_outbox WHERE recipient = $1 AND kind = 'shipping_notification'`, [email])).toHaveLength(2);
 		expect(await api.stock(SKU.mug)).toMatchObject({ onHand: base.mug.onHand - 1, allocated: base.mug.allocated });
 	});
 

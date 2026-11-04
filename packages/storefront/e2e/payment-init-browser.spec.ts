@@ -3,7 +3,7 @@ import { test, expect, skipExternal } from './fixtures';
 import { STRIPE_ENABLED } from './support/env.mjs';
 import { PRODUCT, uniq } from './support/api';
 import { mock } from './support/mock';
-import { addToCart, clickPay, fillShipping, goToCheckout, payButton, placeOrder } from './support/flows';
+import { addToCart, clickPay, fillShipping, goToCheckout, payAndConfirm, payButton, placeOrder } from './support/flows';
 import { installStripeStub } from './support/stripe-stub';
 
 /**
@@ -34,7 +34,8 @@ const watchCheckoutPosts = (page: Page) => {
 };
 const selectMethod = async (page: Page, name: 'Stripe' | 'NMI') => {
 	const methods = page.getByRole('radiogroup', { name: 'Payment method' });
-	if (await methods.count()) await methods.getByRole('radio', { name, exact: true }).click();
+	// The card tab reads "Credit / Debit Card" (PaymentMethodTab), not the provider name.
+	if (await methods.count()) await methods.getByRole('radio', { name: name === 'NMI' ? /credit \/ debit card/i : name, exact: name !== 'NMI' }).click();
 };
 
 for (const [viewportName, viewport] of [
@@ -128,11 +129,11 @@ for (const [viewportName, viewport] of [
 
 				await addToCart(page, PRODUCT.mug.slug);
 				await goToCheckout(page);
-				await fillShipping(page, `${uniq('nmito')}@example.net`);
+				await fillShipping(page, `${uniq('nmito')}@example.net`, undefined, { cardReady: false });
 				await selectMethod(page, 'NMI');
-				const placed = await placeOrder(page);
 
-				// Collect.js loaded and was configured, but it never reported the fields: still waiting, no error yet.
+				// The card form mounts once the details are valid, before any order exists (#403): Collect.js loaded and was
+				// configured, but it never reported the fields: still waiting, no error yet.
 				await expect.poll(() => configures(page)).toBe(1);
 				await expect(retryAlert(page)).toHaveCount(0);
 
@@ -142,20 +143,19 @@ for (const [viewportName, viewport] of [
 				await expect(retryAlert(page)).toContainText(/couldn.t load/i);
 				await expect(payButton(page)).toHaveCount(0);
 				await expectNoPlaceOrder(page);
-				expect(checkoutPosts(), 'init failure creates no additional order').toBe(1);
+				expect(checkoutPosts(), 'init failure creates no order').toBe(0);
 				expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
-				expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
 				// Retry remounts the card form, which configures Collect.js again; this time the fields become available.
 				await retryAlert(page).getByRole('button', { name: /try again/i }).click();
 				await expect(retryAlert(page)).toHaveCount(0);
 				await expect(payButton(page)).toBeVisible();
 				await expectNoPlaceOrder(page);
-				expect(checkoutPosts(), 'retry keeps the original order').toBe(1);
+				expect(checkoutPosts(), 'retry creates no order').toBe(0);
 				await expect.poll(() => configures(page)).toBe(2);
 
-				await clickPay(page);
-				await expect(page).toHaveURL(new RegExp(`/checkout/confirmation/${placed.code}`), { timeout: 20_000 });
+				const placed = await placeOrder(page);
+				await payAndConfirm(page, placed.code);
 				await expect(page.getByRole('heading', { name: /thank you/i })).toBeVisible();
 				const order = await api.order(placed.code);
 				expect(order.state).toBe('Paid');
