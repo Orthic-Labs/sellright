@@ -83,9 +83,9 @@ describe('/shop/ shell grid (#412)', () => {
 
 	it('DP-6 rollback render (not deferred: SHELL_CACHE off, or the path in SHELL_CACHE_EXCLUDE): no gate, no sentinel, no notice, the SSR in-stock grid', async () => {
 		const document = await render({ totalItems: 2, products: full, fallback: false, deferred: false });
-		expect(document.querySelector('[data-live-gate]')).toBeNull();
-		expect(document.querySelector('[data-live-gate-end]')).toBeNull();
-		expect(document.querySelector('[data-shop-slow]')).toBeNull();
+		expect(document.querySelector('[data-live-gate]')).toBeFalsy();
+		expect(document.querySelector('[data-live-gate-end]')).toBeFalsy();
+		expect(document.querySelector('[data-shop-slow]')).toBeFalsy();
 		const grid = document.querySelector('div.grid.gap-px')!;
 		expect(Array.from(grid.children).map((c) => c.getAttribute('data-slug'))).toEqual(['tee']); // the out-of-stock cap is not rendered
 	});
