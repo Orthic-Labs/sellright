@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerCart } from '~/sellright/types/cart';
-import { checkoutSummarySource, hasMixedPreOrder, readCheckoutServerCart, serverCartShipCountry, showsEmptyCart, toDisplayCart } from './summary-cart';
+import { checkoutSummarySource, hasMixedPreOrder, readCheckoutServerCart, readCheckoutSummaryCart, serverCartShipCountry, showsEmptyCart, toDisplayCart } from './summary-cart';
 
 const route = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8');
 
@@ -168,5 +168,31 @@ describe('showsEmptyCart (LCP: the empty view paints from SSR when there is no c
     expect(loader).toContain("if (sharedMap.has('@loaderId') || shellRender()) return false;");
     expect(loader).toContain('return !cookie.get(TOKEN_COOKIE)?.value;');
     expect(loader).not.toMatch(/cacheKey|eTag/);
+  });
+});
+
+describe('readCheckoutSummaryCart: one function for the document loader and /api/live/checkout-summary/', () => {
+  it('reads the same cart, with the same ship country, as the server-rendered summary', async () => {
+    const get = vi.fn(async () => ({ data: serverCart() }));
+    const viaCookies = await readCheckoutSummaryCart(get, 'tok_srv', 'de');
+    const direct = await readCheckoutServerCart(get, 'tok_srv', serverCartShipCountry('de'));
+    expect(viaCookies).toEqual(direct);
+    expect(viaCookies?.grandTotal).toBe(5800);
+    expect(get.mock.calls[0]![1]).toMatchObject({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'DE' } } });
+  });
+  it('no cart cookie: null, no API call; an invalid country cookie quotes the default', async () => {
+    const get = vi.fn(async () => ({ data: serverCart() }));
+    expect(await readCheckoutSummaryCart(get, undefined, 'DE')).toBeNull();
+    expect(await readCheckoutSummaryCart(get, '', 'DE')).toBeNull();
+    expect(get).not.toHaveBeenCalled();
+    await readCheckoutSummaryCart(get, 'tok_srv', '<x>');
+    expect(get.mock.calls[0]![1]).toMatchObject({ params: { query: { shipCountry: 'US' } } });
+  });
+  it('wiring: the document loader and the endpoint both use it (no second implementation)', () => {
+    const endpoint = readFileSync(fileURLToPath(new URL('../api/live/checkout-summary/index.ts', import.meta.url)), 'utf8');
+    expect(route).toContain('readCheckoutSummaryCart(');
+    expect(endpoint).toContain('readCheckoutSummaryCart(');
+    expect(route).not.toContain('readCheckoutServerCart(');
+    expect(endpoint).not.toContain('readCheckoutServerCart(');
   });
 });

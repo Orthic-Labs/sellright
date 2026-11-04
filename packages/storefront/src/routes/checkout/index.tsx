@@ -12,7 +12,8 @@ import { track } from '~/sellright/analytics';
 import { useCart, startCheckoutEntryBoot, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
-import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutServerCart, serverCartShipCountry, type ServerCartValue } from './summary-cart';
+import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutSummaryCart, type ServerCartValue } from './summary-cart';
+import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 import { shellRender } from '~/platform/shell-render';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
@@ -38,6 +39,9 @@ import { applyPaymentInitError, applyPaymentProcessingChange } from '~/component
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
+/** ADR-0001: the shell's `Link: rel=preload` header (Early Hints), only on a shell render (platform/early-reads.server.ts). */
+export const onRequest = earlyHintsOnRequest;
+
 /**
  * L11: the order summary at first paint. One extra live server-side read of the request's cart (checkout quote), per
  * document request, never cached (no cacheKey) and bounded by SERVER_CART_TIMEOUT_MS; null on any failure. Display only:
@@ -50,10 +54,10 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) 
   // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). #412: the marker (no value)
   // tells the page it is the shell: the form paints in SSR and the entry reads start at document ready. Off: unchanged.
   if (shellRender()) return CHECKOUT_SHELL;
-  const cart: ServerCartValue = await readCheckoutServerCart(
+  const cart: ServerCartValue = await readCheckoutSummaryCart(
     (path, init) => sellright().GET(path, init),
     cookie.get(TOKEN_COOKIE)?.value,
-    serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value),
+    cookie.get(COUNTRY_COOKIE)?.value,
   );
   return cart;
 }, { serializationStrategy: 'always' });

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	buildEarlyReadsPlan,
 	earlyFetch,
+	earlyLinkEntry,
+	earlyReadsLinkHeader,
 	earlyJsonOr,
 	earlyReadsScriptSource,
 	earlyReadsScriptTag,
@@ -13,6 +15,8 @@ import {
 	liveReadUrl,
 	stockReadUrl,
 	takeEarlyRead,
+	CHECKOUT_SUMMARY_URL,
+	EARLY_LINK_MAX,
 	EARLY_READS_GLOBAL,
 	LISTING_FIRST_PAGE_URL,
 	SHOP_CONFIG_URL,
@@ -63,7 +67,7 @@ describe('plan per page type', () => {
 		expect(urls('/products/oni/', { ...damned, shell: false })).toEqual([stockReadUrl('oni'), SHOP_CONFIG_URL]);
 	});
 	it('checkout reads the config; blog nothing (visitor reads are decided in the browser); checkout flags the entry query', () => {
-		expect(buildEarlyReadsPlan('/checkout/', damned)).toEqual({ page: 'checkout', get: [[SHOP_CONFIG_URL, 1]], checkout: true, paint: { kind: 'checkout', dm: '', rev: 3 } });
+		expect(buildEarlyReadsPlan('/checkout/', damned)).toEqual({ page: 'checkout', get: [[CHECKOUT_SUMMARY_URL, 0], [SHOP_CONFIG_URL, 1]], checkout: true, paint: { kind: 'checkout', k: CHECKOUT_SUMMARY_URL, dm: '', rev: 3 } });
 		expect(buildEarlyReadsPlan('/checkout/', { ...damned, shell: false })).toEqual({ page: 'checkout', get: [[SHOP_CONFIG_URL, 1]], checkout: true }); // rollback: no paint
 		expect(buildEarlyReadsPlan('/blog/', damned)).toEqual({ page: 'other', get: [], checkout: false });
 	});
@@ -102,7 +106,7 @@ describe('the script in the browser', () => {
 		localStorage.setItem('sr_country_pref', JSON.stringify({ countryCode: 'DE', source: 'explicit' }));
 		expect(started(runScript('/blog/', damned))).toEqual(['/v1/shop/cart/tok%2F1?shipCountry=DE']);
 		document.cookie = 'countryCode=CA; Path=/';
-		expect(started(runScript('/checkout/', damned))).toEqual([SHOP_CONFIG_URL, '/v1/shop/cart/tok%2F1?pricingIntent=checkout&shipCountry=CA&includeShippingMethods=1']);
+		expect(started(runScript('/checkout/', damned))).toEqual([CHECKOUT_SUMMARY_URL, SHOP_CONFIG_URL, '/v1/shop/cart/tok%2F1?pricingIntent=checkout&shipCountry=CA&includeShippingMethods=1']);
 	});
 	it('no cart read while a legacy cart or a pending intent migration means writes come first', () => {
 		document.cookie = 'sr_cart=t1; Path=/';
@@ -231,5 +235,88 @@ describe('#425 license flow (RightSites store.* hosts)', () => {
 	it('a dynamic render and every other license page start nothing', () => {
 		expect(buildEarlyReadsPlan('/', { ...license, shell: false }).get).toEqual([]);
 		for (const p of ['/pricing/', '/checkout/', '/account/', '/products/x/']) expect(buildEarlyReadsPlan(p, { ...license, shell: true }).get, p).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------- Link header (Early Hints)
+
+describe('ADR-0001 Link preload header of the /shop/ and /checkout/ shells', () => {
+	const entry = earlyLinkEntry;
+	const parse = (header: string) => header.split(', ').map((e) => {
+		const m = /^<([^>]+)>; rel=preload; as=fetch; crossorigin=use-credentials$/.exec(e);
+		expect(m, e).not.toBeNull();
+		return m![1]!;
+	});
+	it('the entry is exactly the preload a credentialed fetch() matches', () => {
+		expect(entry('/x/')).toBe('</x/>; rel=preload; as=fetch; crossorigin=use-credentials');
+	});
+	it('non-brand shop (Damned): the live catalog; checkout: the summary, then the config', () => {
+		expect(earlyReadsLinkHeader('/shop/', damned)).toBe('</api/live/shop-catalog/>; rel=preload; as=fetch; crossorigin=use-credentials');
+		expect(earlyReadsLinkHeader('/checkout/', damned)).toBe(
+			'</api/live/checkout-summary/>; rel=preload; as=fetch; crossorigin=use-credentials, </v1/shop/config>; rel=preload; as=fetch; crossorigin=use-credentials',
+		);
+	});
+	it('brand shop (Rotten): each detail product stock, the configurator, the config and the live listing', () => {
+		expect(earlyReadsLinkHeader('/shop/', rotten)).toBe([
+			entry(stockReadUrl('shortsleeveshirt')), entry(stockReadUrl('longsleeveshirt')), entry(liveReadUrl('shop-configurator')), entry(SHOP_CONFIG_URL), entry(LISTING_FIRST_PAGE_URL),
+		].join(', '));
+		expect(earlyReadsLinkHeader('/checkout/', rotten)).toBe([entry(CHECKOUT_SUMMARY_URL), entry(SHOP_CONFIG_URL)].join(', '));
+	});
+	it('derived from the plan (single source): exactly the plan\'s reads, in order', () => {
+		for (const [path, ctx] of [['/shop/', damned], ['/shop/', rotten], ['/checkout/', damned], ['/checkout/', rotten]] as const) {
+			expect(parse(earlyReadsLinkHeader(path, ctx)!), `${path}`).toEqual(urls(path, ctx));
+		}
+	});
+	it('capped, plan order kept (the first entries are the stock reads)', () => {
+		const many = { ...rotten, detailSlugs: Array.from({ length: 10 }, (_, i) => `p${i}`) };
+		const header = parse(earlyReadsLinkHeader('/shop/', many)!);
+		expect(header).toHaveLength(EARLY_LINK_MAX);
+		expect(header).toEqual(urls('/shop/', many).slice(0, EARLY_LINK_MAX));
+	});
+	it('no header at all for a render that is not a shell (SHELL_CACHE off, SHELL_CACHE_EXCLUDE, dynamic): rollback is today\'s page', () => {
+		for (const path of ['/shop/', '/checkout/']) {
+			expect(earlyReadsLinkHeader(path, { ...damned, shell: false }), path).toBeNull();
+			expect(earlyReadsLinkHeader(path, { ...rotten, shell: false }), path).toBeNull();
+		}
+	});
+	it('no header for any other page or for the license flow', () => {
+		for (const path of ['/', '/products/oni/', '/blog/', '/about/', '/checkout/payment/', '/account/']) expect(earlyReadsLinkHeader(path, damned), path).toBeNull();
+		expect(earlyReadsLinkHeader('/checkout/', { ...damned, license: true })).toBeNull();
+		expect(earlyReadsLinkHeader('/shop/', { ...damned, license: true })).toBeNull();
+	});
+	it('identical for every visitor: no cookie, token, country or visitor value ever reaches it', () => {
+		const compute = () => ['/shop/', '/checkout/'].map((p) => earlyReadsLinkHeader(p, damned));
+		const anonymous = compute();
+		document.cookie = 'sr_cart=tok-secret-1; Path=/';
+		document.cookie = 'countryCode=DE; Path=/';
+		document.cookie = 'sr_cust_csrf=abc; Path=/';
+		localStorage.setItem('sr_country_pref', JSON.stringify({ countryCode: 'FR', source: 'explicit' }));
+		window.history.replaceState(null, '', '/checkout/?utm_source=x');
+		expect(compute()).toEqual(anonymous);
+		for (const h of anonymous) {
+			expect(h).not.toMatch(/tok-secret|shipCountry|countryCode|DE|FR|slug=|sr_cart|sr_cust/);
+			expect(parse(h!).every((u) => !u.includes('?') || u === LISTING_FIRST_PAGE_URL)).toBe(true);
+		}
+	});
+	it('the early script issues exactly the Link entries: same URL, credentials include, GET (no method), keeping cache no-store', () => {
+		for (const [path, ctx] of [['/shop/', damned], ['/shop/', rotten], ['/checkout/', damned], ['/checkout/', rotten]] as const) {
+			clearCookies();
+			const m = runScript(path, ctx);
+			expect(started(m), path).toEqual(parse(earlyReadsLinkHeader(path, ctx)!));
+			for (const call of m.mock.calls) {
+				const init = call[1] as RequestInit;
+				expect(init.credentials, `${path} ${call[0]}`).toBe('include');
+				expect(init.cache).toBe('no-store');
+				expect(init.method).toBeUndefined(); // GET, as a preload is
+			}
+		}
+	});
+	it('the checkout summary read starts even without a cart cookie (it must match the preload); no cart read then', () => {
+		const m = runScript('/checkout/', damned);
+		expect(started(m)).toContain(CHECKOUT_SUMMARY_URL);
+		expect(started(m).some((u) => String(u).startsWith('/v1/shop/cart/'))).toBe(false);
+	});
+	it('rollback: the checkout plan of a non-shell render starts no summary read', () => {
+		expect(started(runScript('/checkout/', { ...damned, shell: false }))).toEqual([SHOP_CONFIG_URL]);
 	});
 });

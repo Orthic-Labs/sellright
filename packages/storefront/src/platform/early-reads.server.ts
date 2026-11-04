@@ -8,7 +8,9 @@ import { PRODUCT_PREFIX } from '~/platform/product-path';
 import { SHOP_STOCK_ON_LOAD } from '~/platform/stock-triggers';
 import { shellRender } from '~/platform/shell-render';
 import { COMMERCE_FLOW } from '~/platform/license/flow-env';
-import { earlyReadsWriter, type EarlyReadsContext, type EarlyReadsStreamWriter } from '~/platform/early-reads';
+import type { RequestHandler } from '@qwik.dev/router';
+import { isInternalDataRequest } from '~/config/route-cache-policy';
+import { earlyReadsLinkHeader, earlyReadsWriter, type EarlyReadsContext, type EarlyReadsStreamWriter } from '~/platform/early-reads';
 import { ASSET_VARIANT_REV } from '~/components/ui/LazyImage';
 import { theme } from '~/theme/theme.config';
 
@@ -36,3 +38,20 @@ export function earlyReadsContext(shell = shellRender()): EarlyReadsContext {
 export function earlyReadsStream<W extends EarlyReadsStreamWriter>(stream: W, url: string | undefined, nonce: string | undefined): W {
 	return earlyReadsWriter(stream, { url, nonce, context: earlyReadsContext() });
 }
+
+/** The `Link: rel=preload` header of this request's response, or null (see `earlyReadsLinkHeader`): null unless this render is a shell. */
+export function shellEarlyHintsLink(pathname: string): string | null {
+	return earlyReadsLinkHeader(pathname, earlyReadsContext());
+}
+
+/**
+ * Route `onRequest` of `/shop/` and `/checkout/`: the shell's `Link` preload header (ADR-0001, Cloudflare Early Hints). Only on a GET
+ * document request rendered as a shell (shellRender(): SHELL_CACHE on and the request middleware marked it); a SHELL_CACHE_EXCLUDE
+ * path, a dynamic request, a loader/action data request and every other method get no header at all, so they are byte-identical to
+ * the render without the switch. The value depends on the path and the build only: never on a cookie, token or country.
+ */
+export const earlyHintsOnRequest: RequestHandler = ({ url, method, headers, sharedMap }) => {
+	if (method !== 'GET' || isInternalDataRequest(sharedMap)) return;
+	const link = shellEarlyHintsLink(url.pathname);
+	if (link) headers.set('Link', link);
+};

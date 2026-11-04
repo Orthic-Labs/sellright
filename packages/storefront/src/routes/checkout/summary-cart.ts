@@ -83,6 +83,25 @@ export async function readCheckoutServerCart(
   }
 }
 
+/**
+ * The cart the checkout order summary shows for one request's cookies: the `sr_cart` token and the `countryCode` value, read as
+ * today's server-rendered summary reads them. ONE function for the document loader (routes/checkout/index.tsx useCheckoutServerCart)
+ * and for the shell's /api/live/checkout-summary/ endpoint, so both produce the same numbers. No token: null, no API call.
+ */
+export function readCheckoutSummaryCart(
+  get: CartGet,
+  tokenCookie: string | null | undefined,
+  countryCookie: string | null | undefined,
+  timeoutMs: number = SERVER_CART_TIMEOUT_MS,
+): Promise<Cart | null> {
+  return readCheckoutServerCart(get, tokenCookie, serverCartShipCountry(countryCookie), timeoutMs);
+}
+
+/** The /api/live/checkout-summary/ answer: the display cart, or null (no cookie, no lines, not an active checkout quote, any failure). */
+export interface CheckoutSummaryResponse {
+  cart: Cart | null;
+}
+
 export type SummarySource = 'client' | 'server' | 'skeleton';
 
 /**

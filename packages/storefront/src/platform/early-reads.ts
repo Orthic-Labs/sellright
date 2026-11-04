@@ -24,8 +24,7 @@ export const EARLY_READS_GLOBAL = '__srEarly';
 export interface EarlyReadsStore {
 	h: string;
 	r: Record<string, Promise<Response> | undefined>;
-	/** The checkout shell's cart read (kept for the paint script, which reads a clone) and the cart token it was started for. */
-	cp?: Promise<Response>;
+	/** The cart token the checkout shell's cart read was started for (the paint script paints only when the page would read that cart). */
 	ct?: string;
 }
 
@@ -45,6 +44,10 @@ export const stockReadUrl = (slug: string): string => `/v1/shop/catalog/products
 export const LISTING_FIRST_PAGE_URL = '/v1/shop/catalog/products?limit=100&offset=0';
 
 export const SHOP_CONFIG_URL = '/v1/shop/config';
+
+/** The checkout shell's summary read (routes/api/live/checkout-summary): a FIXED url (no token or country in it: the server reads the
+ *  visitor's `sr_cart` and country cookies from the credentialed request), so it can be preloaded from the cached shell's Link header. */
+export const CHECKOUT_SUMMARY_URL = '/api/live/checkout-summary/';
 
 // ---------------------------------------------------------------------------------------------------- pure: the page's plan
 
@@ -79,7 +82,7 @@ export interface EarlyReadsPlan {
 	get: [string, 0 | 1][];
 	checkout: boolean;
 	/** A shell render only: the paint script this page gets after the reads script (early-paint.ts). Absent: none. */
-	paint?: { kind: 'shop'; k: string; t: number } | { kind: 'checkout'; dm: string; rev: number };
+	paint?: { kind: 'shop'; k: string; t: number } | { kind: 'checkout'; k: string; dm: string; rev: number };
 }
 
 const strip = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
@@ -129,14 +132,46 @@ export function buildEarlyReadsPlan(pathname: string, ctx: EarlyReadsContext): E
 		live(ctx.brandProduct ? 'product-live' : 'product-values', slug);
 		get.push([SHOP_CONFIG_URL, 1]);
 	} else if (page === 'checkout') {
+		// A shell render paints its order summary from the fixed-URL summary read (the server reads the visitor's cart cookie): first,
+		// it is the visible path. A dynamic or excluded render is today's server-rendered summary and reads nothing extra.
+		if (ctx.shell) get.push([CHECKOUT_SUMMARY_URL, 0]);
 		// The checkout reads the shop config on entry with or without a cart (payment methods, the empty-cart state included).
 		get.push([SHOP_CONFIG_URL, 1]);
 	}
 	// DP-5/DP-6: only a shell render paints from its early reads (a dynamic or excluded render is today's server-rendered page).
 	let paint: EarlyReadsPlan['paint'];
 	if (ctx.shell && page === 'shop' && !ctx.brandShop) paint = { kind: 'shop', k: liveReadUrl('shop-catalog'), t: SHOP_REVEAL_TIMEOUT_MS };
-	else if (ctx.shell && page === 'checkout') paint = { kind: 'checkout', dm: ctx.assetDomain ?? '', rev: ctx.assetRev ?? 3 };
+	else if (ctx.shell && page === 'checkout') paint = { kind: 'checkout', k: CHECKOUT_SUMMARY_URL, dm: ctx.assetDomain ?? '', rev: ctx.assetRev ?? 3 };
 	return { page, get, checkout: page === 'checkout', ...(paint ? { paint } : {}) };
+}
+
+// ---------------------------------------------------------------------------------------------------- pure: the Link header
+
+/** At most this many preload entries on a shell response (each is a request the browser starts before the HTML arrives). */
+export const EARLY_LINK_MAX = 6;
+
+/** One `Link` preload entry. `as=fetch; crossorigin=use-credentials` is what a `fetch(url, { credentials: 'include' })` matches
+ *  (the early script's reads, which are exactly these URLs). */
+export const earlyLinkEntry = (url: string): string => `<${url}>; rel=preload; as=fetch; crossorigin=use-credentials`;
+
+/** A same-origin path + query made of URL-safe characters only (nothing that could break out of `<...>` or split the header). */
+const LINK_SAFE_URL = /^\/[A-Za-z0-9\-._~\/?=&%]*$/;
+
+/**
+ * The `Link` response header of an ADR-0001 SHELL render of `/shop/` or `/checkout/`, derived from the same plan the early script runs
+ * (one source of truth: the header lists exactly the reads the script starts, in plan order, capped). Cloudflare Early Hints stores this
+ * header with the cached shell and sends it as a 103 when a request arrives, so the browser starts the reads while the HTML is in flight.
+ *
+ * It is cached with the shell, so it is identical for every visitor: only the plan's fixed URLs (no token, cookie value, country or
+ * query-derived slug), computed from the path and the build's context alone. null (no header at all) for any render that is not a shell
+ * (SHELL_CACHE off, SHELL_CACHE_EXCLUDE, dynamic), for every other page and for the license flow. Pure.
+ */
+export function earlyReadsLinkHeader(pathname: string, ctx: EarlyReadsContext): string | null {
+	if (!ctx.shell || ctx.license) return null;
+	const plan = buildEarlyReadsPlan(pathname, ctx);
+	if (plan.page !== 'shop' && plan.page !== 'checkout') return null;
+	const entries = plan.get.map(([url]) => url).filter((url) => LINK_SAFE_URL.test(url)).slice(0, EARLY_LINK_MAX).map(earlyLinkEntry);
+	return entries.length ? entries.join(', ') : null;
 }
 
 // ---------------------------------------------------------------------------------------------------- pure: the script
@@ -161,7 +196,7 @@ const SCRIPT_BODY =
 	"if(it&&it.token===t&&it.version!==2&&(typeof it.couponCode==='string'||it.couponCode===null))ok=0;" +
 	"var cp=JSON.parse(L.getItem('sr_country_pref')||'null');if(cp&&/^[A-Z]{2}$/.test(cp.countryCode))co=cp.countryCode;}catch(e){ok=0;}" +
 	"if(ok){var b='/v1/shop/cart/'+encodeURIComponent(t);if(P.k){var cc=c.match(/(?:^|;\\s*)countryCode=([^;]*)/);" +
-	"S.ct=t;S.cp=f(b+'?pricingIntent=checkout&shipCountry='+encodeURIComponent(cc&&cc[1]||co)+'&includeShippingMethods=1');}" +
+	"S.ct=t;f(b+'?pricingIntent=checkout&shipCountry='+encodeURIComponent(cc&&cc[1]||co)+'&includeShippingMethods=1');}" +
 	"else f(b+'?shipCountry='+encodeURIComponent(co));}}}catch(e){}})(window,document,";
 
 /** JSON safe inside an HTML <script> element (no `</script>`, no `<!--`, no U+2028/2029). */
@@ -178,7 +213,7 @@ const escapeAttr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;
 /** The paint script text for a plan (shop reveal / checkout summary, early-paint.ts), or null when the page has none. Pure. */
 export function earlyPaintScriptSource(plan: EarlyReadsPlan): string | null {
 	if (!plan.paint) return null;
-	return plan.paint.kind === 'shop' ? shopRevealScriptSource({ k: plan.paint.k, t: plan.paint.t }) : checkoutPaintScriptSource({ dm: plan.paint.dm, rev: plan.paint.rev });
+	return plan.paint.kind === 'shop' ? shopRevealScriptSource({ k: plan.paint.k, t: plan.paint.t }) : checkoutPaintScriptSource({ k: plan.paint.k, dm: plan.paint.dm, rev: plan.paint.rev });
 }
 
 /** The <script> element(s): classic inline scripts, nonce'd when the render has a nonce (a shell render is allowed by its sha256).
