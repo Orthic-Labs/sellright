@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, auth, type Me, type StoreAccess } from './api';
+import { api, auth, hub, type Me, type StoreAccess } from './api';
 import { adminHref } from './lib/base-path';
 
 interface AuthState {
@@ -38,6 +38,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function setStore(slug: string) { auth.store = slug; setStoreSlug(slug); }
 
   async function logout() {
+    // #355: working as a saved account, "sign out" leaves it (it stays saved) and returns to this server's sign-in.
+    if (hub.slot) { hub.slot = null; auth.store = null; location.assign(adminHref('/')); return; }
     try { await api.post('/logout'); } catch { /* ignore */ }
     auth.store = null;
     setMe(null); setStoreSlug(null);

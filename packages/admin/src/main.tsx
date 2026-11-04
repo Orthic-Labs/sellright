@@ -73,6 +73,8 @@ const Locations = lazy(() => import('./pages/Locations'));
 const TaxZones = lazy(() => import('./pages/TaxZones'));
 const CurrencyRates = lazy(() => import('./pages/CurrencyRates'));
 const Staff = lazy(() => import('./pages/Staff'));
+const Handoff = lazy(() => import('./pages/Handoff'));
+const SavedAccounts = lazy(() => import('./pages/SavedAccounts'));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: retryRead, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -136,6 +138,7 @@ function App() {
       <Route path="/accept-invite" element={<AcceptInvite />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/handoff" element={<Handoff />} />
       <Route element={<Protected />}>
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/" element={<Dashboard />} />
@@ -183,6 +186,7 @@ function App() {
         <Route path="/settings/email" element={<EmailSettings />} />
         <Route path="/settings/sheerid" element={<SheerIdSettings />} />
         <Route path="/settings/seo" element={<Seo />} />
+        <Route path="/accounts" element={<SavedAccounts />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

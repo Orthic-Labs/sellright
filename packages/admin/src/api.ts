@@ -11,6 +11,33 @@ export const auth = {
   set store(v: string | null) { v ? localStorage.setItem(STORE_KEY, v) : localStorage.removeItem(STORE_KEY); },
 };
 
+/** #355: the saved account this tab works as (relayed by this server's hub), or null for this server's own sign-in.
+ *  Per tab (sessionStorage), with the hub CSRF token the relay's writes need. */
+const HUB_SLOT_KEY = 'sr_hub_slot';
+const HUB_CSRF_KEY = 'sr_hub_csrf';
+const tabValue = (key: string) => ({
+  get(): string | null { try { return sessionStorage.getItem(key); } catch { return null; } },
+  set(v: string | null) { try { if (v) sessionStorage.setItem(key, v); else sessionStorage.removeItem(key); } catch { /* storage blocked: stays on this server */ } },
+});
+const slotValue = tabValue(HUB_SLOT_KEY), hubCsrfValue = tabValue(HUB_CSRF_KEY);
+export const hub = {
+  get slot() { return slotValue.get(); },
+  set slot(v: string | null) { slotValue.set(v); },
+  get csrf() { return hubCsrfValue.get(); },
+  set csrf(v: string | null) { hubCsrfValue.set(v); },
+};
+
+/** The admin API for this tab: this server's, or the hub relay for the active saved account. */
+function adminBase(): string {
+  const slot = hub.slot;
+  return slot ? `/v1/hub/accounts/${slot}/admin` : '/v1/admin';
+}
+
+function addCsrf(headers: Record<string, string>): void {
+  if (hub.slot) { const t = hub.csrf; if (t) headers['x-hub-csrf'] = t; return; }
+  const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf;
+}
+
 function readCookie(name: string): string | null {
   const prefix = `${name}=`;
   const found = document.cookie.split('; ').find((part) => part.startsWith(prefix));
@@ -62,9 +89,11 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
   }
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (auth.store) headers['x-store-slug'] = auth.store;
-  if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
-  const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
-  if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
+  if (method !== 'GET') addCsrf(headers);
+  const res = await fetch(`${adminBase()}${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
+  // A relayed 401 means the saved account (or this browser's hub session) ended: back to this server's own sign-in.
+  if (res.status === 401 && hub.slot) { hub.slot = null; location.assign(adminHref('/accounts?error=reauth')); }
+  else if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
@@ -84,7 +113,7 @@ export const api = {
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   if (!res.ok) throw new ApiError(res.status, `export failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -101,7 +130,7 @@ export async function downloadExport(path: string): Promise<{ filename: string; 
   if (mock) return mock.data as { filename: string; orders: number | null; rows: number | null };
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   if (!res.ok) {
     const body = await res.json().catch(() => null) as { error?: string | { message?: string } } | null;
     const msg = typeof body?.error === 'string' ? body.error : body?.error?.message;
@@ -125,11 +154,11 @@ export interface AssetRow { id: string; path: string; url: string; width: number
 export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf;
+  addCsrf(headers);
   const fd = new FormData();
   fd.append('file', file);
   if (alt) fd.append('alt', alt);
-  const res = await fetch('/v1/admin/assets', { method: 'POST', headers, credentials: 'include', body: fd });
+  const res = await fetch(`${adminBase()}/assets`, { method: 'POST', headers, credentials: 'include', body: fd });
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw apiError(res.status, json, `upload failed (${res.status})`);
@@ -270,7 +299,7 @@ export function assetUrl(path: string | null): string | null {
 export async function apiText(path: string): Promise<string> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   const text = await res.text();
   if (!res.ok) {
     let json: Record<string, unknown> | null = null;
@@ -279,3 +308,28 @@ export async function apiText(path: string): Promise<string> {
   }
   return text;
 }
+
+// ── #355: saved accounts (this server as a hub) ──────────────────────────────
+export interface HubTarget { id: string; label: string }
+export interface HubAccount { id: string; targetId: string; targetLabel: string; adminEmail: string; expiresAt: string; lastUsedAt: string | null }
+
+async function hubReq<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (method !== 'GET') { const t = hub.csrf; if (t) headers['x-hub-csrf'] = t; }
+  const res = await fetch(`/v1/hub${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
+  return json as T;
+}
+
+export const hubApi = {
+  /** Starts or resumes this browser's hub session (keeping its CSRF token for this tab), then lists saved accounts. */
+  async load(): Promise<{ targets: HubTarget[]; accounts: HubAccount[] }> {
+    hub.csrf = (await hubReq<{ csrf: string }>('POST', '/session')).csrf;
+    return hubReq('GET', '/accounts');
+  },
+  /** The target's sign-in page for a new saved account. */
+  async enrol(targetId: string): Promise<string> { return (await hubReq<{ redirectTo: string }>('POST', '/enrol', { targetId })).redirectTo; },
+  remove: (id: string) => hubReq<{ ok: true }>('DELETE', `/accounts/${id}`),
+};
