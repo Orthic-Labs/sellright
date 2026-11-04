@@ -11,13 +11,15 @@
  *
  * Single-flight: at most one drain runs in this process; wakes arriving during a
  * drain set a rerun flag, and wakes arriving inside the debounce window coalesce.
- * Disabled (no-op) unless JOBS_ENABLED=1; otherwise the 60 s poll still covers it.
+ * The drain runs where jobs run (JOBS_ENABLED=1). A request-only process (#360 api-jobs split) instead sends
+ * pg_notify('email_wake'), and the jobs process drains on that notification; the 60 s poll still backs both up.
  * Never throws: drain errors are reported via onError.
  */
 import { getEnv } from '../env.js';
 import { err as logErr } from '../lib/logger.js';
 import { deliverEmails } from './outbox.js';
-import { detachFromPass } from '../db/client.js';
+import { detachFromPass, pool } from '../db/client.js';
+import { onListenerNotification } from '../store-context.js';
 import { AdmissionStoppedError, jobAdmission } from '../jobs/admission.js';
 
 export const WAKE_DEBOUNCE_MS = 250;
@@ -106,9 +108,22 @@ const sharedWaker = createEmailWaker({
   onError: (e) => { if (!(e instanceof AdmissionStoppedError)) logErr.error('email wake drain failed; 60 s poll will retry', e); },
 });
 
-/** Process-wide post-commit wake. No-op unless JOBS_ENABLED=1. */
+export const EMAIL_WAKE_CHANNEL = 'email_wake';
+
+// Request-only process: forward the wake to the jobs process. Same debounce and single-flight as the drain.
+const remoteWaker = createEmailWaker({
+  drain: () => pool.query('SELECT pg_notify($1, $2)', [EMAIL_WAKE_CHANNEL, '']),
+  enabled: () => !enabledOverride && getEnv().JOBS_ENABLED !== '1',
+  onError: (e) => logErr.error('email wake notify failed; 60 s poll will deliver', e),
+});
+
+// Jobs process: a wake from another process drains here.
+onListenerNotification(EMAIL_WAKE_CHANNEL, () => sharedWaker.wake());
+
+/** Process-wide post-commit wake: drains here when this process runs jobs, otherwise notifies the jobs process. */
 export function wakeEmailDelivery(): void {
   sharedWaker.wake();
+  remoteWaker.wake();
 }
 
 /** Test helper: wait for the process-wide waker to finish its pending drain. */

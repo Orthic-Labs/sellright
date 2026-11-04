@@ -131,6 +131,19 @@ let listenerClient: Client | undefined;
 
 interface InvalidationPayload { slug?: string; host?: string; }
 
+/** Extra NOTIFY channels served by the same LISTEN client (#360: the email wake from request-only processes). */
+const extraChannels = new Map<string, () => void>();
+const CHANNEL_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+
+/** Run `handler` whenever another process sends pg_notify(channel). Registered once per channel; it is LISTENed on
+ *  the store-cache listener connection, now or when it (re)connects. */
+export function onListenerNotification(channel: string, handler: () => void): void {
+  if (!CHANNEL_RE.test(channel) || channel === CHANNEL) throw new Error(`invalid listener channel ${channel}`);
+  const fresh = !extraChannels.has(channel);
+  extraChannels.set(channel, handler);
+  if (fresh && listenerClient) listenerClient.query(`LISTEN ${channel}`).catch((e) => logErr.error(`LISTEN ${channel} failed`, e));
+}
+
 /**
  * Call this INSTEAD of invalidateStoreCache() from any settings-mutation
  * handler — it invalidates locally (so the mutating process's own next read
@@ -203,6 +216,11 @@ async function connectStoreCacheInvalidationListener(): Promise<void> {
   if (listenerStopped || listenerClient) { await closeListener(client); return; } // stop() (or a racing connect) won
   listenerClient = client;
   client.on('notification', (msg) => {
+    const extra = extraChannels.get(msg.channel);
+    if (extra) {
+      try { extra(); } catch (e) { logErr.error(`listener handler for ${msg.channel} failed`, e); }
+      return;
+    }
     if (msg.channel !== CHANNEL) return;
     try {
       const payload = JSON.parse(msg.payload ?? '{}') as InvalidationPayload;
@@ -225,6 +243,7 @@ async function connectStoreCacheInvalidationListener(): Promise<void> {
   client.on('end', () => reconnect());
   try {
     await client.query(`LISTEN ${CHANNEL}`);
+    for (const channel of extraChannels.keys()) await client.query(`LISTEN ${channel}`);
   } catch (e) {
     reconnect(e);
     return;
