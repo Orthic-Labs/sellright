@@ -10,12 +10,18 @@
 //    public, once per page load, only while the stored preference is still the default) used to start only after the add finished,
 //    landing ~1 s into the drawer. Started here, the answer is in the stored preference when the drawer opens.
 import { useVisibleTask$ } from '@qwik.dev/core';
-import { resolveVisitorCountry } from '~/utils/addressStorage';
+// Only the two small modules the lookup needs (what resolveVisitorCountry does): importing utils/addressStorage here would drag the account
+// services and their shared bundle into the one bundle the preload closure hangs off.
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { lookupCountryCodeOnce } from '~/utils/visitor-country';
 
 export function usePreloadCartDrawer(): void {
 	useVisibleTask$(
 		() => {
-			void resolveVisitorCountry().catch(() => undefined);
+			if (!CountryPreferenceService.needsGeolocation()) return;
+			void lookupCountryCodeOnce()
+				.then((code) => { if (code) CountryPreferenceService.setCountryFromGeolocation(code); })
+				.catch(() => undefined);
 		},
 		{ strategy: 'document-idle' },
 	);

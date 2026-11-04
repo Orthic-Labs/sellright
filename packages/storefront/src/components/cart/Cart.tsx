@@ -109,6 +109,20 @@ export default component$(() => {
 		else if (armedCheckoutKey() !== null && armedCheckoutKey() !== key) syncCheckoutPrerender(null); // a change under way: the armed page is stale
 	}, { strategy: 'document-idle' });
 
+	// #425: the express wallets are not part of the drawer's first render. CartExpress and ExpressCheckout are their own bundle (checkout
+	// provider, Stripe.js): mounted a moment after the drawer is open, in a slot with the same box (the wrapper's margin), so the Checkout
+	// control is usable as soon as Cart and CartContents are loaded and nothing moves when the wallets arrive.
+	const showExpress = useSignal(false);
+	useVisibleTask$(({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		if (!open) {
+			showExpress.value = false;
+			return;
+		}
+		const timer = setTimeout(() => { showExpress.value = true; }, 1200);
+		cleanup(() => clearTimeout(timer));
+	}, { strategy: 'document-ready' });
+
 	const dropdownState = useStore({
 		pendingCountryCode: '',
 		debounceTimer: null as number | null,
@@ -520,7 +534,7 @@ export default component$(() => {
 								</div>
 
 								{/* Express wallets above CHECKOUT: the shopper's own cart, server-quoted (components/cart/CartExpress.tsx). */}
-								<CartExpress />
+								{showExpress.value ? <CartExpress /> : <div class="sr-cart-express mb-2" />}
 
 								<button
 									onClick$={$(async () => {

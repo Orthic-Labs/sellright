@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-	FIRST_ARM_DELAY_MS, REARM_DELAY_MS, activationGate, armedCheckoutKey, checkoutSpeculationRules, isPrerendering, resetCheckoutPrerenderForTest, supportsSpeculationRules, syncCheckoutPrerender, whenActivated,
+	FIRST_ARM_DELAY_MS, REARM_DELAY_MS, activationGate, armedCheckoutKey, CHECKOUT_RULES_TEXT, CHECKOUT_RULES_SHA256, isPrerendering, resetCheckoutPrerenderForTest, supportsSpeculationRules, syncCheckoutPrerender, whenActivated,
 } from './prerender';
 
 // A tiny fake of the document the module touches: head children by id, a listener list, and the prerendering flag.
@@ -49,9 +49,12 @@ describe('prerender activation', () => {
 });
 
 describe('checkout speculation rules', () => {
-	it('prerender exactly /checkout/ from a list, immediately by default', () => {
-		expect(JSON.parse(checkoutSpeculationRules())).toEqual({ prerender: [{ source: 'list', urls: ['/checkout/'], eagerness: 'immediate' }] });
-		expect(JSON.parse(checkoutSpeculationRules('moderate')).prerender[0].eagerness).toBe('moderate');
+	it('prerender exactly /checkout/ from a list, immediately', () => {
+		expect(JSON.parse(CHECKOUT_RULES_TEXT)).toEqual({ prerender: [{ source: 'list', urls: ['/checkout/'], eagerness: 'immediate' }] });
+	});
+	it('the CSP hash is the sha256 of exactly that text', async () => {
+		const { createHash } = await import('node:crypto');
+		expect(CHECKOUT_RULES_SHA256).toBe(createHash('sha256').update(CHECKOUT_RULES_TEXT, 'utf8').digest('base64'));
 	});
 });
 
@@ -81,7 +84,7 @@ describe('syncCheckoutPrerender', () => {
 		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS);
 		expect(rules()).toHaveLength(1);
 		expect(rules()[0].type).toBe('speculationrules');
-		expect(JSON.parse(rules()[0].textContent).prerender[0].urls).toEqual(['/checkout/']);
+		expect(rules()[0].textContent).toBe(CHECKOUT_RULES_TEXT); // byte-identical to what the CSP hashes
 		const first = rules()[0];
 		syncCheckoutPrerender('t|1');
 		expect(rules()).toHaveLength(1);

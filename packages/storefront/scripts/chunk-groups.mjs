@@ -14,6 +14,10 @@ const AREAS = [
 	// (platform/preload-graph.ts CART_ANCHOR). Alone in its own bundle so only the pages that run it preload the drawer; merged into
 	// a shared bundle the closure would apply to every page that loads it.
 	['cart-preload', /^platform\/controllers\/cart-preload\./],
+	// #425: the express wallets (the drawer's CartExpress and the checkout's ExpressCheckout, with their helpers). In the checkout area the
+	// drawer's first render loaded that whole bundle (150 KB: order modal, address forms, Stripe, NMI, validators) and, through its flattened
+	// closure edges (preload-graph.ts CHECKOUT_ANCHOR), every checkout route chunk. Their own bundle: the drawer loads it AFTER it is visible.
+	['express', /^components\/(cart\/CartExpress|checkout\/(ExpressCheckout|express-checkout|express-order))\./],
 	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
 	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
 	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],
@@ -23,8 +27,9 @@ const AREAS = [
 	// The widgets a brand view places (pay-later line, express buy-now, restock form, reviews, rich content): their own small bundle.
 	// In the cart bundle, a product page using one loaded the whole cart drawer at load (Rotten PDP: ~44 KB, #429).
 	['widgets', /^platform\/widgets\//],
-	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification)\/|components\/OrderProcessingModal|contexts\/Checkout|hooks\/(useCheckout|checkout-stage|pre-submit-stock|zero-due)\b)/],
-	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
+	['checkout', /^(routes\/checkout\/|components\/(checkout|payment|address-form|billing-address-form|verification|cart-totals)\/|components\/OrderProcessingModal|contexts\/Checkout|hooks\/(useCheckout|checkout-stage|pre-submit-stock|zero-due)\b)/],
+	// cart-totals is the checkout's summary (CheckoutOrderSummary), not the drawer's: with the checkout.
+	['cart', /^(components\/ui\/QuantityDropdown\.|components\/(cart|cart-contents|free-shipping-progress)\/|platform\/cart\.ts|platform\/gateway\/gate\.tsx)/],
 	['product', /^(routes\/products\/|routes\/shop\/\[[^/]+\]\/|brand-slots\/(route\.product|pdp\.)|components\/reviews\/|platform\/(product|configurator|stock-read|content-review)|platform\/controllers\/(product|configurator|stock-read)|brand\/configurator\/)/],
 	['home', /^(routes\/index\.tsx|brand-slots\/route\.home|components\/home\/|platform\/(home|home-spotlight)\b|platform\/controllers\/home)/],
 	['shop', /^(routes\/(shop\/index|collections|search)|components\/(Filters|facet-filter-controls|filters-button|products)\b|platform\/shop\b|platform\/controllers\/shop)/],

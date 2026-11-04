@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CHECKOUT_RULES_TEXT } from "~/utils/prerender";
 import {
 	CACHE_POLICY_VERSION,
 	NO_STORE_CACHE_CONTROL,
@@ -387,8 +388,8 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 			const csp = r.headers.get('content-security-policy')!;
 			const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src '))!;
 			expect(scriptSrc).not.toMatch(/nonce-|unsafe-inline|strict-dynamic/);
-			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' 'inline-speculation-rules' https://static.cloudflareinsights.com https://js.stripe.com`)).toBe(true);
-			expect(scriptSrc.match(/sha256-/g)).toHaveLength(2);
+			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' 'sha256-${sha(CHECKOUT_RULES_TEXT)}' https://static.cloudflareinsights.com https://js.stripe.com`)).toBe(true);
+			expect(scriptSrc.match(/sha256-/g)).toHaveLength(3); // the page's two inline scripts + the checkout prerender rules
 		});
 	});
 
@@ -576,7 +577,8 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 				const { r, text } = await get(path, SIGNED_IN);
 				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
 				expect(r.headers.get('content-security-policy'), path).toMatch(/'nonce-N[a-z0-9]+'/);
-				expect(r.headers.get('content-security-policy'), path).not.toMatch(/sha256-/);
+				// only the constant checkout-prerender rules hash: a nonce render allows no per-page inline hash
+				expect((r.headers.get('content-security-policy') ?? '').replace(`'sha256-${sha(CHECKOUT_RULES_TEXT)}'`, ''), path).not.toMatch(/sha256-/);
 				expect(r.headers.get('x-sr-edge'), path).toBeNull();
 				expect(text, path).toContain('Hi Jane');
 				expect(text, path).toContain('data-co="DE"');

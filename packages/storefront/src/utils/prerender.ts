@@ -34,9 +34,12 @@ export const activationGate = (): Promise<void> | undefined => (isPrerendering()
 /** The page the drawer's Checkout control opens. */
 export const CHECKOUT_PRERENDER_URL = '/checkout/';
 
-/** The Speculation Rules JSON for the checkout. Exactly this text is what the CSP's 'inline-speculation-rules' admits. */
-export const checkoutSpeculationRules = (eagerness: 'immediate' | 'moderate' = 'immediate'): string =>
-	JSON.stringify({ prerender: [{ source: 'list', urls: [CHECKOUT_PRERENDER_URL], eagerness }] });
+/** The Speculation Rules JSON for the checkout: the ONE text the page inserts and the CSP hashes. */
+export const CHECKOUT_RULES_TEXT = '{"prerender":[{"source":"list","urls":["/checkout/"],"eagerness":"immediate"}]}';
+
+/** base64 sha256 of CHECKOUT_RULES_TEXT. script-src carries it as 'sha256-...' on every render: Chrome ignores 'inline-speculation-rules'
+ *  once a policy has hashes (shell renders) or a nonce, exactly as it ignores 'unsafe-inline'. A test pins it to the text. */
+export const CHECKOUT_RULES_SHA256 = 'MnazFGrTDvWjs8L+6BgP0Xl4pYOqeN6SJdkY/YDPjJE=';
 
 /** The browser accepts inline speculation rules. */
 export function supportsSpeculationRules(): boolean {
@@ -65,11 +68,11 @@ function removeRules(): boolean {
 	return true;
 }
 
-function insertRules(eagerness: 'immediate' | 'moderate'): void {
+function insertRules(): void {
 	const script = document.createElement('script');
 	script.type = 'speculationrules';
 	script.id = RULES_ID;
-	script.textContent = checkoutSpeculationRules(eagerness);
+	script.textContent = CHECKOUT_RULES_TEXT;
 	document.head.appendChild(script);
 }
 
@@ -78,7 +81,7 @@ function insertRules(eagerness: 'immediate' | 'moderate'): void {
  * must not be prerendered: no server cart yet, a change in flight, drawer closed). The same key again keeps the prerender; a new key
  * discards it and prerenders anew; null discards it. No-op without Speculation Rules support.
  */
-export function syncCheckoutPrerender(key: string | null, eagerness: 'immediate' | 'moderate' = 'immediate'): void {
+export function syncCheckoutPrerender(key: string | null): void {
 	if (typeof document === 'undefined' || !supportsSpeculationRules()) return;
 	if (key === null) {
 		if (timer !== undefined) clearTimeout(timer);
@@ -98,7 +101,7 @@ export function syncCheckoutPrerender(key: string | null, eagerness: 'immediate'
 		timer = undefined;
 		if (pendingKey !== key) return;
 		pendingKey = null;
-		insertRules(eagerness);
+		insertRules();
 		armedKey = key;
 	}, hadRules ? REARM_DELAY_MS : FIRST_ARM_DELAY_MS);
 }

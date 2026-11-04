@@ -77,14 +77,16 @@ const anyMatch = (origins: readonly string[] | undefined, re: RegExp) => !!origi
 // second closure: seeds are the drawer's roots (the layout's cart wrapper, the drawer component) and the add handlers of the product
 // page and the configurator; the walk follows static and lazy edges through the drawer's own code (cart / cart contents / free-shipping
 // slot / contexts / cart + country services) and adds only bundles of that code. Pages without the anchor are unchanged.
-export const CART_ANCHOR = /^src\/platform\/controllers\/cart-preload\.ts/;
+// The SEGMENT only (…ts_<symbol>.js): the plain module cart-preload.ts is placed in a shared bundle every page loads, and anchoring there applied
+// the closure to every page (measured: a 143 KB shared bundle anchored it).
+export const CART_ANCHOR = /^src\/platform\/controllers\/cart-preload\.ts_/;
 // Seeds: every bundle made only of cart-area code (scripts/chunk-groups.mjs 'cart': the drawer, its contents, totals, free-shipping
 // bar), which is what the build groups the drawer into; and the bundles that contain the add handlers (product page, configurator) and the
 // cart writes (contexts), which the page itself does not load before the tap.
-export const CART_SEEDS = /^src\/(?:components\/ui\/QuantityDropdown\.|components\/(?:cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/cart\.ts)/;
+export const CART_SEEDS = /^src\/(?:components\/ui\/QuantityDropdown\.|components\/cart\/(?!CartExpress\.tsx_)|components\/(?:cart-contents|free-shipping-progress)\/|platform\/cart\.ts)/;
 export const CART_SEEDS_ANY = /^src\/(?:routes\/products\/.*ProductContent\.tsx_.*handleAddToCart|platform\/controllers\/configurator\.ts_.*onAddToCart|contexts\/CartContext\.tsx_(?:addToCartWithOutcome|loadCartIfNeeded)_)/;
 export const CART_REGION = new RegExp(
-	`^src/(?:components/(?:cart|cart-contents|free-shipping-progress|slots|ui)/|contexts/|services/(?:Cart|Country)|utils/(?:addressStorage|visitor-country|prerender|route-helpers)|sellright/|platform/(?:gateway|views|controllers/(?:cart-props|project))|brand-slots/cart\\.)`,
+	`^src/(?:components/cart/(?!CartExpress\\.tsx_)|components/(?:cart-contents|free-shipping-progress|slots|ui)/|contexts/|services/(?:Cart|Country)|utils/(?:addressStorage|visitor-country|prerender|route-helpers)|sellright/|platform/(?:gateway|views|controllers/(?:cart-props|project))|brand-slots/cart\\.)`,
 );
 export const CART_CLOSURE_PROBABILITY = 0.8;
 

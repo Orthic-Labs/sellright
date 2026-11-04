@@ -156,6 +156,13 @@ describe('cart-drawer closure (#425)', () => {
 		expect(CART_SEEDS.test('src/components/cart/Cart.tsx_Cart_component_abc.js')).toBe(true);
 		expect(CART_SEEDS.test('src/components/cart-contents/CartContents.tsx_x_abc.js')).toBe(true);
 		expect(CART_SEEDS.test('src/routes/checkout/index.tsx_Checkout_component_abc.js')).toBe(false);
+		// the express wallets and the checkout's totals are not the drawer: never seeds, never in the region
+		expect(CART_SEEDS.test('src/components/cart/CartExpress.tsx_CartExpress_component_abc.js')).toBe(false);
+		expect(CART_SEEDS.test('src/components/cart/CartExpress.tsx')).toBe(true); // the wrapper module sits in the Cart wrapper bundle
+		expect(CART_SEEDS.test('src/components/cart-totals/CartTotals.tsx_x_abc.js')).toBe(false);
+		expect(CART_REGION.test('src/components/cart/CartExpress.tsx_CartExpress_component_abc.js')).toBe(false);
+		expect(CART_REGION.test('src/components/checkout/ExpressCheckout.tsx_x_abc.js')).toBe(false);
+		expect(CART_REGION.test('src/components/cart/Cart.tsx_Cart_component_abc.js')).toBe(true);
 		expect(CART_ANCHOR.test('src/platform/controllers/cart-preload.ts_usePreloadCartDrawer_useVisibleTask_abc.js')).toBe(true);
 	});
 });
