@@ -20,7 +20,9 @@ export const EDGE_READ_TIMEOUT_MS = 2500;
 export const EDGE_MAX_READS = 6;
 
 /** A document request this Worker may compose; anything else is passed straight through. */
-export const isDocumentGet = (request) => request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html');
+export const isDocumentGet = (request) => request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html')
+	// The ADR-0001 edge-conformance watcher (deploy/edge-conformance.mjs) audits what the CACHE holds: it gets the shell untouched.
+	&& !(request.headers.get('user-agent') || '').includes('sellright-edge-conformance');
 
 /** The live reads a cached shell declares: its `Link` entries with rel=preload and as=fetch, same-origin paths only. The storefront
  *  derives that header from the same plan its early script runs (early-reads.ts earlyReadsLinkHeader), so these are exactly the reads

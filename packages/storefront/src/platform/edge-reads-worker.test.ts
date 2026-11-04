@@ -39,6 +39,7 @@ describe('#425 edge reads Worker', () => {
 	});
 	it('composes document GETs only', () => {
 		expect(isDocumentGet(req('https://s.test/shop/'))).toBe(true);
+		expect(isDocumentGet(req('https://s.test/shop/', { headers: { 'user-agent': 'sellright-edge-conformance/1' } }))).toBe(false); // the watcher audits the cache
 		expect(isDocumentGet(req('https://s.test/shop/', { method: 'HEAD' }))).toBe(false);
 		expect(isDocumentGet(new Request('https://s.test/shop/', { headers: { accept: 'application/json' } }))).toBe(false);
 		expect(edgeMeta(['/a/', '/b/'])).toBe(`<meta name="${EDGE_READS_META}" content="/a/ /b/">`);
