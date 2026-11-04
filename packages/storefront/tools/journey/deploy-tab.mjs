@@ -14,7 +14,7 @@ const before = await p.evaluate(() => document.querySelector('script[src*="/buil
 console.log('tab open at', new Date().toISOString(), 'build asset', before);
 while (!existsSync(process.env.GO_FILE || 'deploy-tab.go')) await sleep(2000);
 console.log('deploy done; using the old tab at', new Date().toISOString());
-await p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), opt); await sleep(800);
+for (const o of String(opt || '').split('|').filter((x) => x && x !== '-')) { await p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), o); await sleep(800); }
 await p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /add to (cart|bag)|^add\b/i.test(x.textContent.trim()) && !x.disabled)?.click());
 const drawer = await p.waitForFunction(() => [...document.querySelectorAll('button')].some((e) => /checkout/i.test(e.textContent || '') && e.getBoundingClientRect().height > 0), { timeout: 20000 }).then(() => true).catch(() => false);
 await sleep(1500);
