@@ -10,7 +10,9 @@
 //            never visible, not for a frame, and nothing moves. A failed or late read keeps the grid hidden (fail closed) and shows a
 //            notice; Qwik's own read then decides. No stock value is stored anywhere: the set of in-stock slugs lives in this
 //            function's scope for the one apply and nothing is written to the DOM but `display:none` on cards.
-//   checkout The order summary paints from the live cart read into SHADOW-DOM hosts that Qwik renders empty (`[data-sr-host]`), beside
+//   checkout The order summary paints from the visitor's live cart, read by the fixed-URL summary endpoint (/api/live/checkout-summary/:
+//            the server reads the `sr_cart` and country cookies exactly as the server-rendered summary does; private, no-store; its
+//            URL is in the shell's Link preload header), into SHADOW-DOM hosts that Qwik renders empty (`[data-sr-host]`), beside
 //            the Qwik skeleton, so Qwik's vnode diff never sees (and never wipes) the painted nodes. (The browser's `sr_cart_count`
 //            hint counts units, not lines, and the browser keeps no line items, so nothing can be painted before the read lands.) A cart this script cannot mirror
 //            exactly (a coupon, a pre-order line, an unavailable line) is left to Qwik: nothing is painted for it.
@@ -27,6 +29,8 @@ export interface ShopRevealParams {
 }
 
 export interface CheckoutPaintParams {
+	/** The request key of the summary read this script paints from (early-reads.ts CHECKOUT_SUMMARY_URL). */
+	k: string;
 	/** theme.domain and the asset variant revision: the image URLs must equal OptimizedImage's so Qwik's <img> hits the same cache entry. */
 	dm: string;
 	rev: number;
@@ -91,7 +95,7 @@ const PAINT_CSS =
 	".t{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:rgba(253,250,246,.4)}.t dd{font-weight:500;color:rgba(253,250,246,.6)}";
 
 const CHECKOUT_BODY =
-	"(function(w,d,P){try{var S=w.__srEarly;if(!S||!S.cp||!S.ct)return;" +
+	"(function(w,d,P){try{var S=w.__srEarly,p=S&&S.r&&S.r[P.k];if(!p||!S.ct)return;" +
 	"var CSS='" + PAINT_CSS.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "',st=0,mo=null,cart=null;" +
 	// escaping, formatting (Intl as utils/price-format.ts; '$' + grouped cents as hooks/checkout-total.ts formatCents)
 	"function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}" +
@@ -120,7 +124,7 @@ const CHECKOUT_BODY =
 	"(rem!==null&&rem<=5?'<div class=\"w\"><span>Only '+rem+' left</span></div>':'')+'<div class=\"q\">Qty '+esc(l.quantity)+'</div></div>'+" +
 	"'<div class=\"e\"><span class=\"p\">'+money(l.lineSubtotal,cur)+'</span></div></li>';}" +
 	// the cart this script can mirror exactly; anything else is left to Qwik (the skeleton stays)
-	"function mirrorable(c){if(!c||c.token!==S.ct||c.status!=='active'||c.pricingIntent!=='checkout'||!c.lines||!c.lines.length)return 0;" +
+	"function mirrorable(c){if(!c||c.status!=='active'||c.pricingIntent!=='checkout'||!c.lines||!c.lines.length)return 0;" +
 	"if(c.coupons&&c.coupons.length)return 0;for(var i=0;i<c.lines.length;i++){var l=c.lines[i];if(!l||l.available!==true||l.isPreOrder)return 0;}return 1;}" +
 	"function real(){if(st===2||!cart)return;var c=cart,cur=c.currency||'USD',sub=c.subtotal||0,dis=c.discountTotal||0,i,r='';" +
 	"for(i=0;i<c.lines.length;i++)r+=line(c.lines[i],cur);" +
@@ -129,7 +133,7 @@ const CHECKOUT_BODY =
 	"'<div class=\"t\"><dt>Shipping</dt><dd>'+(ship===null?'Calculated at next step':ship===0?'Free':money(ship,cur))+'</dd></div><div class=\"t\"><dt>Total</dt><dd>'+money(tot,cur)+'</dd></div>';" +
 	"if(put('lines','<ul>'+r+'</ul>')&&put('totals','<dl>'+t+'</dl>')){put('total',c.grandTotal>0?cents(c.grandTotal):'');st=2;if(mo)mo.disconnect();}}" +
 	"function go(){if(st<2&&cart)real();}" +
-	"S.cp.then(function(r){return r.ok?r.clone().json():null;}).then(function(j){if(mirrorable(j)){cart=j;go();}},function(){});" +
+	"p.then(function(r){return r.ok?r.json():null;}).then(function(j){j=j&&j.cart;if(mirrorable(j)){cart=j;go();}},function(){});" +
 	"try{mo=new MutationObserver(go);mo.observe(d.documentElement,{childList:true,subtree:true});}catch(e){}" +
 	"d.addEventListener('DOMContentLoaded',go);setTimeout(function(){if(mo)mo.disconnect();},8000);go();" +
 	"}catch(e){}})(window,document,";

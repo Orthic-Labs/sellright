@@ -10,6 +10,7 @@ import {
 	earlyReadsScriptSource,
 	earlyReadsScriptTag,
 	liveReadUrl,
+	CHECKOUT_SUMMARY_URL,
 	takeEarlyRead,
 	EARLY_READS_GLOBAL,
 	SHOP_CONFIG_URL,
@@ -188,6 +189,8 @@ describe('DP-6 shop reveal: the grid stays gated until the live in-stock filter 
 
 const TOKEN = 'tok-1';
 const line = (over: Record<string, unknown> = {}) => ({ sku: 'S1', name: 'Oni - Large', productName: 'Oni', productSlug: 'oni', quantity: 2, lineSubtotal: 9000, available: true, availableQuantity: null, image: 'a/oni.jpg', ...over });
+/** The /api/live/checkout-summary/ answer. */
+const sum = (c: unknown, status = 200) => json({ cart: c }, status);
 const cart = (over: Record<string, unknown> = {}) => ({ token: TOKEN, status: 'active', pricingIntent: 'checkout', currency: 'USD', subtotal: 9000, discountTotal: 0, shippingTotal: 500, grandTotal: 9500, quoteHash: 'qh', coupons: [], lines: [line()], ...over });
 
 /** The shell checkout's three empty paint hosts, each before its Qwik skeleton, as CheckoutOrderSummary renders them. */
@@ -202,7 +205,7 @@ async function startCheckout(answer: () => Promise<Response>, setup: () => void 
 	document.cookie = `sr_cart=${TOKEN}; Path=/`;
 	setup();
 	window.history.replaceState(null, '', '/checkout/');
-	vi.stubGlobal('fetch', vi.fn((u: string) => (u.startsWith('/v1/shop/cart/') ? answer() : Promise.resolve(json({})))));
+	vi.stubGlobal('fetch', vi.fn((u: string) => (u === CHECKOUT_SUMMARY_URL ? answer() : u.startsWith('/v1/shop/cart/') ? Promise.resolve(json(cart())) : Promise.resolve(json({})))));
 	const plan = buildEarlyReadsPlan('/checkout/', { ...ctx, assetDomain: 'damned.test', assetRev: 3 });
 	new Function(earlyReadsScriptSource(plan))();
 	new Function(earlyPaintScriptSource(plan)!)();
@@ -211,7 +214,7 @@ async function startCheckout(answer: () => Promise<Response>, setup: () => void 
 
 describe('DP-5 checkout summary paint: before hydration, into shadow-DOM hosts', () => {
 	it('paints the lines, the totals and the order total from the live cart read', async () => {
-		await startCheckout(() => Promise.resolve(json(cart())));
+		await startCheckout(() => Promise.resolve(sum(cart())));
 		for (const h of ['total', 'lines', 'totals']) expect(painted(h), h).toBe(true);
 		expect(hostText('total')).toBe('$95.00');
 		const lines = host('lines').shadowRoot!;
@@ -231,35 +234,34 @@ describe('DP-5 checkout summary paint: before hydration, into shadow-DOM hosts',
 		expect(CHECKOUT_STYLES).toContain('[data-sr-host][data-painted]+[data-sr-skel]{display:none}');
 	});
 	it('the hosts stay empty light DOM: Qwik never has a node here to diff or wipe', async () => {
-		await startCheckout(() => Promise.resolve(json(cart())));
+		await startCheckout(() => Promise.resolve(sum(cart())));
 		for (const h of ['total', 'lines', 'totals']) expect(host(h).childNodes).toHaveLength(0);
 	});
 	it('free shipping reads "Free", an unquoted cart "Calculated at next step", and a discount gets its row', async () => {
-		await startCheckout(() => Promise.resolve(json(cart({ shippingTotal: 0, grandTotal: 9000 }))));
+		await startCheckout(() => Promise.resolve(sum(cart({ shippingTotal: 0, grandTotal: 9000 }))));
 		expect(hostText('totals')).toContain('ShippingFree');
-		await startCheckout(() => Promise.resolve(json(cart({ quoteHash: '', shippingTotal: 0, grandTotal: 0, discountTotal: 1000 }))));
+		await startCheckout(() => Promise.resolve(sum(cart({ quoteHash: '', shippingTotal: 0, grandTotal: 0, discountTotal: 1000 }))));
 		expect(hostText('totals')).toContain('Calculated at next step');
 		expect(hostText('totals')).toContain('Discount-$10');
 		expect(hostText('totals')).toContain('Total$80'); // subtotal - discount, the arithmetic CartTotals does without a quote
 	});
-	it('a cart the script cannot mirror exactly is left to Qwik: coupon, pre-order, unavailable, unknown availability, another cart, converted, wrong intent, empty', async () => {
+	it('a cart the script cannot mirror exactly is left to Qwik: coupon, pre-order, unavailable, unknown availability, converted, wrong intent, empty', async () => {
 		const cases: Record<string, unknown> = {
 			coupon: cart({ coupons: [{ code: 'X', applied: true, appliedAmount: 100 }] }),
 			preorder: cart({ lines: [line({ isPreOrder: true })] }),
 			unavailable: cart({ lines: [line({ available: false })] }),
 			'unknown availability': cart({ lines: [line({ available: undefined })] }),
-			'another cart': cart({ token: 'someone-else' }),
 			converted: cart({ status: 'converted' }),
 			'preview intent': cart({ pricingIntent: 'preview' }),
 			empty: cart({ lines: [] }),
 		};
 		for (const [name, body] of Object.entries(cases)) {
-			await startCheckout(() => Promise.resolve(json(body)));
+			await startCheckout(() => Promise.resolve(sum(body)));
 			for (const h of ['total', 'lines', 'totals']) expect(painted(h), `${name} ${h}`).toBe(false);
 		}
 	});
 	it('a failed or late cart read paints nothing: the Qwik skeleton and entry read are exactly as before', async () => {
-		for (const answer of [() => Promise.resolve(json({ error: 'x' }, 500)), () => Promise.reject(new TypeError('offline')), () => new Promise<Response>(() => {})]) {
+		for (const answer of [() => Promise.resolve(json({ error: 'x' }, 500)), () => Promise.resolve(sum(null)), () => Promise.reject(new TypeError('offline')), () => new Promise<Response>(() => {})]) {
 			await startCheckout(answer);
 			expect(painted('lines')).toBe(false);
 		}
@@ -268,25 +270,28 @@ describe('DP-5 checkout summary paint: before hydration, into shadow-DOM hosts',
 		await startCheckout(() => new Promise<Response>(() => {}), () => localStorage.setItem('sr_cart_count', JSON.stringify({ token: TOKEN, count: 3 })));
 		for (const h of ['total', 'lines', 'totals']) expect(painted(h), h).toBe(false);
 	});
-	it('no cart cookie: no cart read, nothing painted', async () => {
+	it('no cart cookie: the summary read still starts (it matches the preload) but no cart read, nothing painted', async () => {
 		document.body.innerHTML = checkoutHtml;
 		clearCookies();
 		window.history.replaceState(null, '', '/checkout/');
-		vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json({}))));
+		const fetchMock = vi.fn((u: string) => Promise.resolve(u === CHECKOUT_SUMMARY_URL ? sum(cart()) : json({})));
+		vi.stubGlobal('fetch', fetchMock);
 		const plan = buildEarlyReadsPlan('/checkout/', damned);
 		new Function(earlyReadsScriptSource(plan))();
 		new Function(earlyPaintScriptSource(plan)!)();
 		await tick(10);
-		expect(painted('lines')).toBe(false);
+		expect(fetchMock.mock.calls.map((c) => c[0])).toContain(CHECKOUT_SUMMARY_URL);
+		expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith('/v1/shop/cart/'))).toBe(false);
+		expect(painted('lines')).toBe(false); // an answer for a visitor the page would not read a cart for is never painted
 	});
 	it('cart text is escaped: a product name is data, never markup', async () => {
-		await startCheckout(() => Promise.resolve(json(cart({ lines: [line({ productName: '<img src=x onerror=1>"', name: 'v' })] }))));
+		await startCheckout(() => Promise.resolve(sum(cart({ lines: [line({ productName: '<img src=x onerror=1>"', name: 'v' })] }))));
 		const lines = host('lines').shadowRoot!;
 		expect(lines.querySelector('h3')!.textContent).toBe('<img src=x onerror=1>"');
 		expect(lines.querySelectorAll('img')).toHaveLength(1); // only the thumbnail
 	});
-	it('the Qwik cart boot still takes the original early response (the script read a clone): no second round trip', async () => {
-		await startCheckout(() => Promise.resolve(json(cart())));
+	it('the Qwik cart boot still takes its own early cart read (single use); the summary read is the painter\'s alone', async () => {
+		await startCheckout(() => Promise.resolve(sum(cart())));
 		const key = Object.keys(store()!.r).find((k) => k.startsWith('/v1/shop/cart/'))!;
 		expect(Object.keys(store()!.r)).toContain(SHOP_CONFIG_URL);
 		expect(((await (await takeEarlyRead(key)!).json()) as { token: string }).token).toBe(TOKEN);

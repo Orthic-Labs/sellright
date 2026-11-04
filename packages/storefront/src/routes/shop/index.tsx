@@ -17,10 +17,13 @@ import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
 import { SHOP_GATE_CSS } from '~/platform/early-paint';
+import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 
 export { useCatalogLoader };
 export { useConfiguratorDetail } from '~/platform/configurator-detail';
 export { head, onStaticGenerate } from '~/platform/shop';
+// ADR-0001: the shell's `Link: rel=preload` header (Early Hints), only on a shell render (platform/early-reads.server.ts).
+export const onRequest = earlyHintsOnRequest;
 
 // Both shop and search use the same configured category identities and tags.
 const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
