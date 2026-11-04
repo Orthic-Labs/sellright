@@ -1,7 +1,8 @@
 import { test, expect, skipExternal } from './fixtures';
 import { eventually, readRows, sentEmails, SKU, uniq, PRODUCT } from './support/api';
 import { mock, postSezzleWebhook, signedSezzleWebhook } from './support/mock';
-import { addToCart, fillShipping, goToCheckout, placeOrder } from './support/flows';
+import type { Page } from '@playwright/test';
+import { addToCart, fillShipping, goToCheckout } from './support/flows';
 import { STORE_URL } from './support/env.mjs';
 import type { AdminApi } from './support/api';
 
@@ -31,14 +32,11 @@ test.describe('#8 Sezzle', () => {
 		await goToCheckout(page);
 		await fillShipping(page, email);
 		// Both gateways are configured, so the shopper chooses NMI or Sezzle.
-		await page.getByRole('radio', { name: 'Sezzle', exact: true }).click();
-		const placed = await placeOrder(page);
+		await page.getByRole('radiogroup', { name: 'Payment method' }).getByRole('radio', { name: /sezzle/i }).click();
+		// "Continue with Sezzle" places the order, asks the API for a Sezzle session, then sends the browser to Sezzle's hosted
+		// checkout, all in one click (#403).
+		const placed = await placeAndStartSezzle(page);
 		expect(placed.grandTotal).toBe(2500 + 500);
-		const startButton = page.getByRole('button', { name: /^continue/i });
-		await expect(startButton).toContainText('$30.00');
-
-		// Clicking it asks the API for a Sezzle session, then sends the browser to Sezzle's hosted checkout.
-		await startButton.click();
 		await page.waitForURL(/^https:\/\/sandbox\.checkout\.sezzle\.com\//, { timeout: 15_000 });
 		const redirect = new URL(page.url());
 		expect(redirect.protocol).toBe('https:');
@@ -91,9 +89,8 @@ test.describe('#8 Sezzle', () => {
 		await addToCart(page, PRODUCT.mug.slug);
 		await goToCheckout(page);
 		await fillShipping(page, `${uniq('sezret')}@example.net`);
-		await page.getByRole('radio', { name: 'Sezzle', exact: true }).click();
-		const placed = await placeOrder(page);
-		await page.getByRole('button', { name: /^continue/i }).click();
+		await page.getByRole('radiogroup', { name: 'Payment method' }).getByRole('radio', { name: /sezzle/i }).click();
+		const placed = await placeAndStartSezzle(page);
 		await page.waitForURL(/^https:\/\/sandbox\.checkout\.sezzle\.com\//, { timeout: 15_000 });
 		const session = (await mock.sezzleSessions()).find((s) => s.complete_url.includes(placed.code))!;
 
@@ -111,3 +108,11 @@ test.describe('#8 Sezzle', () => {
 		expect((await api.order(placed.code)).payments).toHaveLength(1);
 	});
 });
+
+async function placeAndStartSezzle(page: Page): Promise<{ code: string; receiptToken: string; grandTotal: number }> {
+	const response = page.waitForResponse((r) => r.url().includes('/v1/shop/checkout') && r.request().method() === 'POST');
+	await page.locator('#payment-method-section').getByRole('button', { name: /^continue with sezzle/i }).click();
+	const res = await response;
+	expect(res.status(), 'POST /v1/shop/checkout').toBe(200);
+	return (await res.json()) as { code: string; receiptToken: string; grandTotal: number };
+}

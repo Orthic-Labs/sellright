@@ -168,10 +168,14 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														aria-checked={props.paymentMethod.value === m}
 														disabled={locked}
 														onClick$={$(() => {
-															if (locked) return;
+															// Re-selecting the current method replaces nothing: bumping the view then would turn every callback
+															// of the still-mounted controls (init error, decline) into a stale one and drop it (#403).
+															if (locked || props.paymentMethod.value === m) return;
 															props.paymentMethod.value = m;
-															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
+															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected, and the old
+															// method's init failure does not block the new one (#403: a Stripe.js load failure hid the card form).
 															bumpView(props.paymentInit);
+															props.paymentInit.failed = false;
 														})}
 														class={methodTabClass(props.paymentMethod.value === m)}
 													>
@@ -204,7 +208,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
+														// Same rule as `needsConsent` (disabled): only an existing order's total needs consent; before it exists the
+														// totals left by a refused attempt are stale (#403: the click after confirming an updated quote did nothing).
+														if (props.srState.phase === 'paying' && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
@@ -238,7 +244,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
+														// Same rule as `needsConsent` (disabled): only an existing order's total needs consent; before it exists the
+														// totals left by a refused attempt are stale (#403: the click after confirming an updated quote did nothing).
+														if (props.srState.phase === 'paying' && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent || !cardFieldsReady.value}
