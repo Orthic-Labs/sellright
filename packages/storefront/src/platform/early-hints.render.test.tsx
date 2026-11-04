@@ -24,7 +24,7 @@ async function serve(enabled: boolean, exclude: string[], run: (get: (path: stri
 	const app = express();
 	app.use(policy.createShellRequestMiddleware({ enabled, exclude }) as never);
 	app.use((_req, res, next) => shellRenderContext.run(policy.isShellRender(res), next));
-	app.use((_req, res, next) => { res.setHeader('Content-Security-Policy', buildCsp({})); next(); });
+	app.use((_req, res, next) => { res.setHeader('Content-Security-Policy', buildCsp({ nonce: undefined })); next(); });
 	app.use((_req, res, next) => { res.setHeader('Cache-Control', policy.NO_STORE_CACHE_CONTROL); next(); });
 	app.use(policy.createShellCacheMiddleware({ enabled, ttlSeconds: 300, sha256Base64: sha }) as never);
 	app.use(policy.shellRenderUrl as never);
