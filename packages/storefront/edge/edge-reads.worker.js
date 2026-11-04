@@ -1,9 +1,9 @@
 /* global HTMLRewriter */
 // SellRight edge reads (#425, ADR-0001): a cached shell's live read, started at the edge when the request arrives.
 //
-// A cached shell page (/shop/, /checkout/) carries no live values: its early script (platform/early-reads.ts) reads them in the
+// A cached shell page (/shop/, /checkout/ today) carries no live values: its early script (platform/early-reads.ts) reads them in the
 // browser. That read can only start once the document's headers reach the browser, then pays a full trip to the origin. This Worker
-// starts the same GET at request arrival, in parallel with the shell (served from Cloudflare's cache), and appends its answer to the
+// starts the same GETs (the ones the shell's Link header declares) as soon as the cached shell's headers are in, and appends its answer to the
 // page as a non-executing JSON block before </body>. The page's early script sees <meta name="sr-edge"> naming the read, takes the
 // block instead of fetching (one read, same consumers), and falls back to its own fetch on a failed read or after EDGE_WAIT_MS.
 //
@@ -14,23 +14,31 @@
 // - Fail open: any error returns the origin's response unchanged (the page then reads in the browser as before).
 // - The JSON is escaped for the HTML context (no `<` survives) and the block is `type=application/json`: never executed.
 
-/** Path -> the live reads the page's early script makes on a shell render (early-reads.ts buildEarlyReadsPlan). */
-export const EDGE_READS = {
-	'/shop/': ['/api/live/shop-catalog/'],
-	'/checkout/': ['/api/live/checkout-summary/'],
-};
 /** An edge read slower than this is abandoned (data-ok=0): the page reads it itself. */
 export const EDGE_READ_TIMEOUT_MS = 2500;
+/** At most this many reads per page (a shell declares 1-3; early-reads.ts EARLY_LINK_MAX is 6). */
+export const EDGE_MAX_READS = 6;
 
-/** The reads to start for this request, or null to pass it through. */
-export function edgeReadsFor(request) {
-	if (request.method !== 'GET') return null;
-	const url = new URL(request.url);
-	if (url.search) return null; // a query URL is never a shell (route-cache-policy)
-	const keys = EDGE_READS[url.pathname];
-	if (!keys) return null;
-	if (!(request.headers.get('accept') || '').includes('text/html')) return null;
-	return keys;
+/** A document request this Worker may compose; anything else is passed straight through. */
+export const isDocumentGet = (request) => request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html');
+
+/** The live reads a cached shell declares: its `Link` entries with rel=preload and as=fetch, same-origin paths only. The storefront
+ *  derives that header from the same plan its early script runs (early-reads.ts earlyReadsLinkHeader), so these are exactly the reads
+ *  the page would start, for any store and page, with no list kept here. */
+export function edgeReadKeys(link) {
+	if (!link) return [];
+	const out = [];
+	for (const entry of link.split(/,(?=\s*<)/)) {
+		const m = entry.trim().match(/^<([^>]*)>(.*)$/);
+		if (!m) continue;
+		const params = m[2].toLowerCase();
+		if (!/;\s*rel="?preload"?(?:;|$|\s)/.test(params) || !/;\s*as="?fetch"?(?:;|$|\s)/.test(params)) continue;
+		const url = m[1];
+		if (!url.startsWith('/') || url.startsWith('//')) continue;
+		if (!out.includes(url)) out.push(url);
+		if (out.length >= EDGE_MAX_READS) break;
+	}
+	return out;
 }
 
 /** The Link header without the preloads of reads the Worker serves (the browser would otherwise fetch them a second time). */
@@ -87,14 +95,14 @@ export function composedHeaders(headers, keys) {
 
 export default {
 	async fetch(request) {
-		const keys = edgeReadsFor(request);
-		if (!keys) return fetch(request);
-		const origin = new URL(request.url).origin;
-		const reads = keys.map((k) => readLive(origin, k, request)); // started now, in parallel with the shell
-		const res = await fetch(request);
+		if (!isDocumentGet(request)) return fetch(request);
+		const res = await fetch(request); // a cached shell: a cache HIT, its headers in a few ms
 		try {
 			if (res.status !== 200 || !(res.headers.get('x-sr-edge') || '').startsWith('cacheable') || !(res.headers.get('content-type') || '').includes('text/html')) return res;
-			const done = Promise.all(reads);
+			const keys = edgeReadKeys(res.headers.get('link'));
+			if (!keys.length) return res;
+			const origin = new URL(request.url).origin;
+			const done = Promise.all(keys.map((k) => readLive(origin, k, request))); // started now, while the shell streams
 			return new HTMLRewriter()
 				.on('head', { element(e) { e.prepend(edgeMeta(keys), { html: true }); } })
 				.on('body', {
