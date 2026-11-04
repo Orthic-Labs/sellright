@@ -10,6 +10,10 @@ const AREAS = [
 	// The slot gate renders on every page (SlotHost, bound actions): shell. In the cart area its SlotHost pulled the cart drawer
 	// bundle onto every page with a brand slot (#427).
 	['shell', /^platform\/gateway\/gate\./],
+	// #425: the product page's idle task (platform/controllers/cart-preload.ts) is the ANCHOR of the cart-drawer preload closure
+	// (platform/preload-graph.ts CART_ANCHOR). Alone in its own bundle so only the pages that run it preload the drawer; merged into
+	// a shared bundle the closure would apply to every page that loads it.
+	['cart-preload', /^platform\/controllers\/cart-preload\./],
 	// Product-page widgets that live under other areas' folders: their render code re-runs on the product page, and in the checkout or
 	// account bundle it loaded that whole bundle there (Rotten PDP: ~40 KB br each, #427).
 	['product', /^components\/(loyalty\/LoyaltyPdpEarn|checkout\/ExpressBuyNow)\./],

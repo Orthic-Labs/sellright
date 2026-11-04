@@ -53,6 +53,10 @@ export interface KeptClosure {
 	 *  match is a root, and the walk expands only bundles whose sources are all in seeds, anchor or region. Only region / seed bundles are
 	 *  ever added, never the anchor's own lazy edges (which P7 deliberately dropped). */
 	seeds?: RegExp;
+	/** Bundles that merely CONTAIN a source matching this are seeds too (a page-area bundle that holds an add handler beside a lot else:
+	 *  since #427 segments are grouped per page area, so a bundle's sources are mixed and "all match" never holds for it). Seeds of this
+	 *  kind are added but not expanded (their static imports are followed by the preloader itself). */
+	seedsAny?: RegExp;
 }
 
 // Checkout routes (both commerce flows) and checkout-only components open the closure; the components and hooks the
@@ -74,7 +78,11 @@ const anyMatch = (origins: readonly string[] | undefined, re: RegExp) => !!origi
 // page and the configurator; the walk follows static and lazy edges through the drawer's own code (cart / cart contents / free-shipping
 // slot / contexts / cart + country services) and adds only bundles of that code. Pages without the anchor are unchanged.
 export const CART_ANCHOR = /^src\/platform\/controllers\/cart-preload\.ts/;
-export const CART_SEEDS = /^src\/(?:components\/cart\/(?:Cart|ConditionalCart)\.tsx_|routes\/products\/.*ProductContent\.tsx_.*handleAddToCart|platform\/controllers\/configurator\.ts_.*onAddToCart|contexts\/CartContext\.tsx_(?:addToCartWithOutcome|loadCartIfNeeded)_)/;
+// Seeds: every bundle made only of cart-area code (scripts/chunk-groups.mjs 'cart': the drawer, its contents, totals, free-shipping
+// bar), which is what the build groups the drawer into; and the bundles that contain the add handlers (product page, configurator) and the
+// cart writes (contexts), which the page itself does not load before the tap.
+export const CART_SEEDS = /^src\/(?:components\/ui\/QuantityDropdown\.|components\/(?:cart|cart-contents|cart-totals|free-shipping-progress)\/|platform\/cart\.ts)/;
+export const CART_SEEDS_ANY = /^src\/(?:routes\/products\/.*ProductContent\.tsx_.*handleAddToCart|platform\/controllers\/configurator\.ts_.*onAddToCart|contexts\/CartContext\.tsx_(?:addToCartWithOutcome|loadCartIfNeeded)_)/;
 export const CART_REGION = new RegExp(
 	`^src/(?:components/(?:cart|cart-contents|free-shipping-progress|slots|ui)/|contexts/|services/(?:Cart|Country)|utils/(?:addressStorage|visitor-country|prerender|route-helpers)|sellright/|platform/(?:gateway|views|controllers/(?:cart-props|project))|brand-slots/cart\\.)`,
 );
@@ -106,7 +114,9 @@ export function pruneBundleGraph(graph: BundleGraph, closure?: KeptClosure | rea
 		const marker = -Math.min(10, Math.max(1, Math.round(cl.probability * 10)));
 		const anchors = (name: string) => (cl.anchorMode === 'any' ? anyMatch(cl.origins(name), cl.anchor) : allMatch(cl.origins(name), cl.anchor));
 		const expands = (k: number) => allMatch(cl.origins(entries[k].name), cl.anchor, cl.region, ...(cl.seeds ? [cl.seeds] : []));
-		const seedIdx = cl.seeds ? entries.flatMap((s, y) => (JS_BUNDLE.test(s.name) && allMatch(cl.origins(s.name), cl.seeds as RegExp) ? [y] : [])) : [];
+		const seedIdx = cl.seeds
+			? entries.flatMap((s, y) => (JS_BUNDLE.test(s.name) && (allMatch(cl.origins(s.name), cl.seeds as RegExp) || (cl.seedsAny && anyMatch(cl.origins(s.name), cl.seedsAny))) ? [y] : []))
+			: [];
 		entries.forEach((e, k) => {
 			if (!JS_BUNDLE.test(e.name) || !anchors(e.name)) return;
 			const reached = new Set<number>([k]);
@@ -181,17 +191,19 @@ export function preloadGraphPlugin(): Plugin {
 				const file = path.join(dir, fileName);
 				const graph = JSON.parse(fs.readFileSync(file, 'utf8')) as BundleGraph;
 				const originsOf = (name: string) => origins.get(name);
+				const checkoutClosure: KeptClosure = { origins: originsOf, anchor: CHECKOUT_ANCHOR, region: CHECKOUT_REGION, probability: 0.8 };
 				const pruned = pruneBundleGraph(graph, [
-					{ origins: originsOf, anchor: CHECKOUT_ANCHOR, region: CHECKOUT_REGION, probability: 0.8 },
-					{ origins: originsOf, anchor: CART_ANCHOR, anchorMode: 'any', seeds: CART_SEEDS, region: CART_REGION, probability: CART_CLOSURE_PROBABILITY },
+					checkoutClosure,
+					{ origins: originsOf, anchor: CART_ANCHOR, anchorMode: 'any', seeds: CART_SEEDS, seedsAny: CART_SEEDS_ANY, region: CART_REGION, probability: CART_CLOSURE_PROBABILITY },
 				]);
 				fs.writeFileSync(file, JSON.stringify(pruned));
 				this.info?.(`preload graph ${fileName}: ${graph.length} -> ${pruned.length} entries (dynamic edges of JS bundles dropped; checkout + cart-drawer closures flattened)`);
 				// The cart-drawer closure needs its anchor (the product page's idle task) and its roots to exist as bundles: say so when not.
 				const names = [...origins.keys()];
 				const anchors = names.filter((n) => anyMatch(originsOf(n), CART_ANCHOR));
-				const seeds = names.filter((n) => allMatch(originsOf(n), CART_SEEDS));
-				this.info?.(`cart-drawer closure: ${anchors.length} anchor bundle(s), ${seeds.length} seed bundle(s)`);
+				const seeds = names.filter((n) => allMatch(originsOf(n), CART_SEEDS) || anyMatch(originsOf(n), CART_SEEDS_ANY));
+				// warn level on purpose: the client build runs with --logLevel warn, which hides info lines.
+				console.warn(`[preload-graph] cart-drawer closure: ${anchors.length} anchor bundle(s), ${seeds.length} seed bundle(s); ${pruned.length - pruneBundleGraph(graph, checkoutClosure).length} entries added by it`);
 				if (!anchors.length || !seeds.length) this.warn(`cart-drawer closure has ${anchors.length} anchor and ${seeds.length} seed bundles: the Add to cart tap loads the drawer on demand (platform/preload-graph.ts CART_ANCHOR / CART_SEEDS no longer match the build)`);
 			}
 		},

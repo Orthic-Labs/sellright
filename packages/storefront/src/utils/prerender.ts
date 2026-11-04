@@ -50,6 +50,9 @@ export function supportsSpeculationRules(): boolean {
 const RULES_ID = 'sr-checkout-prerender';
 /** How long a removal is given to take effect before the rules are inserted again. */
 export const REARM_DELAY_MS = 150;
+/** The first arming waits this long after the cart settled: a prerender is a whole page load (HTML, scripts) and must not compete for
+ *  the connection with the drawer's own last requests (its shipping quote) on a slow phone. */
+export const FIRST_ARM_DELAY_MS = 800;
 
 let armedKey: string | null = null;
 let pendingKey: string | null = null;
@@ -89,13 +92,7 @@ export function syncCheckoutPrerender(key: string | null, eagerness: 'immediate'
 	if (timer !== undefined) clearTimeout(timer);
 	timer = undefined;
 	armedKey = null;
-	const hadRules = removeRules();
-	if (!hadRules) {
-		insertRules(eagerness);
-		armedKey = key;
-		pendingKey = null;
-		return;
-	}
+	const hadRules = removeRules() || pendingKey !== null; // replacing a state: the short pause
 	pendingKey = key;
 	timer = setTimeout(() => {
 		timer = undefined;
@@ -103,8 +100,11 @@ export function syncCheckoutPrerender(key: string | null, eagerness: 'immediate'
 		pendingKey = null;
 		insertRules(eagerness);
 		armedKey = key;
-	}, REARM_DELAY_MS);
+	}, hadRules ? REARM_DELAY_MS : FIRST_ARM_DELAY_MS);
 }
+
+/** The key the rules are armed (or about to be re-armed) for, or null. */
+export const armedCheckoutKey = (): string | null => armedKey ?? pendingKey;
 
 /** Test seam: forget what is armed. */
 export function resetCheckoutPrerenderForTest(): void {

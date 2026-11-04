@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CART_ANCHOR, CART_REGION, CART_SEEDS, CHECKOUT_ANCHOR, CHECKOUT_REGION, pruneBundleGraph, type BundleGraph } from './preload-graph';
+import { CART_ANCHOR, CART_REGION, CART_SEEDS, CART_SEEDS_ANY, CHECKOUT_ANCHOR, CHECKOUT_REGION, pruneBundleGraph, type BundleGraph } from './preload-graph';
 
 // Decode the flat graph the same way the rc.3 preloader does (preloader.mjs `F`): name -> [{dep, probability}].
 const decode = (g: BundleGraph) => {
@@ -118,7 +118,8 @@ describe('cart-drawer closure (#425)', () => {
 	const origins: Record<string, string[]> = {
 		'idle.js': ['src/platform/controllers/cart-preload.ts_usePreloadCartDrawer_useVisibleTask_abc.js'],
 		'util.js': ['src/utils/addressStorage.ts'],
-		'handler.js': ['src/routes/products/[...slug]/ProductContent.tsx_ProductContent_component_handleAddToCart_abc.js'],
+		// since #427 a bundle holds a whole page area's segments: the handler's bundle is mixed
+		'handler.js': ['src/routes/products/[...slug]/ProductContent.tsx_ProductContent_component_handleAddToCart_abc.js', 'src/components/reviews/Reviews.tsx_x_abc.js'],
 		'cc.js': ['src/components/cart/ConditionalCart.tsx_ConditionalCart_component_abc.js'],
 		'cart.js': ['src/components/cart/Cart.tsx_Cart_component_abc.js'],
 		'cartutil.js': ['src/components/cart/cart-shipping.ts'],
@@ -129,7 +130,7 @@ describe('cart-drawer closure (#425)', () => {
 		'page.js': ['src/routes/products/[...slug]/index.tsx'],
 		'other.js': ['src/routes/other/index.tsx'],
 	};
-	const cl = { origins: (n: string) => origins[n], anchor: CART_ANCHOR, anchorMode: 'any' as const, seeds: CART_SEEDS, region: CART_REGION, probability: 0.8 };
+	const cl = { origins: (n: string) => origins[n], anchor: CART_ANCHOR, anchorMode: 'any' as const, seeds: CART_SEEDS, seedsAny: CART_SEEDS_ANY, region: CART_REGION, probability: 0.8 };
 	const g1 = decode(pruneBundleGraph(graph, cl));
 	const names1 = (n: string) => g1[n].map((d) => d.dep);
 
@@ -150,8 +151,11 @@ describe('cart-drawer closure (#425)', () => {
 		expect(both['idle.js']).toEqual(g1['idle.js']);
 	});
 	it('matches the real segment names the build produces', () => {
-		expect(CART_SEEDS.test('src/platform/controllers/configurator.ts_useConfigurator_onAddToCart_abc.js')).toBe(true);
-		expect(CART_SEEDS.test('src/contexts/CartContext.tsx_addToCartWithOutcome_abc.js')).toBe(true);
+		expect(CART_SEEDS_ANY.test('src/platform/controllers/configurator.ts_useConfigurator_onAddToCart_abc.js')).toBe(true);
+		expect(CART_SEEDS_ANY.test('src/contexts/CartContext.tsx_addToCartWithOutcome_abc.js')).toBe(true);
+		expect(CART_SEEDS.test('src/components/cart/Cart.tsx_Cart_component_abc.js')).toBe(true);
+		expect(CART_SEEDS.test('src/components/cart-contents/CartContents.tsx_x_abc.js')).toBe(true);
 		expect(CART_SEEDS.test('src/routes/checkout/index.tsx_Checkout_component_abc.js')).toBe(false);
+		expect(CART_ANCHOR.test('src/platform/controllers/cart-preload.ts_usePreloadCartDrawer_useVisibleTask_abc.js')).toBe(true);
 	});
 });

@@ -96,17 +96,28 @@ describe('the script in the browser', () => {
 		expect(store()!.h).toBe('/products/oni/?utm_source=x');
 		expect(Object.keys(store()!.r)).toEqual(started(m));
 	});
-	it('#425: a document being prerendered starts no read (its consumers read live after activation)', () => {
-		document.cookie = 'sr_cart=tok%2F1; Path=/';
+	it('#425: a normal (not prerendering) document starts its reads at parse, as before', () => {
+		expect((document as unknown as { prerendering?: boolean }).prerendering).not.toBe(true);
+		const m = runScript('/checkout/', damned);
+		expect(started(m)).toEqual([CHECKOUT_SUMMARY_URL, SHOP_CONFIG_URL]);
+		expect(Object.keys(store()!.r)).toEqual(started(m));
+	});
+	it('#425: a prerendered document starts them at activation, reading the cookie then', () => {
 		Object.defineProperty(document, 'prerendering', { value: true, configurable: true });
+		let m: ReturnType<typeof runScript>;
 		try {
-			const m = runScript('/checkout/', damned);
+			m = runScript('/checkout/', damned);
 			expect(started(m)).toEqual([]);
 			expect(store()!.r).toEqual({});
+			document.cookie = 'sr_cart=tokA; Path=/';
 		} finally {
 			delete (document as unknown as { prerendering?: boolean }).prerendering;
 		}
-		expect(started(runScript('/checkout/', damned)).length).toBeGreaterThan(0);
+		document.dispatchEvent(new Event('prerenderingchange'));
+		expect(started(m)).toEqual([CHECKOUT_SUMMARY_URL, SHOP_CONFIG_URL, '/v1/shop/cart/tokA?pricingIntent=checkout&shipCountry=US&includeShippingMethods=1']);
+		expect(Object.keys(store()!.r)).toEqual(started(m));
+		document.dispatchEvent(new Event('prerenderingchange'));
+		expect(started(m)).toHaveLength(3); // once
 	});
 	it('session only with a session marker cookie', () => {
 		expect(started(runScript('/blog/', damned))).toEqual([]);

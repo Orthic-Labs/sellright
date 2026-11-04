@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-	REARM_DELAY_MS, activationGate, checkoutSpeculationRules, isPrerendering, resetCheckoutPrerenderForTest, supportsSpeculationRules, syncCheckoutPrerender, whenActivated,
+	FIRST_ARM_DELAY_MS, REARM_DELAY_MS, activationGate, armedCheckoutKey, checkoutSpeculationRules, isPrerendering, resetCheckoutPrerenderForTest, supportsSpeculationRules, syncCheckoutPrerender, whenActivated,
 } from './prerender';
 
 // A tiny fake of the document the module touches: head children by id, a listener list, and the prerendering flag.
@@ -75,8 +75,10 @@ describe('syncCheckoutPrerender', () => {
 		expect(rules()).toHaveLength(0);
 	});
 
-	it('arms once for a cart state and keeps it while the state is unchanged', () => {
+	it('arms once for a cart state (after the first-arm pause) and keeps it while the state is unchanged', () => {
 		syncCheckoutPrerender('t|1');
+		expect(rules()).toHaveLength(0);
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS);
 		expect(rules()).toHaveLength(1);
 		expect(rules()[0].type).toBe('speculationrules');
 		expect(JSON.parse(rules()[0].textContent).prerender[0].urls).toEqual(['/checkout/']);
@@ -88,6 +90,7 @@ describe('syncCheckoutPrerender', () => {
 
 	it('a changed cart removes the rules at once and re-arms for the new state after the pause (a stale prerender is discarded)', () => {
 		syncCheckoutPrerender('t|1');
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS);
 		syncCheckoutPrerender('t|2');
 		expect(rules()).toHaveLength(0); // removed; not yet re-inserted
 		vi.advanceTimersByTime(REARM_DELAY_MS - 1);
@@ -96,18 +99,34 @@ describe('syncCheckoutPrerender', () => {
 		expect(rules()).toHaveLength(1);
 	});
 
-	it('null (no server cart, a write in flight, drawer closed) removes the rules and cancels a pending re-arm', () => {
+	it('null (no server cart, a write in flight, drawer closed) removes the rules and cancels a pending arm', () => {
 		syncCheckoutPrerender('t|1');
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS);
 		syncCheckoutPrerender('t|2');
 		syncCheckoutPrerender(null);
-		vi.advanceTimersByTime(REARM_DELAY_MS * 2);
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS * 2);
 		expect(rules()).toHaveLength(0);
-		syncCheckoutPrerender('t|2'); // arming again after null is immediate (nothing to discard)
+	});
+
+	it('the same key again while the first arming is pending does not restart the pause', () => {
+		syncCheckoutPrerender('t|1');
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS - 1);
+		syncCheckoutPrerender('t|1');
+		vi.advanceTimersByTime(1);
 		expect(rules()).toHaveLength(1);
+	});
+
+	it('exposes the key it is armed (or about to be armed) for', () => {
+		expect(armedCheckoutKey()).toBeNull();
+		syncCheckoutPrerender('k1');
+		expect(armedCheckoutKey()).toBe('k1');
+		syncCheckoutPrerender(null);
+		expect(armedCheckoutKey()).toBeNull();
 	});
 
 	it('a newer state during the pause wins; only one script is ever left', () => {
 		syncCheckoutPrerender('t|1');
+		vi.advanceTimersByTime(FIRST_ARM_DELAY_MS);
 		syncCheckoutPrerender('t|2');
 		syncCheckoutPrerender('t|3');
 		vi.advanceTimersByTime(REARM_DELAY_MS * 3);

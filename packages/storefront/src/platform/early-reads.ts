@@ -4,8 +4,9 @@
 // The Qwik consumer TAKES AND DELETES it once (single-use hand-off) when it would have started that same request, and falls back to
 // its own live request when the promise is absent or rejects.
 //
-// #425: a document that is being PRERENDERED (the drawer's /checkout/ speculation, utils/prerender.ts) starts no read: its reads would be
-// made seconds before the shopper sees the page. Its consumers read live, after activation (the SellRight client waits for it).
+// #425: a document that is being PRERENDERED (the drawer's /checkout/ speculation, utils/prerender.ts) starts its reads when it is
+// ACTIVATED (prerenderingchange), not seconds earlier in a hidden tab; the cookie is read then. Every other document starts them at parse,
+// exactly as before (document.prerendering is false). The listener is registered first, so the reads exist before any consumer takes one.
 //
 // LOCKED stock rules: nothing here caches, debounces or stores a value. A promise is consumed at most once, only by the page load's own
 // automatic read of the document it was started for (navigating away drops every unconsumed one), and never by a later read
@@ -189,7 +190,7 @@ export function earlyReadsLinkHeader(pathname: string, ctx: EarlyReadsContext): 
  */
 const SCRIPT_BODY =
 	"(function(w,d,P){try{if(!w.fetch)return;var c=d.cookie||'',S={h:location.pathname+location.search,r:{}};w." + EARLY_READS_GLOBAL + "=S;" +
-	"if(d.prerendering)return;" +
+	"var run=function(){c=d.cookie||'';" +
 	"var f=function(u,l){try{var p=w.fetch(u,{credentials:'include',cache:'no-store',priority:l?'low':'auto'});p['catch'](function(){});S.r[u]=p;return p;}catch(e){}};" +
 	"try{w.navigation.addEventListener('navigate',function(e){var u=new URL(e.destination.url);if(u.pathname+u.search!==S.h)S.r={};});}catch(e){}" +
 	"for(var i=0;i<P.g.length;i++)f(P.g[i][0],P.g[i][1]);" +
@@ -201,7 +202,9 @@ const SCRIPT_BODY =
 	"var cp=JSON.parse(L.getItem('sr_country_pref')||'null');if(cp&&/^[A-Z]{2}$/.test(cp.countryCode))co=cp.countryCode;}catch(e){ok=0;}" +
 	"if(ok){var b='/v1/shop/cart/'+encodeURIComponent(t);if(P.k){var cc=c.match(/(?:^|;\\s*)countryCode=([^;]*)/);" +
 	"S.ct=t;f(b+'?pricingIntent=checkout&shipCountry='+encodeURIComponent(cc&&cc[1]||co)+'&includeShippingMethods=1');}" +
-	"else f(b+'?shipCountry='+encodeURIComponent(co));}}}catch(e){}})(window,document,";
+	"else f(b+'?shipCountry='+encodeURIComponent(co));}}" +
+	"};if(d.prerendering)d.addEventListener('prerenderingchange',run,{once:true});else run();" +
+	"}catch(e){}})(window,document,";
 
 /** JSON safe inside an HTML <script> element (no `</script>`, no `<!--`, no U+2028/2029). */
 const scriptJson = (value: unknown): string =>

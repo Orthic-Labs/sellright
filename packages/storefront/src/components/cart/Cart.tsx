@@ -7,7 +7,7 @@ import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useCart, retireSettledCart, reopenCart, awaitCartWrites } from '~/contexts/CartContext';
-import { syncCheckoutPrerender } from '~/utils/prerender';
+import { armedCheckoutKey, syncCheckoutPrerender } from '~/utils/prerender';
 import { CartService } from '~/services/CartService';
 import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
@@ -93,17 +93,20 @@ export default component$(() => {
 		const loading = track(() => cartState.isLoading);
 		const pending = track(() => cartState.pendingAdds ?? 0);
 		const token = track(() => cartState.cart.token);
-		const revision = track(() => cartState.cart.revision);
 		const status = track(() => cartState.cart.status);
-		const lineCount = track(() => cartState.cart.lines.length);
+		// What /checkout/ shows of this cart: the lines, their quantities and the coupons. NOT the revision, the shipping quote, the
+		// destination or a confirmation that matches the optimistic lines: those do not change the page, and re-arming on them discarded
+		// the prerender before the tap could use it.
+		const lines = track(() => cartState.cart.lines.map((l) => l.sku + ':' + l.quantity).join(','));
 		const coupons = track(() => (cartState.cart.couponCodes ?? []).join(','));
-		const country = track(() => appState.shippingAddress.countryCode);
-		const exists = !!token && token === CartService.token();
-		syncCheckoutPrerender(
-			open && isInEditableUrl && !loading && pending === 0 && status === 'active' && lineCount > 0 && exists
-				? [token, revision, coupons, country].join('|')
-				: null,
-		);
+		const eligible = open && isInEditableUrl && status === 'active' && lines !== '' && !!token && token === CartService.token();
+		if (!eligible) {
+			syncCheckoutPrerender(null);
+			return;
+		}
+		const key = [token, lines, coupons].join('|');
+		if (!loading && pending === 0) syncCheckoutPrerender(key); // armed only when the cart write queue is idle
+		else if (armedCheckoutKey() !== null && armedCheckoutKey() !== key) syncCheckoutPrerender(null); // a change under way: the armed page is stale
 	}, { strategy: 'document-idle' });
 
 	const dropdownState = useStore({
