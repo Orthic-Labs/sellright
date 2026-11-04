@@ -5,18 +5,15 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	buildEarlyReadsPlan,
-	earlyJsonOr,
 	earlyPaintScriptSource,
 	earlyReadsScriptSource,
 	earlyReadsScriptTag,
-	liveReadUrl,
 	CHECKOUT_SUMMARY_URL,
 	takeEarlyRead,
 	EARLY_READS_GLOBAL,
 	SHOP_CONFIG_URL,
 	type EarlyReadsContext,
 } from './early-reads';
-import { SHOP_GATE_CSS } from './early-paint';
 import { buildCsp, executableInlineScripts, inlineScriptHashSources, withScriptHashes } from '~/utils/csp';
 import { CHECKOUT_STYLES } from '~/routes/checkout/checkout-styles';
 
@@ -50,8 +47,8 @@ afterEach(() => {
 });
 
 describe('plan: which render gets a paint script', () => {
-	it('shell /shop/ (base grid) and shell /checkout/ only; dynamic, excluded, brand shop, license and the opt-out get none', () => {
-		expect(buildEarlyReadsPlan('/shop/', damned).paint).toEqual({ kind: 'shop', k: liveReadUrl('shop-catalog'), t: 4000 });
+	it('shell /checkout/ only; the shop (#425: its grid is visible from the HTML), dynamic, excluded, license and the opt-out get none', () => {
+		expect(buildEarlyReadsPlan('/shop/', damned).paint).toBeUndefined();
 		expect(buildEarlyReadsPlan('/checkout/', damned).paint).toMatchObject({ kind: 'checkout' });
 		expect(buildEarlyReadsPlan('/shop/', { ...damned, shell: false }).paint).toBeUndefined();
 		expect(buildEarlyReadsPlan('/checkout/', { ...damned, shell: false }).paint).toBeUndefined();
@@ -60,13 +57,13 @@ describe('plan: which render gets a paint script', () => {
 		for (const p of ['/', '/products/oni/', '/blog/', '/shop/oni/']) expect(buildEarlyReadsPlan(p, damned).paint, p).toBeUndefined();
 	});
 	it('the tag carries the reads script and then the paint script; a plan without paint has one script', () => {
-		const plan = buildEarlyReadsPlan('/shop/', damned);
+		const plan = buildEarlyReadsPlan('/checkout/', damned);
 		expect(executableInlineScripts(earlyReadsScriptTag(plan))).toEqual([earlyReadsScriptSource(plan), earlyPaintScriptSource(plan)]);
 		expect(executableInlineScripts(earlyReadsScriptTag(buildEarlyReadsPlan('/', damned)))).toHaveLength(1);
 	});
 	it('a shell render allows both scripts by sha256; a nonce render nonces both (CSP)', () => {
 		const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('base64');
-		for (const path of ['/shop/', '/checkout/']) {
+		for (const path of ['/checkout/']) {
 			const plan = buildEarlyReadsPlan(path, damned);
 			const csp = withScriptHashes(buildCsp({ nonce: undefined }), inlineScriptHashSources(earlyReadsScriptTag(plan), sha));
 			for (const src of [earlyReadsScriptSource(plan), earlyPaintScriptSource(plan)!]) expect(csp, path).toContain(`'sha256-${sha(src)}'`);
@@ -76,7 +73,7 @@ describe('plan: which render gets a paint script', () => {
 		}
 	});
 	it('the paint scripts carry no price, stock value or visitor value (the shell is identical for every visitor) and are safe inside <script>', () => {
-		for (const path of ['/shop/', '/checkout/']) {
+		for (const path of ['/checkout/']) {
 			const src = earlyPaintScriptSource(buildEarlyReadsPlan(path, damned))!;
 			expect(src).not.toContain('</script');
 			expect(src).not.toMatch(/[$€£₹]\s?\d/); // edge-conformance's currency scan
@@ -84,104 +81,6 @@ describe('plan: which render gets a paint script', () => {
 			expect(src).not.toMatch(/"inStock"\s*:\s*true/);
 			expect(src).not.toMatch(/sessionStorage|localStorage\.setItem|document\.cookie\s*=/); // LOCKED: nothing stock-like is stored
 		}
-	});
-});
-
-// ---------------------------------------------------------------------------------------------------- shop
-
-/** The shell shop page as the server sends it: the gated grid with its `data-slug` wrappers, the end sentinel after it. */
-const gridHtml = (slugs: string[], sentinel = true) =>
-	`<div id="grid" data-listing-pending="" data-live-gate="">${slugs.map((s) => `<div class="contents" data-slug="${s}"><a href="/products/${s}/">${s}</a></div>`).join('')}</div>${sentinel ? '<i hidden data-live-gate-end=""></i>' : ''}`;
-
-function startShop(answer: () => Promise<Response>) {
-	window.history.replaceState(null, '', '/shop/');
-	vi.stubGlobal('fetch', vi.fn(() => answer()));
-	const plan = buildEarlyReadsPlan('/shop/', damned);
-	new Function(earlyReadsScriptSource(plan))();
-	new Function(earlyPaintScriptSource(plan)!)();
-}
-const shown = () => Array.from(document.getElementById('grid')!.children).filter((c) => (c as HTMLElement).style.display !== 'none').map((c) => c.getAttribute('data-slug'));
-const applied = () => document.getElementById('grid')!.hasAttribute('data-live-applied');
-const slow = () => document.documentElement.hasAttribute('data-sr-shop-slow');
-const catalog = (items: Array<[string, boolean]>) => json({ totalItems: items.length, products: items.map(([slug, inStock]) => ({ slug, inStock })) });
-
-describe('DP-6 shop reveal: the grid stays gated until the live in-stock filter is applied', () => {
-	it('hides every card the live read does not confirm in stock, then lifts the gate', async () => {
-		startShop(() => Promise.resolve(catalog([['a', true], ['b', false], ['c', true]])));
-		document.body.innerHTML = gridHtml(['a', 'b', 'c', 'd']);
-		await tick();
-		expect(shown()).toEqual(['a', 'c']); // b is out of stock; d is not in the read at all (fail closed)
-		expect(applied()).toBe(true);
-		expect(slow()).toBe(false);
-	});
-	it('nothing is un-gated before the read lands, so no card is visible for a frame', async () => {
-		let release!: (res: Response) => void;
-		startShop(() => new Promise<Response>((resolve) => { release = resolve; }));
-		document.body.innerHTML = gridHtml(['a', 'b']);
-		await tick(5);
-		expect(document.getElementById('grid')!.hasAttribute('data-live-gate')).toBe(true);
-		expect(applied()).toBe(false); // CSS: [data-live-gate]:not([data-live-applied]){visibility:hidden}
-		release(catalog([['a', true], ['b', false]]));
-		await tick();
-		expect(shown()).toEqual(['a']);
-		expect(applied()).toBe(true);
-	});
-	it('the gate is lifted only after the out-of-stock cards are hidden (same synchronous step)', async () => {
-		startShop(() => Promise.resolve(catalog([['a', true], ['b', false]])));
-		const seen: (string | null)[][] = [];
-		const grid = () => document.getElementById('grid');
-		new MutationObserver(() => { if (grid()?.hasAttribute('data-live-applied')) seen.push(shown()); }).observe(document.documentElement, { attributes: true, subtree: true, childList: true });
-		document.body.innerHTML = gridHtml(['a', 'b']);
-		await tick();
-		expect(seen.length).toBeGreaterThan(0);
-		for (const s of seen) expect(s).toEqual(['a']); // at no observable point was the gate lifted with b still shown
-	});
-	it('a card whose inStock is not exactly true is hidden (fail closed); prototype-named slugs never match', async () => {
-		startShop(() => Promise.resolve(json({ products: [{ slug: 'a', inStock: 'true' }, { slug: 'b', inStock: true }] })));
-		document.body.innerHTML = gridHtml(['a', 'b', 'constructor', '__proto__']);
-		await tick();
-		expect(shown()).toEqual(['b']);
-	});
-	it('a failed read (5xx, network, malformed) keeps the grid gated, nothing un-gated, and shows the notice', async () => {
-		for (const answer of [() => Promise.resolve(json({ error: 'x' }, 503)), () => Promise.reject(new TypeError('offline')), () => Promise.resolve(json({ nope: true }))]) {
-			delete (window as unknown as W)[EARLY_READS_GLOBAL];
-			document.documentElement.removeAttribute('data-sr-shop-slow');
-			startShop(answer);
-			document.body.innerHTML = gridHtml(['a', 'b']);
-			await tick();
-			expect(applied()).toBe(false);
-			expect(slow()).toBe(true);
-		}
-	});
-	it('a half-streamed grid is never filtered: with the document still loading it waits for the end sentinel', async () => {
-		Object.defineProperty(document, 'readyState', { configurable: true, get: () => 'loading' });
-		startShop(() => Promise.resolve(catalog([['a', true], ['b', false]])));
-		document.body.innerHTML = gridHtml(['a', 'b'], false);
-		await tick();
-		expect(applied()).toBe(false);
-		document.body.insertAdjacentHTML('beforeend', '<i hidden data-live-gate-end=""></i>');
-		await tick();
-		expect(shown()).toEqual(['a']);
-		expect(applied()).toBe(true);
-	});
-	it('a read that lands before the grid is parsed applies when the grid arrives', async () => {
-		startShop(() => Promise.resolve(catalog([['a', true], ['b', false]])));
-		await tick();
-		document.body.innerHTML = gridHtml(['a', 'b']);
-		await tick();
-		expect(shown()).toEqual(['a']);
-	});
-	it('the Qwik consumer still takes the original early response (the script read a clone): no second round trip', async () => {
-		startShop(() => Promise.resolve(catalog([['a', true]])));
-		document.body.innerHTML = gridHtml(['a']);
-		await tick();
-		const body = await earlyJsonOr<{ products: Array<{ slug: string }> }>(liveReadUrl('shop-catalog'), async () => { throw new Error('no second read'); });
-		expect(body.products[0]!.slug).toBe('a');
-	});
-	it('the shop CSS gates only the unapplied grid; the notice shows only while the read is late or failed', () => {
-		expect(SHOP_GATE_CSS).toContain('[data-live-gate]:not([data-live-applied]){visibility:hidden}');
-		expect(SHOP_GATE_CSS).toContain('[data-shop-slow]{display:none}');
-		expect(SHOP_GATE_CSS).toContain('html[data-sr-shop-slow] [data-shop-slow]{display:block}');
 	});
 });
 

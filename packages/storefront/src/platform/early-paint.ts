@@ -1,4 +1,5 @@
-// ADR-0001 DP-5/DP-6 (shop and checkout shells): the two inline PAINT scripts that make the cached shell look right before Qwik has
+// ADR-0001 DP-5 (checkout shell): the inline PAINT script (#425: the shop's DP-6 reveal script is gone: the shell's grid is visible
+// from its HTML and Qwik fills availability in place). Originally DP-5/DP-6, the two inline PAINT scripts that make the cached shell look right before Qwik has
 // loaded. Both are classic inline scripts in <head> (early-reads.ts puts them right after the parse-time reads script; the express
 // layer allows them by sha256 on a shell render, by nonce on a dynamic one, and they are only emitted for a shell render), and both
 // consume the SAME in-flight live read the page's early-reads script started: they read a CLONE of that response, so the Qwik consumer
@@ -20,14 +21,6 @@
 // Nothing here reads or writes a stock value into storage, and nothing visitor-specific is in the script text: it is identical for every
 // visitor (the cached shell's I-2). The cart is read from the in-memory response in the browser only.
 
-/** The shop's live catalog read this script waits for (early-reads.ts liveReadUrl('shop-catalog')). */
-export interface ShopRevealParams {
-	/** The request key of the early read. */
-	k: string;
-	/** Milliseconds after which a still-pending read shows the "still checking" notice (the grid stays hidden either way). */
-	t: number;
-}
-
 export interface CheckoutPaintParams {
 	/** The request key of the summary read this script paints from (early-reads.ts CHECKOUT_SUMMARY_URL). */
 	k: string;
@@ -36,44 +29,10 @@ export interface CheckoutPaintParams {
 	rev: number;
 }
 
-/** The shop grid wrapper attribute the script reads a card's slug from. */
-export const SHOP_CARD_SLUG_ATTR = 'data-slug';
-/** Set on the real-products pending grid: hidden until the live filter has been applied (by this script, or by Qwik, which drops it). */
-export const SHOP_GATE_ATTR = 'data-live-gate';
-/** Marks that the grid's last card has been parsed (the script never filters a half-streamed grid). */
-export const SHOP_GATE_END_ATTR = 'data-live-gate-end';
-export const SHOP_APPLIED_ATTR = 'data-live-applied';
-/** Set on <html> while the read is late or failed: shows the shell's notice. */
-export const SHOP_SLOW_ATTR = 'data-sr-shop-slow';
-export const SHOP_REVEAL_TIMEOUT_MS = 4000;
-
-/** The shop CSS: the gated grid is hidden until applied; the notice shows while the read is late. Inlined by the shop route. */
-export const SHOP_GATE_CSS =
-	`[${SHOP_GATE_ATTR}]:not([${SHOP_APPLIED_ATTR}]){visibility:hidden}` +
-	`[data-shop-slow]{display:none}html[${SHOP_SLOW_ATTR}] [data-shop-slow]{display:block}`;
-
-const SHOP_BODY =
-	"(function(w,d,P){try{var S=w.__srEarly,p=S&&S.r&&S.r[P.k];if(!p)return;" +
-	"var H=d.documentElement,got=null,fin=0,mo=null;" +
-	"function ready(){return d.readyState!=='loading'||!!d.querySelector('[" + SHOP_GATE_END_ATTR + "]');}" +
-	"function apply(){if(fin||got===null)return;" +
-	"if(got===false){H.setAttribute('" + SHOP_SLOW_ATTR + "','');return;}" +
-	"var g=d.querySelector('[" + SHOP_GATE_ATTR + "]');if(!g||!ready())return;" +
-	"var ok=Object.create(null),i,c;" +
-	"for(i=0;i<got.length;i++){c=got[i];if(c&&c.inStock===true&&typeof c.slug==='string')ok[c.slug]=1;}" +
-	"c=g.children;for(i=0;i<c.length;i++){var s=c[i].getAttribute('" + SHOP_CARD_SLUG_ATTR + "');if(!s||ok[s]!==1)c[i].style.display='none';}" +
-	"g.setAttribute('" + SHOP_APPLIED_ATTR + "','');H.removeAttribute('" + SHOP_SLOW_ATTR + "');fin=1;if(mo)mo.disconnect();}" +
-	"p.then(function(r){return r.ok?r.clone().json():null;}).then(function(j){got=j&&j.products&&typeof j.products.length==='number'?j.products:false;apply();},function(){got=false;apply();});" +
-	"try{mo=new MutationObserver(apply);mo.observe(d.documentElement,{childList:true,subtree:true});}catch(e){}" +
-	"d.addEventListener('DOMContentLoaded',apply);" +
-	"setTimeout(function(){if(!fin)H.setAttribute('" + SHOP_SLOW_ATTR + "','');},P.t);setTimeout(function(){if(mo)mo.disconnect();},8000);" +
-	"}catch(e){}})(window,document,";
-
 /** JSON safe inside an HTML <script> element. */
 const scriptJson = (value: unknown): string =>
 	JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 
-export const shopRevealScriptSource = (p: ShopRevealParams): string => `${SHOP_BODY}${scriptJson(p)});`;
 
 // ---------------------------------------------------------------------------------------------------- checkout
 

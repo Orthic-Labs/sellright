@@ -1,4 +1,4 @@
-import { $, component$, useComputed$, useSignal, useStore, useStyles$, useTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
@@ -16,7 +16,6 @@ import type { BrowseCatalog } from '~/services/browse-catalog';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
-import { SHOP_GATE_CSS } from '~/platform/early-paint';
 import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 
 export { useCatalogLoader };
@@ -29,9 +28,6 @@ export const onRequest = earlyHintsOnRequest;
 const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
 
 const BaseShopPage = component$(() => {
- // DP-6 on the shell: the pending grid is hidden until the live in-stock filter has been applied (early-paint.ts; Qwik drops the gate
- // when it applies the same read). Inert for any render without the gate attribute (SHELL_CACHE_EXCLUDE, a query URL, switch off).
- useStyles$(SHOP_GATE_CSS);
  const catalog = useCatalogLoader();
  const location = useLocation();
  // ADR-0001 §2 / DP-6: a deferred (shell) listing is read in the browser from the LIVE catalog, no-store (started at document parse, early-paint.ts). Not deferred: no read.
@@ -48,7 +44,10 @@ const BaseShopPage = component$(() => {
  const isSearching = useSignal(false);
  const searchTerm = useSignal('');
  const facetIds = useSignal<string[]>([]);
- const inStockOnly = useSignal(true);
+ // #425 (architecture note step 1): on the cached shell the products are in the HTML and shown at once; only availability and price
+ // are live. So the shell's listing starts on "all products", each sold-out one marked Sold Out in place when the live read lands
+ // (never hidden, never moved); the in-stock toggle still filters on request. The normal (uncached) render keeps in-stock only.
+ const inStockOnly = useSignal(!catalog.value.deferred);
  // Overrides populated ONLY when the in-stock toggle is flipped — live backend check
  // at that exact moment. Never consulted at any other time. Keyed by slug (the
  // catalog's stable identity — SellRight has no numeric product id).
@@ -115,7 +114,12 @@ const BaseShopPage = component$(() => {
   // the loader's order is the structure the grid already paints (and the early script revealed), so the live read re-sorts nothing.
   const structureOrder = new Map((catalog.value.products || []).map((p, i) => [p.slug, i] as const));
   const orderOf = (slug: string) => structureOrder.get(slug) ?? Number.MAX_SAFE_INTEGER;
+  // #425: the shell keeps the order its HTML painted (merchandising order), so nothing moves when availability lands.
   const sorted = [...products].sort((a, b) => {
+   if (catalog.value.deferred) {
+    const byRank = listingRank(a.slug) - listingRank(b.slug);
+    return byRank !== 0 ? byRank : orderOf(a.slug) - orderOf(b.slug);
+   }
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
    const byRank = listingRank(a.slug) - listingRank(b.slug);
@@ -266,14 +270,13 @@ const BaseShopPage = component$(() => {
      <>
      {/* #425: ONE keyed grid for the pending shell and the live listing, so the browser's read updates the shell's cards in place
         (same nodes): a separate shell grid was replaced wholesale, and its re-created titles became a late LCP (~1.1 s).
-        DP-6 on the shell: while pending the grid carries the live gate (hidden, space reserved) and each card sits in a `data-slug`
-        wrapper, so the parse-time script can hide every card the live read does not confirm in stock before it reveals the grid (no
-        out-of-stock card is ever visible); Qwik drops the gate when it applies the same read. The wrapper is `display:contents`. */}
+        #425: on the shell the pending grid is VISIBLE from the cached HTML (names, images, links; no price, no availability); the
+        live read then fills price and marks sold-out cards in place (same order, nothing hidden or moved). The wrapper is
+        `display:contents`. */}
      <div
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
       style={{ contain: 'layout' }}
       data-listing-pending={gridPending ? '' : undefined}
-      data-live-gate={gridPending ? '' : undefined}
      >
       {(gridPending ? shellProducts : displayProducts).map((item, index) => (
        <div key={item.slug} class="contents" data-slug={item.slug}>
@@ -297,7 +300,6 @@ const BaseShopPage = component$(() => {
        </div>
       ))}
      </div>
-     {gridPending && <i hidden data-live-gate-end="" />}
      {gridPending && (
       <p data-shop-slow="" role="status" class="px-4 sm:px-8 lg:px-12 py-6 text-[13px] tracking-[0.5px] text-[var(--color-ink-soft)] font-body">
        Still checking what is in stock. If this does not load, reload the page.

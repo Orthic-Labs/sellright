@@ -19,7 +19,7 @@
 //
 // DP-5/DP-6: on the /shop/ and /checkout/ shells a second inline script (early-paint.ts) consumes a CLONE of the same in-flight read to
 // reveal the shop grid (stock-confirmed cards only) and to paint the checkout order summary before hydration.
-import { SHOP_REVEAL_TIMEOUT_MS, checkoutPaintScriptSource, shopRevealScriptSource } from './early-paint';
+import { checkoutPaintScriptSource } from './early-paint';
 
 /** The window property holding this document's early reads. */
 export const EARLY_READS_GLOBAL = '__srEarly';
@@ -86,7 +86,7 @@ export interface EarlyReadsPlan {
 	get: [string, 0 | 1][];
 	checkout: boolean;
 	/** A shell render only: the paint script this page gets after the reads script (early-paint.ts). Absent: none. */
-	paint?: { kind: 'shop'; k: string; t: number } | { kind: 'checkout'; k: string; dm: string; rev: number };
+	paint?: { kind: 'checkout'; k: string; dm: string; rev: number };
 }
 
 const strip = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
@@ -144,8 +144,8 @@ export function buildEarlyReadsPlan(pathname: string, ctx: EarlyReadsContext): E
 	}
 	// DP-5/DP-6: only a shell render paints from its early reads (a dynamic or excluded render is today's server-rendered page).
 	let paint: EarlyReadsPlan['paint'];
-	if (ctx.shell && page === 'shop' && !ctx.brandShop) paint = { kind: 'shop', k: liveReadUrl('shop-catalog'), t: SHOP_REVEAL_TIMEOUT_MS };
-	else if (ctx.shell && page === 'checkout') paint = { kind: 'checkout', k: CHECKOUT_SUMMARY_URL, dm: ctx.assetDomain ?? '', rev: ctx.assetRev ?? 3 };
+	// #425: no shop paint script: the shell's grid is visible from its HTML; Qwik applies availability from the same live read.
+	if (ctx.shell && page === 'checkout') paint = { kind: 'checkout', k: CHECKOUT_SUMMARY_URL, dm: ctx.assetDomain ?? '', rev: ctx.assetRev ?? 3 };
 	return { page, get, checkout: page === 'checkout', ...(paint ? { paint } : {}) };
 }
 
@@ -235,7 +235,7 @@ const escapeAttr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;
 /** The paint script text for a plan (shop reveal / checkout summary, early-paint.ts), or null when the page has none. Pure. */
 export function earlyPaintScriptSource(plan: EarlyReadsPlan): string | null {
 	if (!plan.paint) return null;
-	return plan.paint.kind === 'shop' ? shopRevealScriptSource({ k: plan.paint.k, t: plan.paint.t }) : checkoutPaintScriptSource({ k: plan.paint.k, dm: plan.paint.dm, rev: plan.paint.rev });
+	return checkoutPaintScriptSource({ k: plan.paint.k, dm: plan.paint.dm, rev: plan.paint.rev });
 }
 
 /** The <script> element(s): classic inline scripts, nonce'd when the render has a nonce (a shell render is allowed by its sha256).
