@@ -51,7 +51,7 @@ describe('/api/live/checkout-summary/', () => {
 	it('no sr_cart cookie: an empty-cart answer, no API call', async () => {
 		for (const cookies of [{}, { sr_cart: '' }, { countryCode: 'DE' }] as Record<string, string>[]) {
 			const { out } = await call(cookies);
-			expect(out).toEqual({ status: 200, body: { cart: null } });
+			expect(out).toEqual({ status: 200, body: { cart: null, shipCountry: cookies.countryCode ?? 'US' } });
 		}
 		expect(get).not.toHaveBeenCalled();
 	});
@@ -83,7 +83,7 @@ describe('/api/live/checkout-summary/', () => {
 		for (const setup of cases) {
 			get.mockReset();
 			setup();
-			expect((await call({ sr_cart: 'tok_srv' })).out).toEqual({ status: 200, body: { cart: null } });
+			expect((await call({ sr_cart: 'tok_srv' })).out).toEqual({ status: 200, body: { cart: null, shipCountry: 'US' } });
 		}
 	});
 

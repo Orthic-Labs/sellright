@@ -108,6 +108,9 @@ export function readCheckoutSummaryCart(
 /** The /api/live/checkout-summary/ answer: the display cart, or null (no cookie, no lines, not an active checkout quote, any failure). */
 export interface CheckoutSummaryResponse {
   cart: Cart | null;
+  /** #425: the destination the server quoted (serverCartShipCountry). The page adopts it as the geolocated country when the
+   *  shopper has no stored one, so its own checkout read prices the same destination (never a different total a moment later). */
+  shipCountry?: string;
 }
 
 export type SummarySource = 'client' | 'server' | 'skeleton';

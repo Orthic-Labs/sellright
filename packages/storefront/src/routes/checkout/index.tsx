@@ -12,7 +12,8 @@ import { track } from '~/sellright/analytics';
 import { useCart, startCheckoutEntryBoot, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
-import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutSummaryCart, type ServerCartValue } from './summary-cart';
+import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutSummaryCart, serverCartShipCountry, type CheckoutSummaryResponse, type ServerCartValue } from './summary-cart';
+import { CHECKOUT_SUMMARY_URL, earlyJsonOr } from '~/platform/early-reads';
 import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 import { shellRender } from '~/platform/shell-render';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
@@ -61,6 +62,17 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap, re
     request.headers.get('cf-ipcountry'),
   );
   return cart;
+}, { serializationStrategy: 'always' });
+
+/**
+ * #425: the destination the server-rendered summary quoted (cookie, else the edge country, else US), for the client to adopt as
+ * the geolocated country when the shopper has none stored. Without it the client priced its default (US) whenever the layout's
+ * idle geolocation had not run yet, and the total changed a moment after the server's (live: $45 -> $33). Null when unknown: a
+ * client loader fetch (SPA navigation) and the cacheable shell (whose summary read answers it instead).
+ */
+export const useCheckoutQuotedCountry = routeLoader$(({ cookie, sharedMap, request }) => {
+  if (sharedMap.has('@loaderId') || shellRender()) return null;
+  return serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value, request.headers.get('cf-ipcountry'));
 }, { serializationStrategy: 'always' });
 
 /**
@@ -121,6 +133,7 @@ const CheckoutContent = component$(() => {
   const appState = useContext(APP_STATE);
   const localCart = useCart();
   const serverCart = useCheckoutServerCart();
+  const quotedCountry = useCheckoutQuotedCountry();
   const noCartCookie = useCheckoutNoCartCookie();
   // L11: the LOCKED checkout-entry live read has landed (the summary then shows the client cart, not the server read).
   const entryReadDone = useSignal(false);
@@ -476,6 +489,12 @@ const CheckoutContent = component$(() => {
     // a saved or entered address keeps its own country. See components/checkout/checkout-country.ts.
     let sessionCountry: string | null = null;
     try { sessionCountry = sessionStorage.getItem('countryCode'); } catch { /* storage blocked */ }
+    // #425: nothing stored yet: price the destination the server quoted (the document's, or on the shell its summary read's).
+    if (CountryPreferenceService.needsGeolocation()) {
+      const quoted = quotedCountry.value
+        ?? (isCheckoutShell(serverCart.value) ? (await earlyJsonOr<CheckoutSummaryResponse | null>(CHECKOUT_SUMMARY_URL, async () => null).catch(() => null))?.shipCountry : null);
+      if (quoted) CountryPreferenceService.setCountryFromGeolocation(quoted);
+    }
     const startCountry = resolveCheckoutCountry({
       current: appState.shippingAddress.countryCode,
       addressEntered: !canRestorePreferredCountry(appState.shippingAddress),

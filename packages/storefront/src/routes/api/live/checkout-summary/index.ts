@@ -3,7 +3,7 @@ import { COUNTRY_COOKIE } from '~/constants';
 import { NO_STORE_CACHE_CONTROL } from '~/config/route-cache-policy';
 import { TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
-import { readCheckoutSummaryCart, type CheckoutSummaryResponse } from '~/routes/checkout/summary-cart';
+import { readCheckoutSummaryCart, serverCartShipCountry, type CheckoutSummaryResponse } from '~/routes/checkout/summary-cart';
 
 /**
  * ADR-0001: the checkout shell's order summary read, a FIXED url (the shell's Link preload header and its early script both name it
@@ -21,6 +21,7 @@ export const onGet: RequestHandler = async ({ cookie, headers, json, request }) 
 	headers.set('Vary', 'Cookie');
 	const body: CheckoutSummaryResponse = {
 		cart: await readCheckoutSummaryCart((path, init) => sellright().GET(path, init), cookie.get(TOKEN_COOKIE)?.value, cookie.get(COUNTRY_COOKIE)?.value, request.headers.get('cf-ipcountry')),
+		shipCountry: serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value, request.headers.get('cf-ipcountry')),
 	};
 	json(200, body);
 };
