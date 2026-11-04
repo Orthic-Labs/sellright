@@ -14,6 +14,7 @@ DD=https://www.damneddesigns.com; DD_PDP=/products/monsuta-bead/; DD_OPT='Titani
 RH=https://rottenhand.com; RH_PDP=/shop/longsleeveshirt/; RH_OPT='Medium|Midnight black'
 fail=0
 echo "== correctness (Damned, cached + Worker)"; node correctness.mjs "$DD" "$DD_PDP" "$DD_OPT" liveB || fail=1
+echo "== correctness (Rotten, cached + Worker)"; node correctness.mjs "$RH" "$RH_PDP" "$RH_OPT" liveB || fail=1
 for s in "$DD|$DD_PDP|$DD_OPT" "$RH|$RH_PDP|$RH_OPT"; do
   IFS='|' read -r origin pdp opt1 opt2 <<< "$s"; opts=$opt1${opt2:+|$opt2}
   echo "== shop landing A/B $origin"; node shop-ab.mjs "$origin" liveA liveB "$PAIRS" | sed -n '/^pairs=/,$p'

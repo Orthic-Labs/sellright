@@ -17,7 +17,7 @@ async function customer(name) {
   await p.setViewport({ width: 390, height: 844 });
   if (arm) await stageNet(p, origin, arm);
   await p.goto(origin + pdp, { waitUntil: 'load' }); await sleep(2500);
-  await p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), opt); await sleep(700);
+  for (const o of String(opt || '').split('|').filter((x) => x && x !== '-')) { await p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), o); await sleep(700); }
   return { name, p };
 }
 const add = (c) => c.p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /add to (cart|bag)|^add\b/i.test(x.textContent.trim()) && !x.disabled)?.click());
@@ -43,7 +43,7 @@ if (s1.some((v) => s2.length && v === s2[s2.length - 1] && s1[s1.length - 1] !==
 if (amount(s1[s1.length - 1]) === amount(s2[s2.length - 1])) fails.push('C1 and C2 end on the same total although carts differ');
 // 2. race: C1 adds one more on the PDP, opens the drawer and taps Checkout at once
 await c1.p.goto(origin + pdp, { waitUntil: 'load' }); await sleep(2500);
-await c1.p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), opt); await sleep(700);
+for (const o of String(opt || '').split('|').filter((x) => x && x !== '-')) { await c1.p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === t)?.click(), o); await sleep(700); }
 await add(c1);
 await c1.p.waitForFunction(() => [...document.querySelectorAll('button')].some((e) => /checkout/i.test(e.textContent || '') && e.getBoundingClientRect().height > 0 && !e.disabled), { timeout: 15000, polling: 20 }).catch(() => null);
 await c1.p.evaluate(() => [...document.querySelectorAll('button')].find((e) => /checkout/i.test(e.textContent || '') && e.getBoundingClientRect().height > 0 && !e.disabled)?.click());
