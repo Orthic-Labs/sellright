@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { composedHeaders, edgeBlock, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
+import { composedHeaders, edgeBlock, geoCookie, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
 import { CHECKOUT_SUMMARY_URL, EDGE_READS_META, buildEarlyReadsPlan, earlyReadsLinkHeader, liveReadUrl, type EarlyReadsContext } from './early-reads';
 
 const req = (url: string, init: { headers?: Record<string, string>; method?: string; cf?: { country?: string } } = {}) => {
@@ -57,6 +57,14 @@ describe('#425 edge reads Worker', () => {
 		expect(h.get('age')).toBeNull();
 		expect(h.get('link')).toBeNull();
 		expect(h.get('x-sr-edge-reads')).toBe('/api/live/shop-catalog/');
+	});
+	it('sets the country cookie from the edge country only when the visitor has none', () => {
+		expect(geoCookie(req('https://s.test/checkout/', { cf: { country: 'IN' } }))).toBe('countryCode=IN; Path=/; Max-Age=2592000; SameSite=Lax; Secure');
+		expect(geoCookie(req('https://s.test/checkout/', { headers: { cookie: 'a=1; countryCode=DE' }, cf: { country: 'IN' } }))).toBeNull();
+		expect(geoCookie(req('https://s.test/checkout/', { cf: { country: 'XX' } }))).toBeNull();
+		expect(geoCookie(req('https://s.test/checkout/'))).toBeNull();
+		const h = composedHeaders(new Headers({ 'x-sr-edge': 'cacheable' }), ['/a/'], req('https://s.test/checkout/', { cf: { country: 'in' } }));
+		expect(h.get('set-cookie')).toBe('countryCode=IN; Path=/; Max-Age=2592000; SameSite=Lax; Secure');
 	});
 	it('the block is inert JSON with no `<` in it, and parses back to the same value', () => {
 		const text = JSON.stringify({ name: '</script><img src=x onerror=alert(1)>', s: String.fromCharCode(0x2028) });

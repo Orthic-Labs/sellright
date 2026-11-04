@@ -82,9 +82,21 @@ export async function readLive(origin, key, request, fetchImpl = fetch) {
 	}
 }
 
+/** #425: the `countryCode` cookie for a visitor without one, from the edge's own country (the storefront's checkout document sets the
+ *  same, routes/checkout/summary-cart.ts COUNTRY_COOKIE_OPTIONS): the page's parse-time cart read and the checkout boot read it
+ *  first, so they price the visitor's destination from the start. Null when the request has one or the country is unknown. */
+export function geoCookie(request) {
+	if (/(?:^|;\s*)countryCode=/.test(request.headers.get('cookie') || '')) return null;
+	const c = String((request.cf && request.cf.country) || '').toUpperCase();
+	if (!/^[A-Z]{2}$/.test(c) || c === 'XX' || c === 'T1') return null;
+	return `countryCode=${c}; Path=/; Max-Age=2592000; SameSite=Lax; Secure`;
+}
+
 /** The composed response's headers: live values in it, so never stored; no preload of a read already in the page. */
-export function composedHeaders(headers, keys) {
+export function composedHeaders(headers, keys, request) {
 	const h = new Headers(headers);
+	const geo = request ? geoCookie(request) : null;
+	if (geo) h.append('set-cookie', geo);
 	const link = withoutPreloads(h.get('link'), keys);
 	if (link) h.set('link', link); else h.delete('link');
 	h.set('cache-control', 'private, no-store');
@@ -113,7 +125,7 @@ export default {
 						});
 					},
 				})
-				.transform(new Response(res.body, { status: res.status, statusText: res.statusText, headers: composedHeaders(res.headers, keys) }));
+				.transform(new Response(res.body, { status: res.status, statusText: res.statusText, headers: composedHeaders(res.headers, keys, request) }));
 		} catch {
 			return res;
 		}

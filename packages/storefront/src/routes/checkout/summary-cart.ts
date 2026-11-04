@@ -16,6 +16,10 @@ export const SERVER_CART_TIMEOUT_MS = 1500;
 /** The client's own default destination (CountryPreferenceService DEFAULT_COUNTRY) when nothing says otherwise. */
 const DEFAULT_SHIP_COUNTRY = 'US';
 
+/** #425: the `countryCode` cookie the server (and the edge reads Worker, edge/edge-reads.worker.js) sets from the visitor's country
+ *  when there is none: read by the browser (the early script, the checkout boot, the layout), so not HttpOnly. */
+export const COUNTRY_COOKIE_OPTIONS = { path: '/', maxAge: 60 * 60 * 24 * 30, sameSite: 'lax' as const, secure: true };
+
 /** The ship country the server read quotes for: the country cookie when it is a valid code, else the visitor's country from the edge
  *  (`cf-ipcountry`, the same source the client's geo default comes from), else the client's default. #425: the server quote and the
  *  client's entry read then price the same destination, so the first total painted is the one that stays. */

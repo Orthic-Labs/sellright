@@ -12,6 +12,7 @@ import { track } from '~/sellright/analytics';
 import { useCart, startCheckoutEntryBoot, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
+import { COUNTRY_COOKIE_OPTIONS } from './summary-cart';
 import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutSummaryCart, serverCartShipCountry, type CheckoutSummaryResponse, type ServerCartValue } from './summary-cart';
 import { CHECKOUT_SUMMARY_URL, earlyJsonOr } from '~/platform/early-reads';
 import { earlyHintsOnRequest } from '~/platform/early-reads.server';
@@ -72,7 +73,12 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap, re
  */
 export const useCheckoutQuotedCountry = routeLoader$(({ cookie, sharedMap, request }) => {
   if (sharedMap.has('@loaderId') || shellRender()) return null;
-  return serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value, request.headers.get('cf-ipcountry'));
+  const fromCookie = cookie.get(COUNTRY_COOKIE)?.value;
+  const quoted = serverCartShipCountry(fromCookie, request.headers.get('cf-ipcountry'));
+  // #425: no country cookie yet: set it to the destination this document quoted, so the page's parse-time cart read and the checkout
+  // entry boot (both read this cookie first) price the same destination from the start, instead of the US default and a re-quote.
+  if (!fromCookie && quoted !== serverCartShipCountry(null, null)) cookie.set(COUNTRY_COOKIE, quoted, COUNTRY_COOKIE_OPTIONS);
+  return quoted;
 }, { serializationStrategy: 'always' });
 
 /**
