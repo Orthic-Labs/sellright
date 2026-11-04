@@ -55,10 +55,10 @@ describe('getRouteCacheProfile', () => {
 	});
 
 	it('labels x-route-class with the ADR-0001 class (diagnostic only; the header stays no-store)', () => {
-		for (const pathname of ['/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
+		// DP-5/DP-6 reversed 2026-11-04: /shop/ and /checkout/ are shells again (live values arrive from the parse-time scripts).
+		for (const pathname of ['/', '/shop', '/shop/', '/checkout', '/checkout/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('shell');
-		// DP-6: /shop/ renders live stock per request.
-		for (const pathname of ['/shop', '/shop/', '/checkout', '/checkout/', '/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
+		for (const pathname of ['/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/payment', '/checkout/cart-link/', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('dynamic');
 	});
 
@@ -166,8 +166,10 @@ describe('ADR-0001 route classes', async () => {
 	const q = (s = '') => new URLSearchParams(s);
 	const TABLE: Array<[string, string, 'products' | 'shop', 'shell' | 'dynamic' | 'data']> = [
 		['/', '', 'products', 'shell'],
-		['/shop', '', 'products', 'dynamic'], // DP-6
-		['/shop/', '', 'products', 'dynamic'],
+		['/shop', '', 'products', 'shell'], // DP-6 reversed 2026-11-04: live stock arrives from the parse-time scripts
+		['/shop/', '', 'products', 'shell'],
+		['/shop/', '', 'shop', 'shell'],
+		['/shop/', 'utm_source=a&gclid=1', 'products', 'shell'],
 		['/products/some-knife/', '', 'products', 'shell'],
 		['/products/some-knife', '', 'products', 'shell'],
 		['/collections/new/', '', 'products', 'shell'],
@@ -185,9 +187,13 @@ describe('ADR-0001 route classes', async () => {
 		['/shop/long-coat/', '', 'products', 'dynamic'],
 		['/shop/a/b/', '', 'shop', 'dynamic'],
 		// dynamic
-		['/checkout/', '', 'products', 'dynamic'],
-		['/checkout', '', 'products', 'dynamic'],
-		['/checkout/', '', 'shop', 'dynamic'],
+		// DP-5 reversed 2026-11-04: the checkout page itself is a shell (summary painted from the live cart read); its steps are not
+		['/checkout/', '', 'products', 'shell'],
+		['/checkout', '', 'products', 'shell'],
+		['/checkout/', '', 'shop', 'shell'],
+		['/checkout/', 'utm_source=a', 'products', 'shell'],
+		['/checkout/', 'coupon=X', 'products', 'dynamic'],
+		['/checkout/', 'preview_token=abc', 'products', 'dynamic'],
 		['/checkout/payment/', '', 'products', 'dynamic'],
 		['/checkout/cart-link/', '', 'products', 'dynamic'],
 		['/checkout/some-alias/', '', 'products', 'dynamic'],
@@ -217,7 +223,13 @@ describe('ADR-0001 route classes', async () => {
 		// I-3: query that could change output
 		['/collections/new/', 'page=2', 'products', 'dynamic'],
 		['/shop/', 'q=knife', 'products', 'dynamic'],
+		// Query decision (ADR-0001 DP-6): the shop shell is for the bare path only. Damned's /collections/<x> redirect target
+		// /shop/?facets=<x> and Rotten's /shop/?style=short|long stay dynamic (the SSR in-stock grid): a cached shell per query string
+		// would not be reached by the bare-path purge.
+		['/shop/', 'facets=blades', 'products', 'dynamic'],
+		['/shop/', 'style=short', 'products', 'dynamic'],
 		['/shop/', 'style=long', 'products', 'dynamic'],
+		['/shop/', 'utm_source=a&facets=blades', 'products', 'dynamic'],
 		['/products/x/', 'size=m', 'products', 'dynamic'],
 		['/', 'trackOrder=true', 'products', 'dynamic'],
 		// tracking-only query keeps shell
@@ -339,7 +351,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		} finally { await new Promise((resolve) => server.close(resolve)); }
 	};
 
-	const SHELL = ['/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
+	const SHELL = ['/', '/shop/', '/checkout/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
 	const SIGNED_IN = { cookie: 'sr_cust=abc; sr_cust_csrf=x; countryCode=DE; sr_preview_tokenx=1; authToken=t', authorization: 'Bearer secret', 'cf-ipcountry': 'DE', 'x-qwik-nonce': 'attacker' };
 
 	it('SHELL_CACHE on: a signed-in request to every shell route gets the byte-identical body of an anonymous one, cacheable, no Set-Cookie', async () => {
@@ -424,16 +436,16 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		const capture = async (enabled: boolean) => {
 			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string }> = {};
 			await serve(enabled, {}, async (get) => {
-				for (const path of ['/contact/', '/shop/']) {
+				for (const path of ['/contact/', '/shop/', '/checkout/']) {
 					const { r, text } = await get(path, SIGNED_IN);
 					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text) };
 				}
-			}, enabled ? ['/contact/', '/shop'] : []);
+			}, enabled ? ['/contact/', '/shop', '/checkout/'] : []);
 			return out;
 		};
 		const off = await capture(false);
 		const excluded = await capture(true);
-		for (const path of ['/contact/', '/shop/']) {
+		for (const path of ['/contact/', '/shop/', '/checkout/']) {
 			expect(excluded[path], path).toEqual(off[path]);
 			expect(excluded[path]!.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
 			expect(excluded[path]!.text, path).toContain('Hi Jane');
@@ -448,15 +460,69 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		}, ['/contact/', '/shop']);
 	});
 
-	it('SHELL_CACHE on: checkout is dynamic in code (no SHELL_CACHE_EXCLUDE): nonce, cookies kept, no-store (DP-5)', async () => {
+	it('SHELL_CACHE on, no exclusion: /shop/ and /checkout/ are cacheable shells (identity stripped, hash CSP, no Set-Cookie); their steps and query URLs are not', async () => {
 		await serve(true, {}, async (get) => {
-			for (const path of ['/checkout/', '/checkout']) {
+			for (const path of ['/shop/', '/shop', '/checkout/', '/checkout']) {
+				const anon = await get(path);
+				const signed = await get(path, SIGNED_IN);
+				expect(signed.text, path).toBe(anon.text);
+				expect(signed.text, path).not.toContain('Hi Jane');
+				for (const res of [anon, signed]) {
+					expect(res.r.headers.get('cache-control'), path).toBe('public, max-age=0, s-maxage=300');
+					expect(res.r.headers.get('x-sr-edge'), path).toBe('cacheable');
+					expect(res.r.headers.get('set-cookie'), path).toBeNull();
+				}
+			}
+			// DP-5: payment, cart-link, confirmation and aliases stay dynamic. DP-6 query decision: /shop/?facets= and ?style= stay dynamic.
+			for (const path of ['/checkout/payment/', '/checkout/cart-link/', '/checkout/confirmation/ABC/', '/checkout/some-alias/', '/shop/?facets=blades', '/shop/?style=long', '/checkout/?coupon=X']) {
 				const { r, text } = await get(path, SIGNED_IN);
 				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
 				expect(r.headers.get('x-sr-edge'), path).toBe('bypass:class:dynamic');
 				expect(text, path).toContain('Hi Jane');
 			}
 		}, []);
+	});
+
+	// Rollback (ADR-0001): per store, per path, no rebuild. An excluded path is not marked a shell render, so it is rendered exactly as
+	// with the switch off: nonce CSP, cookies reach the render, the per-request (SSR stock-filtered / server-rendered summary) loaders run.
+	it('rollback: SHELL_CACHE_EXCLUDE=/shop/,/checkout/ reverts both paths to the dynamic render, byte for byte as with the switch off', async () => {
+		const normalise = (t: string) => t.replace(/N[a-z0-9]+/g, 'NONCE');
+		const capture = async (enabled: boolean, exclude: string[]) => {
+			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string; diag: string | null }> = {};
+			await serve(enabled, {}, async (get) => {
+				for (const path of ['/shop/', '/checkout/']) {
+					const { r, text } = await get(path, SIGNED_IN);
+					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text), diag: r.headers.get('x-sr-edge') };
+				}
+			}, exclude);
+			return out;
+		};
+		const off = await capture(false, []);
+		const excluded = await capture(true, m.shellExcludedPaths({ SHELL_CACHE_EXCLUDE: '/shop/, /checkout/' }));
+		for (const path of ['/shop/', '/checkout/']) {
+			const { diag, ...rest } = excluded[path]!;
+			expect(diag, path).toBe('bypass:excluded');
+			const { diag: offDiag, ...offRest } = off[path]!;
+			expect(offDiag, path).toBeNull();
+			expect(rest, path).toEqual(offRest);
+			expect(rest.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(rest.csp, path).toMatch(/'nonce-NONCE'/);
+			expect(rest.text, path).toContain('Hi Jane'); // the cookie reached the render: the per-request path
+			expect(rest.text, path).toContain('data-redact="false"'); // shellRender() is false: the loaders return their values
+		}
+		// One path at a time: excluding /checkout/ (Damned and Rotten today) leaves /shop/ a shell, and the reverse.
+		await serve(true, {}, async (get) => {
+			expect((await get('/checkout/')).r.headers.get('x-sr-edge')).toBe('bypass:excluded');
+			const shop = await get('/shop/', SIGNED_IN);
+			expect(shop.r.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=300');
+			expect(shop.text).toContain('data-redact="true"');
+		}, ['/checkout']);
+		await serve(true, {}, async (get) => {
+			expect((await get('/shop/')).r.headers.get('x-sr-edge')).toBe('bypass:excluded');
+			const checkout = await get('/checkout/', SIGNED_IN);
+			expect(checkout.r.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=300');
+			expect(checkout.text).toContain('data-redact="true"');
+		}, ['/shop']);
 	});
 
 	it('I-6 behaviour: a maintenance render (renderer veto) is private no-store, never public', async () => {

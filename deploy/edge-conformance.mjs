@@ -7,7 +7,8 @@
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
 //        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--min-hit 0.9] [--json]
-// --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic).
+// --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic). Damned and Rotten run
+// `--exclude /checkout/` until their checkout shell is switched on (remove /checkout/ from SHELL_CACHE_EXCLUDE and from this flag).
 // --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
 // purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
 // Exit 1 when any row fails. Sends no cookies; a second shell pass sends a fake signed-in cookie to prove it does not change the body.
@@ -31,9 +32,13 @@ let saved = 0;
 const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
 
 const ROWS = [
-	['shell', '/'], ['dynamic', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
+	// DP-5/DP-6 reversed (2026-11-04): /shop/ and /checkout/ are shell rows (value/stock/identity scan, signed-in byte identity, hash CSP);
+	// a store that lists either in SHELL_CACHE_EXCLUDE passes it with --exclude (the row is then expected private no-store). The query
+	// URLs the shop must keep dynamic (Damned's /shop/?facets=, Rotten's /shop/?style=) are checked as dynamic rows below.
+	['shell', '/'], ['shell', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
 	['shell', '/blog/'], ['shell', flag('--blog-post', null)], ['shell', '/about/'], ['shell', '/contact/'],
-	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['dynamic', '/checkout/'],
+	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['shell', '/checkout/'],
+	['dynamic', '/shop/?facets=conformance'], ['dynamic', '/shop/?style=long'], ['dynamic', '/checkout/?conformance=1'],
 	['dynamic', '/checkout/payment/'], ['dynamic', '/checkout/cart-link/'], ['dynamic', '/account/'], ['dynamic', '/sign-in/'],
 	['dynamic', '/search/?q=a'], ['dynamic', '/track-order/'], ['dynamic', '/verify/'], ['dynamic', '/forgot-password/'],
 	['dynamic', '/?preview_token=conformance'], ['dynamic', '/collections/x/?page=2'], ['dynamic', '/edge-conformance-unknown/'],

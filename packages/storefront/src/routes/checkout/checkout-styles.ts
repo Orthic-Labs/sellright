@@ -1,6 +1,9 @@
 export const CHECKOUT_STYLES = `
 .checkout-layout{min-height:100vh;background:linear-gradient(to right,#2c2926 42%,var(--color-parchment) 42%)}
 .checkout-columns{align-items:stretch}
+/* DP-5: the shell's summary paint hosts (platform/early-paint.ts) are empty and hidden until the parse-time script paints them; a painted host hides the Qwik skeleton beside it. */
+[data-sr-host]:not([data-painted]){display:none}
+[data-sr-host][data-painted]+[data-sr-skel]{display:none}
 .checkout-left,.checkout-right{min-height:100%}
 /* Desktop: centre the summary inside the dark 42% panel instead of hugging the seam (columns sit in a max-w-7xl container with px-8 and a gap; left col ~ 42% of the space left after the gap). */
 @media (min-width:1024px){
