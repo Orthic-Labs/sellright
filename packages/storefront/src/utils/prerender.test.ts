@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The prerender ships disabled (VITE_CHECKOUT_PRERENDER unset); these tests exercise it switched on.
+beforeAll(() => { vi.stubEnv('VITE_CHECKOUT_PRERENDER', '1'); });
+afterAll(() => { vi.unstubAllEnvs(); });
 import {
 	FIRST_ARM_DELAY_MS, REARM_DELAY_MS, activationGate, armedCheckoutKey, CHECKOUT_RULES_TEXT, CHECKOUT_RULES_SHA256, isPrerendering, resetCheckoutPrerenderForTest, supportsSpeculationRules, syncCheckoutPrerender, whenActivated,
 } from './prerender';

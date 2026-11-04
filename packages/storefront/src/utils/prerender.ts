@@ -81,7 +81,13 @@ function insertRules(): void {
  * must not be prerendered: no server cart yet, a change in flight, drawer closed). The same key again keeps the prerender; a new key
  * discards it and prerenders anew; null discards it. No-op without Speculation Rules support.
  */
+/** #425: off unless the build sets VITE_CHECKOUT_PRERENDER=1. Measured live on Damned (2026-11-04, m375): with the prerender armed,
+ *  tap Checkout -> total visible went 729 -> 1300 ms (median of 5) and every tap still did a full load, so it ships disabled until
+ *  it is shown to help. */
+export const checkoutPrerenderEnabled = (): boolean => import.meta.env.VITE_CHECKOUT_PRERENDER === '1';
+
 export function syncCheckoutPrerender(key: string | null): void {
+	if (!checkoutPrerenderEnabled()) return;
 	if (typeof document === 'undefined' || !supportsSpeculationRules()) return;
 	if (key === null) {
 		if (timer !== undefined) clearTimeout(timer);
