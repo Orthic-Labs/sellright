@@ -47,7 +47,7 @@ const CheckoutLoyalty = component$<{
  * customer value. Shell only; the switch-off skeletons below are unchanged.
  */
 const ShellSummaryLines = component$(() => (
-  <div class="flow-root w-full" data-testid="checkout-shell-lines" data-sr-skel="">
+  <div class="flow-root w-full" data-testid="checkout-shell-lines">
     <ul class="divide-y w-full divide-[rgba(var(--color-accent-rgb),0.25)]">
       <li class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full animate-pulse">
         <div class="shrink-0 w-[88px] h-[112px] overflow-hidden bg-[rgba(253,250,246,0.06)]" />
@@ -67,7 +67,7 @@ const ShellSummaryLines = component$(() => (
 
 const SHELL_TOTAL_ROWS = ['Subtotal', 'Shipping', 'Total'];
 const ShellSummaryTotals = component$(() => (
-  <dl class="border-t mt-2 border-[rgba(var(--color-accent-rgb),0.25)] pt-4 pb-2 space-y-3" data-testid="checkout-shell-totals" data-sr-skel="">
+  <dl class="border-t mt-2 border-[rgba(var(--color-accent-rgb),0.25)] pt-4 pb-2 space-y-3" data-testid="checkout-shell-totals">
     {SHELL_TOTAL_ROWS.map((label) => (
       <div key={label} class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
         <dt>{label}</dt>
@@ -92,9 +92,6 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
   const shownCart: Cart | undefined = source === 'server' && serverCart ? serverCart : undefined;
   const formattedTotal = shownCart ? (shownCart.grandTotal > 0 ? formatCents(shownCart.grandTotal) : null) : props.formattedTotal.value;
   const mixedPreOrder = shownCart ? hasMixedPreOrder(shownCart.lines) : props.hasMixedPreOrder.value;
-  // DP-5: the shell's summary is painted from the parse-time cart read before hydration into these (empty) hosts, which sit before the
-  // Qwik skeleton and hide it once painted (checkout-styles.ts). Only the shell has them; the dynamic render is unchanged.
-  const paintHosts = shell;
   return (
   <div class="checkout-left order-2 lg:order-1 mb-8 lg:mb-0 lg:basis-[42%]">
     <div class="sticky top-4">
@@ -105,12 +102,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
               <span class="text-[11px] font-heading font-normal tracking-[0.08em] uppercase text-[rgba(253,250,246,0.42)]">Your Order</span>
               <span class="text-[26px] font-medium text-[#FDFAF6] tabular-nums leading-none">
                 {/* While loading, hold the total's line height so the summary does not grow when it arrives (CLS). */}
-                {formattedTotal || (props.pageLoading.value ? (
-                  <>
-                    {paintHosts && <span data-sr-host="total" />}
-                    <span class="inline-block animate-pulse" data-sr-skel="" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" />
-                  </>
-                ) : '')}
+                {formattedTotal || (props.pageLoading.value ? <span class="inline-block animate-pulse" style="width:96px;height:26px;border-radius:4px;background:rgba(253,250,246,0.08);vertical-align:bottom;" /> : '')}
               </span>
             </div>
             <button
@@ -132,10 +124,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         <div class="rounded-lg mt-4 mb-3">
           <div class="px-4 py-3 sm:py-4">
             {source === 'skeleton' && shell ? (
-              <>
-                {paintHosts && <div data-sr-host="lines" />}
-                <ShellSummaryLines />
-              </>
+              <ShellSummaryLines />
             ) : source === 'skeleton' ? (
               // One placeholder per line the cart mirror already knows (at least one), each as tall as a loaded line (152px at
               // phone width), so the loaded summary does not move the form below it (it shifted 121px, CLS 0.125).
@@ -177,10 +166,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         )}
         <div class="px-4 pb-4 pt-2">
           {source === 'skeleton' && shell ? (
-            <>
-              {paintHosts && <div data-sr-host="totals" />}
-              <ShellSummaryTotals />
-            </>
+            <ShellSummaryTotals />
           ) : source === 'skeleton' ? (
             <div class="animate-pulse space-y-3" style="padding-top:4px;min-height:146px;">
               <div class="flex justify-between">

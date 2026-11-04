@@ -63,8 +63,7 @@ describe('plan per page type', () => {
 		expect(urls('/products/oni/', { ...damned, shell: false })).toEqual([stockReadUrl('oni'), SHOP_CONFIG_URL]);
 	});
 	it('checkout reads the config; blog nothing (visitor reads are decided in the browser); checkout flags the entry query', () => {
-		expect(buildEarlyReadsPlan('/checkout/', damned)).toEqual({ page: 'checkout', get: [[SHOP_CONFIG_URL, 1]], checkout: true, paint: { kind: 'checkout', dm: '', rev: 3 } });
-		expect(buildEarlyReadsPlan('/checkout/', { ...damned, shell: false })).toEqual({ page: 'checkout', get: [[SHOP_CONFIG_URL, 1]], checkout: true }); // rollback: no paint
+		expect(buildEarlyReadsPlan('/checkout/', damned)).toEqual({ page: 'checkout', get: [[SHOP_CONFIG_URL, 1]], checkout: true });
 		expect(buildEarlyReadsPlan('/blog/', damned)).toEqual({ page: 'other', get: [], checkout: false });
 	});
 	it('the script carries no visitor value and is safe inside <script>', () => {

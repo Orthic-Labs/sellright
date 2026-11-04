@@ -9,8 +9,6 @@ import { SHOP_STOCK_ON_LOAD } from '~/platform/stock-triggers';
 import { shellRender } from '~/platform/shell-render';
 import { COMMERCE_FLOW } from '~/platform/license/flow-env';
 import { earlyReadsWriter, type EarlyReadsContext, type EarlyReadsStreamWriter } from '~/platform/early-reads';
-import { ASSET_VARIANT_REV } from '~/components/ui/LazyImage';
-import { theme } from '~/theme/theme.config';
 
 /** This build's context for a render (`shell`: this request may be stored as a shared shell, so its values are read in the browser). */
 export function earlyReadsContext(shell = shellRender()): EarlyReadsContext {
@@ -24,8 +22,6 @@ export function earlyReadsContext(shell = shellRender()): EarlyReadsContext {
 		detailSlugs: DETAIL_PRODUCTS.map((p) => p.slug),
 		shopLiveListing: SHOP_STOCK_ON_LOAD === 'live',
 		license: COMMERCE_FLOW === 'license',
-		assetDomain: theme.domain,
-		assetRev: ASSET_VARIANT_REV,
 	};
 }
 

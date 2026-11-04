@@ -1,4 +1,4 @@
-import { $, component$, useComputed$, useSignal, useStore, useStyles$, useTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
@@ -16,7 +16,6 @@ import type { BrowseCatalog } from '~/services/browse-catalog';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
-import { SHOP_GATE_CSS } from '~/platform/early-paint';
 
 export { useCatalogLoader };
 export { useConfiguratorDetail } from '~/platform/configurator-detail';
@@ -26,15 +25,12 @@ export { head, onStaticGenerate } from '~/platform/shop';
 const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
 
 const BaseShopPage = component$(() => {
- // DP-6 on the shell: the pending grid is hidden until the live in-stock filter has been applied (early-paint.ts; Qwik drops the gate
- // when it applies the same read). Inert for any render without the gate attribute (SHELL_CACHE_EXCLUDE, a query URL, switch off).
- useStyles$(SHOP_GATE_CSS);
  const catalog = useCatalogLoader();
  const location = useLocation();
- // ADR-0001 §2 / DP-6: a deferred (shell) listing is read in the browser from the LIVE catalog, no-store (started at document parse, early-paint.ts). Not deferred: no read.
+ // ADR-0001 §2: a deferred (shell) listing is read in the browser on load, from the manifest, no-store. Not deferred: no read.
  const listingKey = useComputed$(() => (catalog.value.deferred ? location.url.pathname : null));
  const liveCatalog = useLiveRead<BrowseCatalog>($(() => earlyJsonOr(liveReadUrl('shop-catalog'), () => readShopCatalog())), listingKey);
- /** The listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
+ /** The manifest listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
  const listingProducts = (): CatalogListItem[] => (catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || []);
  const listingPending = catalog.value.deferred && (liveCatalog.status === 'idle' || liveCatalog.status === 'loading');
 
@@ -108,15 +104,11 @@ const BaseShopPage = component$(() => {
   // Category filter
   products = filterCategoryProducts(products, shopCategoryFilters, facetIds.value);
 
-  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then the loader's order. On the shell
-  // the loader's order is the structure the grid already paints (and the early script revealed), so the live read re-sorts nothing.
-  const structureOrder = new Map((catalog.value.products || []).map((p, i) => [p.slug, i] as const));
-  const orderOf = (slug: string) => structureOrder.get(slug) ?? Number.MAX_SAFE_INTEGER;
+  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then manifest order
   const sorted = [...products].sort((a, b) => {
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
-   const byRank = listingRank(a.slug) - listingRank(b.slug);
-   return byRank !== 0 ? byRank : orderOf(a.slug) === orderOf(b.slug) ? 0 : orderOf(a.slug) < orderOf(b.slug) ? -1 : 1;
+   return listingRank(a.slug) - listingRank(b.slug); // equal ranks keep manifest order (stable sort)
   });
 
   return { products: sorted, count: sorted.length };
@@ -179,8 +171,6 @@ const BaseShopPage = component$(() => {
  const displayData = getDisplayProducts();
  const displayProducts = displayData.products;
  const displayCount = displayData.count;
- // The shell's live read failed (both the parse-time GET and the server$ fallback): nothing is purchasable that was not confirmed.
- const liveFailed = catalog.value.deferred && liveCatalog.status === 'error' && !searchTerm.value;
  const gridPending = listingPending && !searchTerm.value && shellProducts.length > 0;
  const showGrid = gridPending || (!(listingPending && !searchTerm.value) && !(isSearching.value && displayProducts.length === 0) && displayProducts.length > 0);
 
@@ -260,47 +250,34 @@ const BaseShopPage = component$(() => {
    {/* ── PRODUCT GRID ── */}
    <div class="max-w-[1920px] mx-auto">
     {showGrid ? (
-     <>
-     {/* #425: ONE keyed grid for the pending shell and the live listing, so the browser's read updates the shell's cards in place
-        (same nodes): a separate shell grid was replaced wholesale, and its re-created titles became a late LCP (~1.1 s).
-        DP-6 on the shell: while pending the grid carries the live gate (hidden, space reserved) and each card sits in a `data-slug`
-        wrapper, so the parse-time script can hide every card the live read does not confirm in stock before it reveals the grid (no
-        out-of-stock card is ever visible); Qwik drops the gate when it applies the same read. The wrapper is `display:contents`. */}
+     /* #425: ONE keyed grid for the pending shell and the live listing, so the browser's read updates the shell's cards in place
+        (same nodes): a separate shell grid was replaced wholesale, and its re-created titles became a late LCP (~1.1 s). */
      <div
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
       style={{ contain: 'layout' }}
       data-listing-pending={gridPending ? '' : undefined}
-      data-live-gate={gridPending ? '' : undefined}
      >
       {(gridPending ? shellProducts : displayProducts).map((item, index) => (
-       <div key={item.slug} class="contents" data-slug={item.slug}>
-        <ProductCard
-         href={productPath(item.slug)}
-         image={item.image}
-         name={item.name}
-         slug={item.slug}
-         /* pending shell card: placeholder price, neither Sold Out nor in stock (ADR-0001 #412) */
-         price={gridPending ? null : item.pricingVariant?.price ?? item.minPrice}
-         pending={gridPending}
-         pricePending={gridPending}
-         maxPrice={!gridPending && SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
-         inStock={gridPending ? undefined : item.inStock}
-         priority={index === 0}
-         eager={index > 0 && index < 4}
-         salePrice={gridPending ? null : item.pricingVariant?.salePrice ?? null}
-         preOrderPrice={gridPending ? null : item.pricingVariant?.preOrderPrice ?? null}
-         isPreOrder={!gridPending && !!item.pricingVariant?.isPreOrder}
-        />
-       </div>
+       <ProductCard
+        key={item.slug}
+        href={productPath(item.slug)}
+        image={item.image}
+        name={item.name}
+        slug={item.slug}
+        /* pending shell card: placeholder price, neither Sold Out nor in stock (ADR-0001 #412) */
+        price={gridPending ? null : item.pricingVariant?.price ?? item.minPrice}
+        pending={gridPending}
+        pricePending={gridPending}
+        maxPrice={!gridPending && SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
+        inStock={gridPending ? undefined : item.inStock}
+        priority={index === 0}
+        eager={index > 0 && index < 4}
+        salePrice={gridPending ? null : item.pricingVariant?.salePrice ?? null}
+        preOrderPrice={gridPending ? null : item.pricingVariant?.preOrderPrice ?? null}
+        isPreOrder={!gridPending && !!item.pricingVariant?.isPreOrder}
+       />
       ))}
      </div>
-     {gridPending && <i hidden data-live-gate-end="" />}
-     {gridPending && (
-      <p data-shop-slow="" role="status" class="px-4 sm:px-8 lg:px-12 py-6 text-[13px] tracking-[0.5px] text-[var(--color-ink-soft)] font-body">
-       Still checking what is in stock. If this does not load, reload the page.
-      </p>
-     )}
-     </>
     ) : listingPending && !searchTerm.value ? (
      /* ADR-0001: the shell's listing space (two rows at every breakpoint) until the browser's manifest read lands */
      <div
@@ -333,22 +310,16 @@ const BaseShopPage = component$(() => {
      <div class="flex flex-col items-center justify-center py-32 text-center px-12">
       <div class="w-16 h-px bg-[var(--color-card-border)] mb-8"></div>
       <h3 class="font-heading font-normal text-2xl text-[var(--color-ink)] mb-3">
-       {liveFailed ? 'We could not check what is in stock' : 'No products found'}
+       No products found
       </h3>
       <p class="text-[13px] text-[var(--color-ink-muted)] mb-8 max-w-xs leading-loose tracking-wide">
-       {liveFailed
-        ? 'Nothing is shown as available until it is confirmed. Reload the page to try again.'
-        : searchTerm.value
+       {searchTerm.value
         ? `Nothing matched "${searchTerm.value}".`
         : 'Nothing matches your current filters.'}
       </p>
       <button
        class="px-6 py-3 bg-[var(--color-ink)] text-[var(--color-ink-contrast)] text-[13px] tracking-[2.5px] uppercase font-heading cursor-pointer hover:bg-[var(--color-ink-hover)] transition-colors duration-150 min-h-[44px]"
        onClick$={() => {
-        if (liveFailed) {
-         window.location.reload();
-         return;
-        }
         facetIds.value = [];
         searchTerm.value = '';
         state.facetValues = SHOP_FILTERS.map(facet => ({
@@ -357,7 +328,7 @@ const BaseShopPage = component$(() => {
         }));
        }}
       >
-       {liveFailed ? 'Reload' : 'Clear filters'}
+       Clear filters
       </button>
      </div>
     ) : null}

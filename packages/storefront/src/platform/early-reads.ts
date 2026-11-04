@@ -12,10 +12,6 @@
 // Inputs come from the page structure only: the path (product slug), the build's brand data (spotlight, detail products) and whether
 // this render is a shell (ADR-0001: values are read in the browser). Visitor state (session marker, cart token, country) is read by
 // the script in the browser, never written into the HTML, so the edge-cached shell stays identical for every visitor.
-//
-// DP-5/DP-6: on the /shop/ and /checkout/ shells a second inline script (early-paint.ts) consumes a CLONE of the same in-flight read to
-// reveal the shop grid (stock-confirmed cards only) and to paint the checkout order summary before hydration.
-import { SHOP_REVEAL_TIMEOUT_MS, checkoutPaintScriptSource, shopRevealScriptSource } from './early-paint';
 
 /** The window property holding this document's early reads. */
 export const EARLY_READS_GLOBAL = '__srEarly';
@@ -24,9 +20,6 @@ export const EARLY_READS_GLOBAL = '__srEarly';
 export interface EarlyReadsStore {
 	h: string;
 	r: Record<string, Promise<Response> | undefined>;
-	/** The checkout shell's cart read (kept for the paint script, which reads a clone) and the cart token it was started for. */
-	cp?: Promise<Response>;
-	ct?: string;
 }
 
 /** The GET API equivalents of the shell routes' live-values server$ reads (routes/api/live/[read]/index.ts). */
@@ -66,9 +59,6 @@ export interface EarlyReadsContext {
 	shopLiveListing: boolean;
 	/** License commerce flow (RightSites store.* hosts): its own routes; the only page read is the home's license catalog. */
 	license?: boolean;
-	/** theme.domain and the asset variant revision (the painter's image URLs must equal OptimizedImage's). */
-	assetDomain?: string;
-	assetRev?: number;
 }
 
 export type EarlyPageType = 'home' | 'shop' | 'product' | 'checkout' | 'other';
@@ -78,8 +68,6 @@ export interface EarlyReadsPlan {
 	page: EarlyPageType;
 	get: [string, 0 | 1][];
 	checkout: boolean;
-	/** A shell render only: the paint script this page gets after the reads script (early-paint.ts). Absent: none. */
-	paint?: { kind: 'shop'; k: string; t: number } | { kind: 'checkout'; dm: string; rev: number };
 }
 
 const strip = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
@@ -132,11 +120,7 @@ export function buildEarlyReadsPlan(pathname: string, ctx: EarlyReadsContext): E
 		// The checkout reads the shop config on entry with or without a cart (payment methods, the empty-cart state included).
 		get.push([SHOP_CONFIG_URL, 1]);
 	}
-	// DP-5/DP-6: only a shell render paints from its early reads (a dynamic or excluded render is today's server-rendered page).
-	let paint: EarlyReadsPlan['paint'];
-	if (ctx.shell && page === 'shop' && !ctx.brandShop) paint = { kind: 'shop', k: liveReadUrl('shop-catalog'), t: SHOP_REVEAL_TIMEOUT_MS };
-	else if (ctx.shell && page === 'checkout') paint = { kind: 'checkout', dm: ctx.assetDomain ?? '', rev: ctx.assetRev ?? 3 };
-	return { page, get, checkout: page === 'checkout', ...(paint ? { paint } : {}) };
+	return { page, get, checkout: page === 'checkout' };
 }
 
 // ---------------------------------------------------------------------------------------------------- pure: the script
@@ -151,7 +135,7 @@ export function buildEarlyReadsPlan(pathname: string, ctx: EarlyReadsContext): E
  */
 const SCRIPT_BODY =
 	"(function(w,d,P){try{if(!w.fetch)return;var c=d.cookie||'',S={h:location.pathname+location.search,r:{}};w." + EARLY_READS_GLOBAL + "=S;" +
-	"var f=function(u,l){try{var p=w.fetch(u,{credentials:'include',cache:'no-store',priority:l?'low':'auto'});p['catch'](function(){});S.r[u]=p;return p;}catch(e){}};" +
+	"var f=function(u,l){try{var p=w.fetch(u,{credentials:'include',cache:'no-store',priority:l?'low':'auto'});p['catch'](function(){});S.r[u]=p;}catch(e){}};" +
 	"try{w.navigation.addEventListener('navigate',function(e){var u=new URL(e.destination.url);if(u.pathname+u.search!==S.h)S.r={};});}catch(e){}" +
 	"for(var i=0;i<P.g.length;i++)f(P.g[i][0],P.g[i][1]);" +
 	"if(/(?:^|;\\s*)(?:sr_cust_csrf|authToken|sr_legacy_cart)=[^;\\s]/.test(c))f('/api/session/',1);" +
@@ -161,7 +145,7 @@ const SCRIPT_BODY =
 	"if(it&&it.token===t&&it.version!==2&&(typeof it.couponCode==='string'||it.couponCode===null))ok=0;" +
 	"var cp=JSON.parse(L.getItem('sr_country_pref')||'null');if(cp&&/^[A-Z]{2}$/.test(cp.countryCode))co=cp.countryCode;}catch(e){ok=0;}" +
 	"if(ok){var b='/v1/shop/cart/'+encodeURIComponent(t);if(P.k){var cc=c.match(/(?:^|;\\s*)countryCode=([^;]*)/);" +
-	"S.ct=t;S.cp=f(b+'?pricingIntent=checkout&shipCountry='+encodeURIComponent(cc&&cc[1]||co)+'&includeShippingMethods=1');}" +
+	"f(b+'?pricingIntent=checkout&shipCountry='+encodeURIComponent(cc&&cc[1]||co)+'&includeShippingMethods=1');}" +
 	"else f(b+'?shipCountry='+encodeURIComponent(co));}}}catch(e){}})(window,document,";
 
 /** JSON safe inside an HTML <script> element (no `</script>`, no `<!--`, no U+2028/2029). */
@@ -175,18 +159,9 @@ export function earlyReadsScriptSource(plan: EarlyReadsPlan): string {
 
 const escapeAttr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-/** The paint script text for a plan (shop reveal / checkout summary, early-paint.ts), or null when the page has none. Pure. */
-export function earlyPaintScriptSource(plan: EarlyReadsPlan): string | null {
-	if (!plan.paint) return null;
-	return plan.paint.kind === 'shop' ? shopRevealScriptSource({ k: plan.paint.k, t: plan.paint.t }) : checkoutPaintScriptSource({ dm: plan.paint.dm, rev: plan.paint.rev });
-}
-
-/** The <script> element(s): classic inline scripts, nonce'd when the render has a nonce (a shell render is allowed by its sha256).
- *  The reads script first, then (shell /shop/ and /checkout/ only) the paint script. */
+/** The <script> element: a classic inline script, nonce'd when the render has a nonce (a shell render is allowed by its sha256). */
 export function earlyReadsScriptTag(plan: EarlyReadsPlan, nonce?: string): string {
-	const open = `<script${nonce ? ` nonce="${escapeAttr(nonce)}"` : ''}>`;
-	const paint = earlyPaintScriptSource(plan);
-	return `${open}${earlyReadsScriptSource(plan)}</script>${paint ? `${open}${paint}</script>` : ''}`;
+	return `<script${nonce ? ` nonce="${escapeAttr(nonce)}"` : ''}>${earlyReadsScriptSource(plan)}</script>`;
 }
 
 /**
