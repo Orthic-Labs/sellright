@@ -40,7 +40,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabFilterSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabFilterSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, removedQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -382,7 +382,7 @@ admin.openapi(
           // #374: a guest order (no linked customer) shows its own checkout contact.
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
-          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(),
+          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(), removedQty: removedQtySql(),
           // A tab filter aggregates every order once; count the matches in the same pass instead of a second statement.
           ...(tab ? { matchTotal: sql<number>`(count(*) over())::int` } : {}),
         })
@@ -544,7 +544,7 @@ admin.openapi(
         // summary (edit / edit_address / record_payment / edit_refund) — everything
         // else ignores it. Reusing audit_log keeps notes in the SAME timeline
         // as every other order event instead of a second, disconnected feed.
-        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund'].includes(e.action) ? e.data : undefined })),
+        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund', 'refund', 'fulfill', 'tracking_import'].includes(e.action) ? e.data : undefined })),
       };
     });
     if (!out) throw new HttpError(404, 'order not found');

@@ -7,6 +7,7 @@ import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { addressLines } from '../components/order-edit/AddressCard';
 import { LoadError, LoadingRows } from './states';
+import { eventCopy } from './order-model';
 import { fulfilmentPill, paymentPill, shippableQty } from './orders-helpers';
 import { PillView } from './orders-ui';
 
@@ -21,12 +22,11 @@ function lineState(l: Line): string | null {
   return null;
 }
 
-function eventLabel(e: OrderDetail['events'][number]): string {
+function eventLabel(e: OrderDetail['events'][number], currency: string): string {
   if (e.action === 'note') return `Note: ${e.data?.note ?? ''}`;
   if (e.action === 'edit') return 'Order edited';
   if (e.action === 'edit_address') return 'Address edited';
-  const a = e.action.replace(/_/g, ' ');
-  return `${a.charAt(0).toUpperCase()}${a.slice(1)}${e.toState ? ` → ${e.toState}` : ''}`;
+  return eventCopy(e, (c) => money(c, currency));
 }
 
 export default function OrderInspector({ row, onClose, onFulfil }: { row: OrderRow; onClose: () => void; onFulfil: (code: string) => void }) {
@@ -106,7 +106,7 @@ export default function OrderInspector({ row, onClose, onFulfil }: { row: OrderR
       {o && events.length > 0 && (
         <div className="sec" style={{ border: 0 }}><div className="lbl">Activity</div>
           <div className="tl">
-            {events.map((e) => <div className="ev" key={e.id}>{eventLabel(e)}<small>{dateTime(e.at)}{e.actor ? ` · ${e.actor}` : ''}</small></div>)}
+            {events.map((e) => <div className="ev" key={e.id}>{eventLabel(e, o.currency)}<small>{dateTime(e.at)}{e.actor ? ` · ${e.actor}` : ''}</small></div>)}
           </div>
         </div>
       )}

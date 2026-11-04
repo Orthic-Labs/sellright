@@ -27,7 +27,7 @@ import { ApiError } from '../api';
 function product(id = 'p1', name = 'Original'): ProductDetail {
   return ({
     id, name, slug: id, description: 'Description', status: 'active', updatedAt: '2026-01-01T00:00:00.000Z', assetPath: '/image.webp', featuredAssetId: 'image', images: [{ assetId: 'image', path: '/image.webp', position: 0 }, { assetId: 'second-image', path: '/second.webp', position: 1 }],
-    variants: [{ id: 'v1', sku: 'SKU-1', name: 'First', price: 1000, salePrice: null, enabled: true, onHand: 4, allocated: 0, available: 4 }],
+    variants: [{ id: 'v1', sku: 'SKU-1', name: 'First', price: 1000, salePrice: null, enabled: true, updatedAt: '2026-01-01T00:00:00.000Z', onHand: 4, allocated: 0, available: 4 }],
   }) as ProductDetail;
 }
 function deferred<T>() {
@@ -76,7 +76,7 @@ async function mount() {
 }
 let revision = 0;
 function persist(path: string, body: Record<string, unknown>) {
-  const { expectedUpdatedAt: _expected, ...fields } = body;
+  const { expectedUpdatedAt: _expected, expectedOnHand: _expectedOnHand, ...fields } = body;
   if (path.startsWith('/products/')) {
     Object.assign(server(), fields);
     if (fields.featuredAssetId === null) server().assetPath = null;
@@ -85,9 +85,10 @@ function persist(path: string, body: Record<string, unknown>) {
     return { id: server().id, updatedAt };
   }
   const variant = server().variants.find((row) => row.id === path.split('/')[2])!;
-  if (path.endsWith('/stock')) variant.onHand = fields.onHand as number;
-  else Object.assign(variant, fields);
-  return {};
+  if (path.endsWith('/stock')) { variant.onHand = fields.onHand as number; return {}; }
+  const updatedAt = `2026-03-01T00:00:0${++revision}.000Z`;
+  Object.assign(variant, fields, { updatedAt });
+  return { id: variant.id, updatedAt };
 }
 beforeEach(() => {
   mocks.id = 'p1'; mocks.store = { slug: 'first', currency: 'USD' };
@@ -161,8 +162,8 @@ describe('Product draft hydration', () => {
     await clickText('Save changes'); await flush();
     expect(mocks.patch.mock.calls).toEqual([
       ['/products/p1', { name: 'Submitted', expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }],
-      ['/variants/v1', { price: 2200 }],
-      ['/variants/v1/stock', { onHand: 9 }],
+      ['/variants/v1', { price: 2200, expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }],
+      ['/variants/v1/stock', { onHand: 9, expectedOnHand: 4 }],
     ]);
     // The next Save carries the stamp returned by the first.
     await fill(title(), 'Again'); await clickText('Save changes'); await flush();
@@ -177,6 +178,40 @@ describe('Product draft hydration', () => {
     expect(mocks.patch).toHaveBeenCalledTimes(1);
     expect(mocks.patch.mock.calls.some(([path]) => String(path).startsWith('/variants/'))).toBe(false);
     expect(title().value).toBe('Submitted'); expect(price().value).toBe('22.00');
+  });
+
+  it('sends the variant stamp & on-hand it loaded, then the ones it saved', async () => {
+    await mount(); await fill(price(), '22.00'); await fill(onHand(), '9');
+    await clickText('Save changes'); await flush();
+    expect(mocks.patch.mock.calls).toEqual([
+      ['/variants/v1', { price: 2200, expectedUpdatedAt: '2026-01-01T00:00:00.000Z' }],
+      ['/variants/v1/stock', { onHand: 9, expectedOnHand: 4 }],
+    ]);
+    await fill(price(), '23.00'); await fill(onHand(), '7');
+    await clickText('Save changes'); await flush();
+    expect(mocks.patch.mock.calls.slice(2)).toEqual([
+      ['/variants/v1', { price: 2300, expectedUpdatedAt: '2026-03-01T00:00:01.000Z' }],
+      ['/variants/v1/stock', { onHand: 7, expectedOnHand: 9 }],
+    ]);
+  });
+
+  it('shows Use theirs / Keep mine when a variant changed since it was loaded', async () => {
+    await mount(); await fill(price(), '22.00');
+    mocks.patch.mockRejectedValueOnce(new ApiError(409, 'Variant changed since you opened it'));
+    await clickText('Save changes'); await flush();
+    expect(button('Use theirs')).toBeTruthy(); expect(button('Keep mine')).toBeTruthy();
+    expect(price().value).toBe('22.00');
+  });
+
+  it('shows Use theirs / Keep mine when stock moved since it was loaded, and Keep mine re-sends against the new on-hand', async () => {
+    await mount(); await fill(onHand(), '9');
+    server().variants[0]!.onHand = 3; // a fulfilment took one... or someone else edited it
+    mocks.patch.mockRejectedValueOnce(new ApiError(409, 'Stock changed since you opened it'));
+    await clickText('Save changes'); await flush();
+    expect(button('Keep mine')).toBeTruthy();
+    expect(mocks.patch.mock.calls).toEqual([['/variants/v1/stock', { onHand: 9, expectedOnHand: 4 }]]);
+    await clickText('Keep mine'); await flush();
+    expect(mocks.patch.mock.calls[1]).toEqual(['/variants/v1/stock', { onHand: 9, expectedOnHand: 3 }]);
   });
 
   it('blocks Save with a toast when variants have errors, sending nothing', async () => {

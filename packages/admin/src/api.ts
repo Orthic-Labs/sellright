@@ -150,7 +150,7 @@ export interface Page<T> { items: T[]; total: number; page: number; pageSize: nu
 
 export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null;
   /** #406: units still to ship, of those on pre-order, and units shipped. Removed (refunded before shipping) units are in none. */
-  openQty?: number; openPreOrderQty?: number; shippedQty?: number; }
+  openQty?: number; openPreOrderQty?: number; shippedQty?: number; removedQty?: number; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
@@ -179,7 +179,7 @@ export interface OrderDetail {
     lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
   }[];
   locations: { id: string; name: string; code: string; isDefault: boolean }[];
-  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } }[];
+  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } & Record<string, unknown> }[];
 }
 type RefundLineBasis = Pick<OrderDetail['lines'][number], 'quantity' | 'refundQuantity' | 'refundAvailableQuantity' | 'refundCashAmounts' | 'refundUnitPrice' | 'refundedQty'>;
 
@@ -232,7 +232,7 @@ export function refundCashForRemainingLines(lines: readonly RefundLineBasis[]): 
   return total;
 }
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
-export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; onHand: number; allocated: number; available: number; optionIds?: string[]; }
+export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; updatedAt?: string; onHand: number; allocated: number; available: number; optionIds?: string[]; }
 export interface ProductImage { assetId: string; path: string; url: string; position: number; }
 export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; featuredAssetId: string | null; images: ProductImage[]; variants: VariantRow[];
   /** #406: sent back as expectedUpdatedAt on save; a newer row is a 409 conflict. */
