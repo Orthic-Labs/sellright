@@ -23,12 +23,12 @@ export async function goToCheckout(page: Page): Promise<void> {
 }
 
 /**
- * `cardReady: false` for a spec whose card fields never become available (Collect.js init failure): the details are then
- * proven by the card form mounting, since PLACE ORDER stays disabled until the fields load.
+ * `cardReady: false` for a spec whose payment controls never become usable (Collect.js / Stripe init failure): the details
+ * are then proven by the payment controls (or their init error) mounting, since PLACE ORDER stays unavailable.
  */
 export async function fillShipping(page: Page, email: string, who = { first: 'Ada', last: 'Lovelace' }, opts: { cardReady?: boolean } = {}): Promise<void> {
 	const detailsValid = (timeout: number) => opts.cardReady === false
-		? expect(paymentSection(page).locator('.nmi-card-form')).toBeVisible({ timeout })
+		? expect(paymentSection(page).locator('.nmi-card-form, [role="radiogroup"], [data-testid="payment-init-failed"]').first()).toBeVisible({ timeout })
 		: expect(placeOrderButton(page)).toBeEnabled({ timeout });
 	// The form hydrates (and the signed-in lookup resolves) a beat after it first paints, and a re-render in that window
 	// clears typed values — so fill, then prove the values stuck and the form validates, retrying the whole fill otherwise.

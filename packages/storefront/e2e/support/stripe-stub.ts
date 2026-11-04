@@ -55,6 +55,15 @@ export function stripeStubScript(): string {
 						const element = {
 							mount(target) {
 								calls.push({ fn: 'mount', target: String(target) });
+								// Like Stripe.js, a mounted element renders a sized frame into its host (the express row shows only once its
+								// host has a height); the express element renders nothing when no wallet is available on the device.
+								const host = typeof target === 'string' ? document.querySelector(target) : target;
+								if (host && !window.__STRIPE_LOADERROR && (type !== 'expressCheckout' || window.__STRIPE_WALLETS)) {
+									const frame = document.createElement('div');
+									frame.setAttribute('data-stripe-stub-frame', type);
+									frame.style.height = type === 'expressCheckout' ? '44px' : '160px';
+									host.appendChild(frame);
+								}
 								setTimeout(() => {
 									if (window.__STRIPE_LOADERROR) (handlers.loaderror || []).forEach((f) => f({ elementType: 'payment', error: { type: 'api_connection_error', message: String(window.__STRIPE_LOADERROR) } }));
 									else (handlers.ready || []).forEach((f) => f(type === 'expressCheckout'

@@ -172,8 +172,10 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 															// of the still-mounted controls (init error, decline) into a stale one and drop it (#403).
 															if (locked || props.paymentMethod.value === m) return;
 															props.paymentMethod.value = m;
-															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
+															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected, and the old
+															// method's init failure does not block the new one (#403: a Stripe.js load failure hid the card form).
 															bumpView(props.paymentInit);
+															props.paymentInit.failed = false;
 														})}
 														class={methodTabClass(props.paymentMethod.value === m)}
 													>

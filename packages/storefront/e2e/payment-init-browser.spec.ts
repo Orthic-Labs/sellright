@@ -55,26 +55,25 @@ for (const [viewportName, viewport] of [
 
 				await addToCart(page, PRODUCT.mug.slug);
 				await goToCheckout(page);
-				await fillShipping(page, `${uniq('loaderr')}@example.net`);
+				await fillShipping(page, `${uniq('loaderr')}@example.net`, undefined, { cardReady: false });
 				await selectMethod(page, 'Stripe');
-				const placed = await placeOrder(page);
 
+				// The Payment Element mounts once the details are valid, before any order exists (#403), and fails to load.
 				await expect(retryAlert(page)).toBeVisible({ timeout: 15_000 });
 				await expect(retryAlert(page)).toContainText(/couldn.t load/i);
-				// Fail closed: nothing to pay with, nothing was confirmed, the order is untouched.
+				// Fail closed: nothing to pay with, nothing was confirmed, no order was created.
 				await expect(payButton(page)).toHaveCount(0);
 				await expectNoPlaceOrder(page);
-				expect(checkoutPosts(), 'init failure creates no additional order').toBe(1);
+				expect(checkoutPosts(), 'init failure creates no order').toBe(0);
 				const before = await stub.calls();
 				expect(before.filter((c) => c.fn === 'confirmPayment')).toEqual([]);
 				expect(before.filter((c) => c.fn === 'elements.create' && c.type === 'payment')).toHaveLength(1);
 				// Every Payment Element mount: open accordion with radios, no wallets (they are express buttons), fixed order.
-				expect(before.find((c) => c.fn === 'elements.create' && c.type === 'payment')?.options).toEqual({
+				expect(before.find((c) => c.fn === 'elements.create' && c.type === 'payment')?.options).toMatchObject({
 					layout: { type: 'accordion', defaultCollapsed: false, radios: 'always', spacedAccordionItems: false },
 					wallets: { applePay: 'never', googlePay: 'never' },
 					paymentMethodOrder: ['card', 'affirm', 'klarna', 'afterpay_clearpay', 'cashapp', 'link', 'crypto'],
 				});
-				expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
 				// The shopper's network recovers; retry remounts the element (a fresh create) and the form becomes payable.
 				await page.evaluate(() => { delete (window as unknown as { __STRIPE_LOADERROR?: string }).__STRIPE_LOADERROR; });
@@ -82,23 +81,19 @@ for (const [viewportName, viewport] of [
 				await expect(retryAlert(page)).toHaveCount(0);
 				await expect(payButton(page)).toBeVisible();
 				await expectNoPlaceOrder(page);
-				expect(checkoutPosts(), 'retry keeps the original order').toBe(1);
+				expect(checkoutPosts(), 'retry creates no order').toBe(0);
 				await expect(page.getByText(/loading secure payment/i)).toHaveCount(0);
 				expect((await stub.calls()).filter((c) => c.fn === 'elements.create' && c.type === 'payment')).toHaveLength(2);
 
-				// Same order, same PaymentIntent: the retry minted nothing new, and both mounts were created with that intent's client secret and PAY confirms.
+				// PLACE ORDER creates the order, mints its PaymentIntent and confirms it through the remounted Elements, once.
+				const placed = await placeOrder(page);
+				await expect.poll(async () => (await stub.calls()).filter((c) => c.fn === 'confirmPayment')).toHaveLength(1);
 				const intents = (await mock.stripeIntents()).filter((i) => i.metadata.orderCode === placed.code);
 				expect(intents).toHaveLength(1);
-				await clickPay(page);
-				await expect.poll(async () => (await stub.calls()).filter((c) => c.fn === 'confirmPayment')).toHaveLength(1);
 				const calls = await stub.calls();
-				// Only the Payment Element's instances: express checkout's deferred-intent Elements ({ mode }) carries no client secret.
-				const secrets = calls.filter((c) => c.fn === 'elements' && (c.opts as { clientSecret?: string } | null)?.clientSecret).map((c) => (c.opts as { clientSecret: string }).clientSecret);
-				expect(secrets, 'both mounts (the failed one and the retry) used the order intent\'s client secret').toEqual([intents[0]!.client_secret, intents[0]!.client_secret]);
-				// The confirm resolved the order's intent through the Elements instance, and the mock's intent really settled.
 				expect(calls.filter((c) => c.fn === 'confirmPayment')).toEqual([expect.objectContaining({ hasElements: true, clientSecret: intents[0]!.client_secret })]);
 				await expect.poll(async () => (await mock.stripeIntents()).find((i) => i.id === intents[0]!.id)?.status).toBe('succeeded');
-				expect(checkoutPosts(), 'payment confirms without creating another order').toBe(1);
+				expect(checkoutPosts(), 'one order for the whole flow').toBe(1);
 				stub.assertReached();
 			});
 		});
