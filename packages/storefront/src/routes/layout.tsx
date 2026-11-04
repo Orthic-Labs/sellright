@@ -98,8 +98,7 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	search: ['preview_token'],
 	// The shell reads this loader in the browser as well. With the router's default ('never')
 	// each read after load re-fetched it from the server, re-running it and its API call on every page (#362). The value
-	// is small and already rendered into the page. The maintenance loader keeps the default on purpose: passing options
-	// makes a loader skip query-only navigations, and maintenance must be re-read on every navigation.
+	// is small and already rendered into the page. The maintenance loader below uses 'always' too (#425).
 	serializationStrategy: 'always',
 });
 
@@ -132,6 +131,11 @@ export const useMaintenanceLoader = routeLoader$(async ({ headers }): Promise<Sr
 		vetoEdgeCache(headers, 'maintenance-unknown');
 		return { maintenance: false };
 	}
+}, {
+	// #425: serialized into the page. With the default ('never') the layout's first client re-render (opening the cart drawer, any
+	// client state change) re-fetched it as q-loader data, ~300 ms on the add-to-cart -> checkout path. Still run on every document
+	// request and every client navigation to a new path; only query-only navigations (same path) reuse the value.
+	serializationStrategy: 'always',
 });
 
 /*

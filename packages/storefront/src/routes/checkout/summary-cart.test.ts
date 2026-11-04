@@ -27,6 +27,13 @@ describe('serverCartShipCountry', () => {
     expect(serverCartShipCountry('USA')).toBe('US');
     expect(serverCartShipCountry('<x>')).toBe('US');
   });
+  it('#425: falls back to the edge country (cf-ipcountry) before the default; the cookie still wins', () => {
+    expect(serverCartShipCountry(undefined, 'in')).toBe('IN');
+    expect(serverCartShipCountry('de', 'IN')).toBe('DE');
+    expect(serverCartShipCountry(undefined, 'XX')).toBe('US');
+    expect(serverCartShipCountry(undefined, 'T1')).toBe('US');
+    expect(serverCartShipCountry('', null)).toBe('US');
+  });
 });
 
 describe('toDisplayCart', () => {
@@ -65,7 +72,7 @@ describe('readCheckoutServerCart', () => {
     expect(b?.grandTotal).toBe(5800);
     expect(get).toHaveBeenCalledTimes(2);
     expect(get).toHaveBeenCalledWith('/v1/shop/cart/{token}', expect.objectContaining({
-      params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'US' } },
+      params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'US', includeShippingMethods: '1' } },
     }));
   });
 

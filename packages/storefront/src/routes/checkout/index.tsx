@@ -48,7 +48,7 @@ export const onRequest = earlyHintsOnRequest;
  * see ./summary-cart.ts. A client loader fetch (SPA navigation, `@loaderId` set) skips it: the client's entry read is then
  * the only read, exactly as before. Serialized into the (private, no-store) document so a client read never re-fetches it.
  */
-export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) => {
+export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap, request }) => {
   if (sharedMap.has('@loaderId')) return null;
   // ADR-0001: with SHELL_CACHE=1 /checkout/ is a cacheable shell: no per-visitor cart and no prices in it. The summary renders its
   // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). #412: the marker (no value)
@@ -58,6 +58,7 @@ export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) 
     (path, init) => sellright().GET(path, init),
     cookie.get(TOKEN_COOKIE)?.value,
     cookie.get(COUNTRY_COOKIE)?.value,
+    request.headers.get('cf-ipcountry'),
   );
   return cart;
 }, { serializationStrategy: 'always' });

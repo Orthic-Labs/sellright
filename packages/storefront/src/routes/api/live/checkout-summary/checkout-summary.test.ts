@@ -18,13 +18,14 @@ const serverCart = (over: Partial<ServerCart> = {}): ServerCart => ({
 	...over,
 } as ServerCart);
 
-async function call(cookies: Record<string, string>) {
+async function call(cookies: Record<string, string>, ipCountry?: string) {
 	const headers = new Map<string, string>();
 	let out: { status: number; body: { cart: Record<string, unknown> | null } } | undefined;
 	await (onGet as unknown as (ev: unknown) => Promise<void>)({
 		cookie: { get: (n: string) => (cookies[n] !== undefined ? { value: cookies[n] } : null) },
 		headers: { set: (k: string, v: string) => headers.set(k.toLowerCase(), v) },
 		json: (status: number, body: never) => { out = { status, body }; },
+		request: new Request('https://shop.test/api/live/checkout-summary/', { headers: ipCountry ? { 'cf-ipcountry': ipCountry } : {} }),
 	});
 	return { headers, out: out! };
 }
@@ -63,11 +64,11 @@ describe('/api/live/checkout-summary/', () => {
 		expect(out.body.cart).toEqual(server);
 		expect(out.body.cart).toMatchObject({ subtotal: 5000, discountTotal: 0, shippingTotal: 800, grandTotal: 5800, quoteHash: 'qh1', pricingIntent: 'checkout', status: 'active' });
 		// The same call the server summary makes: the cart cookie, the checkout quote, the cookie's country (or the default US).
-		expect(get).toHaveBeenCalledWith('/v1/shop/cart/{token}', expect.objectContaining({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'DE' } } }));
+		expect(get).toHaveBeenCalledWith('/v1/shop/cart/{token}', expect.objectContaining({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'DE', includeShippingMethods: '1' } } }));
 		// Identity stays out of the answer (toDisplayCart).
 		expect(out.body.cart).toMatchObject({ token: '', email: null, customerId: null });
 		await call({ sr_cart: 'tok_srv' });
-		expect(get).toHaveBeenLastCalledWith('/v1/shop/cart/{token}', expect.objectContaining({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'US' } } }));
+		expect(get).toHaveBeenLastCalledWith('/v1/shop/cart/{token}', expect.objectContaining({ params: { path: { token: 'tok_srv' }, query: { pricingIntent: 'checkout', shipCountry: 'US', includeShippingMethods: '1' } } }));
 	});
 
 	it('every doubt is an empty answer, never an error body: failed read, another cart, converted, non-checkout quote, no lines', async () => {
@@ -92,5 +93,16 @@ describe('/api/live/checkout-summary/', () => {
 		get.mockResolvedValue({ data: serverCart({ grandTotal: 6100 }) });
 		expect((await call({ sr_cart: 'tok_srv' })).out.body.cart).toMatchObject({ grandTotal: 6100 });
 		expect(get).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("#425: the summary quotes shipping for the visitor country", () => {
+	it("no country cookie: quotes the edge country (cf-ipcountry) with shipping; the cookie still wins", async () => {
+		get.mockReset();
+		get.mockResolvedValue({ data: serverCart() });
+		await call({ sr_cart: "tok_srv" }, "IN");
+		expect(get).toHaveBeenLastCalledWith("/v1/shop/cart/{token}", expect.objectContaining({ params: { path: { token: "tok_srv" }, query: { pricingIntent: "checkout", shipCountry: "IN", includeShippingMethods: "1" } } }));
+		await call({ sr_cart: "tok_srv", countryCode: "DE" }, "IN");
+		expect(get).toHaveBeenLastCalledWith("/v1/shop/cart/{token}", expect.objectContaining({ params: { path: { token: "tok_srv" }, query: { pricingIntent: "checkout", shipCountry: "DE", includeShippingMethods: "1" } } }));
 	});
 });

@@ -16,10 +16,15 @@ export const SERVER_CART_TIMEOUT_MS = 1500;
 /** The client's own default destination (CountryPreferenceService DEFAULT_COUNTRY) when nothing says otherwise. */
 const DEFAULT_SHIP_COUNTRY = 'US';
 
-/** The ship country the server read quotes for: the country cookie when it is a valid code, else the client's default. */
-export function serverCartShipCountry(cookieValue: string | null | undefined): string {
-  const code = (cookieValue ?? '').trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(code) ? code : DEFAULT_SHIP_COUNTRY;
+/** The ship country the server read quotes for: the country cookie when it is a valid code, else the visitor's country from the edge
+ *  (`cf-ipcountry`, the same source the client's geo default comes from), else the client's default. #425: the server quote and the
+ *  client's entry read then price the same destination, so the first total painted is the one that stays. */
+export function serverCartShipCountry(cookieValue: string | null | undefined, ipCountry?: string | null): string {
+  for (const candidate of [cookieValue, ipCountry]) {
+    const code = (candidate ?? '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(code) && code !== 'XX' && code !== 'T1') return code;
+  }
+  return DEFAULT_SHIP_COUNTRY;
 }
 
 /**
@@ -44,7 +49,7 @@ export function toDisplayCart(server: ServerCart | null | undefined, requestToke
 type CartGet = (
   path: '/v1/shop/cart/{token}',
   init: {
-    params: { path: { token: string }; query: { pricingIntent: 'checkout'; shipCountry: string } };
+    params: { path: { token: string }; query: { pricingIntent: 'checkout'; shipCountry: string; includeShippingMethods: '1' } };
     signal: AbortSignal;
   },
 ) => Promise<{ data?: ServerCart }>;
@@ -68,7 +73,9 @@ export async function readCheckoutServerCart(
   const read = (async () => {
     try {
       const { data } = await get('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { pricingIntent: 'checkout', shipCountry } },
+        // #425: quote shipping in the same read (the API prices the cart with the requested method, else the cheapest eligible: the
+        // client entry read's own rule), so the summary's total includes shipping instead of changing when the client read lands.
+        params: { path: { token }, query: { pricingIntent: 'checkout', shipCountry, includeShippingMethods: '1' } },
         signal: abort.signal,
       });
       return toDisplayCart(data, token);
@@ -92,9 +99,10 @@ export function readCheckoutSummaryCart(
   get: CartGet,
   tokenCookie: string | null | undefined,
   countryCookie: string | null | undefined,
+  ipCountry?: string | null,
   timeoutMs: number = SERVER_CART_TIMEOUT_MS,
 ): Promise<Cart | null> {
-  return readCheckoutServerCart(get, tokenCookie, serverCartShipCountry(countryCookie), timeoutMs);
+  return readCheckoutServerCart(get, tokenCookie, serverCartShipCountry(countryCookie, ipCountry), timeoutMs);
 }
 
 /** The /api/live/checkout-summary/ answer: the display cart, or null (no cookie, no lines, not an active checkout quote, any failure). */

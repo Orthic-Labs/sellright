@@ -15,12 +15,12 @@ import { readCheckoutSummaryCart, type CheckoutSummaryResponse } from '~/routes/
  * or doubt (timeout, other cart, converted, no lines, not the checkout quote) is `{ cart: null }` too: the page then behaves as
  * without the read (its skeleton, then Qwik's own entry read).
  */
-export const onGet: RequestHandler = async ({ cookie, headers, json }) => {
+export const onGet: RequestHandler = async ({ cookie, headers, json, request }) => {
 	headers.set('Cache-Control', NO_STORE_CACHE_CONTROL);
 	headers.set('Cloudflare-CDN-Cache-Control', 'no-store');
 	headers.set('Vary', 'Cookie');
 	const body: CheckoutSummaryResponse = {
-		cart: await readCheckoutSummaryCart((path, init) => sellright().GET(path, init), cookie.get(TOKEN_COOKIE)?.value, cookie.get(COUNTRY_COOKIE)?.value),
+		cart: await readCheckoutSummaryCart((path, init) => sellright().GET(path, init), cookie.get(TOKEN_COOKIE)?.value, cookie.get(COUNTRY_COOKIE)?.value, request.headers.get('cf-ipcountry')),
 	};
 	json(200, body);
 };
