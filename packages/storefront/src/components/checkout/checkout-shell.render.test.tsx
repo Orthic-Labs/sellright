@@ -115,6 +115,31 @@ describe('/checkout/ shell (#412)', () => {
 		expect(priceFree(page)).toEqual([]);
 	});
 
+	it('DP-5 shell: three EMPTY paint hosts (total, lines, totals), each immediately before its Qwik skeleton; no cart, price or identity in the shell', async () => {
+		const document = await render(CHECKOUT_SHELL);
+		const left = document.querySelector('.checkout-left')!;
+		for (const name of ['total', 'lines', 'totals']) {
+			const host = left.querySelector(`[data-sr-host="${name}"]`)!;
+			expect(host, name).toBeTruthy();
+			expect(host.childNodes.length, name).toBe(0); // the painter fills a shadow root; Qwik owns no node inside the host
+			expect(host.hasAttribute('data-painted'), name).toBe(false);
+			expect(host.nextElementSibling!.hasAttribute('data-sr-skel'), name).toBe(true); // CSS hides the skeleton beside a painted host
+		}
+		expect(left.querySelectorAll('[data-sr-host]')).toHaveLength(3);
+		const page = document.documentElement.outerHTML;
+		expect(cartFree(page)).toEqual([]);
+		expect(priceFree(page)).toEqual([]);
+	});
+
+	it('DP-5 rollback render (switch off, or /checkout/ in SHELL_CACHE_EXCLUDE): no paint host, no skeleton marker: the server-rendered summary as before', async () => {
+		for (const server of [null, serverRead]) {
+			const document = await render(server);
+			expect(document.querySelector('[data-sr-host]')).toBeNull();
+			expect(document.querySelector('[data-sr-skel]')).toBeNull();
+		}
+		expect((await render(serverRead)).querySelector('.checkout-left')!.innerHTML).toContain('45.67'); // L11: the total is in the server HTML
+	});
+
 	it('switch off, no server read: the form paints in SSR (no skeleton); the summary keeps its reserved skeleton', async () => {
 		const document = await render(null);
 		expect(document.querySelector(`.checkout-form ${FORM_FIELD}`)).toBeTruthy();

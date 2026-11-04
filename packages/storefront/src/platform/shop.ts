@@ -22,9 +22,10 @@ import type { CatalogListItem } from '~/sellright/types/catalog';
 // Products are in the HTML on first byte — no client-side API call needed.
 // ADR-0001 §2 (SHELL_CACHE=1): the listing is stock-bearing (inStock, and the in-stock filter decides which cards exist) and priced,
 // so the shell carries only its structure (#412): every product's slug, name, image, tags (shellShopItem: no price, the fail-closed
-// stock constant), `deferred`. The grid paints from it in SSR, unfiltered by stock; the browser reads the same manifest snapshot on load
-// through `readShopCatalog` (no-store) and the values (price, availability, the in-stock filter) apply only then. LOCKED layer 2 is
-// otherwise unchanged (manifest on load, the in-stock toggle is the live API hit).
+// stock constant), `deferred`. The grid is in the shell's HTML, unfiltered by stock but hidden (routes/shop/index.tsx, early-paint.ts)
+// until the browser's LIVE catalog read lands (`/api/live/shop-catalog/` started at document parse, else `readShopCatalog`; both no-store
+// and live, DP-6) and the in-stock filter is applied; price and availability then fill in. Excluded (SHELL_CACHE_EXCLUDE=/shop/) or a
+// query URL: the normal render below, the SSR in-stock grid from the live catalog.
 export const useCatalogLoader = routeLoader$(async () => {
  // Brand views PR2: a branded shop reads its listing through useConfiguratorDetail (one generation with the detail products).
  if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false, deferred: false };
@@ -62,10 +63,12 @@ export async function shopListing(
 export const shellShopItem = (p: CatalogListItem): CatalogListItem =>
  redactListItem({ slug: p.slug, name: p.name, status: p.status, tags: p.tags ?? [], image: p.image ?? null, inStock: false, minPrice: null, maxPrice: null, pricingVariant: null });
 
-/** The shop listing's manifest read, moved to the browser (ADR-0001 §2): the same snapshot the SSR loader reads, per request, no-store. */
+/** The shop listing's live read in the browser (ADR-0001 §2, DP-6 restored on the shell): the LIVE catalog, per request, no-store; the
+ *  list endpoint computes inStock from stock on hand/allocated on every call (the same source as /stock), never the manifest snapshot.
+ *  The `/api/live/shop-catalog/` GET the parse-time script starts answers the same build (routes/api/live/[read]). */
 export const readShopCatalog = server$(async function () {
  noStore(this);
- return loadBrowseCatalog();
+ return liveBrowseCatalog();
 });
 
 export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: unknown) => unknown }) => {

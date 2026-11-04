@@ -3,7 +3,7 @@ import { NO_STORE_CACHE_CONTROL } from '~/config/route-cache-policy';
 import { hasView } from '~/platform/gateway';
 import { homeLiveValues } from '~/platform/home';
 import { buildHomeSpotlight } from '~/platform/home-spotlight';
-import { loadBrowseCatalog } from '~/services/browse-catalog';
+import { liveBrowseCatalog } from '~/services/browse-catalog';
 import { buildConfiguratorDetail } from '~/platform/configurator-detail';
 import { productLiveValues } from '~/platform/product';
 import { brandProductLive } from '~/platform/product-live';
@@ -18,7 +18,8 @@ import { LIVE_READS, type LiveReadName } from '~/platform/early-reads';
 const READS: Record<LiveReadName, (slug: string) => Promise<unknown>> = {
 	'home-values': () => homeLiveValues(),
 	'home-spotlight': () => buildHomeSpotlight(),
-	'shop-catalog': () => loadBrowseCatalog(),
+	// DP-6 on the shell: the LIVE catalog (inStock computed from stock on hand/allocated on every call), never the manifest snapshot.
+	'shop-catalog': () => liveBrowseCatalog(),
 	'shop-configurator': async () => (hasView('route.shop') ? buildConfiguratorDetail() : null),
 	'product-values': (slug) => productLiveValues(slug),
 	'product-live': (slug) => brandProductLive(slug),
