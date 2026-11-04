@@ -22,6 +22,7 @@ import {
 	SHOP_CONFIG_URL,
 	type EarlyReadsContext,
 } from './early-reads';
+import { EDGE_READS_META, EDGE_WAIT_MS } from './early-reads';
 
 import { executableInlineScripts, inlineScriptHashSources, withScriptHashes, buildCsp } from '~/utils/csp';
 import { initialStockCtl, readStock } from './controllers/stock-read';
@@ -341,5 +342,52 @@ describe('ADR-0001 Link preload header of the /shop/ and /checkout/ shells', () 
 	});
 	it('rollback: the checkout plan of a non-shell render starts no summary read', () => {
 		expect(started(runScript('/checkout/', { ...damned, shell: false }))).toEqual([SHOP_CONFIG_URL]);
+	});
+});
+
+describe("#425 edge reads: a read the edge Worker started is taken from its JSON block, never fetched twice", () => {
+	const meta = (keys: string) => { const m = document.createElement("meta"); m.name = EDGE_READS_META; m.content = keys; document.head.prepend(m); return m; };
+	const block = (k: string, body: string, ok: boolean) => { const s = document.createElement("script"); s.type = "application/json"; s.setAttribute("data-sr-edge", k); s.setAttribute("data-ok", ok ? "1" : "0"); s.textContent = body; document.body.append(s); return s; };
+	const flush = () => new Promise((r) => setTimeout(r, 0));
+	it("does not fetch a read the meta names; resolves it from the block (same promise for every consumer)", async () => {
+		const m0 = meta(CHECKOUT_SUMMARY_URL);
+		try {
+			const m = runScript("/checkout/", damned);
+			expect(started(m)).toEqual([SHOP_CONFIG_URL]);
+			const p = store()!.r[CHECKOUT_SUMMARY_URL]!;
+			const b = block(CHECKOUT_SUMMARY_URL, JSON.stringify({ cart: { grandTotal: 4500 } }), true);
+			await flush();
+			const res = await p;
+			expect(res.ok).toBe(true);
+			expect(await res.clone().json()).toEqual({ cart: { grandTotal: 4500 } });
+			expect(started(m)).toEqual([SHOP_CONFIG_URL]);
+			b.remove();
+		} finally { m0.remove(); }
+	});
+	it("a failed edge read falls back to the normal fetch", async () => {
+		const m0 = meta(CHECKOUT_SUMMARY_URL);
+		try {
+			const m = runScript("/checkout/", damned, () => Promise.resolve(json({ cart: null })));
+			const p = store()!.r[CHECKOUT_SUMMARY_URL]!;
+			const b = block(CHECKOUT_SUMMARY_URL, "", false);
+			await flush();
+			expect(await (await p).json()).toEqual({ cart: null });
+			expect(started(m)).toEqual([SHOP_CONFIG_URL, CHECKOUT_SUMMARY_URL]);
+			b.remove();
+		} finally { m0.remove(); }
+	});
+	it("no block within EDGE_WAIT_MS: fetches it itself", async () => {
+		vi.useFakeTimers();
+		const m0 = meta(CHECKOUT_SUMMARY_URL);
+		try {
+			const m = runScript("/checkout/", damned);
+			vi.advanceTimersByTime(EDGE_WAIT_MS - 1);
+			expect(started(m)).toEqual([SHOP_CONFIG_URL]);
+			vi.advanceTimersByTime(1);
+			expect(started(m)).toEqual([SHOP_CONFIG_URL, CHECKOUT_SUMMARY_URL]);
+		} finally { m0.remove(); vi.useRealTimers(); }
+	});
+	it("without the meta nothing changes", () => {
+		expect(started(runScript("/checkout/", damned))).toEqual([CHECKOUT_SUMMARY_URL, SHOP_CONFIG_URL]);
 	});
 });
