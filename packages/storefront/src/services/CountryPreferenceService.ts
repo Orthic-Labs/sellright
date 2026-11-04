@@ -76,9 +76,20 @@ const normalise = (code: string): string | null => {
   return isCode(countryCode) ? countryCode : null;
 };
 
+/** The `countryCode` cookie, when it holds a country code (browser only). */
+function cookieCountry(): string | null {
+  if (typeof document === 'undefined') return null;
+  const m = /(?:^|;\s*)countryCode=([A-Za-z]{2})(?:;|$)/.exec(document.cookie);
+  return m ? m[1].toUpperCase() : null;
+}
+
 export class CountryPreferenceService {
+  /** The stored choice or geolocation; with neither (#425), the `countryCode` cookie the checkout document or the edge sets from the
+   *  visitor's country, so the cart quote, the checkout boot and the checkout form all price the same destination from the start. */
   static getCountry(): string {
-    return read().countryCode || DEFAULT_COUNTRY;
+    const pref = read();
+    if (pref.source === 'default') return cookieCountry() ?? (pref.countryCode || DEFAULT_COUNTRY);
+    return pref.countryCode || DEFAULT_COUNTRY;
   }
 
   static getSource(): CountrySource {
