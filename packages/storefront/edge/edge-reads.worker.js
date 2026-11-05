@@ -14,8 +14,12 @@
 // - Fail open: any error returns the origin's response unchanged (the page then reads in the browser as before).
 // - The JSON is escaped for the HTML context (no `<` survives) and the block is `type=application/json`: never executed.
 
-/** How long the stream may wait at the top of the body for the reads, so the data lands early instead of before </body>. */
-export const EDGE_EARLY_HOLD_MS = 200;
+/** How long a checkout stream may wait at the top of the body for its reads, so the order summary lands early instead of
+ *  before </body>. Near the origin the reads take ~20 ms; far away they take longer than this, so the cost there is capped
+ *  at this value (measured: a 200 ms hold cost far visitors ~180 ms of first paint for nothing). */
+export const EDGE_EARLY_HOLD_MS = 80;
+/** Only pages whose main content is a live read hold for it (checkout's order summary); the shop's grid is in the shell. */
+export const holdsForReads = (keys) => keys.some((k) => k.startsWith('/api/live/checkout-summary/'));
 /** Plain HTML body elements a data block may be inserted before (never inside svg, math, template, script or style). */
 export const EARLY_SELECTOR = 'body > div, body > main, body > header, body > section, body > footer, body div, body main, body section, body form, body p';
 /** An edge read slower than this is abandoned (data-ok=0): the page reads it itself. */
@@ -149,9 +153,9 @@ export default {
 					if (g) { got = g; placed = true; e.before(blocks(), { html: true }); }
 				},
 			};
-			return new HTMLRewriter()
-				.on('head', { element(e) { e.prepend(edgeMeta(keys), { html: true }); } })
-				.on(EARLY_SELECTOR, early)
+			const rw = new HTMLRewriter().on('head', { element(e) { e.prepend(edgeMeta(keys), { html: true }); } });
+			if (holdsForReads(keys)) rw.on(EARLY_SELECTOR, early);
+			return rw
 				.on('body', {
 					element(e) {
 						e.onEndTag(async (end) => {

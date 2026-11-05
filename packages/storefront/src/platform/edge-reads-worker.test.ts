@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NO_CART_PARAM, composedHeaders, edgeBlock, geoCookie, noCartCheckout, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
+import { EDGE_EARLY_HOLD_MS, NO_CART_PARAM, holdsForReads, composedHeaders, edgeBlock, geoCookie, noCartCheckout, edgeMeta, edgeReadKeys, isDocumentGet, readLive, safeJson, withoutPreloads } from '../../edge/edge-reads.worker.js';
 import { CHECKOUT_SUMMARY_URL, EDGE_READS_META, buildEarlyReadsPlan, earlyReadsLinkHeader, liveReadUrl, type EarlyReadsContext } from './early-reads';
 
 const req = (url: string, init: { headers?: Record<string, string>; method?: string; cf?: { country?: string } } = {}) => {
@@ -19,6 +19,12 @@ const rotten: EarlyReadsContext = {
 };
 
 describe('#425 edge reads Worker', () => {
+	it('holds the stream for its reads only on checkout (the order summary), never on the shop', () => {
+		expect(holdsForReads(['/api/live/checkout-summary/', '/v1/shop/config'])).toBe(true);
+		expect(holdsForReads(['/api/live/shop-catalog/'])).toBe(false);
+		expect(holdsForReads(['/v1/shop/config'])).toBe(false);
+		expect(EDGE_EARLY_HOLD_MS).toBeLessThanOrEqual(100);
+	});
 	it('starts exactly the reads the shell declares, which are the reads its early script makes (one source of truth)', () => {
 		for (const ctx of [damned, rotten]) for (const path of ['/shop/', '/checkout/']) {
 			const link = earlyReadsLinkHeader(path, ctx);
