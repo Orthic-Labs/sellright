@@ -65,7 +65,7 @@
 		"@typescript-eslint/parser": "^8.72.1",
 		"@typescript/native": "npm:typescript@^7.0.2",
 		"eslint": "^10.14.0",
-		"eslint-plugin-qwik": "2.0.0-rc.3",
+		"eslint-plugin-qwik": "2.0.0-rc.4",
 		"globals": "^17.14.0",
 		"postcss": "^8.5.32",
 		"prettier": "^3.9.10",
