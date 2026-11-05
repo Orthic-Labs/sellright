@@ -188,7 +188,10 @@ export function earlyReadsLinkHeader(pathname: string, ctx: EarlyReadsContext): 
  * `countryCode` cookie and the shipping quote). A request key that does not match what the consumer would send is simply not
  * taken (the consumer reads live).
  */
-/** #425 edge reads: how long the page waits for a read the edge Worker started before reading it itself. */
+/** #425 edge reads: how long the page waits for a read the edge Worker started before also reading it itself (a hedge: the
+ *  first answer wins, so a slow edge read costs at most this plus the page's own read, never the edge timeout plus a fresh read). */
+export const EDGE_HEDGE_MS = 1200;
+/** #425 edge reads: the longest the page waits for the edge block; after it the page's own read is used whatever it returns. */
 export const EDGE_WAIT_MS = 3000;
 /** The <meta name> the edge Worker adds to name the reads it started (space-separated request keys). */
 export const EDGE_READS_META = 'sr-edge';
@@ -199,12 +202,14 @@ const SCRIPT_BODY =
 	"var F=function(u,l){try{var p=w.fetch(u,{credentials:'include',cache:'no-store',priority:l?'low':'auto'});p['catch'](function(){});S.r[u]=p;return p;}catch(e){}};" +
 	// #425 edge reads: a read the edge Worker started at request arrival (named by its <meta name=sr-edge>) is not fetched here; its
 	// promise resolves from the JSON block the Worker appends (<script type=application/json data-sr-edge=url data-ok=1|0>), or
-	// falls back to the normal fetch on a failed edge read or after EDGE_WAIT_MS. Same promise, same consumers.
+	// falls back to the normal fetch on a failed edge read, races it from EDGE_HEDGE_MS, takes it after EDGE_WAIT_MS. Same promise, same consumers.
 	"var E=d.querySelector('meta[name=sr-edge]'),EK=E?' '+E.getAttribute('content')+' ':'';S.e={};" +
 	"var f=function(u,l){if(EK.indexOf(' '+u+' ')<0)return F(u,l);var res,dn=0,p=new Promise(function(r){res=r;});S.r[u]=p;" +
-	"var fb=function(){var q=F(u,l);S.r[u]=p;return q||w.fetch(u,{credentials:'include',cache:'no-store'});};" +
-	"S.e[u]=function(t,ok){if(dn)return;dn=1;res(ok?new Response(t,{status:200,headers:{'content-type':'application/json'}}):fb());};" +
-	"setTimeout(function(){if(!dn){dn=1;res(fb());}}," + EDGE_WAIT_MS + ");return p;};" +
+	"var q,fb=function(){if(!q){q=F(u,l)||w.fetch(u,{credentials:'include',cache:'no-store'});S.r[u]=p;}return q;},fin=function(v){if(!dn){dn=1;res(v);}};" +
+	"S.e[u]=function(t,ok){fin(ok?new Response(t,{status:200,headers:{'content-type':'application/json'}}):fb());};" +
+	// hedge: no block by EDGE_HEDGE_MS -> start the page's own read too; whichever answers first resolves the promise
+	"setTimeout(function(){if(!dn)fb().then(fin,function(){});}," + EDGE_HEDGE_MS + ");" +
+	"setTimeout(function(){if(!dn)fin(fb());}," + EDGE_WAIT_MS + ");return p;};" +
 	"var X=function(){var x=d.querySelectorAll('script[data-sr-edge]');for(var i=0;i<x.length;i++){var k=x[i].getAttribute('data-sr-edge'),h=S.e[k];if(h){S.e[k]=null;h(x[i].textContent,x[i].getAttribute('data-ok')==='1');}}};" +
 	"if(EK){try{var mo=new MutationObserver(X);mo.observe(d.documentElement,{childList:true,subtree:true});d.addEventListener('DOMContentLoaded',function(){X();mo.disconnect();});}catch(e){}}" +
 	"try{w.navigation.addEventListener('navigate',function(e){var u=new URL(e.destination.url);if(u.pathname+u.search!==S.h)S.r={};});}catch(e){}" +

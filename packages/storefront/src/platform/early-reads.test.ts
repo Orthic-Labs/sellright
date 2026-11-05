@@ -22,7 +22,7 @@ import {
 	SHOP_CONFIG_URL,
 	type EarlyReadsContext,
 } from './early-reads';
-import { EDGE_READS_META, EDGE_WAIT_MS } from './early-reads';
+import { EDGE_HEDGE_MS, EDGE_READS_META, EDGE_WAIT_MS } from './early-reads';
 
 import { executableInlineScripts, inlineScriptHashSources, withScriptHashes, buildCsp } from '~/utils/csp';
 import { initialStockCtl, readStock } from './controllers/stock-read';
@@ -376,15 +376,34 @@ describe("#425 edge reads: a read the edge Worker started is taken from its JSON
 			b.remove();
 		} finally { m0.remove(); }
 	});
-	it("no block within EDGE_WAIT_MS: fetches it itself", async () => {
+	it("no block within EDGE_HEDGE_MS: starts its own read once; the first answer wins", async () => {
 		vi.useFakeTimers();
 		const m0 = meta(CHECKOUT_SUMMARY_URL);
 		try {
-			const m = runScript("/checkout/", damned);
-			vi.advanceTimersByTime(EDGE_WAIT_MS - 1);
+			const m = runScript("/checkout/", damned, () => Promise.resolve(json({ cart: { grandTotal: 100 } })));
+			const p = store()!.r[CHECKOUT_SUMMARY_URL]!;
+			vi.advanceTimersByTime(EDGE_HEDGE_MS - 1);
 			expect(started(m)).toEqual([SHOP_CONFIG_URL]);
 			vi.advanceTimersByTime(1);
 			expect(started(m)).toEqual([SHOP_CONFIG_URL, CHECKOUT_SUMMARY_URL]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(await (await p).json()).toEqual({ cart: { grandTotal: 100 } });
+			vi.advanceTimersByTime(EDGE_WAIT_MS);
+			expect(started(m)).toEqual([SHOP_CONFIG_URL, CHECKOUT_SUMMARY_URL]); // never twice
+		} finally { m0.remove(); vi.useRealTimers(); }
+	});
+	it("the edge block still wins when it arrives before the page's own read answers", async () => {
+		vi.useFakeTimers();
+		const m0 = meta(CHECKOUT_SUMMARY_URL);
+		try {
+			const m = runScript("/checkout/", damned, () => new Promise(() => {}));
+			const p = store()!.r[CHECKOUT_SUMMARY_URL]!;
+			vi.advanceTimersByTime(EDGE_HEDGE_MS);
+			expect(started(m)).toEqual([SHOP_CONFIG_URL, CHECKOUT_SUMMARY_URL]);
+			const b = block(CHECKOUT_SUMMARY_URL, JSON.stringify({ cart: { grandTotal: 4500 } }), true);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(await (await p).json()).toEqual({ cart: { grandTotal: 4500 } });
+			b.remove();
 		} finally { m0.remove(); vi.useRealTimers(); }
 	});
 	it("without the meta nothing changes", () => {
