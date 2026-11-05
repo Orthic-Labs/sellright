@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -29,7 +30,7 @@ export async function issueLicensesForPaidOrder(
   const lines = await tx
     .select({
       orderLineId: s.orderLine.id,
-      quantity: s.orderLine.quantity,
+      quantity: billedQuantitySql,
       fulfillmentType: s.productVariant.fulfillmentType,
       appKey: s.productVariant.appKey,
       licenseSeats: s.productVariant.licenseSeats,

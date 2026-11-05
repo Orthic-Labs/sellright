@@ -178,6 +178,9 @@ export const orderLine = pgTable('order_line', {
   fulfilledQty: integer().notNull().default(0),
   cancelledQty: integer().notNull().default(0),
   refundedQty: integer().notNull().default(0),
+  // Units an order EDIT removed (a subset of cancelledQty). quantity stays the ORIGINALLY ORDERED count; billing and every
+  // display use quantity - editRemovedQty (see orders/line-quantity.ts). 0 for every line no edit has reduced.
+  editRemovedQty: integer().notNull().default(0),
 });
 
 // Software entitlements issued from paid order lines. Store-scoped: RightSites

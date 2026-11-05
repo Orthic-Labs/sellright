@@ -14,6 +14,7 @@ import { assertImportedFinancialReconciliationAllowed, importedFinancialReconcil
  * enumerated, fixture-backed allowlist.
  */
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { billedQuantitySql } from '../../orders/line-quantity-sql.js';
 import type { Tx } from '../../db/client.js';
 import * as s from '../../db/schema.js';
 import { consumeForSettlement } from '../reservation.js';
@@ -125,7 +126,7 @@ async function postAcceptedCredit(tx: Tx, storeId: string, orderId: string): Pro
     if (!hold) { await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`); return; }
     const [order] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.id, orderId))).limit(1);
     if (!order || !['Paid', 'PartiallyRefunded', 'Refunded'].includes(order.state)) { await tx.execute(sql`RELEASE SAVEPOINT settlement_credit_snapshot`); return; }
-    const lines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity }).from(s.orderLine).where(and(eq(s.orderLine.storeId, storeId), eq(s.orderLine.orderId, orderId)));
+    const lines = await tx.select({ id: s.orderLine.id, quantity: billedQuantitySql }).from(s.orderLine).where(and(eq(s.orderLine.storeId, storeId), eq(s.orderLine.orderId, orderId)));
     const snapshot = readOrderPricingSnapshot(order.pricingSnapshot, { currency: order.currency, orderLines: lines, mode: 'settlement',
       totals: { subtotal: order.subtotal, discountTotal: order.discountTotal, shippingTotal: order.shippingTotal,
         taxTotal: order.taxTotal, grandTotal: order.grandTotal, pointsDiscount: (order.metadata as { loyalty?: { pointsDiscount?: number } } | null)?.loyalty?.pointsDiscount ?? 0 } });

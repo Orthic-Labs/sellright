@@ -1,4 +1,5 @@
 import { importedFinancialReconciliationRequired, IMPORTED_FINANCIAL_RECONCILIATION_REQUIRED } from '../../orders/imported-financial-reconciliation.js';
+import { billedQuantitySql } from '../../orders/line-quantity-sql.js';
 /**
  * Built-in effect handlers (de-fork plan 2.8). Each one is the body of what the
  * Paid / renewal paths used to call inline, moved behind the pending-effects
@@ -407,7 +408,7 @@ async function checkoutNotifications(tx: Tx, e: EffectRow, p: NotificationPayloa
   const recipient = normalizeEmail(cust?.email ?? p.guestEmail ?? '');
   if (!recipient) return;
   const lines = await tx
-    .select({ variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey })
+    .select({ variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey })
     .from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));
   const appKey = pickEmailAppKey(lines.map((line) => line.appKey));

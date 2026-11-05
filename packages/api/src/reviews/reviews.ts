@@ -135,7 +135,7 @@ const PAID_STATES = ['Paid', 'PartiallyRefunded'] as const;
 export async function findPurchaseProof(tx: Tx, input: { storeId: string; productId: string; customerId?: string | null; customer?: { email: string; emailVerified: boolean } | null; email?: string | null; orderCode?: string | null }): Promise<string | null> {
   const base = and(
     inArray(s.order.state, [...PAID_STATES]),
-    sql`exists (select 1 from order_line ol join product_variant pv on pv.id = ol.variant_id where ol.order_id = ${s.order.id} and pv.product_id = ${input.productId})`,
+    sql`exists (select 1 from order_line ol join product_variant pv on pv.id = ol.variant_id where ol.order_id = ${s.order.id} and pv.product_id = ${input.productId} and ol.quantity - ol.edit_removed_qty > 0)`,
   );
   if (input.customerId) {
     // Fail closed: customer-linked proof requires the mailbox provenance check

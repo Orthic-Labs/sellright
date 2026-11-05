@@ -173,7 +173,7 @@ async function queryExportRows(storeId: string, f: ExportFilters, mode: ExportMo
   }
   const where = sql.join(conds, sql` and `);
   const lineSelect = mode === 'line'
-    ? sql`ol.variant_sku as line_sku, ol.variant_name as line_name, ol.product_name as line_product, ol.quantity as line_qty, ol.unit_price as line_unit, ol.line_total as line_total, ol.line_discount as line_discount`
+    ? sql`ol.variant_sku as line_sku, ol.variant_name as line_name, ol.product_name as line_product, (ol.quantity - ol.edit_removed_qty) as line_qty, ol.unit_price as line_unit, ol.line_total as line_total, ol.line_discount as line_discount`
     : sql`null::text as line_sku, null::text as line_name, null::text as line_product, null::int as line_qty, null::int as line_unit, null::int as line_total, null::int as line_discount`;
   const lineJoin = mode === 'line' ? sql`join order_line ol on ol.order_id = "order"."id"` : sql``;
   const lineOrder = mode === 'line' ? sql`, ol.id` : sql``;

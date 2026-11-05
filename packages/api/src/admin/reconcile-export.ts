@@ -15,6 +15,7 @@
  *   WritableStream; row shape is documented inline below.
  */
 import { createWriteStream } from 'node:fs';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import { and, asc, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -94,7 +95,7 @@ export async function streamReconcileLinesCSV(storeId: string, out: NodeJS.Writa
     const rows = await tx
       .select({
         orderCode: s.order.code, sku: s.orderLine.variantSku, name: s.orderLine.variantName,
-        quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice,
+        quantity: billedQuantitySql, unitPrice: s.orderLine.unitPrice,
         lineSubtotal: s.orderLine.lineSubtotal, lineDiscount: s.orderLine.lineDiscount, lineTotal: s.orderLine.lineTotal,
         fulfilledQty: s.orderLine.fulfilledQty, refundedQty: s.orderLine.refundedQty,
       })

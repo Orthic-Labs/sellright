@@ -59,7 +59,7 @@ export async function reconcileEditedOrderLicenses(
   // even when the caller is not the set (no unordered multi-row UPDATE).
   const stranded = and(eq(s.license.storeId, opts.storeId), eq(s.license.orderId, opts.orderId), eq(s.license.source, 'order'),
     sql`${s.license.status} <> 'revoked'`,
-    sql`exists (select 1 from order_line ol where ol.id = ${s.license.orderLineId} and ol.store_id = ${opts.storeId} and ol.quantity <= 0)`);
+    sql`exists (select 1 from order_line ol where ol.id = ${s.license.orderLineId} and ol.store_id = ${opts.storeId} and ol.quantity - ol.edit_removed_qty <= 0)`);
   const candidates = await tx.select({ id: s.license.id }).from(s.license).where(stranded);
   for (const id of candidates.map((c) => c.id.toLowerCase()).sort()) {
     await tx.execute(sql`SELECT 1 FROM license WHERE id = ${id} AND store_id = ${opts.storeId} FOR UPDATE`);

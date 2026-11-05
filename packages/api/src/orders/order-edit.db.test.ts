@@ -228,7 +228,8 @@ describe('line operations', () => {
     expect(r.grandTotal).toBe(2500);
     const after = await linesOf(o.code);
     expect(after).toHaveLength(2);
-    expect(after.find((l) => l.id === b.id)).toMatchObject({ quantity: 0, lineTotal: 0 });
+    // The ordered quantity survives; the removed unit is cancelled and recorded as edit-removed; billing is zero.
+    expect(after.find((l) => l.id === b.id)).toMatchObject({ quantity: 1, cancelledQty: 1, editRemovedQty: 1, lineTotal: 0 });
     expect((await stock('B')).allocated).toBe(0);
     expect((await stock('A')).allocated).toBe(2);
     expect(stockHook.onStockChanged).toHaveBeenCalledWith(SLUG);
@@ -264,10 +265,11 @@ describe('line operations', () => {
     expect(r.grandTotal).toBe(2000 + 500);
     expect((await stock('A')).allocated).toBe(alloc - 2);
     const row = (await linesOf(o.code))[0]!;
-    expect(row).toMatchObject({ quantity: 2, fulfilledQty: 1, refundedQty: 1, id: l.id });
-    // remove_line on a partly-shipped line removes only what is still open
+    // ordered 4 stays; billed 2 = 4 - 2 edit-removed; cancelled 3 = the 1 refund-cancelled unit + the 2 edit-removed ones
+    expect(row).toMatchObject({ quantity: 4, editRemovedQty: 2, cancelledQty: 3, fulfilledQty: 1, refundedQty: 1, id: l.id });
+    // remove_line on a partly-shipped line removes only what is still open (here nothing: billed 2 = shipped 1 + refund-cancelled 1)
     await commit(o.code, [{ op: 'remove_line', lineId: l.id }], {}, { type: 'leave_credit' });
-    expect((await linesOf(o.code))[0]!.quantity).toBe(2);
+    expect((await linesOf(o.code))[0]).toMatchObject({ quantity: 4, editRemovedQty: 2, cancelledQty: 3 });
   });
 
   it('add item creates a new row, reserves stock, raises the balance', async () => {
@@ -297,7 +299,7 @@ describe('line operations', () => {
     await commit(p.code, [{ op: 'swap_variant', lineId: lp.id, sku: 'B', quantity: 1 }], {}, { type: 'send_pay_link' });
     const rows = await linesOf(p.code);
     expect(rows).toHaveLength(2);
-    expect(rows.find((x) => x.id === lp.id)).toMatchObject({ variantSku: 'A', quantity: 2, fulfilledQty: 1 });
+    expect(rows.find((x) => x.id === lp.id)).toMatchObject({ variantSku: 'A', quantity: 3, editRemovedQty: 1, cancelledQty: 1, fulfilledQty: 1 });
     expect(rows.find((x) => x.id !== lp.id)).toMatchObject({ variantSku: 'B', quantity: 1 });
   });
 
@@ -1499,4 +1501,172 @@ describe('approve a held edit issuance', () => {
     expect((await approve(ownerToken, effectId)).status).toBe(200);
     expect(await licensesOf(o.id)).toHaveLength(1);
   }, 20000);
+});
+
+describe('order edits keep the ordered quantity and attribute removed units to refund lines', () => {
+  const refundsOf = (orderId: string) => withStore(STORE, (tx) => tx.select().from(s.refund).where(eq(s.refund.orderId, orderId)));
+  const refundLinesOf = (orderId: string) => withStore(STORE, async (tx) => {
+    const rs = await tx.select().from(s.refund).where(eq(s.refund.orderId, orderId));
+    return rs.length ? tx.select().from(s.refundLine).where(sql`${s.refundLine.refundId} in (${sql.join(rs.map((r) => sql`${r.id}`), sql`, `)})`) : [];
+  });
+  const line = async (code: string, sku: string) => (await linesOf(code)).find((l) => l.variantSku === sku)!;
+  let refundKey = 0;
+  const itemRefund = async (orderId: string, lines: Array<{ orderLineId: string; quantity: number }>, amount: number) => {
+    const { requestRefund } = await import('../payments/refunds.js');
+    return requestRefund({ storeId: STORE, orderId, actor: 'owner@example.test', idempotencyKey: `item-${++refundKey}`, amount, lines: lines.map((l) => ({ ...l, restock: false })) });
+  };
+
+  it('remove 1 of 1 unfulfilled unit: line keeps quantity 1, cancelled 1, one refund_line, items_amount = unit price, totals as before', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }, { sku: 'B', qty: 1 }] }); // 1000 + 2000 + 500 shipping = 3500, paid in full
+    const la = await line(o.code, 'A');
+    const allocBefore = (await stock('A')).allocated;
+    const r = await commit(o.code, [{ op: 'remove_line', lineId: la.id }], {}, { type: 'refund_now' });
+    expect(r.settlement).toMatchObject({ status: 'settled', amount: 1000 });
+    expect(r.grandTotal).toBe(2500); // identical to the pre-change behaviour
+    expect(r.state).toBe('Paid'); // an edit refund never flips Paid to PartiallyRefunded
+    const after = await line(o.code, 'A');
+    expect(after).toMatchObject({ quantity: 1, cancelledQty: 1, editRemovedQty: 1, refundedQty: 0, fulfilledQty: 0, lineTotal: 0 });
+    expect((await stock('A')).allocated).toBe(allocBefore - 1); // the removed unit's allocation was released once
+    const order = await orderRow(o.code);
+    expect(order).toMatchObject({ subtotal: 2000, grandTotal: 2500 });
+    const [refund] = await refundsOf(o.id);
+    expect(refund).toMatchObject({ amount: 1000, itemsAmount: 1000, adjustmentAmount: 0, shippingAmount: 0, state: 'Settled' });
+    expect((refund!.metadata as { source?: string; stockEffects?: unknown }).source).toBe('order_edit');
+    expect((refund!.metadata as { stockEffects?: unknown }).stockEffects).toBeUndefined(); // no stock/qty effects: the edit did them
+    expect(refund!.reason).toMatch(/^\[order-edit\]/);
+    const lines = await refundLinesOf(o.id);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ orderLineId: la.id, quantity: 1, amount: 1000, restock: false });
+  });
+
+  it('a later item refund cannot refund the cancelled unit again, and the remaining line still refunds normally', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }, { sku: 'B', qty: 1 }] });
+    const la = await line(o.code, 'A'), lb = await line(o.code, 'B');
+    await commit(o.code, [{ op: 'remove_line', lineId: la.id }], {}, { type: 'refund_now' });
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 1 }], 1000)).rejects.toMatchObject({ status: 409 });
+    expect(await refundsOf(o.id)).toHaveLength(1); // nothing new was reserved
+    const ok = await itemRefund(o.id, [{ orderLineId: lb.id, quantity: 1 }], 2000);
+    expect(ok.refundState).toBe('Settled');
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 1, cancelledQty: 1, editRemovedQty: 1, refundedQty: 0 });
+    expect(await line(o.code, 'B')).toMatchObject({ quantity: 1, refundedQty: 1, cancelledQty: 1, editRemovedQty: 0 }); // unshipped refunded unit: refunded + cancelled
+  });
+
+  it('partial removal 2 -> 1: ordered 2 stays, one unit cancelled, only the billed unit stays refundable', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] }); // 2000 + 500
+    const la = await line(o.code, 'A');
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'refund_now' });
+    expect(r.grandTotal).toBe(1500);
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 1, editRemovedQty: 1, lineSubtotal: 1000, lineTotal: 1000 });
+    const [refund] = await refundsOf(o.id);
+    expect(refund).toMatchObject({ amount: 1000, itemsAmount: 1000, adjustmentAmount: 0 });
+    expect(await refundLinesOf(o.id)).toMatchObject([{ orderLineId: la.id, quantity: 1, amount: 1000 }]);
+    // two units were ordered, but only ONE is refundable now
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 2 }], 2000)).rejects.toMatchObject({ status: 409 });
+    expect((await itemRefund(o.id, [{ orderLineId: la.id, quantity: 1 }], 1000)).refundState).toBe('Settled');
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, refundedQty: 1, editRemovedQty: 1 });
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 1 }], 1000)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('removal on a partially fulfilled line removes only open units and refunds only them', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 3, fulfilled: 1 }] }); // 3000 + 500
+    const la = await line(o.code, 'A');
+    const alloc = (await stock('A')).allocated; // 2 open
+    const r = await commit(o.code, [{ op: 'remove_line', lineId: la.id }], {}, { type: 'refund_now' });
+    expect(r.grandTotal).toBe(1000 + 500); // the shipped unit remains billed
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 3, fulfilledQty: 1, cancelledQty: 2, editRemovedQty: 2, lineTotal: 1000 });
+    expect((await stock('A')).allocated).toBe(alloc - 2);
+    const [refund] = await refundsOf(o.id);
+    expect(refund).toMatchObject({ amount: 2000, itemsAmount: 2000, adjustmentAmount: 0 });
+    expect(await refundLinesOf(o.id)).toMatchObject([{ orderLineId: la.id, quantity: 2, amount: 2000 }]);
+    // the shipped unit is still returnable through the normal refund path; the removed ones are not
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 2 }], 2000)).rejects.toMatchObject({ status: 409 });
+    expect((await itemRefund(o.id, [{ orderLineId: la.id, quantity: 1 }], 1000)).refundState).toBe('Settled');
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 3, refundedQty: 1, fulfilledQty: 1, cancelledQty: 2, editRemovedQty: 2 }); // shipped refunded unit is not cancelled
+  });
+
+  it('a price-only edit stays an adjustment: no refund lines, items_amount 0', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const r = await commit(o.code, [{ op: 'add_adjustment', label: 'Goodwill', amount: -300 }], {}, { type: 'refund_now' });
+    expect(r.settlement).toMatchObject({ status: 'settled', amount: 300 });
+    const [refund] = await refundsOf(o.id);
+    expect(refund).toMatchObject({ amount: 300, itemsAmount: 0, adjustmentAmount: 300, shippingAmount: 0 });
+    expect(await refundLinesOf(o.id)).toHaveLength(0);
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 0, editRemovedQty: 0 });
+  });
+
+  it('a mixed edit splits the refund: removed units are items, the shipping difference stays an adjustment', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] }); // 2000 + 500
+    const la = await line(o.code, 'A');
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }, { op: 'set_shipping_amount', amount: 0 }], {}, { type: 'refund_now' });
+    const [refund] = await refundsOf(o.id);
+    expect(refund).toMatchObject({ amount: 1500, itemsAmount: 1000, adjustmentAmount: 500 });
+    expect(await refundLinesOf(o.id)).toMatchObject([{ orderLineId: la.id, quantity: 1, amount: 1000 }]);
+  });
+
+  it('leave_credit removes units without a refund: cancelled + edit-removed, no refund row, no refund lines', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const la = await line(o.code, 'A');
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'leave_credit' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 1, editRemovedQty: 1 });
+    expect(await refundsOf(o.id)).toHaveLength(0);
+    // the credit-left unit is still not refundable as an item
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 2 }], 2000)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('re-adding quantity un-cancels edit-removed units first, then raises the ordered quantity; stock follows', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const la = await line(o.code, 'A');
+    const alloc0 = (await stock('A')).allocated;
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'leave_credit' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 1, editRemovedQty: 1 });
+    expect((await stock('A')).allocated).toBe(alloc0 - 1);
+
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 2 }], {}, { type: 'leave_due' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 0, editRemovedQty: 0, lineTotal: 2000 });
+    expect((await stock('A')).allocated).toBe(alloc0);
+
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 3 }], {}, { type: 'leave_due' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 3, cancelledQty: 0, editRemovedQty: 0, lineTotal: 3000 });
+    expect((await stock('A')).allocated).toBe(alloc0 + 1);
+  });
+
+  it('raising past the removed units in one edit un-cancels them and adds the rest', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 3 }] });
+    const la = await line(o.code, 'A');
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'leave_credit' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 3, cancelledQty: 2, editRemovedQty: 2 });
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 4 }], {}, { type: 'leave_due' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 4, cancelledQty: 0, editRemovedQty: 0, lineTotal: 4000 });
+  });
+
+  it('a unit removed, re-added and removed again restarts cancelled/edit-removed from zero each time', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }, { sku: 'B', qty: 1 }] });
+    const la = await line(o.code, 'A');
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'refund_now' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 1, editRemovedQty: 1 });
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 2 }], {}, { type: 'leave_due' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 0, editRemovedQty: 0 });
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'leave_credit' });
+    expect(await line(o.code, 'A')).toMatchObject({ quantity: 2, cancelledQty: 1, editRemovedQty: 1 });
+    // the first removal's refund and its attribution are history; only one refund exists
+    expect((await refundsOf(o.id)).filter((x) => x.state === 'Settled')).toHaveLength(1);
+    expect((await refundLinesOf(o.id)).filter((l) => l.orderLineId === la.id)).toHaveLength(1);
+  });
+
+  it('a failed edit refund retried carries the same refund_line attribution; the failed attempt carried none that count', async () => {
+    const { retryOrderEditRefund } = await import('./order-edit-service.js');
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const la = await line(o.code, 'A');
+    failNextRefund = true;
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 1 }], {}, { type: 'refund_now' });
+    expect(r.settlement).toMatchObject({ status: 'failed' });
+    await retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'owner@example.test', action: 'retry' });
+    const rs = await refundsOf(o.id);
+    const settled = rs.find((x) => x.state === 'Settled')!;
+    expect(settled).toMatchObject({ amount: 1000, itemsAmount: 1000, adjustmentAmount: 0 });
+    const lines = await refundLinesOf(o.id);
+    expect(lines.filter((l) => l.refundId === settled.id)).toMatchObject([{ orderLineId: la.id, quantity: 1, amount: 1000 }]);
+    // a failed refund's lines never reserve billed units
+    await expect(itemRefund(o.id, [{ orderLineId: la.id, quantity: 2 }], 2000)).rejects.toMatchObject({ status: 409 });
+  });
 });

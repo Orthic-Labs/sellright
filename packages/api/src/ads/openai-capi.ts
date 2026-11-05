@@ -181,7 +181,7 @@ async function loadFacts(storeId: string, orderId: string): Promise<CapiOrderFac
       FROM "order" o LEFT JOIN customer c ON c.id = o.customer_id WHERE o.id = ${orderId}`);
     const o = (r as unknown as { rows: Array<Record<string, unknown>> }).rows[0];
     if (!o) return null;
-    const lines = (await tx.execute(sql`SELECT variant_sku, product_name, variant_name, quantity, cancelled_qty, line_total FROM order_line WHERE order_id = ${orderId} ORDER BY id`) as unknown as { rows: Array<Record<string, unknown>> }).rows;
+    const lines = (await tx.execute(sql`SELECT variant_sku, product_name, variant_name, quantity - edit_removed_qty AS quantity, cancelled_qty - edit_removed_qty AS cancelled_qty, line_total FROM order_line WHERE order_id = ${orderId} ORDER BY id`) as unknown as { rows: Array<Record<string, unknown>> }).rows;
     const meta = (o.metadata ?? {}) as { contact?: { email?: string }; attribution?: { oppref?: string }; adMatch?: CapiOrderFacts['adMatch'] };
     return {
       code: String(o.code), paidAt: new Date(o.placed_at as string), currency: String(o.currency), grandTotal: Number(o.grand_total),

@@ -109,15 +109,15 @@ export async function fetchExportLines(storeId: string, f: OrderExportFilters): 
         case when coalesce(ol.product_name, '') = '' then ol.variant_name
              when coalesce(ol.variant_name, '') = '' or ol.variant_name = ol.product_name then ol.product_name
              else ol.product_name || ' - ' || ol.variant_name end as "productDescription",
-        ol.quantity as quantity,
+        (ol.quantity - ol.edit_removed_qty) as quantity,
         (ol.unit_price / 100.0)::float8 as "unitPriceUsd",
-        (ol.quantity * ol.unit_price / 100.0)::float8 as "lineTotalUsd",
+        ((ol.quantity - ol.edit_removed_qty) * ol.unit_price / 100.0)::float8 as "lineTotalUsd",
         case when row_number() over (partition by "order".id order by ol.variant_sku, ol.id) = 1 then ("order".shipping_total / 100.0)::float8 end as "shippingCostUsd",
         case when row_number() over (partition by "order".id order by ol.variant_sku, ol.id) = 1 then ("order".subtotal / 100.0)::float8 end as "orderSubtotalUsd",
         case when row_number() over (partition by "order".id order by ol.variant_sku, ol.id) = 1 then ("order".grand_total / 100.0)::float8 end as "orderTotalUsd"
       from "order"
       left join customer cust on cust.id = "order".customer_id
-      join order_line ol on ol.order_id = "order".id and ol.quantity > 0
+      join order_line ol on ol.order_id = "order".id and ol.quantity - ol.edit_removed_qty > 0
       where ${whereSql(f)}
       order by "order".created_at desc, "order".id, ol.variant_sku, ol.id`);
     return (r.rows as unknown as ExportLineRow[]).map((row) => ({ ...row, orderStatus: LABEL.get(row.orderStatus) ?? row.orderStatus }));

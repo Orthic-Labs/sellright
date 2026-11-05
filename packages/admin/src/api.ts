@@ -194,7 +194,7 @@ export interface OrderDetail {
   /** #374: the order's own checkout contact (shown when no customer is linked). */
   contact?: { name: string | null; email: string | null; phone: string | null } | null;
   hasPostedCredit?: boolean;
-  lines: { id: string; sku: string; name: string; quantity: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
+  lines: { id: string; sku: string; name: string; quantity: number; orderedQty?: number; editRemovedQty?: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
   payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
   fulfillments: {
     id: string; state: string; trackingCode: string | null; carrier: string | null;

@@ -15,6 +15,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
 import { isEditRefund } from './edit-refund.js';
+import { billedLines } from '../orders/line-quantity.js';
 import { releaseOnFullRefundInSet } from './reservation.js';
 import { recordSettlementOperation } from './settlement/record.js';
 import { restoreRefundAfterSettlement, readCurrentCreditEvidence, anchorImportedCreditOrigin } from '../account-credit/service.js';
@@ -44,6 +45,14 @@ export interface RefundRequest {
   source?: 'order_edit';
   /** Internal staged-edit authority; never accepted from public refund bodies. */
   editId?: string;
+  /**
+   * Order-edit refunds only (server-set, never from a request body): the unfulfilled units the edit removed, attributed
+   * to their lines as refund_line rows (amount = the line money those units carried). They book as `itemsAmount`; the
+   * rest of the refund (price, shipping, discount or tax differences) stays `adjustmentAmount`. They are a separate
+   * domain from billed units: they never reserve refundable units, never touch stock or refunded_qty (the edit already
+   * released the allocation and cancelled the units), and never enter credit unit evidence.
+   */
+  editLines?: Array<{ orderLineId: string; quantity: number; amount: number }>;
 }
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
   const placed = importedSourceMetadata(line.metadata)?.placedQuantity;
@@ -55,6 +64,7 @@ function requestFingerprint(input: RefundRequest) {
     lines: [...(input.lines ?? [])].sort((a,b) => a.orderLineId.localeCompare(b.orderLineId)),
     restock: !!input.restock, reason: input.reason ?? null, returnId: input.returnId ?? null,
     source: input.source ?? null, ...(input.editId ? { editId: input.editId } : {}), ...(input.creditMerchandiseReturn ? { creditMerchandiseReturn: true } : {}),
+    ...(input.editLines?.length ? { editLines: [...input.editLines].sort((a, b) => a.orderLineId.localeCompare(b.orderLineId)) } : {}),
   })).digest('hex');
 }
 async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
@@ -140,7 +150,7 @@ async function applyRefundStockEffects(tx: Tx, storeId: string, order: typeof s.
 async function fullCreditMerchandiseProof(tx: Tx, storeId: string, order: typeof s.order.$inferSelect) {
   await tx.execute(sql`SAVEPOINT refund_merchandise_proof`);
   try {
-    const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+    const lines = billedLines(await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)));
     const evidence = await readCurrentCreditEvidence(tx, { storeId, orderId: order.id });
     if (!evidence) throw new Error('Credit merchandise evidence missing');
     const current = readCurrentOrderPricingSnapshot(order.pricingSnapshot ?? evidence.importedOrigin, {
@@ -207,6 +217,9 @@ async function retryCreditMerchandiseCompletion(tx: Tx, storeId: string, order: 
 export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLocks) {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new RefundError(400, 'A refund idempotency key is required');
   if (input.editId && input.source !== 'order_edit') throw new RefundError(400, 'Edit identity requires an order edit refund');
+  if (input.editLines?.length && input.source !== 'order_edit') throw new RefundError(400, 'Edit refund lines require an order edit refund');
+  if (input.editLines?.some(line => !line.orderLineId || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || !Number.isSafeInteger(line.amount) || line.amount < 0) ||
+      new Set(input.editLines?.map(line => line.orderLineId)).size !== (input.editLines?.length ?? 0)) throw new RefundError(400, 'Invalid order edit refund lines');
   if (input.source === 'order_edit' && (input.lines?.length || input.returnId || input.restock || input.shippingAmount || input.creditMerchandiseReturn)) {
     throw new RefundError(409, 'Order edit refunds transfer money only');
   }
@@ -261,10 +274,14 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
       const refunds = await tx.select().from(s.refund).where(eq(s.refund.orderId, order.id));
       const reserved = refunds.filter(r => r.paymentId === payment.id && r.state !== 'Failed').reduce((n,r) => n + r.amount, 0);
       const available = payment.amount - reserved;
-      const orderLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)).for('update');
-      const reservations = await tx.select({ lineId: s.refundLine.orderLineId, quantity: s.refundLine.quantity, refundId: s.refund.id, metadata: s.refund.metadata })
+      // `orderLineRows` are the stored rows; `orderLines` their BILLED view (quantity less edit-removed units), the only
+      // quantity domain the refund engine reasons in: a unit an order edit removed is not refundable here, ever.
+      const orderLineRows = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)).for('update');
+      const orderLines = billedLines(orderLineRows);
+      // An order-edit refund's own refund_line rows attribute removed units; they reserve nothing in the billed domain.
+      const reservations = (await tx.select({ lineId: s.refundLine.orderLineId, quantity: s.refundLine.quantity, refundId: s.refund.id, metadata: s.refund.metadata })
         .from(s.refundLine).innerJoin(s.refund, eq(s.refund.id, s.refundLine.refundId))
-        .where(and(eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
+        .where(and(eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`))).filter(line => !isEditRefund(line.metadata));
       const reservedQty = new Map<string, number>();
       for (const line of reservations) reservedQty.set(line.lineId, (reservedQty.get(line.lineId) ?? 0) + line.quantity);
       let lines = duplicate ? [] : input.lines ?? [];
@@ -323,7 +340,20 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
         }
         catch { throw new RefundError(409, 'Refund unit basis requires reconciliation'); }
       });
-      const itemsAmount = snapshots.reduce((n,l) => n+l.amount,0);
+      // Order-edit unit attribution: the removed units, valid against what the edit really removed.
+      const editSnapshots: Array<{ orderLineId: string; quantity: number; amount: number; restock: boolean }> = [];
+      if (input.editLines?.length) {
+        const staged = input.editId ? await (await import('../orders/order-edit-service.js')).stagedEditRemovedUnits(tx, { storeId: input.storeId, orderId: order.id, editId: input.editId }) : null;
+        for (const line of input.editLines) {
+          const row = orderLineRows.find(l => l.id === line.orderLineId);
+          const removable = staged ? staged.get(line.orderLineId) ?? 0 : row?.editRemovedQty ?? 0;
+          if (!row || line.quantity > removable) throw new RefundError(409, 'Order edit refund line exceeds the units the edit removed');
+          // restock is false: removing unfulfilled units released their allocation in the edit; nothing came back on hand.
+          editSnapshots.push({ ...line, restock: false });
+        }
+      }
+      const itemsAmount = snapshots.reduce((n,l) => n+l.amount,0) + editSnapshots.reduce((n,l) => n+l.amount,0);
+      if (input.source === 'order_edit' && input.amount != null && itemsAmount > input.amount) throw new RefundError(409, 'Order edit refund lines exceed the refund amount');
       // A separate shipping-refund amount only makes sense alongside explicit
       // lines (a full/no-lines refund's `available` already IS the whole
       // remaining balance, shipping included — adding it again there would
@@ -374,7 +404,7 @@ export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLoc
         const { bindPreparedEditRefund } = await import('../orders/order-edit-service.js');
         await bindPreparedEditRefund(tx, { storeId: input.storeId, orderId: order.id, editId: input.editId, refundId });
       }
-      for (const line of snapshots) await tx.insert(s.refundLine).values({ storeId: input.storeId, refundId, ...line });
+      for (const line of [...snapshots, ...editSnapshots]) await tx.insert(s.refundLine).values({ storeId: input.storeId, refundId, ...line });
       if (rma) await tx.update(s.returnRequest).set({ status: 'approved', refundId, updatedAt: new Date() }).where(eq(s.returnRequest.id, rma.id));
       return { attemptId, payment, amount, currency: payment.currency ?? order.currency, orderId: order.id, creditMerchandise: creditAuthority !== null };
     });
@@ -516,7 +546,9 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   const creditMerchandise = attempt.method === 'credit_merchandise' && details?.authority === 'credit_merchandise' && refund.amount === 0;
   const lines = await tx.select().from(s.refundLine).where(eq(s.refundLine.refundId, refund.id));
   if (isEditRefund(refund.metadata)) {
-    if (lines.length || refund.itemsAmount !== 0 || refund.shippingAmount !== 0 || details?.returnId) throw new RefundError(409, 'Order edit refund must be money-only');
+    // An edit refund moves money only (no stock, refunded_qty or state effects); its refund_line rows merely attribute the
+    // removed units and must account for exactly its items amount.
+    if (refund.shippingAmount !== 0 || details?.returnId || lines.reduce((n, l) => n + l.amount, 0) !== refund.itemsAmount) throw new RefundError(409, 'Order edit refund must be money-only');
     if (attempt.method === 'gift_card') await creditGiftCardRefund(tx, storeId, order.id, refund.amount);
     await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true } }).where(eq(s.refund.id, refund.id));
     const { activatePreparedOrderEdit } = await import('../orders/order-edit-service.js');

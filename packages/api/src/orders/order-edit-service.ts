@@ -56,13 +56,21 @@ import { loadImportedOrderHistory } from './imported-order-history.js';
 import { assertImportedEditAllowed, classifyImportedEditAdmission } from './imported-edit-admission.js';
 import { importedEditSource, importedSourceMetadata, importedPricingBasis as buildImportedPricingBasis, type ImportedPricingBasis } from '../import/source-compatibility.js';
 import {
-  OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
-  referencedKeys, sameAddress, validateSettlement, allowedSettlements,
-  type Address, type EditOpT, type LineDiff, type OrderSnapshot, type PromoFacts, type SettlementT,
+  OrderEditError, allocateEditRefundLines, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
+  referencedKeys, removedUnits as computeRemovedUnits, sameAddress, validateSettlement, allowedSettlements,
+  type Address, type EditOpT, type LineDiff, type OrderSnapshot, type PromoFacts, type RemovedUnit, type SettlementT,
   type ShippingMethodFacts, type VariantFacts, type WLine, type WorkingOrder,
 } from './order-edit.js';
 
+import { billedLines, billedQty, reconcileLineQuantities } from './line-quantity.js';
+
 export { OrderEditError } from './order-edit.js';
+
+/** The refund_line attribution an edit's refund carries for the units the edit removed (none when nothing was removed). */
+const editRefundLines = (units: readonly RemovedUnit[] | undefined, amount: number) => {
+  const allocated = allocateEditRefundLines(units ?? [], amount);
+  return allocated.lines.length ? { editLines: allocated.lines } : {};
+};
 
 type OrderRow = typeof s.order.$inferSelect;
 type VariantRow = typeof s.productVariant.$inferSelect;
@@ -122,6 +130,8 @@ export interface EditPlan {
   taxInclusive: boolean;
   stack: OrderEditStackCandidate;
   storedLines: Array<typeof s.orderLine.$inferSelect>;
+  /** Unfulfilled units this edit removes, per line, with the line money they carried (see removedUnits in order-edit.ts). */
+  removedUnits: RemovedUnit[];
   storedFingerprint: string;
   importedPricingBasis?: ImportedPricingBasis;
   legacyPricingSnapshot?: OrderPricingSnapshotV1;
@@ -279,7 +289,10 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   }
   const meta = (order.metadata ?? {}) as OrderMeta;
 
-  const dbLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+  // `rawLines` are the stored rows (fingerprints hash these); `dbLines` is their BILLED view (quantity less edit-removed
+  // units, cancelled less edit-removed), which is what every pricing/edit rule below has always reasoned about.
+  const rawLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+  const dbLines = billedLines(rawLines);
   const dbAdjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, order.id)).orderBy(asc(s.orderAdjustment.createdAt));
   const [storeRow] = await tx.select().from(s.store).where(eq(s.store.id, storeId)).limit(1);
   if (!storeRow) throw new OrderEditError(404, 'STORE_NOT_FOUND', 'store not found');
@@ -312,7 +325,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const initial: WorkingOrder = {
     lines: dbLines.map((l): WLine => ({
       key: l.id, id: l.id, variantId: l.variantId, sku: l.variantSku, name: l.variantName, unitPrice: l.unitPrice, quantity: l.quantity,
-      fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, cancelledQty: l.cancelledQty,
+      fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty, cancelledQty: l.cancelledQty, editRemovedQty: l.editRemovedQty,
       original: { variantId: l.variantId, sku: l.variantSku, name: l.variantName, unitPrice: l.unitPrice, quantity: l.quantity },
     })),
     adjustments: dbAdjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount })),
@@ -608,7 +621,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const importedPricingBasis: ImportedPricingBasis | undefined = importedBasis && !snapshot?.selectedCredit && order.pricingSnapshot == null && typeof rawSource?.sourceKey === 'string'
     ? buildImportedPricingBasis({ storeId, orderId: order.id, currency: order.currency, sourceKey: rawSource.sourceKey,
       sourceOrderId: String(rawSource.id), editBasisV1: rawSource.editBasisV1 }) : undefined;
-  const storedFingerprint = orderEditStoredFingerprint({ order, ...(importedPricingBasis ? { importedPricingBasis } : {}), lines: [...dbLines].sort((a, b) => a.id.localeCompare(b.id)),
+  const storedFingerprint = orderEditStoredFingerprint({ order, ...(importedPricingBasis ? { importedPricingBasis } : {}), lines: [...rawLines].sort((a, b) => a.id.localeCompare(b.id)),
     adjustments: dbAdjustments, couponCodes: initial.couponCodes, usage: storedUsage.sort((a, b) => a.id.localeCompare(b.id)), variants: [...variantRows].sort((a, b) => a.id.localeCompare(b.id)),
     ...(credit ? { refundPrefixDigest: refundPrefixDigest(credit.evidence) } : {}) });
   const afterHash = credit ? orderEditStoredFingerprint({ ordinaryHash: stack.afterEconomicHash, totals: credit.pricing.totals,
@@ -712,7 +725,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   };
 
   return {
-    order, working, before, after, pricingOptions, ...(importedPricingBasis ? { importedPricingBasis } : {}), ...(legacyPricingSnapshot ? { legacyPricingSnapshot } : {}), lineDiffs: await labelLineDiffs(tx, diffLines(snapLines, working.lines, priced), dbLines, variantRows), priced, stock, stockDeltas, balance, refundable, warnings, storedLines: dbLines,
+    order, working, before, after, removedUnits: computeRemovedUnits(snapLines, working.lines, priced), pricingOptions, ...(importedPricingBasis ? { importedPricingBasis } : {}), ...(legacyPricingSnapshot ? { legacyPricingSnapshot } : {}), lineDiffs: await labelLineDiffs(tx, diffLines(snapLines, working.lines, priced), dbLines, variantRows), priced, stock, stockDeltas, balance, refundable, warnings, storedLines: dbLines,
     promotionRow, shipping: { amount: t.shippingTotal, base: baseShipping, override: shippingOverride, methodCode, methodName: methodCode ? methodsByCode.get(methodCode)?.name ?? null : null },
     address: { shipping: { changed: !sameAddress(beforeShip, afterShip), countryChanged: countryChanged(beforeShip, afterShip) }, billing: { changed: !sameAddress(beforeBill, afterBill) } },
     variantsById, isPreOrder: isPreOrderAfter, storeCtx, recipient, customerId: order.customerId, taxRate, taxInclusive, stack, storedFingerprint, previewAcceptanceHash, credit,
@@ -800,6 +813,17 @@ async function preparedStage(tx: Tx, storeId: string, orderId: string, editId?: 
   return { row, proposal, settlement: row.settlement as unknown as EditStageSettlement & SettlementOutcome, settlementAmendment: (row.after as { settlementAmendment?: unknown }).settlementAmendment };
 }
 
+/**
+ * The units a PREPARED (not yet activated) edit will remove, by order line: the edit's refund is requested before its
+ * lines are activated, so the refund engine validates the edit-line attribution against the accepted edit itself.
+ */
+export async function stagedEditRemovedUnits(tx: Tx, input: { storeId: string; orderId: string; editId: string }): Promise<Map<string, number>> {
+  const stage = await preparedStage(tx, input.storeId, input.orderId, input.editId);
+  if (!stage) throw new OrderEditError(409, 'ORDER_EDIT_STAGE_INVALID', 'Prepared edit is absent.');
+  const units = (stage.row.after as { removedUnits?: RemovedUnit[] } | null)?.removedUnits ?? [];
+  return new Map(units.map(unit => [unit.orderLineId, unit.quantity]));
+}
+
 /** Consumers call under existing licence/order lock set, before account locks. */
 export async function preparedEditTender(tx: Tx, input: { storeId: string; orderId: string }) {
   const stage = await preparedStage(tx, input.storeId, input.orderId);
@@ -877,7 +901,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
     status: requiredRefund ? 'pending' : settlement?.type === 'leave_due' ? 'due' : settlement?.type === 'send_pay_link' ? 'sent' : settlement?.type === 'leave_credit' ? 'credit' : 'none',
     ...(refundPlan ? { amount: refundPlan.amount, paymentId: refundPlan.paymentId } : {}) };
   await tx.insert(s.orderEdit).values({ id: editId, storeId: input.storeId, orderId: plan.order.id, idempotencyKey: input.idempotencyKey, fingerprint,
-    before: { ...plan.before, currentPricing: credit.current.snapshot, storedOrder: plan.order, financialLines: plan.storedLines, storedFingerprint: plan.storedFingerprint }, after: { ...plan.after, proposal }, balance: plan.balance.amountDue,
+    before: { ...plan.before, currentPricing: credit.current.snapshot, storedOrder: plan.order, financialLines: plan.storedLines, storedFingerprint: plan.storedFingerprint }, after: { ...plan.after, removedUnits: plan.removedUnits, proposal }, balance: plan.balance.amountDue,
     settlement: outcome, actor: input.actor, reason: input.reason ?? null });
   if (positiveDeltas.length) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(input.storeSlug)); });
   let emailQueued = false;
@@ -974,7 +998,11 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
     for (const [variantId, delta] of a.stockDeltas) if (delta < 0) await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${-delta}, 0)` }).where(and(eq(s.stock.storeId, input.storeId), eq(s.stock.variantId, variantId)));
     for (const line of a.working.lines) {
       const id = stage.proposal.lineIds[line.key]!, ordinary = a.perLine.find(p => p.key === line.key)!, final = pricing.lines.find(p => p.orderLineId === id)!;
-      const values = { variantId: line.variantId, variantSku: line.sku, variantName: line.name, quantity: line.quantity, unitPrice: ordinary.unitPrice,
+      // Persist the BILLED quantity (a lowered one keeps `quantity` as ordered and records cancelled/edit-removed units).
+      const storedRow = line.id ? lines.find(row => row.id === line.id) : undefined;
+      const qty = storedRow ? reconcileLineQuantities(storedRow, line.quantity) : null;
+      const values = { variantId: line.variantId, variantSku: line.sku, variantName: line.name, quantity: qty ? qty.quantity : line.quantity,
+        ...(qty ? { cancelledQty: qty.cancelledQty, editRemovedQty: qty.editRemovedQty } : {}), unitPrice: ordinary.unitPrice,
         lineSubtotal: ordinary.lineSubtotal, lineDiscount: ordinary.lineSubtotal - final.lineNet, lineTax: final.lineGross - final.lineNet, lineTotal: final.lineGross };
       if (line.id) await tx.update(s.orderLine).set(values).where(eq(s.orderLine.id, id));
       else await tx.insert(s.orderLine).values({ id, storeId: input.storeId, orderId: input.orderId, ...values });
@@ -1179,7 +1207,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
   const orderId = await lockableOrderId(storeId, input.code);
   return withAdvisoryLocks([`pay:${storeId}:${input.code}`, `refund:${storeId}:${orderId}`], async (held) => {
     let stockChanged = false;
-    type Applied = { result: CommitResult; plan: EditPlan | null; refundPlan?: { amount: number; paymentId: string } };
+    type Applied = { result: CommitResult; plan: EditPlan | null; refundPlan?: { amount: number; paymentId: string; removedUnits?: RemovedUnit[] } };
     // STOREKIT §5.8 #15: the order's licences (L2) are planned and locked before the
     // order row (L3); the plan/lock/verify set owns the transaction.
     const applied: Applied = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx): Promise<Applied> => {
@@ -1202,7 +1230,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         // A refund_now that did not finish is re-driven (idempotent by key).
         if (st.type === 'refund_now' && st.status !== 'settled' && st.status !== 'reconciliation_required' && prior.balance < 0) {
           const [pay] = st.paymentId ? await tx.select().from(s.payment).where(eq(s.payment.id, st.paymentId)).limit(1) : [];
-          if (pay) return { result, plan: null, refundPlan: { amount: -prior.balance, paymentId: pay.id } };
+          if (pay) return { result, plan: null, refundPlan: { amount: -prior.balance, paymentId: pay.id, removedUnits: (prior.after as { removedUnits?: RemovedUnit[] } | null)?.removedUnits ?? [] } };
         }
         return { result, plan: null };
       }
@@ -1216,11 +1244,11 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       const balance = plan.balance.amountDue;
       const settlement = validateSettlement(balance, input.settlement);
       // Pre-flight everything that can refuse, before any write.
-      let refundPlan: { amount: number; paymentId: string } | undefined;
+      let refundPlan: { amount: number; paymentId: string; removedUnits?: RemovedUnit[] } | undefined;
       if (settlement?.type === 'refund_now') {
         const f = refundFeasibility(plan, -balance, settlement.paymentId);
         if (!f.feasible) throw new OrderEditError(409, 'REFUND_NOT_POSSIBLE', f.reason ?? 'refund not possible', { reason: f.reason });
-        refundPlan = { amount: -balance, paymentId: f.paymentId! };
+        refundPlan = { amount: -balance, paymentId: f.paymentId!, removedUnits: plan.removedUnits };
       }
       if (settlement?.type === 'send_pay_link' && !plan.recipient) throw new OrderEditError(409, 'NO_RECIPIENT', 'this order has no customer email to send a pay link to');
 
@@ -1261,9 +1289,11 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         const cur = dbLines.find((x) => x.id === l.id)!;
         const lineFacts = plan.stack.result.lineSnapshots.find(line => line.lineKey === l.key)!;
         const lineTax = lineFacts.lineGross - lineFacts.lineNet;
-        if (cur.quantity === l.quantity && cur.unitPrice === l.unitPrice && cur.variantId === l.variantId && cur.lineSubtotal === p.lineSubtotal && cur.lineDiscount === p.lineDiscount && cur.lineTotal === p.lineTotal && cur.lineTax === lineTax) continue;
+        if (billedQty(cur) === l.quantity && cur.unitPrice === l.unitPrice && cur.variantId === l.variantId && cur.lineSubtotal === p.lineSubtotal && cur.lineDiscount === p.lineDiscount && cur.lineTotal === p.lineTotal && cur.lineTax === lineTax) continue;
+        // The BILLED quantity is what the edit sets: a lowered one keeps `quantity` as ordered and cancels the removed units.
+        const qty = reconcileLineQuantities(cur, l.quantity);
         await tx.update(s.orderLine).set({
-          quantity: l.quantity, unitPrice: l.unitPrice, variantId: l.variantId, variantSku: l.sku, variantName: l.name,
+          quantity: qty.quantity, cancelledQty: qty.cancelledQty, editRemovedQty: qty.editRemovedQty, unitPrice: l.unitPrice, variantId: l.variantId, variantSku: l.sku, variantName: l.name,
           lineSubtotal: p.lineSubtotal, lineDiscount: p.lineDiscount, lineTax, lineTotal: p.lineTotal,
         }).where(eq(s.orderLine.id, l.id));
       }
@@ -1321,7 +1351,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         storeId, orderId: o.id, idempotencyKey: input.idempotencyKey, fingerprint: fp,
         before: { ...plan.before, currentPricing: plan.order.pricingSnapshot ?? plan.legacyPricingSnapshot, financialLines: plan.storedLines,
           ...(plan.importedPricingBasis ? { importedPricingBasis: plan.importedPricingBasis, storedOrder: plan.order } : {}) },
-        after: { ...plan.after, lines: plan.after.lines.map((line, index) => ({ ...line, id: lineIds.get(plan.working.lines[index]!.key)! })),
+        after: { ...plan.after, removedUnits: plan.removedUnits, lines: plan.after.lines.map((line, index) => ({ ...line, id: lineIds.get(plan.working.lines[index]!.key)! })),
           pricingOptions: plan.pricingOptions, currentPricing, currentPricingDigest: creditPricingSnapshotDigest(currentPricing) }, balance, settlement: outcome as object,
         reason: input.reason ?? null, actor: input.actor,
       }).returning({ id: s.orderEdit.id });
@@ -1432,6 +1462,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         const r = await requestRefund({
           storeId, orderId: ord!.id, actor: input.actor, idempotencyKey: `order-edit:${input.idempotencyKey}`,
           paymentId: rp.paymentId, amount: rp.amount, reason: editRefundReason(input.reason), source: 'order_edit', ...(applied.result.settlement.phase ? { editId: applied.result.editId } : {}),
+          ...editRefundLines(rp.removedUnits, rp.amount),
         }, held);
         out = { ...out, refundId: r.refundId, refundState: r.refundState, status: r.refundState === 'Settled' ? 'settled' : r.refundState === 'Pending' ? 'pending' : 'failed' };
         if (r.refundState === 'Failed') out.message = 'the gateway declined the refund — retry it from the order edit, or leave it as credit';
@@ -1537,6 +1568,7 @@ export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise
       const r = await requestRefund({
         storeId, orderId: o.id, actor: input.actor, idempotencyKey: `order-edit:${edit.idempotencyKey}:retry:${ctx.attempt}`,
         paymentId: f.paymentId, amount: -ctx.amountDue, reason: editRefundReason(edit.reason), source: 'order_edit', ...(st.phase ? { editId: edit.id } : {}),
+        ...editRefundLines((edit.after as { removedUnits?: RemovedUnit[] } | null)?.removedUnits, -ctx.amountDue),
       }, held);
       out = { ...out, refundId: r.refundId, refundState: r.refundState, status: r.refundState === 'Settled' ? 'settled' : r.refundState === 'Pending' ? 'pending' : 'failed' };
       out.message = r.refundState === 'Failed' ? 'the gateway declined the refund again — retry later or leave it as credit' : undefined;
@@ -1621,7 +1653,7 @@ export async function loadEditContext(storeId: string, code: string) {
     const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
     if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
     const sourceAdmission = importedEditAdmission(o.metadata);
-    const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+    const lines = billedLines(await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id)));
     const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id)).orderBy(asc(s.orderAdjustment.createdAt));
     const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
     const history = await tx.select({ id: s.orderEdit.id, actor: s.orderEdit.actor, reason: s.orderEdit.reason, balance: s.orderEdit.balance, settlement: s.orderEdit.settlement, createdAt: s.orderEdit.createdAt, before: s.orderEdit.before, after: s.orderEdit.after })

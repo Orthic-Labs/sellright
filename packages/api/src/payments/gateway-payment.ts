@@ -1,4 +1,5 @@
 import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
+import { billedLines } from '../orders/line-quantity.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
@@ -147,7 +148,8 @@ export async function startGatewayPayment(input: {
       if (editTender && editTender.currency !== order.currency) throw new GatewayPaymentError(409, 'Order edit tender currency differs');
       if (amount <= 0) throw new GatewayPaymentError(409, 'Order is already paid');
       if (input.method === 'nmi' && !input.token) throw new GatewayPaymentError(400, 'Payment token required');
-      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+      // Billed view: a unit an order edit removed is not part of the checkout session handed to the gateway.
+      const lines = billedLines(await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)));
       const adjustments = input.method === 'sezzle'
         ? await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment)
           .where(and(eq(s.orderAdjustment.orderId, order.id), eq(s.orderAdjustment.storeId, input.storeId))) : [];

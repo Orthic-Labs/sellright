@@ -1,4 +1,6 @@
 import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired, ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
+import { billedLines } from '../orders/line-quantity.js';
+import { isEditRefund } from '../payments/edit-refund.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { refundQuantity, refundStockEffectsProjection, refundMerchandiseCompletionProjection } from '../payments/refunds.js';
 import { refundUnitBases, refundLineCashAmount, availableCreditRefundUnits, refundCreditProjection } from '../payments/refund-credit.js';
@@ -441,7 +443,8 @@ admin.openapi(
     const out = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
-      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      // The BILLED view (quantity less edit-removed units): refund quotes, status and the response all reason in it.
+      const lines = billedLines(await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id)));
       // #406: per-line pre-order flag + ship label from the variant (current), for the order page's Pre-order card.
       const lineVariantIds = [...new Set(lines.map((l) => l.variantId).filter((v): v is string => !!v))];
       const preOrderByVariant = new Map((lineVariantIds.length ? await tx.select({ id: s.productVariant.id, isPreOrder: s.productVariant.isPreOrder, metafields: s.productVariant.metafields })
@@ -461,7 +464,8 @@ admin.openapi(
       try {
         const evidence = await readCurrentCreditEvidence(tx, { storeId: st.storeId, orderId: o.id });
         const units = refundUnitBases(o, lines, evidence ?? undefined, evidence?.pricingSources);
-        const reserved = refunds.filter(refund => refund.state !== 'Failed').map(refund => {
+        // An order-edit refund's lines attribute edit-removed units; they reserve nothing in the billed refundable domain.
+        const reserved = refunds.filter(refund => refund.state !== 'Failed' && !isEditRefund(refund.metadata)).map(refund => {
           const selected = refundLines.filter(line => line.refundId === refund.id);
           const projection = refundCreditProjection(refund.metadata);
           return { metadata: refund.metadata, state: refund.state, lines: selected,
@@ -518,7 +522,7 @@ admin.openapi(
         lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
           refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
           refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
-          id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty,
+          id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, orderedQty: l.quantity + l.editRemovedQty, editRemovedQty: l.editRemovedQty, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty,
           isPreOrder: (l.variantId && preOrderByVariant.get(l.variantId)?.isPreOrder) === true, shipDateLabel: l.variantId ? variantShippingLabel(preOrderByVariant.get(l.variantId)?.metafields) : null })),
         // `state` here is the individual PAYMENT record's wire state (Settled
         // -> captured — BREAKING, pre-1.0), distinct from the order-level

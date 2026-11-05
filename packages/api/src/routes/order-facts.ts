@@ -1,4 +1,5 @@
 import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 /**
  * Shared order-detail facts (R18/R20 parity): every surface that shows a
  * customer their own order — the public receipt (orders.ts), guest tracking
@@ -220,7 +221,7 @@ async function selectOrderLines(tx: Tx, where: SQL): Promise<Array<OrderLineFact
   const rows = await tx
     .select({
       orderId: s.orderLine.orderId,
-      sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
+      sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
       productSlug: s.product.slug,

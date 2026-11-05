@@ -286,7 +286,7 @@ adminAffiliate.openapi(
         .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(AFFILIATE_ORDER_LIMIT);
       const orderIds = orderRows.map((o) => o.id);
       const itemCountRows = orderIds.length
-        ? await tx.select({ orderId: s.orderLine.orderId, qty: sql<number>`sum(${s.orderLine.quantity})::int` })
+        ? await tx.select({ orderId: s.orderLine.orderId, qty: sql<number>`sum(${s.orderLine.quantity} - ${s.orderLine.editRemovedQty})::int` })
             .from(s.orderLine).where(inArray(s.orderLine.orderId, orderIds)).groupBy(s.orderLine.orderId)
         : [];
       const itemCounts = new Map(itemCountRows.map((r) => [r.orderId, r.qty]));

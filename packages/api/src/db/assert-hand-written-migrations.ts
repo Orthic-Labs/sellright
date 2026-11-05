@@ -93,6 +93,7 @@ const HAND_WRITTEN = [
   '0116_job_sweep_indexes.sql',
   '0117_order_list_date_idx.sql',
   '0118_admin_hub.sql',
+  '0119_order_line_edit_removed_qty.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

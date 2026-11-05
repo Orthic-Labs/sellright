@@ -6,13 +6,21 @@
  *
  * Model (differs from the refund engine on purpose — read before changing):
  *  - An existing order_line ROW is preserved across an edit (its id keeps
- *    meaning for fulfillments / refunds / licenses). Quantity is edited IN
- *    PLACE, never below `fulfilledQty + cancelledQty` (the locked units; refundedQty overlaps both: refunded unshipped units are cancelled, refunded shipped units stay fulfilled).
- *  - Removed UNFULFILLED units are removed from `quantity`; they are NOT parked
- *    in `cancelledQty`. The refund engine computes refundable units and the
- *    per-unit refund amount from `quantity`/`lineTotal`, so a unit that stayed
- *    in `quantity` after being edited out could be refunded a second time. The
- *    removal is recorded in order_edit.before/after and the audit timeline.
+ *    meaning for fulfillments / refunds / licenses). This module edits the
+ *    BILLED quantity (WLine.quantity), never below `fulfilledQty +
+ *    cancelledQty` (the locked units; refundedQty overlaps both: refunded
+ *    unshipped units are cancelled, refunded shipped units stay fulfilled).
+ *  - WLine carries the BILLED view of a stored row (orders/line-quantity.ts):
+ *    quantity = ordered - editRemoved, cancelledQty = cancelled - editRemoved.
+ *    The service persists a lowered billed quantity by KEEPING the stored
+ *    `quantity` (the originally ordered count) and recording the removed
+ *    unfulfilled units as cancelled (`cancelled_qty`, `edit_removed_qty`); a
+ *    raised one first un-cancels edit-removed units, then adds. The refund
+ *    engine therefore never sees a removed unit as refundable (it reads the
+ *    billed view and edit refunds' own `refund_line` rows are a separate
+ *    domain), so a removed unit cannot be refunded a second time.
+ *    `removedUnits` reports which units an edit removed (and what they were
+ *    worth) so the edit's refund can attribute them to their lines.
  *  - Added items always create NEW rows.
  *  - Stock moves only for the unfulfilled delta (open = quantity - fulfilled -
  *    cancelled), computed per variant.
@@ -126,6 +134,8 @@ export interface WLine {
   fulfilledQty: number;
   refundedQty: number;
   cancelledQty: number;
+  /** Units earlier edits already removed from this line (stored `edit_removed_qty`); 0 for a new row. */
+  editRemovedQty?: number;
   /** Quantity/variant as stored before this edit (null for a new row). */
   original: { variantId: string | null; sku: string; name: string; unitPrice: number; quantity: number } | null;
   /** True when add_item supplied an explicit unit price. */
@@ -240,8 +250,8 @@ export function applyEditOps(initial: WorkingOrder, ops: EditOpT[], lookups: Edi
         if (moved > movable) throw new OrderEditError(409, 'LINE_LOCKED', `${l.sku}: only ${movable} unit(s) can be swapped`, { lineId: l.id, movable });
         if (v.id === l.variantId && moved === movable) break; // swapping to itself
         const price = lookups.unitPriceFor(v);
-        if (lockedQty(l) === 0 && moved === l.quantity) {
-          // Nothing shipped/refunded: re-point the existing row (keeps its id).
+        if (lockedQty(l) === 0 && (l.editRemovedQty ?? 0) === 0 && moved === l.quantity) {
+          // Nothing shipped/refunded/edit-removed: re-point the existing row (keeps its id).
           l.variantId = v.id; l.sku = v.sku; l.name = v.name; l.unitPrice = price;
         } else {
           l.quantity -= moved;
@@ -369,6 +379,42 @@ export function diffLines(before: LineSnap[], working: WLine[], priced: PricedOr
     });
   }
   return out;
+}
+
+/** Units one edit removed from one line, with the money they represented on that line. */
+export interface RemovedUnit { orderLineId: string; sku: string; quantity: number; amount: number }
+
+/**
+ * The unfulfilled units this edit removes, per existing line: the billed quantity that went down, and the line total
+ * that went with it (before - after, never negative). Only whole-unit removals appear here; a price, shipping, coupon
+ * or tax difference is not a removal and stays an adjustment on the refund.
+ */
+export function removedUnits(before: LineSnap[], working: WLine[], priced: PricedOrder): RemovedUnit[] {
+  const byId = new Map(before.map((l) => [l.id, l]));
+  const out: RemovedUnit[] = [];
+  for (const l of working) {
+    const b = l.id ? byId.get(l.id) : undefined;
+    if (!b || l.quantity >= b.quantity) continue;
+    const after = priced.perLine.find((x) => x.key === l.key)!.lineTotal;
+    out.push({ orderLineId: b.id!, sku: b.sku, quantity: b.quantity - l.quantity, amount: Math.max(0, b.lineTotal - after) });
+  }
+  return out;
+}
+
+/**
+ * Split an edit refund of `refundAmount` into line-attributed units. Each removed line is capped at the money it
+ * represented and the total at the refund (a refund smaller than the removed value, e.g. a coupon repriced the
+ * rest, attributes in line order). Returns the lines plus the items amount; the remainder of the refund is an
+ * adjustment. Deterministic in its input, so a replayed refund request produces the identical lines.
+ */
+export function allocateEditRefundLines(units: readonly RemovedUnit[], refundAmount: number): { lines: Array<{ orderLineId: string; quantity: number; amount: number }>; itemsAmount: number } {
+  let left = Math.max(0, refundAmount);
+  const lines = [...units].sort((a, b) => a.orderLineId.localeCompare(b.orderLineId)).filter((u) => u.quantity > 0).map((u) => {
+    const amount = Math.min(u.amount, left);
+    left -= amount;
+    return { orderLineId: u.orderLineId, quantity: u.quantity, amount };
+  });
+  return { lines, itemsAmount: lines.reduce((n, l) => n + l.amount, 0) };
 }
 
 // ── settlement ───────────────────────────────────────────────────────────────

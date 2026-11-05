@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -36,7 +37,7 @@ export async function sendOrderConfirmationAndEnrol(tx: Tx, storeId: string, ord
     ? [customer?.firstName?.trim(), customer?.lastName?.trim()].filter(Boolean).join(' ') : '';
   const subscriberName = customerName || recipient.split('@')[0];
   const lines = await tx.select({
-    variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity,
+    variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql,
     lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey,
   }).from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));

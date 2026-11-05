@@ -13,6 +13,7 @@
  * `issuanceKey`. The admin page generates a fresh key per submit.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, like, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
@@ -129,7 +130,7 @@ adminAccountCredit.openapi(
         .orderBy(desc(s.accountCreditTransaction.createdAt)).limit(200);
       const redeemedOrders: z.infer<typeof RedeemedOrder>[] = [];
       for (const r of rows.filter((x) => x.kind === 'REDEEM' && x.status === 'POSTED' && x.orderId)) {
-        const lines = await tx.select({ id: s.orderLine.id, name: s.orderLine.variantName, quantity: s.orderLine.quantity })
+        const lines = await tx.select({ id: s.orderLine.id, name: s.orderLine.variantName, quantity: billedQuantitySql })
           .from(s.orderLine).where(and(eq(s.orderLine.storeId, st.storeId), eq(s.orderLine.orderId, r.orderId!)));
         redeemedOrders.push({ orderId: r.orderId!, orderCode: r.orderCode, lines: lines.map((l) => ({ ...l, unitCreditCents: r.operationalAllocation?.[l.id] ?? [] })) });
       }

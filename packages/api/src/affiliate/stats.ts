@@ -43,7 +43,7 @@ export async function affiliateRangeStats(
 
   const skuRes = await tx.execute(sql`
     select l.variant_sku as sku, max(l.variant_name) as name,
-           sum(l.quantity)::int as units, count(distinct l.order_id)::int as orders,
+           sum(l.quantity - l.edit_removed_qty)::int as units, count(distinct l.order_id)::int as orders,
            sum(l.line_subtotal - l.line_discount)::int as revenue
     from order_line l
     join "order" o on o.id = l.order_id
@@ -93,7 +93,7 @@ export async function affiliateTopSellers(
   const res = await tx.execute(sql`
     select l.variant_sku as sku,
            max(l.product_name) as product_name, max(l.variant_name) as variant_name,
-           sum(l.quantity)::int as qty,
+           sum(l.quantity - l.edit_removed_qty)::int as qty,
            sum(l.line_subtotal - l.line_discount)::int as revenue
     from order_line l
     join "order" o on o.id = l.order_id
@@ -102,7 +102,7 @@ export async function affiliateTopSellers(
       and o.promotion_id = ${promotionId}
       and o.state = any(array['Paid','PartiallyRefunded']::order_state[])
     group by l.variant_sku
-    order by sum(l.quantity) desc, l.variant_sku
+    order by sum(l.quantity - l.edit_removed_qty) desc, l.variant_sku
     limit ${limit}`);
   return (res.rows as Array<{ sku: string; product_name: string | null; variant_name: string; qty: number; revenue: number }>)
     .map((r) => ({ name: orderLineLabel({ productName: r.product_name, variantName: r.variant_name }), sku: r.sku, qtySold: Number(r.qty), revenue: Number(r.revenue) }));

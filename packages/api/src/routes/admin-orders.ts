@@ -1,4 +1,5 @@
 import { assertImportedFinancialReconciliationAllowed } from '../orders/imported-financial-reconciliation.js';
+import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -38,10 +39,10 @@ async function loadOrderForDoc(storeId: string, code: string) {
     const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
     if (!order) return null;
     const lines = await tx
-      .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
+      .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
       .from(s.orderLine)
-      // Order editing (G13): a line edited down to 0 stays on the order (row preserved) but is not a document line.
-      .where(and(eq(s.orderLine.orderId, order.id), gt(s.orderLine.quantity, 0)));
+      // Order editing (G13): a line edited down to 0 billed units stays on the order (row preserved) but is not a document line.
+      .where(and(eq(s.orderLine.orderId, order.id), gt(billedQuantitySql, 0)));
     const adjustments = await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, order.id));
     const [storeRow] = await tx.select({ name: s.store.name, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
     return { order, lines, adjustments, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
@@ -229,7 +230,7 @@ adminOrders.openapi(
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
-      const oLines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity, refundedQty: s.orderLine.refundedQty }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      const oLines = await tx.select({ id: s.orderLine.id, quantity: billedQuantitySql, refundedQty: s.orderLine.refundedQty }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       const byId = new Map(oLines.map((l) => [l.id, l]));
       for (const rl of reqLines) {
         const ol = byId.get(rl.orderLineId);

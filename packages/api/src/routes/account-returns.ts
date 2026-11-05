@@ -16,6 +16,7 @@
  * Status the shopper sees is the request's own status (requested / approved / refunded / rejected / received).
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { billedLines } from '../orders/line-quantity.js';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -61,7 +62,8 @@ async function loadOwnedOrder(tx: Tx, cust: SessionCustomer, code: string, lock:
   const q = tx.select().from(s.order).where(and(eq(s.order.code, code), eq(s.order.customerId, cust.id), orderProvenanceFilter(cust))).limit(1);
   const [order] = await (lock ? q.for('update') : q);
   if (!order) return null;
-  const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)).orderBy(asc(s.orderLine.variantSku), asc(s.orderLine.id));
+  // Billed view: refundedQty is compared with cancelled units that a REFUND cancelled, never edit-removed ones.
+  const lines = billedLines(await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id)).orderBy(asc(s.orderLine.variantSku), asc(s.orderLine.id)));
   const requests = await tx.select({
     id: s.returnRequest.id, status: s.returnRequest.status, reason: s.returnRequest.reason,
     createdAt: s.returnRequest.createdAt, updatedAt: s.returnRequest.updatedAt,
