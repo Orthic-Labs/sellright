@@ -14,6 +14,8 @@
 // - Fail open: any error returns the origin's response unchanged (the page then reads in the browser as before).
 // - The JSON is escaped for the HTML context (no `<` survives) and the block is `type=application/json`: never executed.
 
+/** Plain HTML body elements a data block may be inserted before (never inside svg, math, template, script or style). */
+export const EARLY_SELECTOR = 'body > div, body > main, body > header, body > section, body > footer, body div, body main, body section, body form, body p';
 /** An edge read slower than this is abandoned (data-ok=0): the page reads it itself. */
 export const EDGE_READ_TIMEOUT_MS = 2500;
 /** At most this many reads per page (a shell declares 1-3; early-reads.ts EARLY_LINK_MAX is 6). */
@@ -132,13 +134,22 @@ export default {
 			if (!keys.length) return res;
 			const origin = new URL(request.url).origin;
 			const done = Promise.all(keys.map((k) => readLive(origin, k, request))); // started now, while the shell streams
+			// The blocks go in at the first plain body element the rewriter reaches after the reads are back (the shell streams at the
+			// visitor's pace, so near the origin that is the top of the page), never holding the stream; </body> is the fallback.
+			let got = null, placed = false;
+			done.then((g) => { got = g; });
+			const blocks = () => keys.map((k, i) => edgeBlock(k, got[i])).join('');
+			const early = { element(e) { if (got && !placed) { placed = true; e.before(blocks(), { html: true }); } } };
 			return new HTMLRewriter()
 				.on('head', { element(e) { e.prepend(edgeMeta(keys), { html: true }); } })
+				.on(EARLY_SELECTOR, early)
 				.on('body', {
 					element(e) {
 						e.onEndTag(async (end) => {
-							const got = await done;
-							end.before(keys.map((k, i) => edgeBlock(k, got[i])).join(''), { html: true });
+							if (placed) return;
+							got = await done;
+							placed = true;
+							end.before(blocks(), { html: true });
 						});
 					},
 				})
