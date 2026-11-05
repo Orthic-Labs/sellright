@@ -14,6 +14,8 @@
 // - Fail open: any error returns the origin's response unchanged (the page then reads in the browser as before).
 // - The JSON is escaped for the HTML context (no `<` survives) and the block is `type=application/json`: never executed.
 
+/** How long the stream may wait at the top of the body for the reads, so the data lands early instead of before </body>. */
+export const EDGE_EARLY_HOLD_MS = 200;
 /** Plain HTML body elements a data block may be inserted before (never inside svg, math, template, script or style). */
 export const EARLY_SELECTOR = 'body > div, body > main, body > header, body > section, body > footer, body div, body main, body section, body form, body p';
 /** An edge read slower than this is abandoned (data-ok=0): the page reads it itself. */
@@ -134,12 +136,19 @@ export default {
 			if (!keys.length) return res;
 			const origin = new URL(request.url).origin;
 			const done = Promise.all(keys.map((k) => readLive(origin, k, request))); // started now, while the shell streams
-			// The blocks go in at the first plain body element the rewriter reaches after the reads are back (the shell streams at the
-			// visitor's pace, so near the origin that is the top of the page), never holding the stream; </body> is the fallback.
-			let got = null, placed = false;
-			done.then((g) => { got = g; });
+			// The blocks go in before the first plain body element when the reads are back within EDGE_EARLY_HOLD_MS (near the origin
+			// they take ~20 ms, so the data is at the top of the page and paints with it); otherwise the stream goes on and </body>
+			// carries them, as before. The hold is bounded: a slow read never delays the page more than EDGE_EARLY_HOLD_MS.
+			let got = null, placed = false, tried = false;
 			const blocks = () => keys.map((k, i) => edgeBlock(k, got[i])).join('');
-			const early = { element(e) { if (got && !placed) { placed = true; e.before(blocks(), { html: true }); } } };
+			const early = {
+				async element(e) {
+					if (tried) return;
+					tried = true;
+					const g = await Promise.race([done, new Promise((r) => setTimeout(() => r(null), EDGE_EARLY_HOLD_MS))]);
+					if (g) { got = g; placed = true; e.before(blocks(), { html: true }); }
+				},
+			};
 			return new HTMLRewriter()
 				.on('head', { element(e) { e.prepend(edgeMeta(keys), { html: true }); } })
 				.on(EARLY_SELECTOR, early)
