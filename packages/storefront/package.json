@@ -81,7 +81,7 @@
 	},
 	"dependencies": {
 		"@qwik.dev/core": "2.0.0-rc.3",
-		"@qwik.dev/router": "2.0.0-rc.3",
+		"@qwik.dev/router": "2.0.0-rc.4",
 		"@sellright/storefront-client": "workspace:*",
 		"@simplewebauthn/browser": "14.0.0",
 		"@stripe/stripe-js": "^10.2.1",
