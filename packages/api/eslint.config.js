@@ -63,6 +63,7 @@ const RAW_DB_ALLOWED = [
   'src/auth/admin-auth-challenge.ts',
   'src/auth/second-factor.ts',
   'src/auth/admin-handoff.ts',
+  'src/auth/hub.ts', // #355 phase 2: global hub_* tables (no store_id), like admin_handoff_code
   'src/auth/admin-session.ts',
   'src/licensing/storekit-config.ts',
 ];

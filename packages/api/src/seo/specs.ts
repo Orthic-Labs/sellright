@@ -24,6 +24,14 @@ export function htmlToPlainText(html: string): string {
   return stripTags(spaced).replace(/&(nbsp|quot|#39|apos|amp);/g, (m) => ENTITIES[m] ?? m).replace(/\s+/g, ' ').trim();
 }
 
+/** The plain-text description without its SPECS block (#388): the specs ship as material/additionalProperty, and the storefront
+ *  meta description drops them the same way. A description that is only a SPECS block keeps its full text. */
+export function descriptionWithoutSpecs(html: string): string {
+  const marker = html.search(/\bSPECS?\b/i);
+  const lead = marker === -1 ? '' : htmlToPlainText(html.slice(0, marker));
+  return lead || htmlToPlainText(html);
+}
+
 export interface ParsedSpecs {
   /** "Label: Value" spec pairs, in source order. */
   rows: Array<[string, string]>;

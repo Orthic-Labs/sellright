@@ -60,6 +60,8 @@ export interface SellRightClientConfig {
   timeoutMs?: number;
   /** Swap the underlying fetch (tests, non-standard runtimes). */
   fetch?: typeof fetch;
+  /** Hold every request until the returned promise settles (see `StorefrontClientOptions.ready`). */
+  ready?: () => Promise<unknown> | undefined;
 }
 
 let config: SellRightClientConfig | undefined;
@@ -103,6 +105,7 @@ export function sellright(): StorefrontClient['raw'] {
     getCsrfToken,
     timeoutMs: config.timeoutMs,
     fetch: config.fetch,
+    ready: config.ready,
   }).raw;
 }
 

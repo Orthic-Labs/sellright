@@ -4,6 +4,13 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
 import type { SlotProps } from '~/components/slots/registry';
 
+// Each of the four payments, to the cent (Sezzle splits the total into four; the first absorbs any odd cent). "$4" for a
+// $15 item read as $16 in total (#402).
+const sezzleInstallment = (priceCents: number): string => {
+	const cents = Math.ceil(priceCents / 4);
+	return cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+};
+
 const SEZZLE_ENABLED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
 
 export default component$<SlotProps<'pdp.payment-widget'>>(({ priceCents }) => {
@@ -11,7 +18,7 @@ export default component$<SlotProps<'pdp.payment-widget'>>(({ priceCents }) => {
 	if (!SEZZLE_ENABLED) return null;
 	return (
 		<div class="sr-sezzle-inline">
-			or 4 interest-free payments of <strong>${(priceCents / 400).toFixed(0)}</strong> with{' '}
+			or 4 interest-free payments of <strong>${sezzleInstallment(priceCents)}</strong> with{' '}
 			<a href="https://sezzle.com/how-it-works" target="_blank" rel="noopener noreferrer">
 				<img src="/sezzle-color.svg" alt="Sezzle" width="58" height="16" loading="lazy" style={{ display: 'inline', verticalAlign: 'middle', marginLeft: '3px' }} />
 			</a>

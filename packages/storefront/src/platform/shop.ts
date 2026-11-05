@@ -2,12 +2,14 @@
 // (head, onStaticGenerate). The shop route re-exports all three.
 import { routeLoader$, server$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { noStore, shellRender } from '~/platform/shell-render';
-import { loadBrowseCatalog } from '~/services/browse-catalog';
+import { liveBrowseCatalog, loadBrowseCatalog } from '~/services/browse-catalog';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
 import { siteUrl, theme } from '~/theme/theme.config';
 import { hasView } from '~/platform/gateway';
 import { DETAIL_PRODUCTS } from '~/platform/brand-data';
+import { firstCardImage } from '~/platform/shop-first-card';
+import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
 import { useConfiguratorDetail, type ConfiguratorDetail } from '~/platform/configurator-detail';
 import { productGroupSchema } from '~/platform/product-jsonld';
 import { redactListItem } from '~/platform/live-values';
@@ -22,41 +24,64 @@ import type { CatalogListItem } from '~/sellright/types/catalog';
 // Products are in the HTML on first byte — no client-side API call needed.
 // ADR-0001 §2 (SHELL_CACHE=1): the listing is stock-bearing (inStock, and the in-stock filter decides which cards exist) and priced,
 // so the shell carries only its structure (#412): every product's slug, name, image, tags (shellShopItem: no price, the fail-closed
-// stock constant), `deferred`. The grid paints from it in SSR, unfiltered by stock; the browser reads the same manifest snapshot on load
-// through `readShopCatalog` (no-store) and the values (price, availability, the in-stock filter) apply only then. LOCKED layer 2 is
-// otherwise unchanged (manifest on load, the in-stock toggle is the live API hit).
-export const useCatalogLoader = routeLoader$(async ({ error }) => {
+// stock constant), `deferred`. The grid is in the shell's HTML, unfiltered by stock but hidden (routes/shop/index.tsx, early-paint.ts)
+// until the browser's LIVE catalog read lands (`/api/live/shop-catalog/` started at document parse, else `readShopCatalog`; both no-store
+// and live, DP-6) and the in-stock filter is applied; price and availability then fill in. Excluded (SHELL_CACHE_EXCLUDE=/shop/) or a
+// query URL: the normal render below, the SSR in-stock grid from the live catalog.
+export const useCatalogLoader = routeLoader$(async () => {
  // Brand views PR2: a branded shop reads its listing through useConfiguratorDetail (one generation with the detail products).
  if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false, deferred: false };
- if (shellRender()) {
-  // A failed structure read keeps the previous shell (reserved grid, the browser read fills it): the page still works.
-  const parsed = await loadBrowseCatalog().catch(() => null);
+ return shopListing(shellRender(), liveBrowseCatalog, loadBrowseCatalog);
+}, { serializationStrategy: 'always' });
+
+/** The shop listing for one render (exported for tests).
+ *  - shell render: structure only (#412), `deferred` (the browser's read fills values).
+ *  - DP-6 (#425), the normal /shop/ render: the LIVE catalog per request; the list endpoint computes inStock from stock
+ *    on_hand/allocated on every call (the same source as /stock), never the manifest snapshot.
+ *  - a failed live read fails closed on stock only, never takes the page down: the listing renders as the pending shell
+ *    (structure, no price, no availability, nothing purchasable) and `deferred`, so the parse-time stock/catalog read fills it. */
+export async function shopListing(
+ shell: boolean,
+ live: () => Promise<{ totalItems: number; products: CatalogListItem[] }>,
+ structure: () => Promise<{ totalItems: number; products: CatalogListItem[] }>,
+): Promise<{ totalItems: number; products: CatalogListItem[]; fallback: boolean; deferred: boolean }> {
+ const pending = async () => {
+  // A failed structure read keeps the reserved grid (the browser read fills it): the page still works.
+  const parsed = await structure().catch(() => null);
   return { totalItems: parsed?.totalItems ?? 0, products: parsed ? parsed.products.map(shellShopItem) : [], fallback: false, deferred: true };
- }
+ };
+ if (shell) return pending();
  try {
-  const parsed = await loadBrowseCatalog();
+  const parsed = await live();
   return { ...parsed, fallback: false, deferred: false };
- } catch {
-  throw error(503, 'Catalog temporarily unavailable');
+ } catch (e) {
+  console.error('[shop] live catalog read failed; rendering the pending listing:', e instanceof Error ? e.message : e);
+  return pending();
  }
-});
+}
 
 /** A shop listing item for the shell (#412): structure only, as an explicit projection (no unknown field can carry a value through),
  *  then redacted (no price, the fail-closed stock constant, never shown as Sold Out while pending). */
 export const shellShopItem = (p: CatalogListItem): CatalogListItem =>
  redactListItem({ slug: p.slug, name: p.name, status: p.status, tags: p.tags ?? [], image: p.image ?? null, inStock: false, minPrice: null, maxPrice: null, pricingVariant: null });
 
-/** The shop listing's manifest read, moved to the browser (ADR-0001 §2): the same snapshot the SSR loader reads, per request, no-store. */
+/** The shop listing's live read in the browser (ADR-0001 §2, DP-6 restored on the shell): the LIVE catalog, per request, no-store; the
+ *  list endpoint computes inStock from stock on hand/allocated on every call (the same source as /stock), never the manifest snapshot.
+ *  The `/api/live/shop-catalog/` GET the parse-time script starts answers the same build (routes/api/live/[read]). */
 export const readShopCatalog = server$(async function () {
  noStore(this);
- return loadBrowseCatalog();
+ return liveBrowseCatalog();
 });
 
 export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: unknown) => unknown }) => {
  const searchTerm = url.searchParams.get('q') || '';
+ // #425: the first card's image is preloaded at high priority from <head> (same responsive sources as its <img>), so on a slow link it
+ // no longer queues behind fonts, scripts and the other cards (cached shell, live A/B: LCP 1016 -> 1292 ms without it).
+ const firstImage = !searchTerm && !hasView('route.shop') && resolveValue ? firstCardImage(resolveValue(useCatalogLoader) as Parameters<typeof firstCardImage>[0]) : null;
  // A branded shop (route.shop view): one platform-built ProductGroup per configurator product, from the page's own catalog
  // generation, with the brand's declared facts (no availability: platform/product-jsonld.ts).
- const configurator = hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
+ // Server build only (import.meta.env.SSR is folded by the client build, unlike core's runtime isServer; the ProductGroup JSON-LD is crawl data): product-jsonld.ts stays out of the client bundle.
+ const configurator = import.meta.env.SSR && hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
  const groups = (configurator?.detail ?? []).map((m) =>
   productGroupSchema(m, { siteOrigin: siteUrl, brandName: theme.storeName, facts: DETAIL_PRODUCTS.find((p) => p.slug === m.slug)?.facts, variantUrls: hasView('route.product') }),
  );
@@ -74,6 +99,7 @@ export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: 
   canonical: `${siteUrl}/shop/`,
   ogUrl: `${siteUrl}/shop/`,
   noindex: !!searchTerm,
+  links: firstImage ? generateImagePreloadLinks(firstImage, 'productCard', ['avif']) : [],
   schemas: [
    breadcrumbSchema,
    ...(!searchTerm ? [{

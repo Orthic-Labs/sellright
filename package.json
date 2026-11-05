@@ -2,7 +2,7 @@
   "name": "sellright",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@11.25.0",
+  "packageManager": "pnpm@12.16.1",
   "engines": {
     "node": ">=24.15 <25 || >=26 <27",
     "pnpm": ">=11.25 <12"
@@ -32,12 +32,12 @@
     "release:doctor": "right-release doctor"
   },
   "devDependencies": {
-    "@rightkit/release": "0.6.4",
-    "@typescript-eslint/parser": "8.71.2",
+    "@rightkit/release": "0.6.29",
+    "@typescript-eslint/parser": "8.72.1",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "eslint": "10.13.0",
+    "eslint": "10.14.0",
     "jscpd": "^5.4.2",
-    "knip": "^6.42.1",
+    "knip": "^6.44.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }

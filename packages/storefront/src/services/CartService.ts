@@ -20,9 +20,11 @@
 import { sellright, SellRightError } from '~/sellright/client';
 import { resolveAssetPath } from '~/sellright/types/catalog';
 import { srMe, srErrorStatus, srLegacyCartMigration } from '~/utils/sellright';
+import { activationGate } from '~/utils/prerender';
 import { CountryPreferenceService } from './CountryPreferenceService';
 import { classifyOrderState } from './order-state';
 import { theme } from '~/theme/theme.config';
+import { earlyFetch } from '~/platform/early-reads';
 import {
   EMPTY_CART,
   type Cart,
@@ -93,7 +95,12 @@ const PAYMENT_IN_PROGRESS_MESSAGE = 'Your payment is still processing. Continue 
 /** Outcome of reopening a converted cart (#370). */
 /** Options of one live cart read. `includeShippingMethods` (#412, the checkout entry read only) asks the read to quote the shipping
  *  methods for the cart's destination too and price the cart with the selected one; see `takeShippingQuote`. */
-export interface LiveReadOptions { includeShippingMethods?: boolean }
+export interface LiveReadOptions {
+  includeShippingMethods?: boolean;
+  /** #415: the document's boot read only: take the cart read this document started at parse (platform/early-reads.ts) once, else
+   *  read live. Never set for cart open, checkout entry re-reads, pre-submit or any read after a write. */
+  early?: boolean;
+}
 
 export type ReopenResult = { ok: true } | { ok: false; message: string };
 
@@ -327,6 +334,10 @@ export class CartService {
    *  when Web Locks are missing: there is no synchronous fallback that could be claimed safe. */
   private static async exclusive<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.hasLocks()) throw new CartError('unsupported', UNSUPPORTED_MESSAGE);
+    // #425: a prerendered checkout waits to be shown BEFORE it asks for the origin-wide cart lock: held for a hidden page it would
+    // block the visible tab's cart changes, and its live cart read must be the one made at activation (see utils/prerender.ts).
+    const activation = activationGate();
+    if (activation) await activation;
     return navigator.locks.request(CART_LOCK, { mode: 'exclusive' }, async () => {
       this.lockHeld = true;
       try {
@@ -414,7 +425,7 @@ export class CartService {
    * the snapshot, the request that produced it and the cookie all name the same token; otherwise a response for T
    * cannot touch U's mirror. Returns the SKUs that vanished unexpectedly, or `null` when it did not apply.
    */
-  private static install(server: ServerCart, requestToken: string, expectedRemoval?: string): string[] | null {
+  private static install(server: ServerCart, requestToken: string, expectedRemoval?: string, quiet = false): string[] | null {
     if (server.token !== requestToken || this.readTokenCookie() !== requestToken) return null;
     // A new snapshot: a shipping quote of an earlier read no longer belongs to the mirror (`recordLiveRead` sets this read's).
     this.readShippingQuote = null;
@@ -433,7 +444,7 @@ export class CartService {
       if (!next.has(sku)) this.enrichment.delete(sku);
     }
     this.persistCount(server.token, this.cart.lines.reduce((sum, line) => sum + line.quantity, 0));
-    this.notify();
+    if (!quiet) this.notify();
     return dropped;
   }
 
@@ -495,7 +506,8 @@ export class CartService {
         this.pendingIntentMigration = false;
         this.persistIntent();
       }
-      return this.refreshInLock(opts);
+      // After the legacy writes the read must be newer than them: never the document's early read.
+      return this.refreshInLock({ ...opts, early: false });
     });
   }
 
@@ -589,8 +601,26 @@ export class CartService {
     const { data } = await sellright().POST('/v1/shop/cart', { body: {} });
     if (!data) throw new CartError(undefined, 'Could not create a cart');
     this.writeTokenCookie(data.token);
-    this.install(data, data.token);
+    // Quiet: a cart is only ever created for the mutation that follows it, which installs and announces its own result
+    // (or the caller commits the mirror on failure). Announcing the new EMPTY cart replaced the line the PDP had just shown
+    // locally, so every first add flashed "Your cart is empty" in the drawer for ~0.7 s (e2e 2026-11-03, 8/8 first adds).
+    this.install(data, data.token, undefined, true);
     return data.token;
+  }
+
+  /** The first add of a browser with no cart: one POST that creates the cart holding `sku` x `quantity`, answered with the
+   *  server-priced snapshot (same shape and pricing as the lines PATCH). Writes the cookie on success, like `createCart`; nothing is
+   *  retried after an uncertain result. Resolves to `null` when a legacy transfer already created the cart (the caller then
+   *  appends the ordinary way). */
+  private static async createSeeded(sku: string, quantity: number): Promise<{ token: string; data: ServerCart } | null> {
+    this.assertHeld();
+    if (await this.migrateLegacyInLock()) return null;
+    const { data } = await sellright().POST('/v1/shop/cart', {
+      body: { items: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
+    });
+    if (!data) throw new CartError(undefined, 'Could not create a cart');
+    this.writeTokenCookie(data.token);
+    return { token: data.token, data };
   }
 
   /** Ensure the mirror's revision is live (cold start reads it via GET). */
@@ -697,12 +727,19 @@ export class CartService {
     return this.exclusive(async () => {
       this.setEnrichment(sku, enrichment);
       return this.reopeningConverted(async () => {
-        const token = await this.ensureCart();
+        // #425: a browser with no cart yet creates it WITH this line in one POST (the cart API seeds a new cart exactly as the
+        // lines PATCH would answer), not create-then-append: one round trip fewer on the first add. A saved legacy cart is
+        // transferred first (as `createCart` does); then the cookie names a cart and the ordinary append below runs.
+        const seeded = this.readTokenCookie() ? null : await this.createSeeded(sku, quantity);
+        const token = seeded?.token ?? (await this.ensureCart());
         try {
-          const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
-            params: { path: { token } },
-            body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
-          });
+          let data: ServerCart | undefined = seeded?.data;
+          if (!seeded) {
+            ({ data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
+              params: { path: { token } },
+              body: { lines: [{ sku, quantity }], ...this.quoteContext, shipCountry: this.quoteCountry() },
+            }));
+          }
           if (!data) throw new CartError(undefined, "Couldn't add item to cart");
           const quoted = await this.inQuoteContext(data, token);
           const installed = this.install(quoted, token);
@@ -741,6 +778,13 @@ export class CartService {
     return this.updateLine(sku, 0);
   }
 
+  /** Resolves once every cart operation already queued has finished (the exclusive lock is FIFO). With no Web Locks there is nothing
+   *  queued to wait for. Used before leaving for checkout so the server cart the checkout reads holds every line the shopper added. */
+  static settled(): Promise<void> {
+    if (!this.hasLocks()) return Promise.resolve();
+    return this.exclusive(async () => undefined);
+  }
+
   /** Re-fetch the server-priced cart (live stock/price/coupon) — used for the
    *  LOCKED stock checks: cart open, checkout entry, and pre-submit.
    *  Without Web Locks this is a read-only refresh: it installs the mirror under the token fence and never retires. */
@@ -761,6 +805,7 @@ export class CartService {
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.liveReadQuery(opts) },
+        ...(opts.early ? { fetch: earlyFetch } : {}),
       });
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
@@ -783,6 +828,7 @@ export class CartService {
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.liveReadQuery(opts) },
+        ...(opts.early ? { fetch: earlyFetch } : {}),
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };

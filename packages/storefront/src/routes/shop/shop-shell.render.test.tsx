@@ -47,6 +47,49 @@ describe('/shop/ shell grid (#412)', () => {
 		expect(stockFree(page)).toEqual([]);
 	});
 
+	it('shell grid: first-row images are real <img> in the markup; first is eager + fetchpriority=high, next eager, rest lazy', async () => {
+		const many = Array.from({ length: 6 }, (_, i) => listItem(`p${i}`));
+		const document = await render({ totalItems: 6, products: many.map(shellShopItem), fallback: false, deferred: true });
+		const imgs = Array.from(document.querySelectorAll('[data-listing-pending] img'));
+		expect(imgs).toHaveLength(6);
+		const attr = (i: number, n: string) => imgs[i].getAttribute(n);
+		expect(attr(0, 'loading')).toBe('eager');
+		expect(attr(0, 'fetchpriority')?.toLowerCase()).toBe('high');
+		expect(attr(0, 'decoding')).toBe('async');
+		expect(attr(0, 'srcset') ?? attr(0, 'src')).toBeTruthy();
+		for (const i of [1, 2, 3]) {
+			expect(attr(i, 'loading')).toBe('eager');
+			expect(attr(i, 'fetchpriority')?.toLowerCase()).not.toBe('high');
+		}
+		for (const i of [4, 5]) expect(attr(i, 'loading')).toBe('lazy');
+	});
+
+	it('DP-6: the pending grid is gated (hidden until the live in-stock filter), each card is in a data-slug wrapper, the end sentinel follows the grid', async () => {
+		const document = await render({ totalItems: 3, products: ['tee', 'cap', 'hat'].map((s) => shellShopItem(listItem(s))), fallback: false, deferred: true });
+		const grid = document.querySelector('[data-listing-pending]')!;
+		expect(grid.hasAttribute('data-live-gate')).toBe(true);
+		expect(Array.from(grid.children).map((c) => c.getAttribute('data-slug'))).toEqual(['tee', 'cap', 'hat']);
+		for (const wrapper of Array.from(grid.children)) expect(wrapper.querySelectorAll('a')).toHaveLength(1); // the card (link) is inside the wrapper
+		const sentinel = grid.nextElementSibling!;
+		expect(sentinel.hasAttribute('data-live-gate-end')).toBe(true);
+		expect(sentinel.hasAttribute('hidden')).toBe(true);
+		// the "still checking" notice is in the shell (hidden by CSS until the read is late or failed): copy only, no value
+		expect(document.querySelector('[data-shop-slow]')!.textContent).toContain('Still checking');
+		// no stock or price anywhere, including the gate, the sentinel and the notice
+		const page = document.documentElement.outerHTML.split('In stock only').join('');
+		expect(priceFree(page)).toEqual([]);
+		expect(stockFree(page)).toEqual([]);
+	});
+
+	it('DP-6 rollback render (not deferred: SHELL_CACHE off, or the path in SHELL_CACHE_EXCLUDE): no gate, no sentinel, no notice, the SSR in-stock grid', async () => {
+		const document = await render({ totalItems: 2, products: full, fallback: false, deferred: false });
+		expect(document.querySelector('[data-live-gate]')).toBeFalsy();
+		expect(document.querySelector('[data-live-gate-end]')).toBeFalsy();
+		expect(document.querySelector('[data-shop-slow]')).toBeFalsy();
+		const grid = document.querySelector('div.grid.gap-px')!;
+		expect(Array.from(grid.children).map((c) => c.getAttribute('data-slug'))).toEqual(['tee']); // the out-of-stock cap is not rendered
+	});
+
 	it('shell without a structure (failed read at render): the reserved skeleton grid, as before #412', async () => {
 		const document = await render({ totalItems: 0, products: [], fallback: false, deferred: true });
 		expect(document.querySelector('[data-listing-pending]')!.innerHTML).toContain('animate-pulse');

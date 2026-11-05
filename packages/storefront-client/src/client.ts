@@ -75,6 +75,10 @@ export interface StorefrontClientOptions {
    *  `fetch` (it's always called with a fully-formed `Request`, never a bare
    *  URL string). */
   fetch?: (input: Request) => Promise<Response>;
+  /** Held before EVERY request: when it returns a promise the request waits for it, and only then is the timeout started. A document
+   *  that must not talk to the API yet (a prerendered page until it is activated) returns one; a page that may returns nothing,
+   *  which costs the normal path no extra tick. Runs ahead of the timeout guard on purpose: a wait inside it would spend the budget. */
+  ready?: () => Promise<unknown> | undefined;
 }
 
 function readBrowserCsrfCookie(): string | undefined {
@@ -181,6 +185,16 @@ export function createStorefrontClient(options: StorefrontClientOptions): Storef
     fetch: options.fetch,
   });
 
+  const ready = options.ready;
+  if (ready) {
+    raw.use({
+      async onRequest() {
+        const wait = ready();
+        if (wait) await wait;
+        return undefined;
+      },
+    });
+  }
   raw.use(storeResolutionMiddleware(options));
   if (!isBrowser && options.forwardCookie) raw.use(forwardCookieMiddleware(options.forwardCookie));
   raw.use(csrfMiddleware(getCsrfToken));

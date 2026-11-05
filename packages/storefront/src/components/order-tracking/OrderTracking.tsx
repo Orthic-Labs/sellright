@@ -179,7 +179,7 @@ export default component$(() => {
               </div>
             </div>
 
-            <div id="track-turnstile" class="min-h-[65px]"></div>
+            <div id="track-turnstile"></div>
 
             <div class="flex gap-4">
               <button

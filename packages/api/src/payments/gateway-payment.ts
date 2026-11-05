@@ -12,6 +12,7 @@ import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
 import { nmiOrderReference } from './nmi.js';
 import { queryNmiPayment, queryNmiPaymentObserved } from './nmi-query.js';
+import { nmiTestModeMark } from './nmi-test-mode.js';
 import { recordProviderObservationDetached } from './provider-observation.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
@@ -232,9 +233,14 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
     }
     const [order] = await tx.select().from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1).for('update');
     if (!order) throw new GatewayPaymentError(404, 'Order not found');
+    // #378: NMI test mode is an NMI-side switch. A settled NMI result proven to be a test-mode transaction is recorded as
+    // test (attempt + payment), whatever mode SellRight is configured for; the configured mode stays in metadata.
+    const testMark = attempt.method === 'nmi' && attempt.mode === 'live' && result.state === 'Settled' ? nmiTestModeMark(result.metadata) : null;
+    const mode = testMark ? 'test' : attempt.mode;
     const metadata = {
       ...(result.metadata as Record<string, unknown> | null ?? {}),
-      gateway: { accountId: attempt.accountId, storeId, method: attempt.method, mode: attempt.mode,
+      ...(testMark ? { testMode: { ...testMark, configuredMode: attempt.mode } } : {}),
+      gateway: { accountId: attempt.accountId, storeId, method: attempt.method, mode,
         ...(attempt.method === 'nmi' ? { nmiEnvironment: recordedNmiEnvironment(attempt.context, attempt.mode) } : {}) },
     };
     const applied = result.providerRef ? await applyPaymentResult(tx, {
@@ -245,10 +251,10 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
       : (result.metadata as Record<string, unknown> | null)?.needsReconciliation ? 'unknown' : 'pending';
     const [payment] = result.providerRef ? await tx.select({ id: s.payment.id }).from(s.payment).where(and(
       eq(s.payment.storeId, storeId), eq(s.payment.orderId, order.id), eq(s.payment.method, attempt.method), eq(s.payment.providerRef, result.providerRef),
-      sql`coalesce(${s.payment.gatewayAccount}, '') = ${attempt.accountId}`, sql`coalesce(${s.payment.gatewayMode}, '') = ${attempt.mode}`,
+      sql`coalesce(${s.payment.gatewayAccount}, '') = ${attempt.accountId}`, sql`coalesce(${s.payment.gatewayMode}, '') = ${mode}`,
     )).limit(1) : [];
     const [updated] = await tx.update(s.paymentAttempt).set({
-      status, providerRef: result.providerRef, ...(payment ? { paymentId: payment.id } : {}),
+      status, providerRef: result.providerRef, ...(testMark ? { mode } : {}), ...(payment ? { paymentId: payment.id } : {}),
       result: { state: applied.orderState, payment: result.state,
         ...(status === 'unknown' ? { error: 'Payment requires reconciliation' } : {}),
         // Customer-safe copy only (providers never put raw gateway text in

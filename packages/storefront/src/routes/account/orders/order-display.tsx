@@ -89,6 +89,8 @@ export type OrderHistoryFacts = {
 	items?: Array<{
 		sku: string; name: string; productName: string | null; quantity: number; unitPrice: number; lineTotal: number;
 		image: string | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null;
+		/** #315: lets a history line link to its product's write-review entry. */
+		productSlug?: string | null; reviewed?: boolean;
 	}>;
 };
 

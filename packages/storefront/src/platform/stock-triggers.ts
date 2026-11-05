@@ -14,13 +14,14 @@ export const PDP_STOCK_TRIGGER: 'qinit' | 'qidle' = platformSettings['pdp.stockR
 export const PDP_BFCACHE_REFRESH: boolean = platformSettings['pdp.bfcacheRefresh'];
 export const SHOP_STOCK_ON_LOAD: 'manifest' | 'live' = platformSettings['shop.stockOnLoad'];
 
-/** The document event that starts a view's automatic live read on a direct load: the PDP's setting, or the shop's qidle. */
-export function useStockTrigger(page: 'pdp' | 'shop', load: QRL<() => unknown>): void {
-	useOnDocument(page === 'pdp' ? PDP_STOCK_TRIGGER : 'qidle', $(() => { load(); }));
+/** The document event that starts a view's automatic live read on a direct load: the PDP's setting, or the shop's qidle. #415: the
+ *  read itself already started at document parse (platform/early-reads.ts); `load(true)` takes it over once, or reads live. */
+export function useStockTrigger(page: 'pdp' | 'shop', load: QRL<(early?: boolean) => unknown>): void {
+	useOnDocument(page === 'pdp' ? PDP_STOCK_TRIGGER : 'qidle', $(() => { load(true); }));
 }
 
 /** PDP (base and brand view): `useStockTrigger('pdp', load)`. */
-export function usePdpStockTrigger(load: QRL<() => unknown>): void {
+export function usePdpStockTrigger(load: QRL<(early?: boolean) => unknown>): void {
 	useStockTrigger('pdp', load);
 }
 
@@ -37,7 +38,7 @@ export function useBfcacheStockRefresh(refresh: QRL<() => unknown>, page: 'pdp' 
  * (path + query) that already started its read; it is not a freshness flag (a new view or a reload reads again). The reader keeps one
  * request generation, so a previous view's response can never apply. Manifest (default): no listener, no task.
  */
-export function useShopListingOnLoad(read: QRL<() => unknown>): void {
+export function useShopListingOnLoad(read: QRL<(early?: boolean) => unknown>): void {
 	if (SHOP_STOCK_ON_LOAD !== 'live') return;
 	const location = useLocation();
 	const requestedFor = useSignal<string | null>(null);
@@ -45,7 +46,8 @@ export function useShopListingOnLoad(read: QRL<() => unknown>): void {
 		const view = `${location.url.pathname}${location.url.search}`;
 		if (requestedFor.value === view) return;
 		requestedFor.value = view;
-		read();
+		// #415: the view's one load read; on a direct load it takes the listing read the document started at parse (once).
+		read(true);
 	});
 	useTask$(({ track }) => {
 		track(() => location.url.href);

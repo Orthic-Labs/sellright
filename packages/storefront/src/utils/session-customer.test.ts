@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CUSTOMER_NOT_DEFINED_ID } from '~/constants';
-import { SESSION_ENDPOINT, anonymousCustomer, fetchSessionCustomer, nextCustomer, pageSessionCustomer, resetPageSessionForTest } from './session-customer';
+import { SESSION_ENDPOINT, anonymousCustomer, fetchSessionCustomer, hasSessionMarker, nextCustomer, pageSessionCustomer, resetPageSessionForTest } from './session-customer';
 
 const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 const ada = { id: 'c1', firstName: 'Ada', lastName: 'L', emailAddress: 'ada@example.com' };
@@ -39,9 +39,16 @@ describe('nextCustomer (what the layout writes into appState.customer)', () => {
 	});
 });
 
+const clearCookies = () => {
+	for (const c of document.cookie.split(';')) {
+		const name = c.split('=')[0]?.trim();
+		if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+	}
+};
+
 describe('#412: one GET /api/session/ per page load', () => {
-	afterEach(() => { vi.unstubAllGlobals(); resetPageSessionForTest(); });
-	const stub = () => { const f = reply(200, { customer: ada }); vi.stubGlobal('fetch', f); return f; };
+	afterEach(() => { vi.unstubAllGlobals(); resetPageSessionForTest(); clearCookies(); });
+	const stub = () => { document.cookie = 'sr_cust_csrf=t1; path=/'; const f = reply(200, { customer: ada }); vi.stubGlobal('fetch', f); return f; };
 
 	it('the checkout takes the layout\'s read for this page (in flight or settled) instead of sending its own', async () => {
 		const f = stub();
@@ -63,5 +70,38 @@ describe('#412: one GET /api/session/ per page load', () => {
 		expect(f).toHaveBeenCalledTimes(2);
 		await pageSessionCustomer(); // ... which the page then takes
 		expect(f).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('lane 11: no GET /api/session/ without a session marker cookie', () => {
+	afterEach(() => { vi.unstubAllGlobals(); resetPageSessionForTest(); clearCookies(); });
+
+	it('recognises the readable markers sign-in and the legacy transport leave, and nothing else', () => {
+		expect(hasSessionMarker('')).toBe(false);
+		expect(hasSessionMarker('_ga=GA1.1.2.3; countryCode=US')).toBe(false);
+		expect(hasSessionMarker('sr_cust_csrf=')).toBe(false);
+		expect(hasSessionMarker('xsr_cust_csrf=abc')).toBe(false);
+		expect(hasSessionMarker('_ga=1; sr_cust_csrf=abc')).toBe(true);
+		expect(hasSessionMarker('authToken=tok')).toBe(true);
+		expect(hasSessionMarker('sr_legacy_cart=1')).toBe(true);
+	});
+
+	it('a visitor without a marker is anonymous with no request (layout and checkout reads alike)', async () => {
+		const f = reply(200, { customer: ada });
+		vi.stubGlobal('fetch', f);
+		expect(await fetchSessionCustomer()).toEqual({ status: 'anonymous' });
+		resetPageSessionForTest();
+		expect(await pageSessionCustomer()).toEqual({ status: 'anonymous' });
+		expect(f).not.toHaveBeenCalled();
+	});
+
+	it('with the sign-in marker the page reads the endpoint once, no-store, at low fetch priority', async () => {
+		document.cookie = 'sr_cust_csrf=t1; path=/';
+		const f = reply(200, { customer: ada });
+		vi.stubGlobal('fetch', f);
+		expect(await fetchSessionCustomer()).toEqual({ status: 'signed-in', customer: ada });
+		expect(await pageSessionCustomer()).toEqual({ status: 'signed-in', customer: ada });
+		expect(f).toHaveBeenCalledTimes(1);
+		expect(f).toHaveBeenCalledWith(SESSION_ENDPOINT, expect.objectContaining({ cache: 'no-store', priority: 'low' }));
 	});
 });

@@ -9,6 +9,7 @@
 // stock or prices.
 import { googleSignInClientIdForHost } from '~/config/google-signin';
 import { appleSignInClientIdForHost } from '~/config/apple-signin';
+import { gatewaysFromShopConfig } from '~/platform/dns-prefetch';
 
 export interface SocialSignInIds {
 	google: string;
@@ -18,9 +19,11 @@ export interface SocialSignInIds {
 export const TTL_MS = 60_000;
 const TIMEOUT_MS = 1_500;
 const NONE: SocialSignInIds = { google: '', apple: '' };
-const cache = new Map<string, { at: number; ids: SocialSignInIds }>();
+/** One host's public config facts: the sign-in ids and (#425) the enabled payment gateways (the head's dns-prefetch hints). */
+interface StoreConfigFacts { ids: SocialSignInIds; gateways: string[] }
+const cache = new Map<string, { at: number } & StoreConfigFacts>();
 /** Misses in flight per key: concurrent requests for one host (a document and its assets) share one config read. */
-const inflight = new Map<string, Promise<SocialSignInIds>>();
+const inflight = new Map<string, Promise<StoreConfigFacts>>();
 /** Hosts are validated upstream, but the map is still bounded: the oldest entry goes first. */
 export const MAX_ENTRIES = 256;
 
@@ -45,38 +48,49 @@ export function idsFromShopConfig(body: unknown): SocialSignInIds {
  * Ids for this host: the store's admin Settings first, else the env fallback for that host. `storePin` is the build's
  * VITE_SELLRIGHT_STORE_SLUG (a pinned process always asks for its own store).
  */
-export async function socialSignInIdsForHost(
-	host: string,
-	{ storePin = import.meta.env.VITE_SELLRIGHT_STORE_SLUG as string | undefined, fetcher = defaultFetcher, now = Date.now() }: { storePin?: string; fetcher?: ConfigFetcher; now?: number } = {},
-): Promise<SocialSignInIds> {
-	const h = (host || '').toLowerCase();
+type ReadOptions = { storePin?: string; fetcher?: ConfigFetcher; now?: number };
+
+/** The host's config facts from the shared per-host read (TTL_MS, one read in flight per host); empty on failure. */
+async function storeConfigFacts(
+	h: string,
+	{ storePin = import.meta.env.VITE_SELLRIGHT_STORE_SLUG as string | undefined, fetcher = defaultFetcher, now = Date.now() }: ReadOptions,
+): Promise<StoreConfigFacts | null> {
 	const pin = clean(storePin);
 	const key = pin ? `slug:${pin}` : `host:${h}`;
-	if (!pin && !h) return fallback(h);
+	if (!pin && !h) return null;
 	const hit = cache.get(key);
-	let ids: SocialSignInIds;
-	if (hit && now - hit.at < TTL_MS) ids = hit.ids;
-	else {
-		let pending = inflight.get(key);
-		if (!pending) {
-			pending = (async () => {
-				let read: SocialSignInIds;
-				try {
-					read = idsFromShopConfig(await fetcher(pin ? { 'x-store-slug': pin } : { 'x-forwarded-host': h }));
-				} catch {
-					read = NONE;
-				}
-				cache.delete(key);
-				cache.set(key, { at: now, ids: read });
-				while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
-				return read;
-			})().finally(() => inflight.delete(key));
-			inflight.set(key, pending);
-		}
-		ids = await pending;
+	if (hit && now - hit.at < TTL_MS) return hit;
+	let pending = inflight.get(key);
+	if (!pending) {
+		pending = (async () => {
+			let read: StoreConfigFacts;
+			try {
+				const body = await fetcher(pin ? { 'x-store-slug': pin } : { 'x-forwarded-host': h });
+				read = { ids: idsFromShopConfig(body), gateways: gatewaysFromShopConfig(body) };
+			} catch {
+				read = { ids: NONE, gateways: [] };
+			}
+			cache.delete(key);
+			cache.set(key, { at: now, ...read });
+			while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
+			return read;
+		})().finally(() => inflight.delete(key));
+		inflight.set(key, pending);
 	}
+	return pending;
+}
+
+export async function socialSignInIdsForHost(host: string, opts: ReadOptions = {}): Promise<SocialSignInIds> {
+	const h = (host || '').toLowerCase();
+	const facts = await storeConfigFacts(h, opts);
+	const ids = facts?.ids ?? NONE;
 	const env = fallback(h);
 	return { google: ids.google || env.google, apple: ids.apple || env.apple };
+}
+
+/** #425: the payment gateways this host's store enables (GET /v1/shop/config `gateways`), from the same cached read; [] on failure. */
+export async function storeGatewaysForHost(host: string, opts: ReadOptions = {}): Promise<string[]> {
+	return (await storeConfigFacts((host || '').toLowerCase(), opts))?.gateways ?? [];
 }
 
 function fallback(host: string): SocialSignInIds {

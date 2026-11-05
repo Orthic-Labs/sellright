@@ -40,7 +40,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabSql, openQtySql, openPreOrderQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabFilterSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, removedQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -370,7 +370,7 @@ admin.openapi(
       if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
-      if (tab) conds.push(orderTabSql(tab) as never);
+      if (tab) conds.push(orderTabFilterSql(tab) as never); // set-based; same rows as orderTabSql(tab)
       if (q) conds.push(orderSearchSql(q, 'customer') as never);
       const where = conds.length ? and(...conds) : undefined;
       const contactSql = orderContactSql('customer');
@@ -382,7 +382,9 @@ admin.openapi(
           // #374: a guest order (no linked customer) shows its own checkout contact.
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
-          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(),
+          openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(), removedQty: removedQtySql(),
+          // A tab filter aggregates every order once; count the matches in the same pass instead of a second statement.
+          ...(tab ? { matchTotal: sql<number>`(count(*) over())::int` } : {}),
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -394,9 +396,11 @@ admin.openapi(
       const cntBase = (q
         ? tx.select({ n: sql<number>`count(*)::int` }).from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         : tx.select({ n: sql<number>`count(*)::int` }).from(s.order)).$dynamic();
-      const [cnt] = await (where ? cntBase.where(where) : cntBase);
+      // The window total rides on the page rows; only a page past the end (no rows) still needs the count statement.
+      const windowTotal = tab && rows.length ? (rows[0] as { matchTotal?: number }).matchTotal : undefined;
+      const [cnt] = windowTotal === undefined ? await (where ? cntBase.where(where) : cntBase) : [{ n: windowTotal }];
       return {
-        items: rows.map((r) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),
+        items: rows.map(({ matchTotal: _total, ...r }: typeof rows[number] & { matchTotal?: number }) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),
         total: cnt?.n ?? 0, page, pageSize,
       };
     });
@@ -416,10 +420,9 @@ admin.openapi(
     const st = requireStore(admin, c);
     const { excludeDemo } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
-      const live = excludeDemo === '1' ? sql`${s.order.deletedAt} is null and ${s.order.isDemo} = false` : sql`${s.order.deletedAt} is null`;
-      const cols = Object.fromEntries(ORDER_TABS.map((t) => [t, sql<number>`(count(*) filter (where ${orderTabSql(t)}))::int`]));
-      const [row] = await tx.select({ ...cols, all: sql<number>`count(*)::int` }).from(s.order).where(live);
-      return row as Record<string, number>;
+      // One set-based pass (orders/tabs-sql.ts orderTabCountsSql), not per-row tab subqueries over every order.
+      const r = await tx.execute(orderTabCountsSql({ excludeDemo: excludeDemo === '1' }));
+      return (r as unknown as { rows: Array<Record<string, number>> }).rows[0]!;
     });
     return c.json(out as never, 200);
   }),
@@ -541,7 +544,7 @@ admin.openapi(
         // summary (edit / edit_address / record_payment / edit_refund) — everything
         // else ignores it. Reusing audit_log keeps notes in the SAME timeline
         // as every other order event instead of a second, disconnected feed.
-        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund'].includes(e.action) ? e.data : undefined })),
+        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund', 'refund', 'fulfill', 'tracking_import'].includes(e.action) ? e.data : undefined })),
       };
     });
     if (!out) throw new HttpError(404, 'order not found');

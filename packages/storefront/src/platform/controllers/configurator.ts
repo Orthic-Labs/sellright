@@ -6,9 +6,10 @@ import { $, untrack, useContext, useStore, useTask$, useVisibleTask$, type Reado
 import { isBrowser } from '@qwik.dev/core/build';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
-import { addToCartWithOutcome, useCart } from '~/contexts/CartContext';
+import { addToCartWithOutcome, showAddedLine, useCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
-import { fetchProductStock } from '~/sellright/catalog';
+import { usePreloadCartDrawer } from './cart-preload';
+import { fetchProductStock, fetchProductStockEarly } from '~/sellright/catalog';
 import { track } from '~/sellright/analytics';
 import { ADD_RESULT } from '~/platform/gateway/actions';
 import type { ActionResult, AddResult } from '~/platform/views';
@@ -65,8 +66,8 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
 	const location = useLocation();
-	const first = sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode);
-	const start = initialFocus(first, location.url.searchParams);
+	// The initial focus only (untracked): read in the render body these would subscribe the mount to the live read (#427).
+	const start = untrack(() => initialFocus(sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode), location.url.searchParams));
 	const ctl = useStore<ConfiguratorCtl>({
 		disposed: false,
 		admitted: [],
@@ -80,9 +81,10 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	});
 
 	/** The view's automatic read (direct load: qidle; SPA navigation: the task below). One per view, whichever fires first. */
-	const load = $(async () => {
+	// #415: `early` (the document trigger only): the view's read takes the stock reads this document started at parse, once each.
+	const load = $(async (early?: boolean) => {
 		const source = await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode));
-		const started = requestLoad(ctl, source.products.map((p) => p.slug), fetchProductStock);
+		const started = requestLoad(ctl, source.products.map((p) => p.slug), early === true ? fetchProductStockEarly : fetchProductStock);
 		if (started && mode === 'product') {
 			const p = source.products[0];
 			const v = p?.variants[0];
@@ -118,7 +120,10 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
 	const reread = $(async () => { void readStock(ctl, (await whenLoaded(() => sourceOf(pickLiveSource(loader.value, live?.value ?? null, mode), mode))).products.map((p) => p.slug), fetchProductStock); });
 	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
-	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
+	// #425: at idle, the cart drawer's code and the visitor country, ahead of the Add to cart tap.
+	usePreloadCartDrawer();
+	// Only the unmount cleanup: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
+	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }), { strategy: 'document-idle' });
 
 	/** The projection for this render (the mount calls it in its render body: a computed read inside another computed lost its
 	 *  captures in the production build, Qwik 2 rc). It reads the store, the loader and the cart mirror, so a change re-renders. */
@@ -148,18 +153,23 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 				ctl.last = rejected;
 				return rejected;
 			}
+			// #427 local first: the line shows and the drawer opens on the click; the server write runs behind it. `eligible`
+			// already came from this page's live stock read. The add's own response then replaces the line (server price,
+			// availability); a failed add drops it again (the mirror never had it) and the drawer shows the error.
+			const enrichment = enrichmentFor(model, variant);
+			showAddedLine(cart, variant.sku, quantity, model.name, effectivePriceOf(variant), enrichment);
+			// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first.
+			if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
+			else appState.showCart = true;
 			ctl.adding = true;
 			let result: AddResult;
 			try {
-				result = addResultFrom(await addToCartWithOutcome(cart, variant.sku, quantity, enrichmentFor(model, variant)), variant.sku, quantity);
+				result = addResultFrom(await addToCartWithOutcome(cart, variant.sku, quantity, enrichment), variant.sku, quantity);
 			} finally {
 				ctl.adding = false;
 			}
 			ctl.last = result;
 			if (result.status === 'added' || result.status === 'added-unavailable') {
-				// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first (the add is already done).
-				if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
-				else appState.showCart = true;
 				loadCountryOnDemand(appState);
 				announce(`${model.name} added to cart`);
 				track({ name: 'add_to_cart', sku: variant.sku, productName: model.name, price: effectivePriceOf(variant), currency: model.currencyCode, quantity });

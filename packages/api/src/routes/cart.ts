@@ -563,7 +563,7 @@ function mutationBlocker(row: CartRow | undefined, expectedRevision: number | un
 cart.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/cart', summary: 'Create a cart',
-    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).max(MAX_CART_LINES).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).max(MAX_CART_LINES).optional(), email: z.string().email().optional(), couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional(), pricingIntent: z.enum(['preview', 'checkout']).optional(), shippingMethodCode: z.string().optional(), redeemPoints: z.number().int().min(1).optional(), shipCountry: z.string().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -580,9 +580,13 @@ cart.openapi(
         .insert(s.cart)
         .values({ storeId: st.id, token, couponCodes: canonicalCouponCodes(body.couponCodes ?? (body.couponCode ? [body.couponCode] : [])), customerId: customer?.id ?? null, email: body.email ? normalizeEmail(body.email) : null, expiresAt: cartExpiry(new Date(), lifecycle(st).ttlDays) })
         .returning();
+      // One round trip for a first add: the seeded cart answers exactly as the PATCH lines call would for the same line
+      // (same line validation and cap in applyLines, same server pricing and availability in cartResponse, the same quote
+      // options), so a client that creates a cart for its first line needs no second request.
       const seed = (body.items ?? []).filter((l) => l.quantity > 0);
       const cur = seed.length ? (await applyLines(tx, st, row!, seed)) ?? row! : row!;
-      return cartResponse(tx, st, cur, body.couponCodes ?? body.couponCode, authTok);
+      const quoteOptions = { pricingIntent: body.pricingIntent, shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints };
+      return cartResponse(tx, st, cur, body.couponCodes ?? body.couponCode, authTok, body.shipCountry, quoteOptions);
     });
     return c.json(out, 200);
   },

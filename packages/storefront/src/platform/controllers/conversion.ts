@@ -7,6 +7,7 @@
 // OpenAI pixel's order_created tag fires on this dataLayer `purchase`). The bus carries minor units; GA4 gets major units by the currency's own exponent, and
 // every event (view_item, add_to_cart, begin_checkout, purchase) also carries integer minor units (`ecommerce.value_minor`, items[]
 // `price_minor`, `sku`) and a unique top-level `event_id` for pixels that want them, since GTM may not compute.
+import { isPrerendering, whenActivated } from '~/utils/prerender';
 import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
 import { minorUnitDigits } from '~/utils/currency';
 import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent, type AnalyticsLine } from '~/sellright/analytics';
@@ -73,7 +74,7 @@ export function startConversion(): void {
 	if (!spec || spec.provider !== 'gtm') return;
 	started = true;
 	if (spec.consent === 'implied') setAnalyticsConsent(true);
-	onAnalyticsEvent((event) => {
+	const deliver = (event: AnalyticsEvent): void => {
 		const w = window as unknown as { dataLayer?: unknown[]; google_tag_manager?: unknown };
 		const eventId = event.name === 'purchase' ? `purchase_${event.orderCode}` : newEventId(event.name);
 		const ga = document.cookie.match(/(?:^|; )_ga=([^;]*)/)?.[1]?.split('.').slice(-2).join('.');
@@ -84,7 +85,12 @@ export function startConversion(): void {
 		if (!beacon) return;
 		const body = JSON.stringify(beacon);
 		const queued = typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(SINK_PATH, new Blob([body], { type: 'application/json' }));
-		if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => undefined);
+		if (!queued) fetch(SINK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true, priority: 'low' }).catch(() => undefined);
+	};
+	// #425: a prerendered page reports nothing until it is shown: its events belong to the visit, not to the speculation.
+	onAnalyticsEvent((event) => {
+		if (isPrerendering()) void whenActivated().then(() => deliver(event));
+		else deliver(event);
 	});
 }
 

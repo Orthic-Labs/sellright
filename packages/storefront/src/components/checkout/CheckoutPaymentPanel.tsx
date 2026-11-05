@@ -1,8 +1,8 @@
-import { $, component$, Slot, untrack, useComputed$, useContext, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { $, component$, Slot, useComputed$, useContext, useSignal, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { billingDefaultValues } from './payment-element-options';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
-import { isCheckoutShell, type ServerCartValue } from '~/routes/checkout/summary-cart';
+import type { ServerCartValue } from '~/routes/checkout/summary-cart';
 import { PaymentLock } from './LockedPaymentBox';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
@@ -32,7 +32,7 @@ interface CheckoutPaymentPanelProps {
 	onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
 	onPlaceOrder$: QRL<() => void>;
 	pageLoading: Signal<boolean>;
-	/** The checkout loader's value (passed through by CheckoutPageView): the ADR-0001 shell marker paints the form while loading (#412). */
+	/** The checkout loader's value (passed through by CheckoutPageView); unused here since the form always paints from SSR. */
 	serverCart?: ReadonlySignal<ServerCartValue>;
 	paymentInit: PaymentInitState;
 	paymentMethod: Signal<PaymentMethod>;
@@ -121,31 +121,10 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 				</div>
 			</div>
 			<div class="mb-3">
-				{/* ADR-0001 #412: the cacheable shell paints the form at once (it holds no per-visitor value; the entry reads fill
-				    the country and a signed-in customer). With the switch off the loading skeleton is unchanged. */}
-				{props.pageLoading.value && !untrack(() => isCheckoutShell(props.serverCart?.value)) ? (
-					<div class="animate-pulse" style="padding-top:8px;">
-						<div style="height:14px;width:140px;border-radius:4px;background:rgba(100,85,65,0.1);margin-bottom:20px;" />
-						<div class="flex gap-3" style="margin-bottom:14px;">
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-						</div>
-						<div style="height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);margin-bottom:14px;" />
-						<div style="height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);margin-bottom:24px;" />
-						<div style="height:14px;width:160px;border-radius:4px;background:rgba(100,85,65,0.1);margin-bottom:20px;" />
-						<div style="height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);margin-bottom:14px;" />
-						<div class="flex gap-3" style="margin-bottom:14px;">
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-						</div>
-						<div class="flex gap-3">
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-							<div style="flex:1;height:42px;border-radius:4px;background:rgba(100,85,65,0.06);border:1px solid rgba(100,85,65,0.08);" />
-						</div>
-					</div>
-				) : (
-					<CheckoutAddresses />
-				)}
+				{/* LCP: the form paints from the SSR HTML on every document (it holds no price or stock; the LOCKED entry read fills the
+				    country and a signed-in customer). It was a skeleton until that read landed (LCP 20-24 s on slow 4G); ADR-0001 #412's
+				    shell already painted it. PLACE ORDER stays gated on validation and the entry read, not on this markup. */}
+				<CheckoutAddresses />
 			</div>
 			<div id="checkout-payment-section" style="margin-bottom:14px;scroll-margin-top:16px;">
 				<div
@@ -189,10 +168,14 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														aria-checked={props.paymentMethod.value === m}
 														disabled={locked}
 														onClick$={$(() => {
-															if (locked) return;
+															// Re-selecting the current method replaces nothing: bumping the view then would turn every callback
+															// of the still-mounted controls (init error, decline) into a stale one and drop it (#403).
+															if (locked || props.paymentMethod.value === m) return;
 															props.paymentMethod.value = m;
-															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
+															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected, and the old
+															// method's init failure does not block the new one (#403: a Stripe.js load failure hid the card form).
 															bumpView(props.paymentInit);
+															props.paymentInit.failed = false;
 														})}
 														class={methodTabClass(props.paymentMethod.value === m)}
 													>
@@ -225,7 +208,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
+														// Same rule as `needsConsent` (disabled): only an existing order's total needs consent; before it exists the
+														// totals left by a refused attempt are stale (#403: the click after confirming an updated quote did nothing).
+														if (props.srState.phase === 'paying' && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent}
@@ -259,7 +244,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
+														// Same rule as `needsConsent` (disabled): only an existing order's total needs consent; before it exists the
+														// totals left by a refused attempt are stale (#403: the click after confirming an updated quote did nothing).
+														if (props.srState.phase === 'paying' && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || props.isOrderProcessing.value || needsConsent || !cardFieldsReady.value}

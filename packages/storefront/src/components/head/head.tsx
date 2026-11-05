@@ -1,10 +1,11 @@
-import { component$, useTask$ } from '@qwik.dev/core';
+import { component$, useConstant, useServerData, useTask$ } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useDocumentHead, useLocation } from '@qwik.dev/router';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
-import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
+import { cssText, sanitizeInlineScript } from '~/utils/sanitize-lite';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { PROVIDER_PREFETCH_ORIGINS } from '~/platform/payments/labels';
+import { dnsPrefetchOrigins, GATEWAYS_HEADER, parseGatewaysHeader } from '~/platform/dns-prefetch';
+import { theme } from '~/theme/theme.config';
 import { brandHeadTags, DEFAULT_SOURCES, resolveHead } from '~/platform/head';
 import { STALE_BUILD_RECOVERY_SOURCE } from '~/platform/stale-build-recovery';
 
@@ -26,6 +27,16 @@ export const Head = component$<HeadProps>(({ nonce, country }) => {
 	const resolved = resolveHead(documentHead, loc.url.pathname, identity);
 	const head = resolved.head;
 	const brandHead = DEFAULT_SOURCES.spec;
+	// #425: only the third-party hosts this brand uses (platform/dns-prefetch.ts). Computed once at SSR from the store's configured
+	// gateways (the express layer's x-sr-gateways header) and kept for the browser's re-renders of the head.
+	const requestHeaders = useServerData<Record<string, string>>('requestHeaders');
+	const prefetchOrigins = useConstant(() =>
+		dnsPrefetchOrigins({
+			gateways: parseGatewaysHeader(requestHeaders?.[GATEWAYS_HEADER]),
+			sheerIdEnabled: theme.sheerIdEnabled,
+			ipCountryFallback: import.meta.env.VITE_IP_COUNTRY_FALLBACK as string | undefined,
+		}),
+	);
 
 	// The initial <html lang> (entry.ssr.tsx containerAttributes) is the
 	// build-time static theme's locale — the real per-request store identity
@@ -112,22 +123,10 @@ export const Head = component$<HeadProps>(({ nonce, country }) => {
 			<meta name="msapplication-TileColor" content="#000000" />
 			<meta name="msapplication-config" content="none" />
 
-			{/* Resource hints - Critical external domains */}
-
-			{/* Payment processors - dns-prefetch only, used on checkout */}
-			<link rel="dns-prefetch" href="https://secure.nmi.com" />
-
-			{/* SheerID verification service - dns-prefetch only, loaded on-demand */}
-			<link rel="dns-prefetch" href="https://services.sheerid.com" />
-			{PROVIDER_PREFETCH_ORIGINS.map((href) => (
+			{/* Resource hints: the payment gateways, SheerID and geo-IP hosts this brand actually uses (#425, platform/dns-prefetch.ts) */}
+			{prefetchOrigins.map((href) => (
 				<link key={href} rel="dns-prefetch" href={href} />
 			))}
-
-
-			{/* Geolocation services for address validation */}
-			<link rel="dns-prefetch" href="https://ipapi.co" />
-			<link rel="dns-prefetch" href="https://api.country.is" />
-			<link rel="dns-prefetch" href="https://get.geojs.io" />
 
 
 
@@ -223,7 +222,7 @@ export const Head = component$<HeadProps>(({ nonce, country }) => {
 			{brandHeadTags(resolved, nonce, country)}
 
 			{head.styles.map(({ key, style, ...props }) => (
-				<style key={key} {...props} dangerouslySetInnerHTML={sanitizeStyle(style ?? '')} />
+				<style key={key} {...props} dangerouslySetInnerHTML={cssText(style ?? '')} />
 			))}
 		</head>
 	);

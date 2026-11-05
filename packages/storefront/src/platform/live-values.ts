@@ -108,7 +108,21 @@ export function settleLiveRead<T>(state: LiveReadState<T>, gen: number, key: str
  * or throws is `error` (the caller fails closed).
  */
 export function useLiveRead<T>(read: QRL<() => Promise<T | null>>, viewKey: ReadonlySignal<string | null>): LiveReadState<T> {
-	const state = useStore<LiveReadState<T>>({ status: 'idle', value: null, key: null, gen: 0 });
+	const state = useLiveReadState<T>();
+	useLiveReadStart(state, read, viewKey);
+	return state;
+}
+
+/** The state half of `useLiveRead`, for a caller that must register other document handlers (the PDP's live stock read) before
+ *  this read's own qinit handler: create the state, register those, then `useLiveReadStart`. */
+export function useLiveReadState<T>(): LiveReadState<T> {
+	return useStore<LiveReadState<T>>({ status: 'idle', value: null, key: null, gen: 0 });
+}
+
+/** The start half of `useLiveRead` (see there). The qinit handler only starts the read and returns at once: the qwikloader runs a
+ *  document event's handlers one after another, awaiting each returned promise, so a handler that returned the read would hold every
+ *  later qinit handler (the PDP's live stock read among them) until this response landed. */
+export function useLiveReadStart<T>(state: LiveReadState<T>, read: QRL<() => Promise<T | null>>, viewKey: ReadonlySignal<string | null>): void {
 	const start = $(async () => {
 		const key = viewKey.value;
 		if (key === null || state.key === key) return;
@@ -136,8 +150,7 @@ export function useLiveRead<T>(read: QRL<() => Promise<T | null>>, viewKey: Read
 		}
 		if (isBrowser) start();
 	});
-	useOnDocument('qinit', start);
-	return state;
+	useOnDocument('qinit', $(() => { void start(); }));
 }
 
 // ---------------------------------------------------------------------------------------------------- pure: PDP variant prices

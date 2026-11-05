@@ -18,6 +18,7 @@ export const CSP_PROD = [
   "connect-src 'self' https:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
+  "form-action 'self'", // the SPA never posts a native form off-origin (security audit 2026-11-02)
   "object-src 'none'",
 ].join('; ');
 
@@ -30,6 +31,7 @@ export const CSP_DEV = [
   "connect-src 'self' https: ws: wss:", // Vite HMR uses ws://
   "frame-ancestors 'none'",
   "base-uri 'self'",
+  "form-action 'self'",
   "object-src 'none'",
 ].join('; ');
 

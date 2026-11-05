@@ -84,6 +84,8 @@ const JOB_KEYS = {
   'purge-cancelled': NAMESPACE | 43n,
   // #375: OpenAI Ads Conversions API sends (ads/openai-capi.ts).
   'openai-capi': NAMESPACE | 44n,
+  // #359: soft-deletes release-stale-cancelled orders after the delay (jobs/trash-abandoned-orders.ts).
+  'trash-abandoned': NAMESPACE | 45n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;

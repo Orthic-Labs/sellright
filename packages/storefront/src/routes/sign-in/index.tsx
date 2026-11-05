@@ -2,7 +2,7 @@ import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
-import { login, passwordResetFailureMessage, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
+import { consumeMagicLinkCode, login, passwordResetFailureMessage, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
 import { loginWithApple, preloadAppleSdk, signInWithApple } from '~/providers/shop/account/apple-auth';
 import { loginWithPasskey } from '~/providers/shop/account/passkeys';
@@ -76,6 +76,10 @@ export default component$(() => {
 	const resendSent = useSignal(false);
 	/** Whether this store has passwordless sign-in links switched on (GET /v1/shop/config) — offered only when it has. */
 	const magicLinkEnabled = useSignal(false);
+	// The one-time code typed on the check-email screen (#350), for where the emailed link cannot open this browser.
+	const magicCode = useSignal('');
+	const magicCodeError = useSignal('');
+	const magicCodeBusy = useSignal(false);
 
 	/** Passkeys: the store has them on (GET /v1/shop/config auth.passkeys) AND this browser can use them. Both must hold. */
 	const passkeysEnabled = useSignal(false);
@@ -288,6 +292,22 @@ export default component$(() => {
 		else error.value = result.message;
 	});
 
+	const handleMagicCode = $(async () => {
+		const code = magicCode.value.replace(/[\s-]/g, '');
+		if (magicCodeBusy.value || !/^\d{6}$/.test(code)) return;
+		magicCodeError.value = '';
+		magicCodeBusy.value = true;
+		const result = await consumeMagicLinkCode(email.value.trim(), code);
+		if (result.ok) {
+			navigate(signInDestination());
+			return;
+		}
+		magicCodeError.value = result.code === 'invalid_token'
+			? 'That code is wrong, expired, or already used. Use the newest email, or go back and ask for a new one.'
+			: result.message;
+		magicCodeBusy.value = false;
+	});
+
 	const goToView = $((next: View) => {
 		error.value = '';
 		password.value = '';
@@ -410,7 +430,7 @@ export default component$(() => {
 						</div>
 					)}
 
-					<div id="turnstile-container" class={showWidget && TURNSTILE_SITE_KEY ? 'min-h-[65px] flex justify-center mt-5' : 'hidden'}></div>
+					<div id="turnstile-container" class={showWidget && TURNSTILE_SITE_KEY ? 'flex justify-center mt-5' : 'hidden'}></div>
 
 					{showWidget && error.value && (
 						<div class="mt-5">
@@ -585,6 +605,43 @@ export default component$(() => {
 							<p class="text-sm text-[var(--color-ink-soft)] mb-6">
 								If an account exists for <span class="font-medium">{email.value}</span>, we've sent a link that signs you in. It works once and expires soon.
 							</p>
+							<form
+								preventdefault:submit
+								onSubmit$={handleMagicCode}
+								class="mb-6 text-left"
+								data-testid="magic-code-form"
+							>
+								<label for="magic-code" class="block text-sm font-medium text-[var(--color-ink-soft)]">
+									Link not opening here? Enter the code from the email
+								</label>
+								<input
+									id="magic-code"
+									name="code"
+									type="text"
+									inputMode="numeric"
+									autoComplete="one-time-code"
+									maxLength={12}
+									placeholder="123456"
+									value={magicCode.value}
+									onInput$={(_, el) => (magicCode.value = el.value)}
+									class={INPUT}
+									data-testid="magic-code-input"
+								/>
+								{magicCodeError.value && (
+									<div class="mt-3" data-testid="magic-code-error">
+										<SignInError message={magicCodeError.value} />
+									</div>
+								)}
+								<button
+									type="submit"
+									disabled={magicCodeBusy.value}
+									aria-disabled={/^\d{6}$/.test(magicCode.value.replace(/[\s-]/g, '')) ? 'false' : 'true'}
+									class={`${PRIMARY} mt-3`}
+									data-testid="magic-code-submit"
+								>
+									{magicCodeBusy.value ? 'Signing in...' : 'Sign in with code'}
+								</button>
+							</form>
 							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-ink-soft)] hover:text-[var(--color-ink)] underline cursor-pointer">
 								Back to sign in
 							</button>

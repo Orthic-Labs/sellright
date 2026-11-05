@@ -255,8 +255,8 @@ describe('ADR-0001 hash CSP for shell renders', async () => {
 
 	it('buildCsp without a nonce has no nonce source and never unsafe-inline for scripts; with one it is unchanged', () => {
 		const none = directive(buildCsp({ nonce: undefined }), 'script-src');
-		expect(none).toBe("script-src 'self' https://static.cloudflareinsights.com https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
-		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(none).toBe("script-src 'self' 'sha256-MnazFGrTDvWjs8L+6BgP0Xl4pYOqeN6SJdkY/YDPjJE=' https://static.cloudflareinsights.com https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
+		expect(directive(buildCsp({ nonce: 'abc' }), 'script-src')).toBe("script-src 'self' 'sha256-MnazFGrTDvWjs8L+6BgP0Xl4pYOqeN6SJdkY/YDPjJE=' 'nonce-abc' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com https://applepay.cdn-apple.com");
 	});
 
 	it('finds exactly the executable inline scripts (not src, JSON-LD or Qwik data)', () => {
@@ -274,5 +274,20 @@ describe('ADR-0001 hash CSP for shell renders', async () => {
 		expect(withScriptHashes(csp, [])).toBe("default-src 'self'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'");
 		expect(() => withScriptHashes("script-src 'self' 'unsafe-inline'", [])).toThrow();
 		expect(() => withScriptHashes("default-src 'self'", [])).toThrow();
+	});
+});
+
+describe('#425 inline speculation rules', () => {
+	it('script-src carries the sha256 of the inserted rules text on every render (nonce and shell), never unsafe-inline', async () => {
+		const { CHECKOUT_RULES_TEXT } = await import('./prerender');
+		const { createHash } = await import('node:crypto');
+		const hash = `'sha256-${createHash('sha256').update(CHECKOUT_RULES_TEXT, 'utf8').digest('base64')}'`;
+		for (const nonce of ['abc', undefined]) {
+			const d = directive(buildCsp({ nonce }), 'script-src');
+			expect(d).toContain(hash);
+			expect(d).not.toContain("'unsafe-inline'");
+		}
+		const { withScriptHashes } = await import('./csp');
+		expect(directive(withScriptHashes(buildCsp({ nonce: undefined }), ["'sha256-PAGE'"]), 'script-src')).toContain(hash);
 	});
 });

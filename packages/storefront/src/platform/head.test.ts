@@ -128,8 +128,13 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 });
 
 describe('resolveHead: preloads', () => {
+	it('#429: never emits a font preload (it held first paint), whatever head.json fontPreloads says', () => {
+		const spec = { fontPreloads: [{ href: '/fonts/h.woff2', type: 'font/woff2' as const, fetchpriority: 'high' as const }, { href: '/fonts/b.woff2', type: 'font/woff2' as const }] };
+		for (const path of ['/', '/shop/', '/blog/a/']) expect(resolveHead(routeHead({ title: 'A', description: 'D' }), path, identity, sources(spec)).extraLinks.filter((l) => l.as === 'font'), path).toEqual([]);
+	});
+
 	it('a path ending in * matches every path under its prefix', () => {
-		const spec = { fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2' as const, paths: ['/blog/*'] }] };
+		const spec = { imagePreloads: [{ paths: ['/blog/*'], type: 'image/avif' as const, srcset: [{ href: '/fonts/a.woff2', width: 640 }], sizes: '100vw' }] };
 		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blog/a-post/', identity, sources(spec)).extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2']);
 		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blog/', identity, sources(spec)).extraLinks).toHaveLength(1);
 		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blogs/', identity, sources(spec)).extraLinks).toHaveLength(0);
@@ -141,12 +146,12 @@ describe('resolveHead: preloads', () => {
 		imagePreloads: [{ paths: ['/'], type: 'image/avif', fetchpriority: 'high', srcset: [{ href: '/brand/h-640.avif', width: 640 }, { href: '/brand/h-1024.avif', width: 1024 }], sizes: '(max-width: 640px) 100vw, 640px' }],
 	};
 
-	it('brand preloads for the path follow the route preloads; fonts without `paths` apply everywhere', () => {
+	it('brand image preloads apply on their paths only; fonts are never preloaded (#429)', () => {
 		const home = resolveHead(routeHead({ title: 'S', description: 'D' }), '/', identity, sources(spec));
-		expect(home.extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2', '/brand/h-640.avif']);
+		expect(home.extraLinks.map((l) => l.href)).toEqual(['/brand/h-640.avif']);
 		const shop = resolveHead(routeHead({ title: 'S', description: 'D' }), '/shop/', identity, sources(spec));
-		expect(shop.extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2', '/fonts/shop.woff2']);
-		expect(home.extraLinks[1]).toMatchObject({ as: 'image', imagesrcset: '/brand/h-640.avif 640w, /brand/h-1024.avif 1024w', imagesizes: '(max-width: 640px) 100vw, 640px', fetchpriority: 'high' });
+		expect(shop.extraLinks.map((l) => l.href)).toEqual([]);
+		expect(home.extraLinks[0]).toMatchObject({ as: 'image', imagesrcset: '/brand/h-640.avif 640w, /brand/h-1024.avif 1024w', imagesizes: '(max-width: 640px) 100vw, 640px', fetchpriority: 'high' });
 	});
 
 	it('is deduplicated by href and imagesrcset against the route\'s own preloads and against itself', () => {

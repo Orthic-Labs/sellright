@@ -1,9 +1,9 @@
 import { shippingDateText } from '~/utils/shipping-label';
-import { component$ } from '@qwik.dev/core';
+import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionPriceFor, priceDeltaLabel, swatchColor } from './product-options';
+import { availableForGroup, enhanceDescription, isVariantPurchasable, liveUnitPrice, optionAriaLabel, optionPriceFor, priceDeltaLabel, swatchColor } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
@@ -13,6 +13,7 @@ import { reviewsMeetThreshold, starString } from '~/utils/rewards';
 import { productPageContent } from '~/platform/brand-data';
 import { useRelatedProducts } from '~/platform/product-related';
 import { formatPrice } from '~/utils/price-format';
+import { whenNearViewport } from '~/utils/near-viewport';
 import { PRICE_PLACEHOLDER } from '~/platform/live-values';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
@@ -36,6 +37,14 @@ export const ProductPageView = component$((props: Record<string, any>) => {
   // routes.json productPage: editorial content for this product and the related row (empty unless the brand turns it on).
   const content = productPageContent(String(product?.slug ?? ''));
   const related = useRelatedProducts();
+  // The related row sat inside Chrome's lazy-load look-ahead (1250-2500px), so its images were fetched on load beside the LCP
+  // image (audit 2026-11-02: ~96 KB on the Damned PDP). The photos render only once the row nears the viewport, as reviews read.
+  const relatedRef = useSignal<Element>();
+  const relatedNear = useSignal(false);
+  useVisibleTask$(({ cleanup }) => {
+    if (!relatedRef.value) return;
+    cleanup(whenNearViewport(relatedRef.value, () => { relatedNear.value = true; }));
+  }, { strategy: 'document-idle' });
   // the previous platform showed the waitlist whenever every variant was sold out (O/components/products/WaitlistForm.tsx use). Here "sold out" must
   // be real: a complete live read, or the manifest itself saying the product is out of stock (never an unchecked shell).
   const waitlistAvailable = hasWaitlist && allVariantsSoldOut.value && (liveStockReady.value || catalogInStock === false) && product.variants.some((v: CatalogVariant) => v.enabled !== false);
@@ -59,6 +68,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                 loading="lazy"
                 width={72} height={90}
                 responsive="thumbnail"
+                // Below the LCP image in priority (#429): visible, so the browser fetched them at High beside it.
+                fetchPriority="low"
               />
             </button>
           ))}
@@ -248,7 +259,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
             // #408: every group is open from the start and can be chosen in any order. A value no purchasable variant has is
-            // disabled; one that only fails with the current choices stays clickable, marked unavailable (choosing it swaps).
+            // disabled and greyed. #426 (Adrian): a value another combination has never greys out; it looks like any other
+            // option, choosing it clears the conflicting choice (selectOptionValue), and only its label says it swaps.
             const purchasable = availableForGroup(product.variants, groups.value, groupIdx, []);
             const available = availableForGroup(product.variants, groups.value, groupIdx, selectedValues.value);
             const chosenVal = selectedValues.value[groupIdx];
@@ -270,9 +282,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const delta = priceDeltaLabel(product.variants, groups.value, val);
                         return (
                           <button key={val}
-                            class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -291,9 +303,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const color = swatchColor(val);
                         return (
                           <button key={val}
-                            class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-swatch-btn${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -324,9 +336,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                         const pillPrice = optionPrice !== null ? `$${(optionPrice / 100).toFixed(0)}` : null;
                         return (
                           <button key={val}
-                            class={`sr-pill${chosenVal === val ? ' active' : ''}${!isAvail ? ' oos' : ''}`}
+                            class={`sr-pill${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
                             disabled={!purchasable.has(val)}
-                            aria-label={!purchasable.has(val) ? `${val}, sold out` : !isAvail ? `${val}, unavailable with your other choice` : undefined}
+                            aria-label={optionAriaLabel(val, purchasable.has(val), isAvail, liveStockReady.value === true)}
                             data-group-name={group.groupName}
                             data-val={val}
                             onClick$={handleGroupSelect$}
@@ -462,14 +474,14 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         </div>{/* end sr-info-col */}
       </div>{/* end sr-layout */}
       {related.value.items.length > 0 && (
-        <section class="sr-related">
+        <section class="sr-related" ref={relatedRef}>
           <h2 class="sr-related-title">{related.value.heading}</h2>
           <div class="sr-related-grid">
             {/* A plain <a> (full load), as the base product links: the PDP state does not re-sync on an SPA product change. */}
             {related.value.items.map((rp) => (
               <a key={rp.slug} href={rp.href} class="sr-related-card">
                 <div class="sr-related-img">
-                  {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
+                  {rp.image && relatedNear.value && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" responsive="relatedCard" />}
                 </div>
                 <div class="sr-related-name">{rp.name}</div>
                 {(() => {

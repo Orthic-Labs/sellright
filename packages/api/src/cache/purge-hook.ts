@@ -1,6 +1,7 @@
 /**
- * Cache-invalidation trigger for catalog CONTENT changes (ADR-0001: stock commits no longer purge HTML; the shell
- * holds no stock and price is a live value). Called from manifest/stock-hook.ts's onCatalogContentChanged() only. Zero debounce — same LOCKED policy as the
+ * Cache-invalidation triggers (ADR-0001 item 5 / I-4). Stock commits never purge HTML (the shell holds no stock and
+ * price is a live value). Catalog content: manifest/stock-hook.ts onCatalogContentChanged() -> publication ->
+ * purgeAfterPublish, or onCatalogCacheChanged where no catalog is published. Zero debounce — same LOCKED policy as the
  * stock manifest: no coalescing window, fire on every commit. Fire-and-
  * forget: never await this from a request handler (see purgeCloudflareUrls
  * for why it can never throw either).
@@ -9,6 +10,7 @@ import { env } from '../env.js';
 import { appValue } from '../email/dispatch.js';
 import { purgeCloudflareHosts, purgeCloudflareUrls, resolveCloudflareConfig } from './cloudflare-purge.js';
 import { err as logErr } from '../lib/logger.js';
+import { collectionPath } from '../seo/config.js';
 
 function storefrontOrigin(storeSlug: string): string | null {
   const raw = appValue(env.STOREFRONT_ORIGIN_BY_STORE, storeSlug) ?? env.STOREFRONT_URL;
@@ -35,56 +37,63 @@ export function standardPurgeUrls(storeSlug: string, opts: { productPath?: strin
 }
 
 /**
- * Call this AFTER a transaction that changed a product, variant, or stock row
- * for `storeSlug` has committed. Never throws — this is called
- * unconditionally from onStockChanged (manifest/stock-hook.ts), which itself
- * must never throw into its callers, so every failure here (including a
- * misconfigured/missing STOREFRONT_URL) is logged and swallowed, exactly like
- * purgeCloudflareUrls()'s own failures. Fire-and-forget: does not await the
- * purge, and does not report success/failure back to the caller — for that,
- * use the admin purge route instead.
+ * Everything a product content change can render into (ADR-0001 I-4): the product page(s) (old and new slug, at the
+ * store's productUrlPattern), and the pages that list products: `/` (features/spotlight), `/shop/`, every published
+ * collection page that can contain the product (its manual memberships plus every smart collection), and the
+ * product/collection sitemaps. `null` means the affected set could not be determined: purge the whole host.
  */
-export function onCatalogCacheChanged(storeSlug: string, opts: { productPath?: string } = {}): void {
-  try {
-    const urls = standardPurgeUrls(storeSlug, opts);
-    if (!urls) return; // no configured origin for this store — nothing to purge against
-    firePurge('product-content', storeSlug, { urls });
-  } catch (e) {
-    logErr.error('cache purge hook failed to resolve/queue', e, { storeSlug });
-  }
+export interface ProductPurgeScope {
+  productPaths: readonly string[];
+  collectionSlugs: readonly string[];
 }
 
-/** F5: the longest a post-publication purge may hold its caller (the catalog publisher, under its leader lock). */
-export const PURGE_AFTER_PUBLISH_TIMEOUT_MS = 5_000;
+/** The purge request for a product content change. Null: no storefront origin (nothing to purge against). Over
+ *  PURGE_URL_FALLBACK_THRESHOLD URLs, runPurge's planPurge turns the list into one host purge. */
+export function productContentPurgeSpec(storeSlug: string, scope: ProductPurgeScope | null): PurgeSpec | null {
+  const base = storefrontOrigin(storeSlug);
+  if (!base) return null;
+  if (!scope) return { everything: true };
+  const urls = standardPurgeUrls(storeSlug)!;
+  for (const path of new Set(scope.productPaths)) if (path) urls.push(`${base}${path}`);
+  const collections = [...new Set(scope.collectionSlugs)].filter(Boolean);
+  if (collections.length) urls.push(`${base}/sitemap-collections.xml`);
+  for (const slug of collections) urls.push(`${base}${collectionPath(slug)}`);
+  return { urls: [...new Set(urls)] };
+}
+
+/**
+ * Product content edit where this deployment publishes no catalog (manifest/stock-hook.ts schedule()): purge now,
+ * after the caller's commit. Without BOTH the product path and the collection set the affected pages are unknown,
+ * so the whole host is purged. Fire-and-forget, never throws (retry + `cache_purge_failed` alert in runPurge).
+ */
+export function onCatalogCacheChanged(storeSlug: string, opts: { productPath?: string; collectionSlugs?: readonly string[] } = {}): void {
+  try {
+    const scope = opts.productPath && opts.collectionSlugs ? { productPaths: [opts.productPath], collectionSlugs: opts.collectionSlugs } : null;
+    const spec = productContentPurgeSpec(storeSlug, scope);
+    if (spec) firePurge('product-content', storeSlug, spec);
+  } catch (e) {
+    logErr.error('cache purge hook failed to resolve/queue', e, { alert: 'cache_purge_failed', event: 'product-content', storeSlug });
+  }
+}
 
 export type PurgeOutcome = 'purged' | 'skipped' | 'failed';
 
 /**
  * N9 / F5: purge AFTER a validated content generation is durably published, never before — an edge that refills
- * between purge and publication would otherwise re-cache the old content. Awaited, but bounded: a hung Cloudflare
- * call resolves as 'failed' after `timeoutMs` (the request itself is left to settle in the background and is still
- * logged by purgeCloudflareUrls). 'skipped' means nothing to purge against (no storefront origin or no Cloudflare
- * config for this store) and is NOT a failure. 'failed' is retryable: the publisher reports it so the durable
- * catalog_manifest_pending marker stays and the drain pass republishes + purges again. Never throws.
+ * between purge and publication would otherwise re-cache the old content. Awaited, with the same per-attempt
+ * timeout, PURGE_MAX_ATTEMPTS retries and `cache_purge_failed` alert as every other trigger (runPurge). `scope` null
+ * (the publisher could not determine the affected products) purges the whole host. 'skipped' means nothing to purge
+ * against (no storefront origin or no Cloudflare config) and is NOT a failure. 'failed' is retryable: the publisher
+ * reports it so the durable catalog_manifest_pending marker stays and the drain pass republishes + purges again.
+ * Never throws.
  */
-export async function purgeAfterPublish(storeSlug: string, productPaths: readonly string[] = [], timeoutMs = PURGE_AFTER_PUBLISH_TIMEOUT_MS): Promise<PurgeOutcome> {
+export async function purgeAfterPublish(storeSlug: string, scope: ProductPurgeScope | null): Promise<PurgeOutcome> {
   try {
-    const urls = standardPurgeUrls(storeSlug);
-    if (!urls || !resolveCloudflareConfig(storeSlug)) return 'skipped';
-    const base = storefrontOrigin(storeSlug)!;
-    for (const path of new Set(productPaths)) if (path) urls.push(`${base}${path}`);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), timeoutMs); timer.unref?.(); });
-    try {
-      const ok = await Promise.race([purgeCloudflareUrls(storeSlug, urls), deadline]);
-      if (ok === 'timeout') {
-        logErr.error('cache purge after publish timed out', new Error(`purge exceeded ${timeoutMs}ms`), { storeSlug, fileCount: urls.length });
-        return 'failed';
-      }
-      return ok ? 'purged' : 'failed';
-    } finally { if (timer) clearTimeout(timer); }
+    const spec = productContentPurgeSpec(storeSlug, scope);
+    if (!spec) return 'skipped';
+    return await runPurge('product-content', storeSlug, spec);
   } catch (e) {
-    logErr.error('cache purge after publish failed to resolve/queue', e, { storeSlug });
+    logErr.error('cache purge after publish failed to resolve/queue', e, { alert: 'cache_purge_failed', event: 'product-content', storeSlug });
     return 'failed';
   }
 }
@@ -192,7 +201,7 @@ export function collectionPurgeUrls(storeSlug: string, collectionSlugs: readonly
   const base = storefrontOrigin(storeSlug);
   if (!base) return null;
   const urls = [`${base}/shop/`, `${base}/sitemap-collections.xml`, `${base}/sitemap.xml`];
-  for (const slug of new Set(collectionSlugs)) if (slug) urls.push(`${base}/collections/${encodeURIComponent(slug)}/`);
+  for (const slug of new Set(collectionSlugs)) if (slug) urls.push(`${base}${collectionPath(slug)}`);
   return urls;
 }
 

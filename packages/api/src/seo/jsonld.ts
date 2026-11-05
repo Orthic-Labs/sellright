@@ -12,7 +12,7 @@
  */
 import { productPath, type SeoConfig } from './config.js';
 import type { ProductAvailability } from './queries.js';
-import { htmlToPlainText, specsToMaterial, specsToSchemaProperties } from './specs.js';
+import { descriptionWithoutSpecs, specsToMaterial, specsToSchemaProperties } from './specs.js';
 
 const SCHEMA = 'https://schema.org';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -131,7 +131,7 @@ export function productSchema(config: SeoConfig, product: ProductAvailability, n
     name: product.name,
     url,
   };
-  const description = product.description ? htmlToPlainText(product.description) : '';
+  const description = product.description ? descriptionWithoutSpecs(product.description) : '';
   if (description) schema.description = description;
   if (product.images.length > 0) schema.image = product.images.map((key) => absoluteImage(siteUrl, key));
   if (product.sku) schema.sku = product.sku;

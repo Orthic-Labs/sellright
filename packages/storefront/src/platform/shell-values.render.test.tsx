@@ -19,7 +19,7 @@ import { shellFeaturedItem, shellHomeProduct } from './home';
 import { relatedRow, shellRelatedRow, relatedPricesOf } from './product-related-model';
 import { fillJsonLdOffers, jsonLdTextWithOffers, productGroupSchema, productOgMeta, withoutOffers } from './product-jsonld';
 import { applyVariantPrices, cardState, redactListItem, valuesBySlug, withCardValues } from './live-values';
-import { shellShopItem } from './shop';
+import { shellShopItem, shopListing } from './shop';
 import { CHECKOUT_SHELL, displayServerCart, isCheckoutShell } from '~/routes/checkout/summary-cart';
 
 const PRICE = 4567;
@@ -225,5 +225,37 @@ describe('/checkout/ shell loader value (#412)', () => {
 		expect(isCheckoutShell(CHECKOUT_SHELL)).toBe(true);
 		expect(displayServerCart(CHECKOUT_SHELL)).toBeNull();
 		expect(isCheckoutShell(null)).toBe(false);
+	});
+});
+
+describe('DP-6 /shop/ listing (#425)', () => {
+	const item = (slug: string, inStock: boolean): CatalogListItem =>
+		({ slug, name: slug, status: 'active', tags: [], image: null, inStock, minPrice: 1000, maxPrice: 1000, pricingVariant: null }) as unknown as CatalogListItem;
+	const structure = async () => ({ totalItems: 2, products: [item('a', true), item('b', false)] });
+
+	it('renders the live listing (live stock and prices) when the live read succeeds', async () => {
+		const r = await shopListing(false, async () => ({ totalItems: 1, products: [item('a', true)] }), structure);
+		expect(r).toEqual({ totalItems: 1, products: [item('a', true)], fallback: false, deferred: false });
+	});
+
+	it('a failed live read fails closed on stock only: the pending listing (no price, nothing purchasable), deferred, no throw', async () => {
+		const r = await shopListing(false, async () => { throw new Error('api down'); }, structure);
+		expect(r.deferred).toBe(true);
+		expect(r.products.map((p) => p.slug)).toEqual(['a', 'b']);
+		for (const p of r.products) {
+			expect(p.inStock).toBe(false);
+			expect(p.minPrice).toBeNull();
+			expect(p.pricingVariant).toBeNull();
+		}
+	});
+
+	it('live and structure both failing still renders (empty pending grid), and a shell render never reads live', async () => {
+		let liveCalls = 0;
+		const failing = async () => { liveCalls++; throw new Error('down'); };
+		expect(await shopListing(false, failing, failing)).toEqual({ totalItems: 0, products: [], fallback: false, deferred: true });
+		liveCalls = 0;
+		const shell = await shopListing(true, failing, structure);
+		expect(liveCalls).toBe(0);
+		expect(shell.deferred).toBe(true);
 	});
 });

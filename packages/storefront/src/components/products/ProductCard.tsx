@@ -30,7 +30,12 @@ interface ProductCardProps {
   pending?: boolean;
   /** ADR-0001 DP-1: price not read yet (or failed): the price keeps its space with a placeholder. */
   pricePending?: boolean;
+  /** First card of the grid (LCP candidate): eager, fetchpriority=high, async decode. */
   priority?: boolean;
+  /** Other above-the-fold cards: eager and discoverable, normal fetch priority. */
+  eager?: boolean;
+  /** #425: an eager card that must not compete with the LCP image for bandwidth: fetchpriority=low. */
+  lowPriority?: boolean;
   skeleton?: boolean;
   /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
   href?: string;
@@ -46,6 +51,8 @@ export default component$((props: ProductCardProps) => {
 	const {
 		slug,
 		priority = false,
+		eager = false,
+		lowPriority = false,
 		skeleton = false,
 		salePrice = null,
 		preOrderPrice = null,
@@ -101,8 +108,10 @@ export default component$((props: ProductCardProps) => {
 							}`}
 							width={400}
 							height={500}
-							loading={priority ? 'eager' : 'lazy'}
+							loading={priority || eager ? 'eager' : 'lazy'}
 							priority={priority}
+							fetchPriority={priority ? 'high' : lowPriority ? 'low' : 'auto'}
+							decoding="async"
 							responsive="productCard"
 							alt={name}
 						/>

@@ -429,7 +429,7 @@ catalog.openapi(
   },
 );
 
-// GET /v1/shop/catalog/search — term search over active products (name + description),
+// GET /v1/shop/catalog/search — term search over active products (name, description, variant names),
 // optional collection + in-stock filters, paginated. WP4a. The name+description ILIKE
 // is backed by GIN trigram indexes (migration 0029) so it stays index-served as the
 // catalog grows; `description ilike` (not coalesce) keeps that branch indexable —
@@ -455,7 +455,8 @@ catalog.openapi(
       const conds = [
         eq(s.product.status, 'active'),
         isNull(s.product.deletedAt),
-        sql`(${s.product.name} ilike ${like} or ${s.product.description} ilike ${like})`,
+        // Variant names too ("Yokai / Black G10"): a shopper searching a colour or material finds the product that has it.
+        sql`(${s.product.name} ilike ${like} or ${s.product.description} ilike ${like} or exists (select 1 from product_variant pv where pv.product_id = ${s.product.id} and pv.enabled and pv.deleted_at is null and pv.name ilike ${like}))`,
       ];
       if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug} and c2.published = true)`);
       if (inStock) conds.push(productInStock());

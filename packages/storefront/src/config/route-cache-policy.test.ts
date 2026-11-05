@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CHECKOUT_RULES_TEXT } from "~/utils/prerender";
 import {
 	CACHE_POLICY_VERSION,
 	NO_STORE_CACHE_CONTROL,
@@ -55,9 +56,10 @@ describe('getRouteCacheProfile', () => {
 	});
 
 	it('labels x-route-class with the ADR-0001 class (diagnostic only; the header stays no-store)', () => {
-		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about', '/checkout'])
+		// DP-5/DP-6 reversed 2026-11-04: /shop/ and /checkout/ are shells again (live values arrive from the parse-time scripts).
+		for (const pathname of ['/', '/shop', '/shop/', '/checkout', '/checkout/', '/products/some-knife', '/collections/new', '/contact', '/contact/', '/terms', '/blog', '/about'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('shell');
-		for (const pathname of ['/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
+		for (const pathname of ['/search', '/track-order', '/newsletter-signup', '/subscriber/confirm/abc', '/affiliate', '/checkout/payment', '/checkout/cart-link/', '/checkout/confirmation/ABC', '/account/orders', '/nope/nope', '/shop-api/anything'])
 			expect(getRouteCacheProfile(pathname).routeClass, pathname).toBe('dynamic');
 	});
 
@@ -104,7 +106,7 @@ describe('hashed build assets', () => {
 		const assets = src.indexOf("app.use(`/assets`");
 		const rootStatic = src.indexOf('rootStatic(req, res, next)');
 		const failClosed = src.indexOf('res.setHeader(\'Cache-Control\', NO_STORE_CACHE_CONTROL)');
-		const router = src.indexOf('app.use(router)');
+		const router = src.indexOf('app.use(createServerFunctionGuard({ knownHashes: knownServerFunctionHashes })(router))');
 		expect(build).toBeGreaterThan(-1);
 		expect(assets).toBeGreaterThan(-1);
 		expect(rootStatic).toBeGreaterThan(-1);
@@ -165,8 +167,10 @@ describe('ADR-0001 route classes', async () => {
 	const q = (s = '') => new URLSearchParams(s);
 	const TABLE: Array<[string, string, 'products' | 'shop', 'shell' | 'dynamic' | 'data']> = [
 		['/', '', 'products', 'shell'],
-		['/shop', '', 'products', 'shell'],
+		['/shop', '', 'products', 'shell'], // DP-6 reversed 2026-11-04: live stock arrives from the parse-time scripts
 		['/shop/', '', 'products', 'shell'],
+		['/shop/', '', 'shop', 'shell'],
+		['/shop/', 'utm_source=a&gclid=1', 'products', 'shell'],
 		['/products/some-knife/', '', 'products', 'shell'],
 		['/products/some-knife', '', 'products', 'shell'],
 		['/collections/new/', '', 'products', 'shell'],
@@ -179,13 +183,18 @@ describe('ADR-0001 route classes', async () => {
 		['/terms/', '', 'products', 'shell'],
 		['/returns/', '', 'products', 'shell'],
 		['/press/', '', 'products', 'shell'],
-		['/checkout/', '', 'products', 'shell'],
-		['/checkout', '', 'products', 'shell'],
 		// brand productPath /shop/:slug/
 		['/shop/long-coat/', '', 'shop', 'shell'],
 		['/shop/long-coat/', '', 'products', 'dynamic'],
 		['/shop/a/b/', '', 'shop', 'dynamic'],
 		// dynamic
+		// DP-5 reversed 2026-11-04: the checkout page itself is a shell (summary painted from the live cart read); its steps are not
+		['/checkout/', '', 'products', 'shell'],
+		['/checkout', '', 'products', 'shell'],
+		['/checkout/', '', 'shop', 'shell'],
+		['/checkout/', 'utm_source=a', 'products', 'shell'],
+		['/checkout/', 'coupon=X', 'products', 'dynamic'],
+		['/checkout/', 'preview_token=abc', 'products', 'dynamic'],
 		['/checkout/payment/', '', 'products', 'dynamic'],
 		['/checkout/cart-link/', '', 'products', 'dynamic'],
 		['/checkout/some-alias/', '', 'products', 'dynamic'],
@@ -215,7 +224,13 @@ describe('ADR-0001 route classes', async () => {
 		// I-3: query that could change output
 		['/collections/new/', 'page=2', 'products', 'dynamic'],
 		['/shop/', 'q=knife', 'products', 'dynamic'],
+		// Query decision (ADR-0001 DP-6): the shop shell is for the bare path only. Damned's /collections/<x> redirect target
+		// /shop/?facets=<x> and Rotten's /shop/?style=short|long stay dynamic (the SSR in-stock grid): a cached shell per query string
+		// would not be reached by the bare-path purge.
+		['/shop/', 'facets=blades', 'products', 'dynamic'],
+		['/shop/', 'style=short', 'products', 'dynamic'],
 		['/shop/', 'style=long', 'products', 'dynamic'],
+		['/shop/', 'utm_source=a&facets=blades', 'products', 'dynamic'],
 		['/products/x/', 'size=m', 'products', 'dynamic'],
 		['/', 'trackOrder=true', 'products', 'dynamic'],
 		// tracking-only query keeps shell
@@ -296,9 +311,11 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 	type Render = { status?: number; veto?: string; setCookie?: boolean };
 	/** Mirrors entry.express.tsx order: request strip -> CSP/nonce -> no-store default -> response-end check -> renderer. */
 	const { shellRenderContext } = await import('../platform/shell-render-context.server');
-	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>, exclude: string[] = []) => {
+	const serve = async (enabled: boolean, render: Render, run: (get: (path: string, headers?: Record<string, string>) => Promise<{ r: Response; text: string }>) => Promise<void>, exclude: string[] = [], reinjectIdentity = false) => {
 		const app = express();
 		app.use(m.createShellRequestMiddleware({ enabled, exclude }) as never);
+		// Simulates a broken strip: an identity header reaches the render on a marked shell request.
+		if (reinjectIdentity) app.use((req, _res, next) => { req.headers.cookie = 'sr_cust=leak'; next(); });
 		app.use((_req, res, next) => shellRenderContext.run(m.isShellRender(res), next));
 		app.use((req, res, next) => {
 			const nonce = m.isShellRender(res) ? undefined : `N${Math.random().toString(36).slice(2)}`;
@@ -335,7 +352,7 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		} finally { await new Promise((resolve) => server.close(resolve)); }
 	};
 
-	const SHELL = ['/', '/shop/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/', '/checkout/'];
+	const SHELL = ['/', '/shop/', '/checkout/', '/products/some-knife/', '/collections/new/', '/blog/', '/blog/a-post/', '/about/', '/contact/', '/privacy/', '/terms/', '/returns/', '/press/'];
 	const SIGNED_IN = { cookie: 'sr_cust=abc; sr_cust_csrf=x; countryCode=DE; sr_preview_tokenx=1; authToken=t', authorization: 'Bearer secret', 'cf-ipcountry': 'DE', 'x-qwik-nonce': 'attacker' };
 
 	it('SHELL_CACHE on: a signed-in request to every shell route gets the byte-identical body of an anonymous one, cacheable, no Set-Cookie', async () => {
@@ -371,8 +388,8 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 			const csp = r.headers.get('content-security-policy')!;
 			const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src '))!;
 			expect(scriptSrc).not.toMatch(/nonce-|unsafe-inline|strict-dynamic/);
-			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' https://static.cloudflareinsights.com https://js.stripe.com`)).toBe(true);
-			expect(scriptSrc.match(/sha256-/g)).toHaveLength(2);
+			expect(scriptSrc.startsWith(`script-src 'self' 'sha256-${sha('window.qwikevents=[]')}' 'sha256-${sha('(()=>{})()')}' 'sha256-${sha(CHECKOUT_RULES_TEXT)}' https://static.cloudflareinsights.com https://js.stripe.com`)).toBe(true);
+			expect(scriptSrc.match(/sha256-/g)).toHaveLength(3); // the page's two inline scripts + the checkout prerender rules
 		});
 	});
 
@@ -420,28 +437,133 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 		const capture = async (enabled: boolean) => {
 			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string }> = {};
 			await serve(enabled, {}, async (get) => {
-				for (const path of ['/checkout/', '/shop/']) {
+				for (const path of ['/contact/', '/shop/', '/checkout/']) {
 					const { r, text } = await get(path, SIGNED_IN);
 					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text) };
 				}
-			}, enabled ? ['/checkout/', '/shop'] : []);
+			}, enabled ? ['/contact/', '/shop', '/checkout/'] : []);
 			return out;
 		};
 		const off = await capture(false);
 		const excluded = await capture(true);
-		for (const path of ['/checkout/', '/shop/']) {
+		for (const path of ['/contact/', '/shop/', '/checkout/']) {
 			expect(excluded[path], path).toEqual(off[path]);
 			expect(excluded[path]!.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
 			expect(excluded[path]!.text, path).toContain('Hi Jane');
 			expect(excluded[path]!.text, path).toContain('data-redact="false"');
 		}
 		await serve(true, {}, async (get) => {
-			const { r } = await get('/checkout/');
+			const { r } = await get('/contact/');
 			expect(r.headers.get('x-sr-edge')).toBe('bypass:excluded');
 			const home = await get('/');
 			expect(home.r.headers.get('cache-control')).toMatch(/^public, max-age=0, s-maxage=300$/);
 			expect(home.text).toContain('data-redact="true"');
-		}, ['/checkout/', '/shop']);
+		}, ['/contact/', '/shop']);
+	});
+
+	it('SHELL_CACHE on, no exclusion: /shop/ and /checkout/ are cacheable shells (identity stripped, hash CSP, no Set-Cookie); their steps and query URLs are not', async () => {
+		await serve(true, {}, async (get) => {
+			for (const path of ['/shop/', '/shop', '/checkout/', '/checkout']) {
+				const anon = await get(path);
+				const signed = await get(path, SIGNED_IN);
+				expect(signed.text, path).toBe(anon.text);
+				expect(signed.text, path).not.toContain('Hi Jane');
+				for (const res of [anon, signed]) {
+					expect(res.r.headers.get('cache-control'), path).toBe('public, max-age=0, s-maxage=300');
+					expect(res.r.headers.get('x-sr-edge'), path).toBe('cacheable');
+					expect(res.r.headers.get('set-cookie'), path).toBeNull();
+				}
+			}
+			// DP-5: payment, cart-link, confirmation and aliases stay dynamic. DP-6 query decision: /shop/?facets= and ?style= stay dynamic.
+			for (const path of ['/checkout/payment/', '/checkout/cart-link/', '/checkout/confirmation/ABC/', '/checkout/some-alias/', '/shop/?facets=blades', '/shop/?style=long', '/checkout/?coupon=X']) {
+				const { r, text } = await get(path, SIGNED_IN);
+				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+				expect(r.headers.get('x-sr-edge'), path).toBe('bypass:class:dynamic');
+				expect(text, path).toContain('Hi Jane');
+			}
+		}, []);
+	});
+
+	// Rollback (ADR-0001): per store, per path, no rebuild. An excluded path is not marked a shell render, so it is rendered exactly as
+	// with the switch off: nonce CSP, cookies reach the render, the per-request (SSR stock-filtered / server-rendered summary) loaders run.
+	it('rollback: SHELL_CACHE_EXCLUDE=/shop/,/checkout/ reverts both paths to the dynamic render, byte for byte as with the switch off', async () => {
+		const normalise = (t: string) => t.replace(/N[a-z0-9]+/g, 'NONCE');
+		const capture = async (enabled: boolean, exclude: string[]) => {
+			const out: Record<string, { cc: string | null; csp: string; setCookie: string | null; text: string; diag: string | null }> = {};
+			await serve(enabled, {}, async (get) => {
+				for (const path of ['/shop/', '/checkout/']) {
+					const { r, text } = await get(path, SIGNED_IN);
+					out[path] = { cc: r.headers.get('cache-control'), csp: normalise(r.headers.get('content-security-policy') ?? ''), setCookie: r.headers.get('set-cookie'), text: normalise(text), diag: r.headers.get('x-sr-edge') };
+				}
+			}, exclude);
+			return out;
+		};
+		const off = await capture(false, []);
+		const excluded = await capture(true, m.shellExcludedPaths({ SHELL_CACHE_EXCLUDE: '/shop/, /checkout/' }));
+		for (const path of ['/shop/', '/checkout/']) {
+			const { diag, ...rest } = excluded[path]!;
+			expect(diag, path).toBe('bypass:excluded');
+			const { diag: offDiag, ...offRest } = off[path]!;
+			expect(offDiag, path).toBeNull();
+			expect(rest, path).toEqual(offRest);
+			expect(rest.cc, path).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(rest.csp, path).toMatch(/'nonce-NONCE'/);
+			expect(rest.text, path).toContain('Hi Jane'); // the cookie reached the render: the per-request path
+			expect(rest.text, path).toContain('data-redact="false"'); // shellRender() is false: the loaders return their values
+		}
+		// One path at a time: excluding /checkout/ (Damned and Rotten today) leaves /shop/ a shell, and the reverse.
+		await serve(true, {}, async (get) => {
+			expect((await get('/checkout/')).r.headers.get('x-sr-edge')).toBe('bypass:excluded');
+			const shop = await get('/shop/', SIGNED_IN);
+			expect(shop.r.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=300');
+			expect(shop.text).toContain('data-redact="true"');
+		}, ['/checkout']);
+		await serve(true, {}, async (get) => {
+			expect((await get('/shop/')).r.headers.get('x-sr-edge')).toBe('bypass:excluded');
+			const checkout = await get('/checkout/', SIGNED_IN);
+			expect(checkout.r.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=300');
+			expect(checkout.text).toContain('data-redact="true"');
+		}, ['/shop']);
+	});
+
+	it('I-6 behaviour: a maintenance render (renderer veto) is private no-store, never public', async () => {
+		await serve(true, { veto: 'maintenance' }, async (get) => {
+			const { r } = await get('/');
+			expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(r.headers.get('cache-control')).not.toMatch(/public|s-maxage/);
+			expect(r.headers.get('x-sr-edge')).toBe('bypass:veto:maintenance');
+		});
+	});
+
+	for (const [status, veto] of [[503, 'unpublished'], [404, 'unpublished'], [500, 'fallback'], [200, 'unpublished'], [200, 'fallback'], [500, undefined]] as const) {
+		it(`I-6 behaviour: render status ${status} with veto ${veto ?? 'none'} is no-store`, async () => {
+			await serve(true, { status, veto }, async (get) => {
+				for (const path of ['/', '/products/x/']) {
+					const { r } = await get(path);
+					expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
+					expect(r.headers.get('x-sr-edge'), path).toMatch(/^bypass:/);
+				}
+			});
+		});
+	}
+
+	it('I-6 behaviour: a request whose identity was not stripped is no-store (not-anonymous), even with a clean 200 render', async () => {
+		await serve(true, {}, async (get) => {
+			const { r } = await get('/');
+			expect(r.headers.get('cache-control')).toBe(m.NO_STORE_CACHE_CONTROL);
+			expect(r.headers.get('x-sr-edge')).toBe('bypass:not-anonymous');
+		}, [], true);
+	});
+
+	it('I-6 behaviour: the request middleware marks anonymity from the headers left after the strip', () => {
+		const run = (headers: Record<string, string>) => {
+			const res = { locals: {} as Record<string, unknown>, setHeader() {} };
+			m.createShellRequestMiddleware({ enabled: true })({ method: 'GET', path: '/', originalUrl: '/', headers: { ...headers } } as never, res as never, () => {});
+			return res.locals;
+		};
+		expect(run({ cookie: 'a=1' })).toMatchObject({ srShellRender: true, srShellAnonymous: true });
+		expect(run({})).toMatchObject({ srShellRender: true, srShellAnonymous: true });
+		expect(run({ cookie: 'x' }).srShellRender).toBe(true);
 	});
 
 	it('SHELL_CACHE_EXCLUDE parses a comma list of exact paths (trailing slash optional, junk ignored)', () => {
@@ -455,7 +577,8 @@ describe('ADR-0001 express layer (fake renderer, real HTTP)', async () => {
 				const { r, text } = await get(path, SIGNED_IN);
 				expect(r.headers.get('cache-control'), path).toBe(m.NO_STORE_CACHE_CONTROL);
 				expect(r.headers.get('content-security-policy'), path).toMatch(/'nonce-N[a-z0-9]+'/);
-				expect(r.headers.get('content-security-policy'), path).not.toMatch(/sha256-/);
+				// only the constant checkout-prerender rules hash: a nonce render allows no per-page inline hash
+				expect((r.headers.get('content-security-policy') ?? '').replace(`'sha256-${sha(CHECKOUT_RULES_TEXT)}'`, ''), path).not.toMatch(/sha256-/);
 				expect(r.headers.get('x-sr-edge'), path).toBeNull();
 				expect(text, path).toContain('Hi Jane');
 				expect(text, path).toContain('data-co="DE"');
@@ -474,7 +597,7 @@ describe('ADR-0001 wiring in entry.express.tsx', () => {
 		const cookieCtx = src.indexOf('sellrightRequestCookie.run(');
 		const failClosed = src.indexOf("res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL)");
 		const check = src.indexOf('app.use(createShellCacheMiddleware(');
-		const router = src.indexOf('app.use(router)');
+		const router = src.indexOf('app.use(createServerFunctionGuard({ knownHashes: knownServerFunctionHashes })(router))');
 		expect(strip).toBeGreaterThan(-1);
 		expect(strip).toBeLessThan(nonce);
 		expect(strip).toBeLessThan(cookieCtx);
@@ -486,5 +609,61 @@ describe('ADR-0001 wiring in entry.express.tsx', () => {
 		expect(src).toMatch(/const SHELL_CACHE_ON = shellCacheEnabled\(\);/);
 		expect(src).toMatch(/ttlSeconds: shellTtlSeconds\(\)/);
 		expect(src).not.toMatch(/SELLRIGHT_EDGE_HTML_CACHE|createEdgeHtmlMiddleware/);
+	});
+});
+
+describe('error responses are never stored (createErrorNoStoreMiddleware, real HTTP)', async () => {
+	const express = (await import('express')).default;
+	const { join } = await import('node:path');
+	const { mkdtempSync, writeFileSync } = await import('node:fs');
+	const { tmpdir } = await import('node:os');
+	const m = await import('./route-cache-policy');
+	const { snapshotGuard } = await import('../utils/snapshot-guard');
+	const dir = mkdtempSync(join(tmpdir(), 'sr-static-'));
+	writeFileSync(join(dir, 'a.js'), 'x');
+	const HEADER = /^private, no-store/;
+
+	it('static 404 under immutable handlers, router 404/500, express error, temporary redirect and guard 404 all carry private, no-store', async () => {
+		const app = express();
+		app.use(m.createErrorNoStoreMiddleware() as never);
+		app.use('/build', express.static(dir, { immutable: true, maxAge: '1y' }));
+		app.use(snapshotGuard as never);
+		app.get('/ok-static', (_q, res) => { res.setHeader('Cache-Control', 'public, max-age=60'); res.send('ok'); });
+		app.get('/gone', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.status(404).send('x'); });
+		app.get('/boom', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.status(503).send('x'); });
+		app.get('/throw', () => { throw new Error('x'); });
+		app.get('/tmp', (_q, res) => { res.setHeader('Cache-Control', 'public, s-maxage=600'); res.redirect(302, '/x'); });
+		app.get('/perm', (_q, res) => { res.setHeader('Cache-Control', 'public, max-age=300'); res.redirect(301, '/x'); });
+		app.use((_q, res) => { res.status(404).send('nf'); });
+		const server = await new Promise<import('node:http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+		try {
+			const { port } = server.address() as import('node:net').AddressInfo;
+			const get = (p: string, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${port}${p}`, { redirect: 'manual', headers });
+			const okJs = await get('/build/a.js');
+			expect(okJs.headers.get('cache-control')).toMatch(/immutable/);
+			for (const [p, status] of [['/build/missing.js', 404], ['/gone', 404], ['/boom', 503], ['/throw', 500], ['/tmp', 302], ['/page.html', 404], ['/nope', 404]] as const) {
+				const r = await get(p);
+				expect([p, r.status]).toEqual([p, status]);
+				expect([p, r.headers.get('cache-control')]).toEqual([p, expect.stringMatching(HEADER)]);
+				expect(r.headers.get('cache-control')).not.toMatch(/s-maxage|immutable|public|max-age=[1-9]/);
+			}
+			// 416 from express.static carries immutable before it errors: must be overridden.
+			const r416 = await get('/build/a.js', { Range: 'bytes=999-1000' });
+			expect(r416.status).toBe(416);
+			expect(r416.headers.get('cache-control')).toMatch(HEADER);
+			expect(r416.headers.get('cache-control')).not.toMatch(/immutable/);
+			// Deliberate permanent redirect and 200 keep their own header.
+			expect((await get('/perm')).headers.get('cache-control')).toBe('public, max-age=300');
+			expect((await get('/ok-static')).headers.get('cache-control')).toBe('public, max-age=60');
+		} finally { await new Promise((resolve) => server.close(resolve)); }
+	});
+
+	it('wiring: entry.express.tsx registers the middleware right after the error-path log, before every handler', async () => {
+		const { readFileSync } = await import('node:fs');
+		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
+		const at = (needle: string) => src.indexOf(needle);
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeGreaterThan(at('app.use(createErrorPathLog())'));
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeLessThan(at('app.use(createShellRequestMiddleware'));
+		expect(at('app.use(createErrorNoStoreMiddleware())')).toBeLessThan(at('app.use(snapshotGuard)'));
 	});
 });

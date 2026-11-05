@@ -28,4 +28,13 @@ describe('nextConfirm', () => {
 	it('ignores a zero trigger', () => {
 		expect(nextConfirm(0, true, 0).run).toBe(false);
 	});
+
+	it('a trigger reset to 0 while mounted resets the baseline, so the next click runs (#403)', () => {
+		let baseline = 0;
+		baseline = nextConfirm(1, true, baseline).baseline; // first PLACE ORDER (stopped by a changed total)
+		expect(baseline).toBe(1);
+		baseline = nextConfirm(0, true, baseline).baseline; // the page resets its order state and the trigger
+		expect(baseline).toBe(0);
+		expect(nextConfirm(1, true, baseline)).toEqual({ run: true, baseline: 1 }); // the click after confirming
+	});
 });

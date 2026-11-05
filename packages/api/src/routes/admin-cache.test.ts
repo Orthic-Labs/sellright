@@ -111,3 +111,18 @@ describe('POST /v1/admin/cache/purge', () => {
     expect(purgeSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /v1/admin/cache/purge: guesses are throttled before the compare (audit 2026-11-02)', () => {
+  it('a WRONG token still spends the per-IP budget', async () => {
+    envMock.CACHE_ADMIN_TOKEN = 'right-token';
+    expect((await purge({ storeSlug: 'acme' }, 'wrong')).status).toBe(401);
+    expect(retryAfterSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throttled caller gets 429 even with the wrong token, and the token is never evaluated', async () => {
+    envMock.CACHE_ADMIN_TOKEN = 'right-token';
+    retryAfterSpy.mockReturnValue(30);
+    expect((await purge({ storeSlug: 'acme' }, 'wrong')).status).toBe(429);
+    expect(purgeSpy).not.toHaveBeenCalled();
+  });
+});

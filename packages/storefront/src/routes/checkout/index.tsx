@@ -12,7 +12,10 @@ import { track } from '~/sellright/analytics';
 import { useCart, startCheckoutEntryBoot, isBootDeferredToCheckoutEntry, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService, TOKEN_COOKIE } from '~/services/CartService';
 import { sellright } from '~/sellright/client';
-import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutServerCart, serverCartShipCountry, type ServerCartValue } from './summary-cart';
+import { COUNTRY_COOKIE_OPTIONS } from './summary-cart';
+import { CHECKOUT_SHELL, isCheckoutShell, readCheckoutSummaryCart, serverCartShipCountry, type CheckoutSummaryResponse, type ServerCartValue } from './summary-cart';
+import { CHECKOUT_SUMMARY_URL, earlyJsonOr } from '~/platform/early-reads';
+import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 import { shellRender } from '~/platform/shell-render';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
@@ -38,24 +41,55 @@ import { applyPaymentInitError, applyPaymentProcessingChange } from '~/component
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
+/** ADR-0001: the shell's `Link: rel=preload` header (Early Hints), only on a shell render (platform/early-reads.server.ts). */
+export const onRequest = earlyHintsOnRequest;
+
 /**
  * L11: the order summary at first paint. One extra live server-side read of the request's cart (checkout quote), per
  * document request, never cached (no cacheKey) and bounded by SERVER_CART_TIMEOUT_MS; null on any failure. Display only:
  * see ./summary-cart.ts. A client loader fetch (SPA navigation, `@loaderId` set) skips it: the client's entry read is then
  * the only read, exactly as before. Serialized into the (private, no-store) document so a client read never re-fetches it.
  */
-export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap }) => {
+export const useCheckoutServerCart = routeLoader$(async ({ cookie, sharedMap, request }) => {
   if (sharedMap.has('@loaderId')) return null;
   // ADR-0001: with SHELL_CACHE=1 /checkout/ is a cacheable shell: no per-visitor cart and no prices in it. The summary renders its
   // skeleton and the client's LOCKED checkout-entry read fills it (the path a null read always took). #412: the marker (no value)
   // tells the page it is the shell: the form paints in SSR and the entry reads start at document ready. Off: unchanged.
   if (shellRender()) return CHECKOUT_SHELL;
-  const cart: ServerCartValue = await readCheckoutServerCart(
+  const cart: ServerCartValue = await readCheckoutSummaryCart(
     (path, init) => sellright().GET(path, init),
     cookie.get(TOKEN_COOKIE)?.value,
-    serverCartShipCountry(cookie.get(COUNTRY_COOKIE)?.value),
+    cookie.get(COUNTRY_COOKIE)?.value,
+    request.headers.get('cf-ipcountry'),
   );
   return cart;
+}, { serializationStrategy: 'always' });
+
+/**
+ * #425: the destination the server-rendered summary quoted (cookie, else the edge country, else US), for the client to adopt as
+ * the geolocated country when the shopper has none stored. Without it the client priced its default (US) whenever the layout's
+ * idle geolocation had not run yet, and the total changed a moment after the server's (live: $45 -> $33). Null when unknown: a
+ * client loader fetch (SPA navigation) and the cacheable shell (whose summary read answers it instead).
+ */
+export const useCheckoutQuotedCountry = routeLoader$(({ cookie, sharedMap, request }) => {
+  if (sharedMap.has('@loaderId') || shellRender()) return null;
+  const fromCookie = cookie.get(COUNTRY_COOKIE)?.value;
+  const quoted = serverCartShipCountry(fromCookie, request.headers.get('cf-ipcountry'));
+  // #425: no country cookie yet: set it to the destination this document quoted, so the page's parse-time cart read and the checkout
+  // entry boot (both read this cookie first) price the same destination from the start, instead of the US default and a re-quote.
+  if (!fromCookie && quoted !== serverCartShipCountry(null, null)) cookie.set(COUNTRY_COOKIE, quoted, COUNTRY_COOKIE_OPTIONS);
+  return quoted;
+}, { serializationStrategy: 'always' });
+
+/**
+ * LCP: a document request with no cart cookie has no cart the server could read, so the page paints the empty-cart view from SSR
+ * instead of the form and repainting it seconds later (Lighthouse: LCP 24 s, the empty view's heading). Display only: the LOCKED
+ * checkout-entry live read still runs and decides (a cart it finds, e.g. a legacy local cart, replaces this view with the form).
+ * False when unknown: a client loader fetch (SPA navigation) and the ADR-0001 cacheable shell (no per-visitor value in it).
+ */
+export const useCheckoutNoCartCookie = routeLoader$(({ cookie, sharedMap }) => {
+  if (sharedMap.has('@loaderId') || shellRender()) return false;
+  return !cookie.get(TOKEN_COOKIE)?.value;
 }, { serializationStrategy: 'always' });
 
 /** The checkout views whose entry has started (the shell's document-ready start and the visible task never both run it). A WeakSet
@@ -105,6 +139,8 @@ const CheckoutContent = component$(() => {
   const appState = useContext(APP_STATE);
   const localCart = useCart();
   const serverCart = useCheckoutServerCart();
+  const quotedCountry = useCheckoutQuotedCountry();
+  const noCartCookie = useCheckoutNoCartCookie();
   // L11: the LOCKED checkout-entry live read has landed (the summary then shows the client cart, not the server read).
   const entryReadDone = useSignal(false);
   const hasMixedPreOrder = useHasMixedPreOrder();
@@ -371,12 +407,16 @@ const CheckoutContent = component$(() => {
   // Forget everything bound to the previous order (store fields, method lock via phase, confirm triggers, consent, init
   // failure). Run on every transition out of a resume state that is NOT a resume of the same order.
   const resetOrderState = $(async () => {
+    // #403: remount the payment controls only when they may hold a previous order's state. On a plain checkout entry
+    // there is none, and bumping the key there mounted a second card form during hydration (the replaced one was never
+    // cleaned up, so Collect.js was configured twice).
+    const stale = !!srState.code || paymentInit.failed;
     await resetOrder();
     stripeConfirmTrigger.value = 0;
     gatewayConfirmTrigger.value = 0;
     totalConfirmed.value = false;
     paymentInit.failed = false;
-    paymentInit.key = paymentInit.key + 1;
+    if (stale) paymentInit.key = paymentInit.key + 1;
   });
 
   // Resume the ORIGINAL order of a converted cart: its own view and payment initialisation, never the new-order form
@@ -455,6 +495,12 @@ const CheckoutContent = component$(() => {
     // a saved or entered address keeps its own country. See components/checkout/checkout-country.ts.
     let sessionCountry: string | null = null;
     try { sessionCountry = sessionStorage.getItem('countryCode'); } catch { /* storage blocked */ }
+    // #425: nothing stored yet: price the destination the server quoted (the document's, or on the shell its summary read's).
+    if (CountryPreferenceService.needsGeolocation()) {
+      const quoted = quotedCountry.value
+        ?? (isCheckoutShell(serverCart.value) ? (await earlyJsonOr<CheckoutSummaryResponse | null>(CHECKOUT_SUMMARY_URL, async () => null).catch(() => null))?.shipCountry : null);
+      if (quoted) CountryPreferenceService.setCountryFromGeolocation(quoted);
+    }
     const startCountry = resolveCheckoutCountry({
       current: appState.shippingAddress.countryCode,
       addressEntered: !canRestorePreferredCountry(appState.shippingAddress),
@@ -951,7 +997,7 @@ const CheckoutContent = component$(() => {
         <p>Your total changed. Review updated amounts before placing your order.</p>
         <dl class="space-y-1">
           <div class="flex justify-between gap-4"><dt>Discount</dt><dd>{formatCents(srState.quoteChange.quote.discountTotal)}</dd></div>
-          <div class="flex justify-between gap-4"><dt>Shipping</dt><dd>{formatCents(srState.quoteChange.quote.shippingTotal)}</dd></div>
+          <div class="flex justify-between gap-4"><dt>Shipping</dt><dd>{srState.quoteChange.quote.shippingTotal === 0 ? 'Free' : formatCents(srState.quoteChange.quote.shippingTotal)}</dd></div>
           <div class="flex justify-between gap-4"><dt>Tax</dt><dd>{formatCents(srState.quoteChange.quote.taxTotal)}</dd></div>
           <div class="flex justify-between gap-4"><dt>Updated total</dt><dd>{formatCents(srState.quoteChange.quote.grandTotal)}</dd></div>
         </dl>
@@ -987,6 +1033,7 @@ const CheckoutContent = component$(() => {
       onResumeRetry$={onResumeRetry$}
       onStartNewCart$={onStartNewCart$}
       pageLoading={pageLoading}
+      noCartCookie={noCartCookie.value}
       serverCart={serverCart}
       entryReadDone={entryReadDone}
       paymentInit={paymentInit}

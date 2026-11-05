@@ -1,4 +1,5 @@
-import { $, component$, useOnWindow, useSignal, useVisibleTask$ } from '@qwik.dev/core';
+import { $, component$, useOnWindow, useSignal, useOnDocument, useTask$ } from '@qwik.dev/core';
+import { isBrowser } from '@qwik.dev/core/build';
 import { PRICE_PLACEHOLDER } from '~/platform/live-values';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
@@ -31,7 +32,10 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
   });
   useOnWindow('scroll', measure);
   useOnWindow('resize', measure);
-  useVisibleTask$(({ track }) => { track(() => props.waitlistAvailable); measure(); }, { strategy: 'document-ready' });
+  // The first measure on browser idle (a document event, not an eager visible task), then again when the waitlist slot changes
+  // (QWIK-TASK-AUDIT #5).
+  useOnDocument('qidle', measure);
+  useTask$(({ track }) => { track(() => props.waitlistAvailable); if (isBrowser) measure(); });
   return (
     <div class={`sr-mobile-bar${yielding.value ? ' is-yielding' : ''}`} aria-hidden={yielding.value ? 'true' : undefined} inert={yielding.value || undefined}>
       <div class="sr-mobile-bar-meta">

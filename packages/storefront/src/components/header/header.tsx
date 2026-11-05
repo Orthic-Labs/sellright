@@ -8,6 +8,7 @@ import { logout as logoutAccount } from '~/providers/shop/account/account';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import LogoImage from '~/media/logo.svg?jsx';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
+import { warmLoginModal, warmMenu } from '~/utils/warm-chunks';
 import { HEADER_STYLES } from './header-styles';
 
 export default component$(() => {
@@ -47,6 +48,10 @@ export default component$(() => {
 			appState.showUserMenu = false;
 		}
 	}));
+
+	// #360: chunk warm-up on intent for the modal / menu that mount only once opened.
+	const warmLogin$ = $(() => warmLoginModal());
+	const warmMenu$ = $(() => warmMenu());
 
 	const logout = $(async () => {
 		const result = await logoutAccount();
@@ -143,6 +148,8 @@ export default component$(() => {
 						{/* Account icon — desktop only */}
 						<div class="hidden md:flex header-icon-btn" ref={userMenuRef} data-user-menu>
 							<svg
+								onPointerDown$={warmLogin$}
+								onMouseEnter$={warmLogin$}
 								onClick$={() => {
 									if (appState.customer.id !== CUSTOMER_NOT_DEFINED_ID) {
 										appState.showUserMenu = !appState.showUserMenu;
@@ -189,6 +196,9 @@ export default component$(() => {
 						{/* Mobile burger */}
 						<button
 							class="burger-btn header-icon-btn cursor-pointer"
+							onPointerDown$={warmMenu$}
+							onMouseEnter$={warmMenu$}
+							onFocus$={warmMenu$}
 							onClick$={() => (appState.showMenu = !appState.showMenu)}
 							aria-label="Open menu"
 						>
@@ -262,6 +272,8 @@ export default component$(() => {
 								location.url.pathname.startsWith('/account') || location.url.pathname.startsWith('/sign-in')
 									? 'active' : ''
 							}`}
+							onPointerDown$={warmLogin$}
+							onFocus$={warmLogin$}
 							onClick$={() => {
 								if (appState.customer.id !== CUSTOMER_NOT_DEFINED_ID) {
 									appState.showMobileUserMenu = !appState.showMobileUserMenu;

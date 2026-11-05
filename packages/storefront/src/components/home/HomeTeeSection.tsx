@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import { stripHtml } from '~/utils/sanitize';
+import { htmlToText } from '~/utils/sanitize-lite';
 // Tee section image — 65: decorative/lifestyle section, not a purchase decision image
 import TeeImage_480 from '~/media/homelast.png?format=avif&w=480&quality=65&url';
 import TeeImage_768 from '~/media/homelast.png?format=avif&w=768&quality=65&url';
@@ -37,7 +37,7 @@ interface HomeTeeSectionProps {
 }
 
 export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, variant, href: productHref, pricePending }) => {
-  const body = product?.description ? stripHtml(product.description).trim() : 'Thoughtfully made. Built to last. Every item in the shop gets the same attention to detail.';
+  const body = product?.description ? htmlToText(product.description).trim() : 'Thoughtfully made. Built to last. Every item in the shop gets the same attention to detail.';
   const href = product ? (productHref ?? `/products/${product.slug}`) : '/shop';
   return (
   <>

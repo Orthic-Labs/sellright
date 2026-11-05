@@ -45,6 +45,7 @@ export async function searchProducts(params: {
   take?: number;
   skip?: number;
   inStock?: boolean;
+  early?: boolean;
 } = {}): Promise<CatalogListResponse> {
   return searchCatalog(params);
 }

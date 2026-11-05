@@ -6,8 +6,9 @@
 //   dynamic -> `private, no-store` always.
 //   data    -> `private, no-store` always (or a non-2xx with no-store).
 // Usage: node deploy/edge-conformance.mjs <baseUrl> [--expect-shell on|off] [--product /products/<slug>/] [--collection /collections/<slug>/]
-//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--json]
-// --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic).
+//        [--blog-post /blog/<slug>/] [--allow <file.json>] [--save-dir <dir>] [--exclude /checkout/,/shop/] [--min-hit 0.9] [--json]
+// --exclude: the store's SHELL_CACHE_EXCLUDE; those shell rows are expected private no-store (dynamic). Damned and Rotten run
+// `--exclude /checkout/` until their checkout shell is switched on (remove /checkout/ from SHELL_CACHE_EXCLUDE and from this flag).
 // --allow: a JSON array of { "text": "<exact copy>", "source": "<file:line or setting>" }: amounts typed into brand/CMS copy (content,
 // purged on edit), removed from the body before the value scan. Anything from a price/variant/catalog field still fails.
 // Exit 1 when any row fails. Sends no cookies; a second shell pass sends a fake signed-in cookie to prove it does not change the body.
@@ -31,15 +32,23 @@ let saved = 0;
 const ALLOWED_COPY = allowFile ? JSON.parse(readFileSync(allowFile, 'utf8')).map((e) => e.text).filter(Boolean).sort((a, b) => b.length - a.length) : [];
 
 const ROWS = [
+	// DP-5/DP-6 reversed (2026-11-04): /shop/ and /checkout/ are shell rows (value/stock/identity scan, signed-in byte identity, hash CSP);
+	// a store that lists either in SHELL_CACHE_EXCLUDE passes it with --exclude (the row is then expected private no-store). The query
+	// URLs the shop must keep dynamic (Damned's /shop/?facets=, Rotten's /shop/?style=) are checked as dynamic rows below.
 	['shell', '/'], ['shell', '/shop/'], ['shell', flag('--product', null)], ['shell', flag('--collection', null)],
 	['shell', '/blog/'], ['shell', flag('--blog-post', null)], ['shell', '/about/'], ['shell', '/contact/'],
 	['shell', '/privacy/'], ['shell', '/terms/'], ['shell', '/returns/'], ['shell', '/checkout/'],
+	['dynamic', '/shop/?facets=conformance'], ['dynamic', '/shop/?style=long'], ['dynamic', '/checkout/?conformance=1'],
 	['dynamic', '/checkout/payment/'], ['dynamic', '/checkout/cart-link/'], ['dynamic', '/account/'], ['dynamic', '/sign-in/'],
 	['dynamic', '/search/?q=a'], ['dynamic', '/track-order/'], ['dynamic', '/verify/'], ['dynamic', '/forgot-password/'],
 	['dynamic', '/?preview_token=conformance'], ['dynamic', '/collections/x/?page=2'], ['dynamic', '/edge-conformance-unknown/'],
+	['dynamic', '/checkout/confirmation/CONFORMANCE1/'], ['dynamic', '/checkout/conformance-alias/'], ['dynamic', '/account/orders/'],
+	['dynamic', '/api/session/'], ['dynamic', '/api/live/checkout-summary/'], ['dynamic', '/api/live/shop-catalog/'], ['dynamic', '/cache/'],
 	['data', '/v1/shop/me'],
 ].filter(([, p]) => p).map(([cls, p]) => [cls === 'shell' && EXCLUDED.has(stripSlash(p)) ? 'dynamic' : cls, p]);
 
+const LINK_ENTRY = '<\\/[A-Za-z0-9\\-._~\\/?=&%]*>; rel=preload; as=fetch; crossorigin=use-credentials';
+const LINK_PRELOAD = new RegExp(`^${LINK_ENTRY}(, ${LINK_ENTRY})*$`);
 const isNoStore = (cc) => /\bno-store\b/.test(cc) && !/\bpublic\b|s-maxage/.test(cc);
 const isShellPublic = (cc) => /^public, max-age=0, s-maxage=\d+$/.test(cc);
 
@@ -81,7 +90,7 @@ async function get(path, headers = {}) {
 	const body = await r.text();
 	if (saveDir) writeFileSync(join(saveDir, `${String(++saved).padStart(3, '0')}${headers.cookie ? '-signed' : ''}${path.replace(/[^a-z0-9]+/gi, '_')}.html`), body);
 	return { status: r.status, cc: r.headers.get('cache-control') ?? '', cf: r.headers.get('cf-cache-status') ?? '-', csp: r.headers.get('content-security-policy') ?? '',
-		setCookie: r.headers.get('set-cookie'), diag: r.headers.get('x-sr-edge') ?? '', hash: createHash('sha256').update(withoutInstance(body)).digest('hex').slice(0, 12),
+		setCookie: r.headers.get('set-cookie'), link: r.headers.get('link') ?? '', diag: r.headers.get('x-sr-edge') ?? '', hash: createHash('sha256').update(withoutInstance(body)).digest('hex').slice(0, 12),
 		values: valueHits(body, path) };
 }
 
@@ -94,13 +103,33 @@ for (const [cls, path] of ROWS) {
 		if (res.setCookie) problems.push('set-cookie on a cacheable response');
 		const scriptSrc = res.csp.split(/;\s*/).find((d) => d.startsWith('script-src ')) ?? '';
 		if (/nonce-|unsafe-inline/.test(scriptSrc)) problems.push('script-src has a nonce or unsafe-inline');
-		const signed = await get(path, { cookie: 'sr_cust=conformance; countryCode=DE', authorization: 'Bearer conformance' });
+		const signed = await get(path, { cookie: 'sr_cust=conformance; sr_cart=conformance; countryCode=DE', authorization: 'Bearer conformance' });
 		if (signed.hash !== res.hash) problems.push(`signed-in body differs (${signed.hash} vs ${res.hash})`);
+		// ADR-0001 Early Hints: the Link preload header is cached with the shell, so identical for every visitor and fixed URLs only.
+		if (signed.link !== res.link) problems.push(`Link header differs for a signed-in visitor (${signed.link || '(none)'} vs ${res.link || '(none)'})`);
+		if (res.link && !LINK_PRELOAD.test(res.link)) problems.push(`Link header malformed: ${res.link}`);
+		if (res.link && /conformance|countryCode|shipCountry|sr_cart|token=/i.test(res.link)) problems.push(`Link header carries a visitor value: ${res.link}`);
+		if (/^\/(shop|checkout)\/$/.test(path) && !res.link) problems.push('shell has no Link preload header');
 		if (res.values.length) problems.push(`price/stock value in shell body: ${res.values.join(' | ')}`);
 	} else if (!isNoStore(res.cc)) {
 		problems.push(`expected private no-store, got ${res.cc || '(none)'}`);
+	} else if (/rel=preload/.test(res.link)) {
+		// Rollback (SHELL_CACHE_EXCLUDE) and every dynamic page: today's response, no Early Hints preload header.
+		problems.push(`private no-store response carries a Link preload header: ${res.link}`);
 	}
 	results.push({ class: cls, path, status: res.status, cacheControl: res.cc, cfCacheStatus: res.cf, diag: res.diag, ok: problems.length === 0, problems });
+}
+
+// --min-hit <ratio>: with the switch on, every OK shell row is fetched again; the share served as cf-cache-status HIT must reach
+// the ratio (ADR-0001 QS-1a), else one FAIL row reports it. A row fetched first as MISS/EXPIRED is normally HIT on the re-fetch.
+const minHit = Number(flag('--min-hit', '0')) || 0;
+if (minHit > 0 && expectShell === 'on') {
+	const shellOk = results.filter((r) => r.class === 'shell' && r.ok && r.status === 200);
+	let hits = 0;
+	for (const r of shellOk) if ((await get(r.path)).cf === 'HIT') hits++;
+	const ratio = shellOk.length ? hits / shellOk.length : 1;
+	const ok = ratio >= minHit;
+	results.push({ class: 'hit-ratio', path: `${hits}/${shellOk.length} shell rows HIT`, status: 0, cacheControl: '', cfCacheStatus: '', diag: '', ok, problems: ok ? [] : [`HIT ratio ${ratio.toFixed(2)} < ${minHit}`] });
 }
 
 if (json) console.log(JSON.stringify({ base, expectShell, results }, null, 2));

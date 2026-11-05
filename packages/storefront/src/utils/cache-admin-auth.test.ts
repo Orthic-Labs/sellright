@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { requireCacheAdminToken, CACHE_ADMIN_TOKEN_HEADER } from './cache-admin-auth';
+import { requireCacheAdminToken, CACHE_ADMIN_TOKEN_HEADER, _resetCacheAdminFailuresForTest } from './cache-admin-auth';
 
 function req(headers: Record<string, string> = {}): Request {
 	return new Request('http://localhost/cache-admin/purge', { headers });
@@ -7,6 +7,7 @@ function req(headers: Record<string, string> = {}): Request {
 
 const ORIGINAL = process.env.CACHE_ADMIN_TOKEN;
 afterEach(() => {
+	_resetCacheAdminFailuresForTest();
 	if (ORIGINAL === undefined) delete process.env.CACHE_ADMIN_TOKEN;
 	else process.env.CACHE_ADMIN_TOKEN = ORIGINAL;
 });
@@ -41,5 +42,27 @@ describe('requireCacheAdminToken', () => {
 		process.env.CACHE_ADMIN_TOKEN = 'right-token';
 		const result = requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'right-token' }));
 		expect(result).toEqual({ ok: true, status: 200, error: '' });
+	});
+});
+
+describe('requireCacheAdminToken failure limiter (audit 2026-11-02)', () => {
+	it('refuses an IP after 10 wrong guesses, even when it then sends the right token', () => {
+		process.env.CACHE_ADMIN_TOKEN = 'right-token';
+		for (let i = 0; i < 10; i++) expect(requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: `wrong-${i}` }), '203.0.113.9').status).toBe(403);
+		expect(requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'right-token' }), '203.0.113.9').status).toBe(429);
+	});
+
+	it('is per IP: another address is unaffected', () => {
+		process.env.CACHE_ADMIN_TOKEN = 'right-token';
+		for (let i = 0; i < 10; i++) requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'nope' }), '203.0.113.9');
+		expect(requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'right-token' }), '203.0.113.10').ok).toBe(true);
+	});
+
+	it('forgets failures after the window', () => {
+		process.env.CACHE_ADMIN_TOKEN = 'right-token';
+		const t0 = 1_000_000;
+		for (let i = 0; i < 10; i++) requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'nope' }), '203.0.113.9', t0);
+		expect(requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'right-token' }), '203.0.113.9', t0 + 1000).status).toBe(429);
+		expect(requireCacheAdminToken(req({ [CACHE_ADMIN_TOKEN_HEADER]: 'right-token' }), '203.0.113.9', t0 + 16 * 60 * 1000).ok).toBe(true);
 	});
 });

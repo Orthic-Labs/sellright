@@ -16,7 +16,7 @@ import { RefundDialog } from '../redesign/RefundDialog';
 import { CancelDialog } from '../redesign/CancelDialog';
 import { LoadError, LoadingRows } from '../redesign/states';
 import {
-  canShip, canShipState, doneCopy, fulfilmentPill, isPre, openQty, paidTotal, paymentPill, plural, refundable, refundedTotal,
+  canShip, canShipState, doneCopy, eventCopy, fulfilmentPill, isPre, openQty, paidTotal, paymentPill, plural, refundable, refundedTotal,
   type OrderLine, type OrderView,
 } from '../redesign/order-model';
 
@@ -257,7 +257,7 @@ export default function OrderDetailPage() {
                       : e.action === 'edit' || e.action === 'edit_address' ? (
                         <><b>{e.action === 'edit' ? 'Order edited' : `${e.data?.kind === 'billing' ? 'Billing' : 'Shipping'} address edited`}</b>{e.data?.reason ? `: ${e.data.reason}` : ''}
                           {e.data?.changes && e.data.changes.length > 0 && <span className="muted" style={{ display: 'block', fontSize: 12 }}>{e.data.changes.join(' · ')}</span>}</>
-                      ) : <span style={{ textTransform: 'capitalize' }}>{e.action.replace(/_/g, ' ')}{e.toState ? ` → ${e.toState}` : ''}</span>}
+                      ) : <span>{eventCopy(e, (c) => money(c, o.currency))}</span>}
                     <small>{dateTime(e.at)}{e.actor ? ` · ${e.actor}` : ''}</small>
                   </div>
                 ))}

@@ -2,6 +2,7 @@ import { component$, useSignal, $ } from '@qwik.dev/core';
 
 // Import the modal component directly
 import VerificationModal from './VerificationModal';
+import { warmVerificationModal } from '~/utils/warm-chunks';
 
 
 interface VerificationButtonProps {
@@ -26,6 +27,8 @@ export default component$<VerificationButtonProps>(({
       document.body.style.overflow = 'hidden';
     }
   });
+
+  const warm = $(() => warmVerificationModal());
 
   const closeModal = $(() => {
     showModal.value = false;
@@ -57,6 +60,9 @@ export default component$<VerificationButtonProps>(({
   return (
     <>
       <button
+        onPointerDown$={warm}
+        onMouseEnter$={warm}
+        onFocus$={warm}
         onClick$={openModal}
         class={getButtonClasses()}
         aria-label="Verify your status for exclusive discounts"

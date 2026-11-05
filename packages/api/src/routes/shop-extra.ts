@@ -15,7 +15,11 @@ import { contactRoutes, turnstileSecret } from './contact.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { clearTrackingAttempts, trackingKey, trackingRetryAfter } from './shop-extra.tracking-limit.js';
+import {
+  clearTrackingAttempts, clearTrackingEmailFailures, recordTrackingEmailFailure, redactShippingAddress, trackingEmailFailureRetryAfter,
+  trackingEmailKey, trackingIpKey, trackingIpRetryAfter, trackingKey, trackingRetryAfter,
+} from './shop-extra.tracking-limit.js';
+import { tokensMatch } from './orders.js';
 import { loadOrderLines, loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
 import { orderCodeCandidates } from '../orders/order-number.js';
 
@@ -27,7 +31,7 @@ const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
-    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254), turnstileToken: z.string().max(2048).optional() }) },
+    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254), turnstileToken: z.string().max(2048).optional(), rt: z.string().max(256).optional() }) },
     responses: {
       200: { description: 'OK', content: J(z.any()) },
       403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
@@ -37,15 +41,24 @@ shopExtra.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { code, email, turnstileToken } = c.req.valid('query');
-    // previous-platform parity (order-tracking.service.ts getClientKey): the throttle key is IP + order code, never the email.
-    const key = trackingKey(st.id, clientIp(c), code);
+    const { code, email, turnstileToken, rt } = c.req.valid('query');
+    const ip = clientIp(c);
+    // Audit 2026-11-02: three budgets. (1) per-IP across every code, (2) per-(IP, email) failures, (3) per-(IP, code).
+    const ipRetry = await trackingIpRetryAfter(trackingIpKey(st.id, ip));
+    const emailKey = trackingEmailKey(st.id, ip, email);
+    const emailRetry = ipRetry ? 0 : await trackingEmailFailureRetryAfter(emailKey);
+    if (ipRetry || emailRetry) {
+      c.header('Retry-After', String(ipRetry || emailRetry));
+      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
+    }
+    // previous-platform parity (order-tracking.service.ts getClientKey): the per-code throttle key is IP + order code, never the email.
+    const key = trackingKey(st.id, ip, code);
     const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
       return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
     }
-    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: clientIp(c) }))) {
+    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: ip }))) {
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const out = await withStore(st.id, async (tx) => {
@@ -71,7 +84,9 @@ shopExtra.openapi(
         currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal,
         discountTotal: o.discountTotal, grandTotal: o.grandTotal,
-        shippingAddress: o.shippingAddress ?? null,
+        // The receipt token (the 256-bit secret from the order confirmation) unlocks the full address; code + email alone
+        // only see city / region / country.
+        shippingAddress: tokensMatch(rt ?? c.req.header('x-receipt-token'), o.receiptToken) ? (o.shippingAddress ?? null) : redactShippingAddress(o.shippingAddress),
         payments,
         fulfillments: fuls.map(f => ({
           state: f.state, trackingCode: f.trackingCode, carrier: f.carrier,
@@ -80,8 +95,12 @@ shopExtra.openapi(
         lines: lines.map(({ productSlug: _productSlug, ...l }) => l),
       };
     });
-    if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found for that code + email');
+    if (!out) {
+      await recordTrackingEmailFailure(emailKey);
+      return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found for that code + email');
+    }
     await clearTrackingAttempts(key);
+    await clearTrackingEmailFailures(emailKey);
     return c.json(out, 200);
   },
 );

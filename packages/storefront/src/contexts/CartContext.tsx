@@ -10,7 +10,7 @@ import {
 } from '@qwik.dev/core';
 import { CartService, CartError, CART_COUNT_KEY } from '~/services/CartService';
 export { COUPON_MAX_LENGTH, INVALID_COUPON_MESSAGE } from '~/services/CartService';
-import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
+import { bindCartMirror, commitMirror, isDefinitiveCartFailure, setCartIfChanged } from './cart-mirror';
 import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment, type CartMutationResult } from '~/sellright/types/cart';
 
@@ -34,6 +34,10 @@ export interface CartContextState extends Live {
   /** The persisted item count from the last session of this browser's cart (null = none). The header badge shows it until
    *  the first server read lands (`hasLoadedOnce`); after that the lines are the count. Never cart data. */
   lastKnownQuantity?: number | null;
+  /** #425: adds whose line is on screen (`showAddedLine`) but whose server write has not finished. While > 0 the drawer shows no
+   *  subtotal or total (the line's own price is the page's displayed price; the server has not priced the cart yet) and Checkout
+   *  waits for it to reach 0 before leaving. */
+  pendingAdds?: number;
 }
 
 export const CartContextId = createContextId<CartContextState>('cart-context');
@@ -47,6 +51,7 @@ export const CartProvider = component$(() => {
     isRefreshingStock: false,
     notice: null,
     lastKnownQuantity: null,
+    pendingAdds: 0,
   });
 
   // Init on page boot: paint whatever CartService already has in memory (SPA
@@ -61,7 +66,7 @@ export const CartProvider = component$(() => {
       bindCartMirror(cartState);
       bindCrossTabSync(cartState);
       if (cartState.hasLoadedOnce) return;
-      cartState.cart = CartService.getCart();
+      setCartIfChanged(cartState, CartService.getCart());
       // Paint the last known count at once; the bootstrap read below replaces it.
       cartState.lastKnownQuantity = CartService.lastKnownQuantity();
       // V27: a document loaded AT checkout reads the cart once, at checkout entry (`refreshCartLive`): this boot
@@ -69,7 +74,8 @@ export const CartProvider = component$(() => {
       // at document start (this handler is already loaded for every page), not when the checkout's own chunks have loaded;
       // the entry takes it over. The entry read is the LOCKED live check and always runs.
       if (startCheckoutEntryBoot(typeof location === 'undefined' ? '' : location.pathname)) return;
-      CartService.bootstrap()
+      // #415: the boot read takes the cart read this document started at parse (once), else reads live.
+      CartService.bootstrap({ early: true })
         .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
           console.error('CartContext: initial cart refresh failed:', e);
@@ -108,7 +114,9 @@ function bindCrossTabSync(cartState: CartContextState): void {
  *  last session (so the badge does not flash 0); after that it is the live lines. Brand headers (layer slots) use the
  *  same helper so every header shows the same number. */
 export function cartBadgeCount(state: { hasLoadedOnce?: boolean; lastKnownQuantity?: number | null; cart: { lines: ReadonlyArray<{ quantity: number }> } }): number {
-  if (!state.hasLoadedOnce && typeof state.lastKnownQuantity === 'number') return state.lastKnownQuantity;
+  // lastKnownQuantity first: with no persisted count `hasLoadedOnce` is never read, so a header computed from this does not
+  // subscribe to it and the boot's hasLoadedOnce flip (no visible change) does not re-run the header before the first paint.
+  if (typeof state.lastKnownQuantity === 'number' && !state.hasLoadedOnce) return state.lastKnownQuantity;
   return state.cart.lines.reduce((sum, line) => sum + line.quantity, 0);
 }
 
@@ -182,7 +190,8 @@ export function startCheckoutEntryBoot(pathname: string): boolean {
   const cookie = typeof document === 'undefined' ? null : COUNTRY_COOKIE_RE.exec(document.cookie);
   const shipCountry = cookie?.[1] || undefined;
   CartService.setQuoteContext({ pricingIntent: 'checkout', ...(shipCountry ? { shipCountry } : {}) });
-  const read = CartService.bootstrap(CHECKOUT_ENTRY_READ);
+  // #415: started at document parse by the early-reads script (same query); taken over here once, else read live.
+  const read = CartService.bootstrap({ ...CHECKOUT_ENTRY_READ, early: true });
   // The entry awaits it and reports its failure; this only keeps an unawaited rejection from being reported twice.
   read.catch(() => undefined);
   checkoutBoot.read = read;
@@ -291,8 +300,37 @@ export type AddOutcome =
 /** #401: the add-to-cart failure every PDP shows (announced via role=alert). */
 export const ADD_FAILED_MESSAGE = "Couldn't add to cart. Please try again.";
 
+/** #427 local first: put the line the shopper just added into the cart state on the click, before the server write, so the
+ *  drawer can open at once. The caller has already judged it purchasable from its own live stock read. The add's response
+ *  replaces it (server price and availability); a failed or unapplied add commits the mirror, which never had it. */
+export function showAddedLine(cartState: CartContextState, sku: string, quantity: number, name: string, unitPrice: number, enrichment?: CartLineEnrichment): void {
+  const lines = cartState.cart?.lines;
+  if (!lines) return;
+  // #425: counted here, synchronously with the click, not when the write starts: the write's code may still be loading, and a
+  // Checkout tap in that gap must not leave for a cart the server does not have yet. `addToCartWithOutcome` releases it.
+  cartState.pendingAdds = (cartState.pendingAdds ?? 0) + 1;
+  const same = lines.find((l) => l.sku === sku);
+  if (same) {
+    same.quantity += quantity;
+    same.lineSubtotal = same.unitPrice * same.quantity;
+    same.lineTotal = same.lineSubtotal - (same.lineDiscount ?? 0);
+    return;
+  }
+  cartState.cart.lines = [
+    ...lines,
+    { ...enrichment, sku, name, unitPrice, quantity, lineSubtotal: unitPrice * quantity, lineDiscount: 0, lineTotal: unitPrice * quantity, available: true, availableQuantity: null } as (typeof lines)[number],
+  ];
+}
+
 export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddOutcome> => {
-  await loadCartIfNeeded(cartState);
+  try {
+    await loadCartIfNeeded(cartState);
+  } catch (error) {
+    // The boot read failed before the add started: the shown line never reached the server. Roll it back and release it.
+    reportError(cartState, error, ADD_FAILED_MESSAGE);
+    if ((cartState.pendingAdds ?? 0) > 0) cartState.pendingAdds = (cartState.pendingAdds ?? 0) - 1;
+    return { kind: 'error', message: cartState.lastError };
+  }
   cartState.isLoading = true;
   cartState.lastError = null;
   try {
@@ -315,7 +353,24 @@ export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: s
     return { kind: 'error', message: cartState.lastError };
   } finally {
     cartState.isLoading = false;
+    // Released after the mirror was committed (success: the server's cart; failure: the cart without the shown line).
+    if ((cartState.pendingAdds ?? 0) > 0) cartState.pendingAdds = (cartState.pendingAdds ?? 0) - 1;
   }
+});
+
+/** #425: how long Checkout waits for a cart write that is still running before it gives up (the client's own request bound is 8 s). */
+const CART_WRITES_WAIT_MS = 20_000;
+
+/** Whether the shopper may leave for checkout: waits for every add / change still being written (the optimistic drawer shows lines
+ *  before the server has them), then for the cart lock queue, and resolves to true only when the server cart exists and holds the
+ *  lines the drawer shows. A failed add rolled its line back, so the cart is then empty or gone and this is false: never navigate
+ *  to a checkout whose server cart is missing the shopper's lines. */
+export const awaitCartWrites = $(async (cartState: CartContextState): Promise<boolean> => {
+  const deadline = Date.now() + CART_WRITES_WAIT_MS;
+  while ((cartState.isLoading || (cartState.pendingAdds ?? 0) > 0) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  if (cartState.isLoading || (cartState.pendingAdds ?? 0) > 0) return false;
+  await CartService.settled();
+  return !!CartService.token() && cartState.cart.lines.length > 0;
 });
 
 export const updateCartLineQuantity = $(async (cartState: CartContextState, sku: string, quantity: number) => {

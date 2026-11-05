@@ -1,6 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { XCircleIcon } from '~/platform/gateway';
 import { confirmFederatedSignIn } from '~/providers/shop/account/google-auth';
+import { signInDestination } from '~/utils/sign-in-next';
 import { createSEOHead } from '~/utils/seo';
 
 export const head = createSEOHead({
@@ -40,7 +41,8 @@ export default component$(() => {
 		error.value = '';
 		const result = await confirmFederatedSignIn(token.value);
 		if (result.ok) {
-			window.location.href = '/account';
+			// ?next= is honoured only as a same-site path (utils/sign-in-next.ts); anything else lands on /account.
+			window.location.href = signInDestination();
 			return;
 		}
 		error.value = result.message;

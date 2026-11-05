@@ -10,6 +10,7 @@ import { env } from '../env.js';
 import { onStoreShellConfigChanged } from '../cache/purge-hook.js';
 import { appleServicesId } from '../auth/apple.js';
 import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
+import { findHostnameConflict, validateStoreHostnames } from '../lib/store-hostnames.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireHuman, guard } from './admin-helpers.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
@@ -154,7 +155,8 @@ adminSettings.openapi(
       // (JSONB), not a `store` column — handled separately from the rest of
       // this body below. Previously nothing on the admin surface could ever
       // set this after bootstrap.js's one-time BOOTSTRAP_STORE_HOSTNAMES.
-      hostnames: z.array(z.string().trim().min(1)).optional(),
+      // Each entry must be a fully-qualified domain name (lib/store-hostnames.ts) and not overlap another store's.
+      hostnames: z.array(z.string().trim().min(1).max(253)).max(50).optional(),
       // Public storefront URL (config.storefrontUrl): Sezzle/Stripe return
       // URLs and email links are built from it. https only (http allowed for
       // loopback); null or "" clears it.
@@ -165,7 +167,22 @@ adminSettings.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const { hostnames, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    const { hostnames: hostnamesRaw, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    let hostnames: string[] | undefined;
+    if (hostnamesRaw !== undefined) {
+      const checked = validateStoreHostnames(hostnamesRaw);
+      if (!checked.ok) throw new HttpError(400, `hostnames must be fully-qualified domain names (no bare TLD, wildcard, IP, port or path): ${checked.invalid.slice(0, 5).join(', ')}`);
+      hostnames = checked.hostnames;
+    }
+    // Agents may edit the store's name and tax, but never where it lives: storefrontUrl is the base of every customer
+    // password-reset and email-change link, and hostnames pick the store per Host and feed the credentialed CORS list.
+    // A leaked or prompt-injected agent token could otherwise redirect reset tokens to its own host (security audit
+    // 2026-11-02 H1). Field-level, so the route itself stays open to agents for the reversible fields.
+    if (admin.kind === 'agent' && (storefrontUrlRaw !== undefined || hostnames !== undefined)) {
+      await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'agent', entityId: admin.id,
+        action: 'denied', data: { method: 'PATCH', path: '/v1/admin/settings/store', group: 'identity', fields: [storefrontUrlRaw !== undefined && 'storefrontUrl', hostnames !== undefined && 'hostnames'].filter(Boolean) } }));
+      throw new HttpError(403, 'Agents cannot change the storefront URL or store hostnames; a human admin must.', 'AGENT_NOT_ALLOWED');
+    }
     let storefrontUrl: string | null | undefined;
     if (storefrontUrlRaw !== undefined) {
       if (storefrontUrlRaw === null || storefrontUrlRaw === '') storefrontUrl = null;
@@ -208,6 +225,18 @@ adminSettings.openapi(
         actor: admin.email,
         action: 'settings_update_hostnames',
         detail: () => ({ hostnames }),
+      }, {
+        // Same transaction as the write, serialised across stores so two tenants cannot claim one name at once.
+        before: async (tx) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('store-hostnames'))`);
+          const rows = await tx.execute(sql`SELECT config->'hostnames' AS hostnames FROM store WHERE id <> ${st.storeId}`);
+          const others: string[] = [];
+          for (const r of rows.rows as Array<{ hostnames: unknown }>) {
+            if (Array.isArray(r.hostnames)) for (const h of r.hostnames) if (typeof h === 'string') others.push(h.trim().toLowerCase());
+          }
+          const clash = findHostnameConflict(hostnames!, others);
+          if (clash) throw new HttpError(409, `hostname ${clash.mine} is already used by another store`, 'HOSTNAME_IN_USE');
+        },
       });
     }
     if (storefrontUrl !== undefined) {

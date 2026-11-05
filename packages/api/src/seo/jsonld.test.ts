@@ -173,16 +173,21 @@ describe('productSchema', () => {
     expect(noPrice!.offers).toBeUndefined();
   });
 
-  it('describes the product in plain text and parses material/additionalProperty from the SPECS block', () => {
+  it('describes the product in plain text without the SPECS block, and parses material/additionalProperty from it (#388)', () => {
     const description = '<p>The Oni is a &quot;small&quot; knife.</p><p>SPECS</p><p>Blade Material: Sandvik 14c28n.<br>Handle Material: G10<br>Reversible Deep carry pocket Clip</p>';
     const schema = productSchema(configured, { ...product, description }, NOW)!;
-    expect(schema.description).toBe('The Oni is a "small" knife. SPECS Blade Material: Sandvik 14c28n. Handle Material: G10 Reversible Deep carry pocket Clip');
+    expect(schema.description).toBe('The Oni is a "small" knife.');
     expect(String(schema.description)).not.toMatch(/[<>]/);
     expect(schema.material).toBe('Sandvik 14c28n');
     expect(schema.additionalProperty).toEqual([
       { '@type': 'PropertyValue', name: 'Blade Material', value: 'Sandvik 14c28n' },
       { '@type': 'PropertyValue', name: 'Handle Material', value: 'G10' },
     ]);
+  });
+
+  it('keeps the full text when the description is only a SPECS block', () => {
+    const schema = productSchema(configured, { ...product, description: '<p>SPECS</p><p>Blade Material: 14C28N</p>' }, NOW)!;
+    expect(schema.description).toBe('SPECS Blade Material: 14C28N');
   });
 
   it('has no material or additionalProperty without a SPECS block', () => {

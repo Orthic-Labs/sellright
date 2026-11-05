@@ -49,12 +49,17 @@ async function heldUnits(tx: Tx, orderId: string): Promise<Map<string, number>> 
   return byVariant;
 }
 
+/** Cancellation source stamped on the audit row by the stale-unpaid job; the abandoned-order trash job (#359) trashes only these. */
+export const CANCEL_SOURCE_RELEASE_STALE = 'release-stale';
+
 export interface CancelUnpaidInput {
   storeId: string;
   orderId: string;
   actor: string;
   /** Stored on the audit row (`data`). */
   reason: Record<string, unknown>;
+  /** Who initiated the cancel, stored as `data.cancelSource`. Omitted by callers that must never be auto-trashed (shopper cart reopen). */
+  cancelSource?: string;
   stripeDiscoverable: boolean;
   /** false = count what would be released and write nothing (the job's dry run). */
   apply: boolean;
@@ -95,7 +100,8 @@ export async function cancelUnpaidOrderInSet(tx: Tx, held: HeldLocks, input: Can
   await release(tx, held, { storeId, orderId, reason: 'order_cancelled', stripeDiscoverable: input.stripeDiscoverable });
   await tx.insert(s.auditLog).values({
     storeId, actor: input.actor, entity: 'order', entityId: orderId,
-    action: 'cancel', fromState: 'PendingPayment', toState: 'Cancelled', data: input.reason,
+    action: 'cancel', fromState: 'PendingPayment', toState: 'Cancelled',
+    data: input.cancelSource ? { ...input.reason, cancelSource: input.cancelSource } : input.reason,
   });
   return released;
 }

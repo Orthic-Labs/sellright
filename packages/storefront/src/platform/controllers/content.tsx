@@ -1,14 +1,16 @@
 // Brand views, plan §2.3/§2.5: the content, home, blog and contact mounts, and the two form hooks the base pages and the brand views
 // share. Everything that reads a loader, posts a form or loads a script lives here (L1); the brand view gets projections and actions.
-import { $, component$, useComputed$, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, component$, useComputed$, useConstant, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { isServer } from '@qwik.dev/core/build';
 import { server$, useLocation } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { withVisitorIp } from '~/utils/sellright-visitor-ip.server';
 import { mountTurnstileOnIntent, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { readHomeValues, useFeaturedProducts } from '~/platform/home';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { useLiveRead } from '~/platform/live-values';
-import { hasPendingValues } from './configurator-model';
+import { hasPendingValues, pickLiveSource, projectConfigurator, sourceOf } from './configurator-model';
+import { useCart } from '~/contexts/CartContext';
 import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/platform/blog';
 import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
@@ -60,7 +62,7 @@ export function useNewsletterForm() {
 			port,
 			{
 				post: async (body) => {
-					const res = await fetch('/newsletter-signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+					const res = await fetch('/api/newsletter-signup/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 					return { ok: res.ok, status: res.status };
 				},
 				onSuccess: () => { email.value = ''; },
@@ -190,9 +192,10 @@ export const BrandHomeMount = component$(() => {
 	// ADR-0001: shell values (SHELL_CACHE=1) are read in the browser on load, no-store: the spotlight's prices through the configurator's
 	// source, the featured tiles' prices here. Off: neither read starts.
 	const spotKey = useComputed$(() => (hasPendingValues(spotlight.value, 'spotlight') ? 'spotlight' : null));
-	const spotLive = useLiveRead<HomeSpotlightDetail>($(() => readHomeSpotlight()), spotKey);
+	// #415: this document's early GETs of the same values (once each), else the server$ reads.
+	const spotLive = useLiveRead<HomeSpotlightDetail>($(() => earlyJsonOr(liveReadUrl('home-spotlight'), () => readHomeSpotlight())), spotKey);
 	const featuredKey = useComputed$(() => (featured.value.valuesPending ? 'featured' : null));
-	const featuredLive = useLiveRead($(async () => (await readHomeValues()).featured), featuredKey);
+	const featuredLive = useLiveRead($(async () => (await earlyJsonOr(liveReadUrl('home-values'), () => readHomeValues())).featured), featuredKey);
 	const c = useConfigurator(spotlight as ReadonlySignal<ConfiguratorLoaderValue>, 'spotlight', spotLive);
 	const data = useComputed$(() => {
 		const pending = featured.value.valuesPending && featuredLive.status !== 'ready';
@@ -202,21 +205,39 @@ export const BrandHomeMount = component$(() => {
 			featured: projectFeatured(items).map((card) => (pending ? { ...card, pricePending: true } : card)) as HomeViewProps['featured'],
 		});
 	});
-	// Projected in the render body (a computed reading the configurator's projection loses its captures in production builds).
-	const v = c.project();
-	const product = spotlight.value ? (v.products[0] ?? null) : null;
-	const spot = product ? (seal<HomeSpotlight>({ product, selection: v.selection, purchase: v.purchase } as HomeSpotlight) as HomeSpotlight) : null;
+	// #427: the spotlight as one computed passed as `{spot.value}`, so Qwik hands the view a signal: a stock or selection change
+	// re-renders only what reads it (the brand's spotlight), not the whole home view. One level only: it reads the configurator's
+	// store, the loader, the live read and the cart directly, never another computed (that lost its captures in production, rc).
+	const ctl = c.ctl;
+	const cart = useCart();
+	const spot = useComputed$(() => {
+		if (!spotlight.value) return null;
+		const v = projectConfigurator(ctl, sourceOf(pickLiveSource(spotlight.value, spotLive.value ?? null, 'spotlight'), 'spotlight'), cart.cart.lines);
+		const product = v.products[0] ?? null;
+		return product ? (seal<HomeSpotlight>({ product, selection: v.selection, purchase: v.purchase } as HomeSpotlight) as HomeSpotlight) : null;
+	});
+	// Built once (#427): fresh handles on each render of this mount would be new props for the home view.
+	const actions = useConstant(() => ({
+		onSubscribe$: platformAction('home.subscribe', form.onSubscribe$),
+		onOptionSelect$: platformAction('configurator.option-select', c.onOptionSelect$),
+		onQuantityChange$: platformAction('configurator.quantity', c.onQuantityChange$),
+		onConsentChange$: platformAction('configurator.consent', c.onConsentChange$),
+		onAddToCart$: platformAction('configurator.add', c.onAddToCart$),
+		onRetryStock$: platformAction('configurator.retry-stock', c.onRetryStock$),
+	}));
 	return (
 		<HomeView
-			{...data.value}
-			spotlight={spot}
+			// Named, not spread: each is passed as a signal, so the live featured prices re-render only what reads them (#427).
+			identity={data.value.identity}
+			featured={data.value.featured}
+			spotlight={spot.value}
 			newsletter={form.form.value}
-			onSubscribe$={platformAction('home.subscribe', form.onSubscribe$)}
-			onOptionSelect$={platformAction('configurator.option-select', c.onOptionSelect$)}
-			onQuantityChange$={platformAction('configurator.quantity', c.onQuantityChange$)}
-			onConsentChange$={platformAction('configurator.consent', c.onConsentChange$)}
-			onAddToCart$={platformAction('configurator.add', c.onAddToCart$)}
-			onRetryStock$={platformAction('configurator.retry-stock', c.onRetryStock$)}
+			onSubscribe$={actions.onSubscribe$}
+			onOptionSelect$={actions.onOptionSelect$}
+			onQuantityChange$={actions.onQuantityChange$}
+			onConsentChange$={actions.onConsentChange$}
+			onAddToCart$={actions.onAddToCart$}
+			onRetryStock$={actions.onRetryStock$}
 		/>
 	);
 });

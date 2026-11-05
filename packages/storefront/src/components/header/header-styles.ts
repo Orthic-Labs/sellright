@@ -82,9 +82,12 @@ export const HEADER_STYLES = `
   }
   .header-scrolled {
     background: rgba(10, 10, 10, 0.8);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  /* F1: the blur is a post-paint effect (html.sr-fx, set after load); a backdrop-filter on the first frame stalled it. */
+  .sr-fx .header-scrolled {
     backdrop-filter: blur(20px) saturate(1.2);
     -webkit-backdrop-filter: blur(20px) saturate(1.2);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
   @keyframes sr-header-solidify {
@@ -102,15 +105,18 @@ export const HEADER_STYLES = `
     }
   }
 
+  /* F1: transparent (its scroll-top look) until html.sr-fx; the scroll-timeline animation attaches after first paint. */
   .header-home-transparent {
     background: transparent;
+  }
+  .sr-fx .header-home-transparent {
     animation: sr-header-solidify linear both;
     animation-timeline: scroll();
     animation-range: 0px 101px;
   }
 
   @supports not (animation-timeline: scroll()) {
-    .header-home-transparent {
+    .sr-fx .header-home-transparent {
       animation: none;
     }
   }

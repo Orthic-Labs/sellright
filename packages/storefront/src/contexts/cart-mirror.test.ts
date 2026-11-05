@@ -9,7 +9,7 @@ import { CartError, CartService } from '~/services/CartService';
 import { installLocks, removeLocks } from '~/services/cart-test-harness';
 import { EMPTY_CART, type Cart, type ServerCart } from '~/sellright/types/cart';
 import { decideCheckoutEntry } from '~/hooks/checkout-stage';
-import { bindCartMirror, commitMirror, isDefinitiveCartFailure, totalQuantityOf } from './cart-mirror';
+import { bindCartMirror, commitMirror, isDefinitiveCartFailure, sameCart, setCartIfChanged, totalQuantityOf } from './cart-mirror';
 
 let queue: Promise<Response>[] = [];
 const respond = (status: number, body: unknown) =>
@@ -131,6 +131,38 @@ describe('cart context follows the service mirror', () => {
 		await CartService.refresh();
 		expect(second.cart.lines).toHaveLength(1);
 		expect(first.cart).toBe(EMPTY_CART);
+	});
+});
+
+describe('#LCP: no-op cart writes keep the context reference (no header re-run before first paint)', () => {
+	it('commitMirror with no cart cookie keeps the SSR cart object when the content is the same', async () => {
+		const ssrCart: Cart = JSON.parse(JSON.stringify(EMPTY_CART)); // the resumed SSR copy: same content, another object
+		const ctx = { cart: ssrCart };
+		await CartService.bootstrap(); // no sr_cart cookie: no request, the mirror stays EMPTY_CART
+		commitMirror(ctx);
+		expect(ctx.cart).toBe(ssrCart);
+		expect(events).toEqual([0]); // the badge is still told
+	});
+
+	it('a changed cart still replaces the context cart', async () => {
+		setCookie('tok_srv');
+		const ctx = newContext();
+		queue.push(respond(200, serverCart()));
+		await CartService.refresh();
+		commitMirror(ctx);
+		expect(ctx.cart).toBe(CartService.getCart());
+		expect(ctx.cart.lines).toHaveLength(1);
+	});
+
+	it('setCartIfChanged / sameCart compare content, not identity', () => {
+		const a: Cart = JSON.parse(JSON.stringify(EMPTY_CART));
+		const ctx = { cart: a };
+		setCartIfChanged(ctx, EMPTY_CART);
+		expect(ctx.cart).toBe(a);
+		const b: Cart = { ...EMPTY_CART, revision: EMPTY_CART.revision + 1 };
+		expect(sameCart(a, b)).toBe(false);
+		setCartIfChanged(ctx, b);
+		expect(ctx.cart).toBe(b);
 	});
 });
 

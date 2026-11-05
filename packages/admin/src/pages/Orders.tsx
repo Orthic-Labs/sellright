@@ -10,12 +10,12 @@ import { useForcePurgeDialog, isPaidPurgeState } from '../components/ForcePurgeD
 import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
 import { PAYMENT_OPTIONS, customerLabel, paymentDef } from '../lib/order-status';
-import { EmptyState, FilteredEmpty, LoadError, LoadingRows } from '../redesign/states';
+import { EmptyState, FilteredEmpty, LoadError, LoadingRows, sentence } from '../redesign/states';
 import { FulfilDialog } from '../redesign/FulfilDialog';
 import OrderInspector from '../redesign/OrderInspector';
 import { FilterChip, PillView, Popover } from '../redesign/orders-ui';
 import {
-  COL_LABELS, DEFAULT_TAB, TABS, UNCOUNTED, fulfilmentPill, isTabKey, loadCols, loadViews, paymentPill, storeCols, storeViews,
+  COL_LABELS, DEFAULT_TAB, TABS, UNCOUNTED, fulfilmentPill, isTabKey, itemsCopy, loadCols, loadViews, paymentPill, storeCols, storeViews,
   validateViewName, type ColKey, type Cols, type SavedView, type TabKey,
 } from '../redesign/orders-helpers';
 
@@ -390,7 +390,7 @@ export default function Orders() {
           )}
 
           {dateInvalid && <div className="note w" role="alert"><span>The start date is after the end date, so no orders can match.</span></div>}
-          {error && <div style={{ padding: '8px 24px' }}><LoadError what="orders" detail={`${(error as Error).message} Your filters are kept.`} onRetry={() => refetch()} /></div>}
+          {error && <div style={{ padding: '8px 24px' }}><LoadError what="orders" detail={`${sentence((error as Error).message)} Your filters are kept.`} onRetry={() => refetch()} /></div>}
           {bulkResult && bulkResult.results.some((r) => !r.ok) && (
             <div className="banner w" role="alert" style={{ margin: '8px 24px' }}>
               <div>
@@ -432,7 +432,6 @@ export default function Orders() {
                 <tbody>
                   {items.map((o, i) => {
                     const c = customerLabel(o);
-                    const n = (o.openQty ?? 0) + (o.shippedQty ?? 0);
                     return (
                       <tr key={o.code} data-id={o.code} tabIndex={0} aria-selected={o.code === selCode}
                         ref={(el) => { if (el) rowRefs.current.set(o.code, el); else rowRefs.current.delete(o.code); }}
@@ -444,7 +443,7 @@ export default function Orders() {
                         <td><Link to={`/orders/${encodeURIComponent(o.code)}`} className="lnk mono" tabIndex={-1} onClick={(e) => e.stopPropagation()}>{o.code}</Link></td>
                         <td className="muted" data-col="placed">{dateTime(o.placedAt ?? o.createdAt)}</td>
                         <td>{c.name ?? c.email ?? '—'}</td>
-                        <td className="muted hide-open" data-col="items">{o.openQty == null ? '—' : `${n} item${n === 1 ? '' : 's'}`}</td>
+                        <td className="muted hide-open" data-col="items">{itemsCopy(o)}</td>
                         <td data-col="payment"><PillView pill={paymentPill(o.paymentStatus)} /></td>
                         <td><PillView pill={fulfilmentPill(o)} /></td>
                         <td className="muted" data-col="shipping">{o.shippingMethodName ?? '—'}</td>

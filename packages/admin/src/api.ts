@@ -1,4 +1,3 @@
-import { maybeMock } from './qa-mocks.js';
 import { adminHref, isPublicAdminPath } from './lib/base-path';
 
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
@@ -11,6 +10,33 @@ export const auth = {
   get store() { return localStorage.getItem(STORE_KEY); },
   set store(v: string | null) { v ? localStorage.setItem(STORE_KEY, v) : localStorage.removeItem(STORE_KEY); },
 };
+
+/** #355: the saved account this tab works as (relayed by this server's hub), or null for this server's own sign-in.
+ *  Per tab (sessionStorage), with the hub CSRF token the relay's writes need. */
+const HUB_SLOT_KEY = 'sr_hub_slot';
+const HUB_CSRF_KEY = 'sr_hub_csrf';
+const tabValue = (key: string) => ({
+  get(): string | null { try { return sessionStorage.getItem(key); } catch { return null; } },
+  set(v: string | null) { try { if (v) sessionStorage.setItem(key, v); else sessionStorage.removeItem(key); } catch { /* storage blocked: stays on this server */ } },
+});
+const slotValue = tabValue(HUB_SLOT_KEY), hubCsrfValue = tabValue(HUB_CSRF_KEY);
+export const hub = {
+  get slot() { return slotValue.get(); },
+  set slot(v: string | null) { slotValue.set(v); },
+  get csrf() { return hubCsrfValue.get(); },
+  set csrf(v: string | null) { hubCsrfValue.set(v); },
+};
+
+/** The admin API for this tab: this server's, or the hub relay for the active saved account. */
+function adminBase(): string {
+  const slot = hub.slot;
+  return slot ? `/v1/hub/accounts/${slot}/admin` : '/v1/admin';
+}
+
+function addCsrf(headers: Record<string, string>): void {
+  if (hub.slot) { const t = hub.csrf; if (t) headers['x-hub-csrf'] = t; return; }
+  const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf;
+}
 
 function readCookie(name: string): string | null {
   const prefix = `${name}=`;
@@ -36,6 +62,15 @@ function apiError(status: number, json: Record<string, unknown> | null | undefin
   return err;
 }
 
+/** QA mock builds only (VITE_QA_MOCK=1, `vite --mode qa`) and unit tests: decided at build time, so a production
+ *  build drops the mock fixtures entirely instead of shipping them in the entry chunk behind a runtime check. */
+const QA_MOCKS = import.meta.env.VITE_QA_MOCK === '1' || import.meta.env.MODE === 'test';
+async function qaMock(path: string, qs: URLSearchParams, init?: RequestInit): Promise<{ data: unknown; threw?: string } | null> {
+  if (!QA_MOCKS) return null;
+  const { maybeMock } = await import('./qa-mocks.js');
+  return maybeMock(path, qs, init);
+}
+
 /** POSTs that only read (dry runs): QA mode may mock them like GETs. Every writing POST still passes through. */
 const READ_ONLY_POSTS = new Set(['/import-tracking/preview']);
 
@@ -46,7 +81,7 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
   const pathOnly = path.split('?')[0]!;
   if (method === 'GET' || (method === 'POST' && READ_ONLY_POSTS.has(pathOnly))) {
     const qs = new URLSearchParams(path.includes('?') ? path.split('?').pop() || '' : '');
-    const mock = maybeMock(pathOnly, qs, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+    const mock = await qaMock(pathOnly, qs, { method, body: body === undefined ? undefined : JSON.stringify(body) });
     if (mock) {
       if (mock.threw) throw new ApiError(500, mock.threw);
       return mock.data as T;
@@ -54,9 +89,11 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
   }
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (auth.store) headers['x-store-slug'] = auth.store;
-  if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
-  const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
-  if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
+  if (method !== 'GET') addCsrf(headers);
+  const res = await fetch(`${adminBase()}${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
+  // A relayed 401 means the saved account (or this browser's hub session) ended: back to this server's own sign-in.
+  if (res.status === 401 && hub.slot) { hub.slot = null; location.assign(adminHref('/accounts?error=reauth')); }
+  else if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
@@ -76,7 +113,7 @@ export const api = {
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   if (!res.ok) throw new ApiError(res.status, `export failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -89,11 +126,11 @@ export async function downloadFile(path: string, filename: string): Promise<void
 // The xlsx export streams, so it sends no counts; the CSV route still does. A missing header is null, not 0.
 export async function downloadExport(path: string): Promise<{ filename: string; orders: number | null; rows: number | null }> {
   // QA preview (VITE_QA_MOCK + ?qa=1 only): report a mocked download instead of fetching.
-  const mock = maybeMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
+  const mock = await qaMock(path.split('?')[0]!, new URLSearchParams(path.split('?')[1] ?? ''), { method: 'GET' });
   if (mock) return mock.data as { filename: string; orders: number | null; rows: number | null };
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   if (!res.ok) {
     const body = await res.json().catch(() => null) as { error?: string | { message?: string } } | null;
     const msg = typeof body?.error === 'string' ? body.error : body?.error?.message;
@@ -117,11 +154,11 @@ export interface AssetRow { id: string; path: string; url: string; width: number
 export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf;
+  addCsrf(headers);
   const fd = new FormData();
   fd.append('file', file);
   if (alt) fd.append('alt', alt);
-  const res = await fetch('/v1/admin/assets', { method: 'POST', headers, credentials: 'include', body: fd });
+  const res = await fetch(`${adminBase()}/assets`, { method: 'POST', headers, credentials: 'include', body: fd });
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw apiError(res.status, json, `upload failed (${res.status})`);
@@ -142,7 +179,7 @@ export interface Page<T> { items: T[]; total: number; page: number; pageSize: nu
 
 export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null;
   /** #406: units still to ship, of those on pre-order, and units shipped. Removed (refunded before shipping) units are in none. */
-  openQty?: number; openPreOrderQty?: number; shippedQty?: number; }
+  openQty?: number; openPreOrderQty?: number; shippedQty?: number; removedQty?: number; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
@@ -171,7 +208,7 @@ export interface OrderDetail {
     lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
   }[];
   locations: { id: string; name: string; code: string; isDefault: boolean }[];
-  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } }[];
+  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } & Record<string, unknown> }[];
 }
 type RefundLineBasis = Pick<OrderDetail['lines'][number], 'quantity' | 'refundQuantity' | 'refundAvailableQuantity' | 'refundCashAmounts' | 'refundUnitPrice' | 'refundedQty'>;
 
@@ -224,7 +261,7 @@ export function refundCashForRemainingLines(lines: readonly RefundLineBasis[]): 
   return total;
 }
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
-export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; onHand: number; allocated: number; available: number; optionIds?: string[]; }
+export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; updatedAt?: string; onHand: number; allocated: number; available: number; optionIds?: string[]; }
 export interface ProductImage { assetId: string; path: string; url: string; position: number; }
 export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; featuredAssetId: string | null; images: ProductImage[]; variants: VariantRow[];
   /** #406: sent back as expectedUpdatedAt on save; a newer row is a 409 conflict. */
@@ -262,7 +299,7 @@ export function assetUrl(path: string | null): string | null {
 export async function apiText(path: string): Promise<string> {
   const headers: Record<string, string> = {};
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const res = await fetch(`${adminBase()}${path}`, { headers, credentials: 'include' });
   const text = await res.text();
   if (!res.ok) {
     let json: Record<string, unknown> | null = null;
@@ -271,3 +308,28 @@ export async function apiText(path: string): Promise<string> {
   }
   return text;
 }
+
+// ── #355: saved accounts (this server as a hub) ──────────────────────────────
+export interface HubTarget { id: string; label: string }
+export interface HubAccount { id: string; targetId: string; targetLabel: string; adminEmail: string; expiresAt: string; lastUsedAt: string | null }
+
+async function hubReq<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (method !== 'GET') { const t = hub.csrf; if (t) headers['x-hub-csrf'] = t; }
+  const res = await fetch(`/v1/hub${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
+  return json as T;
+}
+
+export const hubApi = {
+  /** Starts or resumes this browser's hub session (keeping its CSRF token for this tab), then lists saved accounts. */
+  async load(): Promise<{ targets: HubTarget[]; accounts: HubAccount[] }> {
+    hub.csrf = (await hubReq<{ csrf: string }>('POST', '/session')).csrf;
+    return hubReq('GET', '/accounts');
+  },
+  /** The target's sign-in page for a new saved account. */
+  async enrol(targetId: string): Promise<string> { return (await hubReq<{ redirectTo: string }>('POST', '/enrol', { targetId })).redirectTo; },
+  remove: (id: string) => hubReq<{ ok: true }>('DELETE', `/accounts/${id}`),
+};

@@ -34,16 +34,42 @@ export function cleanIp(raw: HeaderValue): string | undefined {
 	return v.includes(':') && IPV6.test(v) ? v : undefined;
 }
 
-/** The visitor IP for one request: the proxy's x-real-ip when a trusted proxy is declared, else the socket peer. */
+/** A loopback or private peer: the deployment's own proxy (nginx, Docker gateway), never a shopper. */
+export function isLocalProxyPeer(ip: string | undefined): boolean {
+	return !ip || ip === '::1' || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || /^f[cd]/i.test(ip);
+}
+
+/**
+ * The visitor IP for one request, from header lookups and the socket peer:
+ * - SELLRIGHT_TRUST_FORWARDED_HOST=1: the proxy's x-real-ip (that proxy overwrites it).
+ * - BEHIND_CLOUDFLARE=1: when the peer is the local proxy, Cloudflare's CF-Connecting-IP. Cloudflare always
+ *   overwrites that header and the origin answers only Cloudflare (nginx cf-enforce origin lock), so it is the shopper's
+ *   address even where nginx does not set x-real-ip. Only the IP is trusted this way; forwarded host headers stay ignored.
+ * - otherwise the socket peer.
+ */
+export function visitorIpFrom(
+	header: (name: string) => string | string[] | null | undefined,
+	socketIp: string | undefined,
+	env: Record<string, string | undefined> = process.env,
+): string | undefined {
+	if (env.SELLRIGHT_TRUST_FORWARDED_HOST === '1') {
+		const fromProxy = cleanIp(header(VISITOR_IP_HEADER));
+		if (fromProxy) return fromProxy;
+	}
+	const peer = cleanIp(socketIp);
+	if (env.BEHIND_CLOUDFLARE === '1' && isLocalProxyPeer(peer)) {
+		const fromCloudflare = cleanIp(header('cf-connecting-ip'));
+		if (fromCloudflare) return fromCloudflare;
+	}
+	return peer;
+}
+
+/** The visitor IP for one request (see visitorIpFrom). */
 export function resolveVisitorIp(
 	req: { headers: { get(name: string): string | null }; socketIp?: string },
 	env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-	if (env.SELLRIGHT_TRUST_FORWARDED_HOST === '1') {
-		const fromProxy = cleanIp(req.headers.get(VISITOR_IP_HEADER));
-		if (fromProxy) return fromProxy;
-	}
-	return cleanIp(req.socketIp);
+	return visitorIpFrom((name) => req.headers.get(name), req.socketIp, env);
 }
 
 /** Run `fn` so every sr() call inside it forwards this request's visitor IP to the API. */

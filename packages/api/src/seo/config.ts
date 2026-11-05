@@ -53,6 +53,12 @@ export function productPath(config: Pick<SeoConfig, 'productUrlPattern'>, slug: 
   return config.productUrlPattern.replace('{slug}', encodeURIComponent(slug));
 }
 
+/** Absolute path of a collection page. Fixed for every storefront (storefront routes/collections, sitemap-collections,
+ *  edge purge all build it here). */
+export function collectionPath(slug: string): string {
+  return `/collections/${encodeURIComponent(slug)}/`;
+}
+
 export interface SeoAddress {
   streetAddress?: string;
   addressLocality?: string;

@@ -25,7 +25,6 @@ import type {
 	GatewayAttempt,
 	GatewayVerifyResult,
 	OrderSummary,
-	ShopConfig,
 	ShopShippingMethod,
 } from '~/sellright/types/checkout';
 
@@ -291,29 +290,7 @@ export const getOrder = async (code: string, receiptToken?: string, signal?: Abo
 	return nonEmpty(data, 'order') as OrderSummary;
 };
 
-const fetchShopConfig = async (): Promise<ShopConfig> => {
-	const { data } = await sellright().GET('/v1/shop/config', {});
-	return nonEmpty(data, 'shop config') as ShopConfig;
-};
-
-// One config read per page in the browser (#362): the PDP pay-later line, express buttons, cart drawer, checkout and
-// loyalty widgets each asked for it on their own. Public store settings only (no stock, prices or customer data). The
-// share is keyed to the page (path + query), so a client-side navigation reads it again, and a failed read is not kept.
-// Object-property holder (not a module-level `let`) so the minifier can't fold it. Never used on the server, where a
-// module value would outlive the request.
-const configShare: { page?: string; read?: Promise<ShopConfig> } = {};
-
-/** Public runtime config — decides whether Stripe is wired for this store. */
-export const getShopConfig = (): Promise<ShopConfig> => {
-	if (typeof window === 'undefined') return fetchShopConfig();
-	const page = window.location.pathname + window.location.search;
-	if (configShare.read && configShare.page === page) return configShare.read;
-	const read = fetchShopConfig();
-	configShare.page = page;
-	configShare.read = read;
-	read.catch(() => { if (configShare.read === read) configShare.read = undefined; });
-	return read;
-};
+export { getShopConfig } from '~/providers/shop/config';
 
 /**
  * Shipping methods for this cart and destination, quoted by the server from the cart's own items and coupons
@@ -327,13 +304,32 @@ export interface ShippingQuote {
 	freeShipping: { threshold: number; remaining: number } | null;
 }
 
-export const getShippingQuote = async (
+// One request per distinct quote: the drawer, the checkout form's typing and its blur each asked for the same quote, so a ZIP
+// entry sent POST /v1/shop/shipping-methods three times (e2e 2026-11-03). Identical requests share the one in flight and reuse
+// its answer for QUOTE_REUSE_MS; any change to country, lines or coupons is a new request.
+const QUOTE_REUSE_MS = 1500;
+let lastQuote: { key: string; at: number; promise: Promise<ShippingQuote> } | null = null;
+
+export const getShippingQuote = (
 	countryCode: string,
 	items: readonly { sku: string; quantity: number }[],
 	couponCodes: readonly string[] = [],
 ): Promise<ShippingQuote> => {
 	const lines = items.filter((i) => i.sku && i.quantity > 0).map((i) => ({ sku: i.sku, quantity: i.quantity }));
-	if (!countryCode || lines.length === 0) return { methods: [], freeShipping: null };
+	if (!countryCode || lines.length === 0) return Promise.resolve({ methods: [], freeShipping: null });
+	const key = JSON.stringify([countryCode.toUpperCase(), lines, [...couponCodes]]);
+	if (lastQuote && lastQuote.key === key && Date.now() - lastQuote.at < QUOTE_REUSE_MS) return lastQuote.promise;
+	const promise = fetchShippingQuote(countryCode, lines, couponCodes);
+	lastQuote = { key, at: Date.now(), promise };
+	promise.catch(() => { if (lastQuote?.promise === promise) lastQuote = null; });
+	return promise;
+};
+
+const fetchShippingQuote = async (
+	countryCode: string,
+	lines: { sku: string; quantity: number }[],
+	couponCodes: readonly string[],
+): Promise<ShippingQuote> => {
 	const { data } = await sellright().POST('/v1/shop/shipping-methods', {
 		body: { country: countryCode.toUpperCase(), items: lines, ...(couponCodes.length ? { couponCodes: [...couponCodes] } : {}) },
 	});

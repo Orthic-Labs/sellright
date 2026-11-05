@@ -12,12 +12,13 @@ import { CSP_DEV, CSP_PROD, cspFor } from './csp';
  * yell at you).
  */
 const NGINX_CSP_PROD =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
 
 const REQUIRED_DIRECTIVES = [
   "default-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
+  "form-action 'self'",
   "object-src 'none'",
 ];
 

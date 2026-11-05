@@ -61,7 +61,7 @@ describe('imported edit basis source capture', () => {
       referencedDetachedShippingLines: [], surcharges: [{ sourceId: '3', sourceRecord: input.surcharges[0]!.sourceRecord }] });
     const { sourceDigest, ...payload } = retained;
     expect(sourceDigest).toBe(digest(payload));
-    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+    expect((capture as { financialReconciliationV1?: unknown }).financialReconciliationV1).toEqual({ version: 1, status: 'required',
       reasons: ['HEADER_CHARGE_CONTRADICTION'], sourceDigest });
     expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
     const changed = fixture();
@@ -341,5 +341,48 @@ describe('imported edit basis source capture', () => {
     expect(captures[1]!.editBasisV1!.shippingMethods.map(method => method.sourceId)).toEqual(['5']);
     input.shippingMethods[0]!.sourceRecord = '{"id":9007199254740992,"code":"historic"}';
     expect(() => buildImportedEditBasis(input)).toThrow(/method identity mismatch/);
+  });
+});
+
+describe('imported payment shortfall on closed source orders (#405)', () => {
+  const shortfallInput = (state: string, shortfall = true) => {
+    const input = { ...fixture(), paymentShortfallOrderIds: new Set<string>() };
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { state, chargeProjectionV1: { status: 'exact-header' } });
+    if (shortfall) input.paymentShortfallOrderIds.add(input.targetOrders[0]!.id);
+    return input;
+  };
+
+  it.each(['Delivered', 'Refunded'])('marks a %s order settled for less than its total with IMPORTED_PAYMENT_SHORTFALL and keeps its edit basis', state => {
+    const capture = buildImportedEditBasis(shortfallInput(state))[0]!;
+    expect(capture).toHaveProperty('editBasisV1');
+    expect(capture).not.toHaveProperty('retainedHistoryV1');
+    expect((capture as { financialReconciliationV1?: unknown }).financialReconciliationV1).toEqual({ version: 1, status: 'required',
+      reasons: ['IMPORTED_PAYMENT_SHORTFALL'], sourceDigest: capture.editBasisV1!.sourceDigest });
+    expect(importedFinancialReconciliationRequired({ vendure: capture })).toBe(true);
+  });
+
+  it('leaves open source states, fully covered orders and unflagged orders without a marker', () => {
+    for (const state of ['Shipped', 'PaymentSettled', 'Cancelled', 'ArrangingPayment']) {
+      expect(buildImportedEditBasis(shortfallInput(state))[0]).not.toHaveProperty('financialReconciliationV1');
+    }
+    expect(buildImportedEditBasis(shortfallInput('Delivered', false))[0]).not.toHaveProperty('financialReconciliationV1');
+    const noSet = fixture();
+    Object.assign(noSet.targetOrders[0]!.metadata.vendure, { state: 'Delivered', chargeProjectionV1: { status: 'exact-header' } });
+    expect(buildImportedEditBasis(noSet)[0]).not.toHaveProperty('financialReconciliationV1');
+  });
+
+  it('keeps the HEADER_CHARGE_CONTRADICTION marker when the order is both contradictory and short', () => {
+    const input = shortfallInput('Delivered');
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { chargeProjectionV1: { status: 'unresolved' } });
+    expect((buildImportedEditBasis(input)[0] as { financialReconciliationV1?: unknown }).financialReconciliationV1).toMatchObject({ reasons: ['HEADER_CHARGE_CONTRADICTION'] });
+  });
+
+  it('marks a retained (detached shipping) closed order too, bound to its retained digest', () => {
+    const input = { ...detachedFixture(), paymentShortfallOrderIds: new Set<string>() };
+    Object.assign(input.targetOrders[0]!.metadata.vendure, { state: 'Delivered', chargeProjectionV1: { status: 'exact-header' } });
+    input.paymentShortfallOrderIds.add(input.targetOrders[0]!.id);
+    const capture = retainedCapture(buildImportedEditBasis(input)[0]);
+    expect(capture.financialReconciliationV1).toEqual({ version: 1, status: 'required',
+      reasons: ['IMPORTED_PAYMENT_SHORTFALL'], sourceDigest: capture.retainedHistoryV1!.sourceDigest });
   });
 });

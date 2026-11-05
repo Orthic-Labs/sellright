@@ -6,10 +6,10 @@ import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
 import { isBrowser } from '@qwik.dev/core/build';
-import { useCart, retireSettledCart, reopenCart } from '~/contexts/CartContext';
+import { useCart, retireSettledCart, reopenCart, awaitCartWrites } from '~/contexts/CartContext';
+import { armedCheckoutKey, syncCheckoutPrerender } from '~/utils/prerender';
 import { CartService } from '~/services/CartService';
 import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
-import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShipping } from './cart-shipping';
@@ -83,14 +83,57 @@ export default component$(() => {
 		frame = requestAnimationFrame(focusPanel);
 	}, { strategy: 'document-ready' });
 
+	// #425: the checkout prerender. While the drawer is open and the cart exists on the server, is not being changed and holds lines, the
+	// browser may prerender /checkout/ (Speculation Rules) so the Checkout tap activates a page that is already built. The key is
+	// everything the prerendered page would show of this cart; any change (an add, a quantity, a coupon, the destination, a failed write)
+	// makes the key differ or null, which discards the stale prerender (utils/prerender.ts), and a closed drawer drops it. Nothing from
+	// the prerendered page is trusted: its live cart read runs at activation (a prerendered document does no API work until shown).
+	useVisibleTask$(({ track }) => {
+		const open = track(() => appState.showCart);
+		const loading = track(() => cartState.isLoading);
+		const pending = track(() => cartState.pendingAdds ?? 0);
+		const token = track(() => cartState.cart.token);
+		const status = track(() => cartState.cart.status);
+		// What /checkout/ shows of this cart: the lines, their quantities and the coupons. NOT the revision, the shipping quote, the
+		// destination or a confirmation that matches the optimistic lines: those do not change the page, and re-arming on them discarded
+		// the prerender before the tap could use it.
+		const lines = track(() => cartState.cart.lines.map((l) => l.sku + ':' + l.quantity).join(','));
+		const coupons = track(() => (cartState.cart.couponCodes ?? []).join(','));
+		const eligible = open && isInEditableUrl && status === 'active' && lines !== '' && !!token && token === CartService.token();
+		if (!eligible) {
+			syncCheckoutPrerender(null);
+			return;
+		}
+		const key = [token, lines, coupons].join('|');
+		if (!loading && pending === 0) syncCheckoutPrerender(key); // armed only when the cart write queue is idle
+		else if (armedCheckoutKey() !== null && armedCheckoutKey() !== key) syncCheckoutPrerender(null); // a change under way: the armed page is stale
+	}, { strategy: 'document-idle' });
+
+	// #425: the express wallets are not part of the drawer's first render. CartExpress and ExpressCheckout are their own bundle (checkout
+	// provider, Stripe.js): mounted a moment after the drawer is open, in a slot with the same box (the wrapper's margin), so the Checkout
+	// control is usable as soon as Cart and CartContents are loaded and nothing moves when the wallets arrive.
+	const showExpress = useSignal(false);
+	useVisibleTask$(({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		if (!open) {
+			showExpress.value = false;
+			return;
+		}
+		const timer = setTimeout(() => { showExpress.value = true; }, 1200);
+		cleanup(() => clearTimeout(timer));
+	}, { strategy: 'document-ready' });
+
 	const dropdownState = useStore({
 		pendingCountryCode: '',
 		debounceTimer: null as number | null,
 		DEBOUNCE_DELAY: 500
 	});
 
+	// #427: no task in this component awaits the network. An awaiting useTask$ holds the component's render, so the drawer
+	// stayed shut until the country list, converted-cart lookup and shipping quote returned (1.1 s live after ADD TO CART).
+	// Each read now starts here and writes its signal when it lands; the drawer renders at once.
 	// T20: Restore country + load country list — useTask$ (runs once)
-	useTask$(async () => {
+	useTask$(() => {
 		if (!appState.shippingAddress.countryCode) {
 			const stored = CountryPreferenceService.getCountry();
 			appState.shippingAddress.countryCode = stored;
@@ -99,15 +142,17 @@ export default component$(() => {
 			countryCodeSignal.value = appState.shippingAddress.countryCode;
 		}
 		if (!appState.availableCountries || appState.availableCountries.length === 0) {
-			const countries = await CountryService.getAvailableCountries();
-			appState.availableCountries = countries as any[];
+			// #427: loaded on demand; a static import put CountryService and its countries.json (~14 KB raw) in every page's shared chunk.
+			void import('~/services/CountryService').then(({ CountryService }) => CountryService.getAvailableCountries()).then((countries) => {
+				appState.availableCountries = countries as any[];
+			});
 		}
 	});
 
 	// A converted cart is an order waiting to be paid (or finished): ask the server which, each time the drawer opens on
 	// one. Read-only; a failed lookup just keeps "Continue checkout" and offers no escape.
 	const convertedLookup = useSignal<ConvertedLookupState>(null);
-	useTask$(async ({ track, cleanup }) => {
+	useTask$(({ track, cleanup }) => {
 		const open = track(() => appState.showCart);
 		const status = track(() => cartState.cart.status);
 		const token = isBrowser ? CartService.token() : null;
@@ -118,23 +163,17 @@ export default component$(() => {
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
 		convertedLookup.value = 'loading';
-		const result = await CartService.lookupConvertedCheckout(token);
-		if (!cancelled) convertedLookup.value = result;
+		void CartService.lookupConvertedCheckout(token).then((result) => {
+			if (!cancelled) convertedLookup.value = result;
+		});
 	});
 	const banner = cartBannerFor(cartState.cart.status, convertedLookup.value);
 	// A converted cart gets its own footer (continue / edit / start new) instead of the checkout footer.
 	const convertedFooter = banner.continueCheckout || banner.editCart || banner.startNewCart;
 	const reopening = useSignal(false);
 
-	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
-
-	const isOutOfStock = useSignal(false);
-
-	// T20: Track out-of-stock via useTask$
-	useTask$(async ({ track }) => {
-		track(() => cartState.cart.lines);
-		isOutOfStock.value = await hasOutOfStockItems();
-	});
+	// T20: out-of-stock straight from the lines (fail closed: only an explicit available === true counts).
+	const isOutOfStock = useComputed$(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
 	// T20: Sync country code signal via useTask$
 	useTask$(({ track }) => {
@@ -165,7 +204,7 @@ export default component$(() => {
 	// Reactive shipping calculation — drives shippingState on every track change.
 	// Previously this was useResource$ which has beta.32 quirks where sync-body resources
 	// skip re-runs after first resolution. Plain useTask$ is reliable.
-	useTask$(async ({ track, cleanup }) => {
+	useTask$(({ track, cleanup }) => {
 		const countryCode = track(() => appState.shippingAddress.countryCode);
 		const cartVisible = track(() => appState.showCart);
 		// The quote is the server's, from the cart's own items and coupons; re-quote whenever either changes.
@@ -186,16 +225,17 @@ export default component$(() => {
 
 		let cancelled = false;
 		cleanup(() => { cancelled = true; });
-		const { method: selectedShippingMethod, freeShipping, failed } = await fetchCartShipping(countryCode, items, couponCodes);
-		if (cancelled) return;
-		// A failed quote is not remembered: the next cart change (or reopen) asks again.
-		shippingState.quoteKey = failed ? '' : quoteKey;
-		appState.freeShipping = freeShipping;
+		void fetchCartShipping(countryCode, items, couponCodes).then(({ method: selectedShippingMethod, freeShipping, failed }) => {
+			if (cancelled) return;
+			// A failed quote is not remembered: the next cart change (or reopen) asks again.
+			shippingState.quoteKey = failed ? '' : quoteKey;
+			appState.freeShipping = freeShipping;
 
-		shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
-		shippingState.selectedMethod = selectedShippingMethod;
-		shippingState.lastCheckedCountry = countryCode;
-		shippingState.error = null;
+			shippingState.methods = selectedShippingMethod ? [selectedShippingMethod] : [];
+			shippingState.selectedMethod = selectedShippingMethod;
+			shippingState.lastCheckedCountry = countryCode;
+			shippingState.error = null;
+		});
 	});
 
 	const calculationState = useStore({
@@ -270,7 +310,8 @@ export default component$(() => {
 	});
 
 	// Ready = at least one line, shipping method + country chosen, and in stock. Mirrors the old disabled conditions.
-	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!shippingState.selectedMethod && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
+	// #427: the drawer's shipping quote is information, not a gate: checkout quotes shipping itself, so Checkout does not wait for it.
+	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
 
 	return (
 		<div>
@@ -454,8 +495,10 @@ export default component$(() => {
 								<div class="space-y-1 mb-2">
 									<div class="flex justify-between items-baseline">
 										<span class="text-[11px] tracking-[0.05em] text-[#6B6459] uppercase">Subtotal</span>
+										{/* #425: while an add is still being written the server has not priced the cart: no subtotal (the line above
+										    shows the page's own price), never the stale one. */}
 										<span class="text-[13px] font-medium text-[#1A1A1A] tabular-nums">
-											{formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
+											{(cartState.pendingAdds ?? 0) > 0 ? '—' : formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
 										</span>
 									</div>
 
@@ -477,7 +520,7 @@ export default component$(() => {
 									</div>
 
 									{/* Total with shipping */}
-									{shippingState.selectedMethod && (
+									{shippingState.selectedMethod && (cartState.pendingAdds ?? 0) === 0 && (
 										<div class="flex justify-between items-baseline pt-1.5 border-t border-[#E5E0D8]">
 											<span class="text-[11px] tracking-[0.05em] text-[#1A1A1A] uppercase font-semibold">Total</span>
 											<span class="text-[15px] font-semibold text-[#1A1A1A] tabular-nums">
@@ -491,7 +534,7 @@ export default component$(() => {
 								</div>
 
 								{/* Express wallets above CHECKOUT: the shopper's own cart, server-quoted (components/cart/CartExpress.tsx). */}
-								<CartExpress />
+								{showExpress.value ? <CartExpress /> : <div class="sr-cart-express mb-2" />}
 
 								<button
 									onClick$={$(async () => {
@@ -504,17 +547,16 @@ export default component$(() => {
 												return;
 											}
 
-											if (!shippingState.selectedMethod) {
-												console.error('No shipping method selected');
-												return;
-											}
-
-											if (!appState.shippingAddress.countryCode) {
-												console.error('No country selected');
-												return;
-											}
-
-											await navigate('/checkout/');
+											// #427: a full document load, not a client navigation. The client route change waited on four
+											// loader round trips to the origin (two of them return nothing on a client fetch) and then the
+											// checkout's own reads (~2 s live); the document carries the order summary from its server cart
+											// read (TTFB ~0.36 s). The checkout quotes shipping itself, so the drawer's quote is not awaited.
+											// #425: the drawer shows the added line (and this control is live) before the server has the cart.
+											// Leave only once every write has finished and the server cart exists with the lines shown: a tap
+											// during the add waits for it, and a failed add (its line is rolled back) stays here. The tap
+											// then activates the prerendered checkout when one was armed (utils/prerender.ts) or loads it.
+											if (!(await awaitCartWrites(cartState))) return;
+											window.location.assign('/checkout/');
 										} catch (error) {
 											console.error('Error navigating to checkout:', error);
 											appState.showCart = true;
@@ -522,6 +564,7 @@ export default component$(() => {
 											isNavigatingToCheckout.value = false;
 										}
 									})}
+									data-warm="checkout"
 									disabled={isNavigatingToCheckout.value || !cartCheckoutReady}
 									aria-disabled={cartCheckoutReady ? 'false' : 'true'}
 									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium

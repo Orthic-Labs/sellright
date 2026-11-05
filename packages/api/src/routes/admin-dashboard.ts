@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { J, errBody, money, PAID_STATES, requireAdmin, requireStore, guard } from './admin-helpers.js';
 import { isStorePublished } from '../store-publish.js';
-import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
+import { pendingFulfillmentCountSql } from '../orders/tabs-sql.js';
 import { orderContactSql } from '../orders/contact.js';
 
 export const adminDashboard = new OpenAPIHono();
@@ -35,12 +35,10 @@ adminDashboard.openapi(
         .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null and not ${s.order.isDemo}`);
       const revenue = agg?.revenue ?? 0;
       const cnt = agg?.cnt ?? 0;
-      // Keep this predicate aligned with the Orders page's canonical
-      // Unfulfilled view; both use the shared status SQL projections.
-      const [pf] = await tx
-        .select({ n: sql<number>`count(*)::int` })
-        .from(s.order)
-        .where(sql`${s.order.deletedAt} is null and ${s.order.isDemo} = false and ${s.order.status} in ('open','completed') and ${paymentStatusWithBalanceSql()} = 'paid' and ${fulfillmentStatusSql()} = 'unfulfilled'`);
+      // The Orders page's Unfulfilled view, counted set-based (orders/tabs-sql.ts pendingFulfillmentCountSql; the per-row
+      // status projections cost ~280 ms here). tabs-sql.db.test.ts keeps it equal to the status-sql predicate.
+      const pfRes = await tx.execute(pendingFulfillmentCountSql());
+      const pf = (pfRes as unknown as { rows: Array<{ n: number }> }).rows[0];
       const [cu] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer);
       const [ls] = await tx
         .select({ n: sql<number>`count(*)::int` })

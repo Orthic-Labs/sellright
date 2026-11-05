@@ -2,6 +2,7 @@
 // the way the e2e fallback proof compares pages (scripts/ssr-normalize.mjs: every element, attribute and text; Qwik bookkeeping only
 // normalised). The "before" side is the raw component with today's call-site props and children.
 import { $, type JSXOutput } from '@qwik.dev/core';
+import { homepageStyles } from './home-styles';
 import { QwikRouterMockProvider } from '@qwik.dev/router';
 import { ssrRenderToDom } from '@qwik.dev/core/testing';
 import { describe, expect, it } from 'vitest';
@@ -194,6 +195,6 @@ describe('gateway default output: each handle renders what L1 rendered before', 
 	});
 
 	it('homepage styles reach the page unchanged', () => {
-		expect(G.homepageStyles).toBe(STYLES);
+		expect(homepageStyles).toBe(STYLES);
 	});
 });

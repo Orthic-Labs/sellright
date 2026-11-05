@@ -5,6 +5,7 @@ import { OptimizedImage } from '~/components/ui/LazyImage';
 import { APP_STATE } from '~/constants';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { formatPrice } from '~/utils';
+import { normalizeOptionSeparators } from '~/utils/line-label';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
@@ -127,8 +128,6 @@ export default component$<{
 		}
 	});
 
-	const optionSeparators = (label: string) => label.split(/\s+-\s+/).join(' / ');
-
 	// Helper: strip product name prefix from variant name
 	const variantLabel = (variantName: string, productName: string) => {
 		const stripped = variantName.replace(productName, '').trim();
@@ -157,7 +156,7 @@ export default component$<{
 					const quantityOpts = projectQuantityOptions(maxQty, expandedDropdowns.value.has(line.sku));
 					// #401: one separator everywhere. The add path's options read "Small / Storm grey"; the server's variant name
 					// ("Small - Storm grey") after a sync or reload is shown the same way (hyphens inside a word stay).
-					const vLabel = line.options ?? optionSeparators(line.productName ? line.name : variantLabel(line.name, productName));
+					const vLabel = normalizeOptionSeparators(line.options ?? (line.productName ? line.name : variantLabel(line.name, productName)));
 
 					return (
 						<li key={line.sku} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">

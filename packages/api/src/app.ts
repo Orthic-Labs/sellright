@@ -16,6 +16,7 @@ import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { adminHandoff } from './routes/admin-handoff.js';
+import { hub } from './routes/hub.js';
 import { setup } from './routes/setup.js';
 import { adminSystem } from './routes/admin-system.js';
 import { adminSystemInfo } from './routes/admin-system-info.js';
@@ -75,7 +76,7 @@ import { isAgentToken, resolveAgentByToken } from './auth/admin-api-token.js';
 import { CACHE_ADMIN_TOKEN_HEADER } from './routes/admin-cache.js';
 import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
-import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
+import { isAllowedAdminCorsOrigin, isAllowedShopCorsOrigin } from './cors-origins.js';
 import { bodyLimit } from 'hono/body-limit';
 import { isPoolTimeout, locksPool, poolGauges } from './db/client.js';
 import { admissionGauges } from './jobs/admission.js';
@@ -226,7 +227,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // P2: the credentialed admin API only answers CORS for EXACT configured origins (cors-origins.ts).
     const allowed = !origin ? false
       : c.req.path === '/v1/admin' || c.req.path.startsWith('/v1/admin/') ? isAllowedAdminCorsOrigin(origin)
-      : await isAllowedCorsOrigin(origin);
+      : await isAllowedShopCorsOrigin({ method: c.req.method, header: (n) => c.req.header(n) }, origin);
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
@@ -533,6 +534,15 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (Array.isArray(zodIssues)) {
       return c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param: zodIssues[0]?.path?.map(String).join('.') || undefined }), 400);
     }
+    // A malformed id in the path or query (e.g. /v1/admin/products/null) reaches Postgres as invalid uuid syntax
+    // (SQLSTATE 22P02, wrapped by drizzle as the cause). The id names no row: answer 404, not 500.
+    // Any other 22P02 (a bad enum or number value) is the client's input error: 400.
+    const pg = [err, (err as { cause?: unknown }).cause].find((e) => (e as { code?: string } | null)?.code === '22P02') as { message?: string } | undefined;
+    if (pg) {
+      return /\buuid\b/i.test(pg.message ?? '')
+        ? c.json(errorEnvelope(c, 'NOT_FOUND', 'not found'), 404)
+        : c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request'), 400);
+    }
     // A malformed JSON body read with c.req.json() inside a handler is also the client's error.
     if (err instanceof SyntaxError && /JSON/i.test(err.message)) {
       return c.json(errorEnvelope(c, 'INVALID_JSON', 'request body is not valid JSON'), 400);
@@ -595,6 +605,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
   app.route('/', adminHandoff); // #355: saved-account hub sign-in handoff (target side)
+  app.route('/', hub); // #355 phase 2: saved-account hub (broker side; off unless HUB_* are set)
   app.route('/', setup); // one-click install: pre-auth claim (404s once claimed)
   app.route('/', adminSystem); // one-click install: setup checklist, Publish readiness, recovery-kit download
   app.route('/', adminSystemInfo); // read-only build-info + effective-config (config/v1) — owner only

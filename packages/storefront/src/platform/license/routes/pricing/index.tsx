@@ -6,7 +6,7 @@ import { useHostVariant } from '../layout';
 import { licensePageHead } from '../../variant';
 
 /** The variant's license catalog, from its collection (Host -> variant -> collection). */
-export const useCatalog = routeLoader$<PricedProduct[]>(async ({ resolveValue }) => loadCatalog((await resolveValue(useHostVariant)).collection));
+export const useCatalog = routeLoader$<PricedProduct[]>(async ({ resolveValue }) => loadCatalog((await resolveValue(useHostVariant)).collection), { serializationStrategy: 'always' });
 
 export default component$(() => {
 	const v = useHostVariant();

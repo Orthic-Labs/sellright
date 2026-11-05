@@ -5,6 +5,7 @@ import { SellRightError } from '~/platform/errors';
 import type { ReviewList } from '~/sellright/types/rewards';
 import { theme } from '~/theme/theme.config';
 import { signInHref } from '~/utils/sign-in-next';
+import { whenNearViewport } from '~/utils/near-viewport';
 import { pointsLabel, wantsReviewForm, reviewsMeetThreshold, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';
 
 const PAGE = 10;
@@ -45,16 +46,26 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	const error = useSignal('');
 	const done = useSignal<'' | 'pending' | 'approved'>('');
 
-	// document-ready, not on visibility: the block is below the fold, and a read that only starts when it scrolls into view
-	// left "Loading reviews…" on screen (captures, fast scrolls). Only the network read is guarded.
-	useVisibleTask$(async () => {
+	const anchor = useSignal<HTMLElement>();
+
+	// Lane 11: the reviews read (GET .../reviews, low fetch priority) starts only when the block nears the viewport (~400px ahead,
+	// so it has landed before the shopper reaches it), never on the page's load where it competed with the LCP image and the live
+	// stock read. The observer is set up at idle; a review entry (?review=1 / #write-review) reads at once.
+	useVisibleTask$(({ cleanup }) => {
 		const loc = window.location;
 		writeOnly.value = wantsReviewForm(loc.search, loc.hash);
 		returnPath.value = loc.pathname + (writeOnly.value && !loc.search.includes('review=1') ? '?review=1' : loc.search);
-		const first = await getProductReviews(slug, { limit: PAGE }).catch(() => null);
-		if (first) data.value = first;
-		else loadError.value = true;
-	}, { strategy: 'document-ready' });
+		const load = async () => {
+			const first = await getProductReviews(slug, { limit: PAGE, priority: 'low' }).catch(() => null);
+			if (first) data.value = first;
+			else loadError.value = true;
+		};
+		if (writeOnly.value || !anchor.value) {
+			void load();
+			return;
+		}
+		cleanup(whenNearViewport(anchor.value, () => { void load(); }));
+	}, { strategy: 'document-idle' });
 
 	const more = $(async () => {
 		if (!data.value || loadingMore.value) return;
@@ -101,9 +112,9 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 
 	const d = data.value;
 	// Nothing renders until the read resolves (no "Loading" placeholder, no empty heading for a store with reviews off or a
-	// failed read). The wrapper always renders so the document-ready task has a node to hang off.
+	// failed read). The wrapper always renders: the idle task has a node to hang off and the observer watches it.
 	// It keeps id="reviews" while the read is pending, so the rating link's #reviews always has a target.
-	if (!d || loadError.value || !d.enabled) return <div id="reviews" data-state={d || loadError.value ? 'off' : 'pending'} />;
+	if (!d || loadError.value || !d.enabled) return <div id="reviews" ref={anchor} data-state={d || loadError.value ? 'off' : 'pending'} />;
 	// Under the threshold the whole block (and so the #reviews anchor the rating link targets) is withheld; the rating link is gated to match.
 	// A review entry (?review=1) still shows the write form alone, so products can collect their first reviews.
 	const formOnly = !reviewsMeetThreshold(d.count);

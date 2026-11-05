@@ -90,6 +90,9 @@ const HAND_WRITTEN = [
   '0113_admin_handoff_code.sql',
   '0114_admin_preference.sql',
   '0115_customer_title.sql',
+  '0116_job_sweep_indexes.sql',
+  '0117_order_list_date_idx.sql',
+  '0118_admin_hub.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

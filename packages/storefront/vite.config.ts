@@ -1,13 +1,39 @@
+import { readFileSync } from 'node:fs';
 import { qwikRouter } from '@qwik.dev/router/vite';
 import { qwikVite } from '@qwik.dev/core/optimizer';
-import { defineConfig, loadEnv } from 'vite';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import { imagetools } from 'vite-imagetools';
-import viteCompression from 'vite-plugin-compression';
 import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
 import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 import { preloadGraphPlugin } from './src/platform/preload-graph';
+import { buildGuardsPlugin } from './src/platform/build-guards';
+import { precompressPlugin } from './src/platform/precompress';
+
+const NO_GLOBAL_CSS = '\0sellright-no-global-css';
+function noGlobalCssPlugin(srcDir: string): Plugin {
+  return {
+    name: 'sellright-license-no-global-css',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (source === './global.css' && importer && dirname(importer.split('?')[0]) === srcDir) return NO_GLOBAL_CSS;
+      return null;
+    },
+    load(id) {
+      return id === NO_GLOBAL_CSS ? 'export {};' : null;
+    },
+  };
+}
+
+import { areaSets, sharedAreaGroup } from './scripts/chunk-groups.mjs';
+const srAreaSets = new Map<string, string>();
+function chunkGroupsMap(): Record<string, string> {
+  const suffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
+  try { return JSON.parse(readFileSync(`chunk-groups${suffix}.json`, 'utf8')); } catch { return {}; }
+}
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -33,7 +59,7 @@ export default defineConfig((config) => {
     base: '/', // Ensure root-relative URLs
     // Vite 8 / Rolldown (ported from the Rotten Hand and Damned storefronts): the
     // SSR build must bundle tailwindcss so the `@import 'tailwindcss'` in
-    // global.css (?inline) resolves instead of being externalised.
+    // global.css resolves instead of being externalised.
     ssr: {
       noExternal: ['tailwindcss'],
     },
@@ -86,6 +112,10 @@ export default defineConfig((config) => {
       // the brand storefronts run without it on Rolldown.
       rolldownOptions: {
         output: {
+          // #427: the downward-closed set of plain source modules shares one chunk per set of page areas that reach it
+          // (scripts/chunk-groups.mjs areaSets / sharedAreaGroup; the sets are computed in sr-area-sets below).
+          // Client build only (sr-client-only-split below drops it from the server build, where it broke SSR mid-stream).
+          codeSplitting: { groups: [{ name: sharedAreaGroup(srAreaSets), includeDependenciesRecursively: false }] },
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {
@@ -100,6 +130,26 @@ export default defineConfig((config) => {
       },
     },
     plugins: [
+      // #427: the express adapter sets build.ssr in its own config (ConfigEnv.isSsrBuild stays false there), so the server
+      // build is detected here and keeps rolldown's default splitting: the shared group on the server build sent every page
+      // a 500 mid-stream (9622bb24 live 2026-11-01, rolled back).
+      // #427: area sets for the shared chunks, from the whole module graph once parsing is done (chunking runs after).
+      {
+        name: 'sr-area-sets',
+        buildEnd() {
+          const ids = [...this.getModuleIds()];
+          srAreaSets.clear();
+          for (const [id, g] of areaSets({ ids, info: (id: string) => this.getModuleInfo(id) }, chunkGroupsMap())) srAreaSets.set(id, g);
+        },
+      },
+      {
+        name: 'sr-client-only-split',
+        enforce: 'pre',
+        config(c) {
+          const out = c.build?.rolldownOptions?.output;
+          if (c.build?.ssr && out && !Array.isArray(out)) delete out.codeSplitting;
+        },
+      },
       // A17: validates src/brand-slots (or SELLRIGHT_BRAND_SLOTS_DIR) and serves virtual:sellright-brand-slots.
       brandSlotsPlugin(),
       // Brand views: validates src/brand/head.json and routes.json and serves virtual:sellright-brand-data (a missing file = defaults).
@@ -115,9 +165,8 @@ export default defineConfig((config) => {
         },
         srcDir: 'src',
         debug: false,
-        entryStrategy: {
-          type: 'smart',
-        },
+        // #427: page-area chunk groups from the previous pass (scripts/build-client.mjs); absent on a first build.
+        entryStrategy: { type: 'smart', manual: chunkGroupsMap() },
       }),
       // P7/V30: the rc.3 preloader has no probability cut-off and fetched ~410 bundles per page after load by following
       // lazy-QRL edges of the bundle graph. Keep static imports and route/symbol edges only, plus (L10) one flat edge from
@@ -157,32 +206,14 @@ export default defineConfig((config) => {
           }
         }
       },
-      // Text compression - addresses GTmetrix "Enable text compression" (577KB savings)
-      ...(!isDev ? [
-        // Gzip compression (universally supported, built into Nginx)
-        viteCompression({
-          algorithm: 'gzip',
-          ext: '.gz',
-          threshold: 1024, // Only compress files > 1KB
-          deleteOriginFile: false, // Keep original files
-          filter: /\.(js|mjs|json|css|html|svg)$/i, // Compress text-based files
-          compressionOptions: {
-            level: 9, // Maximum compression for build-time (since it's pre-computed)
-          },
-        }),
-        // 🚀 NEW: Brotli compression (better compression than gzip, supported by modern browsers)
-        viteCompression({
-          algorithm: 'brotliCompress',
-          ext: '.br',
-          threshold: 1024, // Only compress files > 1KB
-          deleteOriginFile: false, // Keep original files
-          filter: /\.(js|mjs|json|css|html|svg)$/i, // Compress text-based files
-          compressionOptions: {
-            level: 11, // Maximum Brotli compression (0-11, 11 is best compression)
-            chunkSize: 32 * 1024, // 32KB chunks for optimal compression
-          },
-        }),
-      ] : []),
+      // #360: src/root.tsx imports global.css as a stylesheet, and Qwik links every client CSS asset in every page's head. The
+      // license flow renders LicenseRoot with its own license.css, so its build resolves that import to an empty module.
+      ...(commerceFlow === 'license' ? [noGlobalCssPlugin(fileURLToPath(new URL('./src', import.meta.url)))] : []),
+      // Build-time .gz (level 9) + .br (q11) siblings, served by the /build handler in entry.express.tsx.
+      ...(!isDev ? [precompressPlugin()] : []),
+      // Brand perf checks before bundling; after it, the CSS gate: the global stylesheet must carry the brand tokens and fonts
+      // (bedbed29). In the build itself so a brand build script that runs the steps one by one cannot skip it.
+      buildGuardsPlugin({ commerceFlow }),
     ],
     preview: {
       host: '0.0.0.0',

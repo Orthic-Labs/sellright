@@ -21,6 +21,8 @@ describe('license flow route tree', () => {
 			'account/devices/index.tsx',
 			'account/index.tsx',
 			'account/magic-link/index.tsx',
+			// #425: the license home's parse-time price read (GET, no-store)
+			'api/live/license-catalog/index.ts',
 			'checkout/confirmation/[code]/index.tsx',
 			'checkout/index.tsx',
 			'index.tsx',
@@ -33,8 +35,8 @@ describe('license flow route tree', () => {
 
 	it('every loader reading a search param declares it (the router hides undeclared params from loaders)', () => {
 		const checkout = fs.readFileSync(path.join(ROUTES, 'checkout/index.tsx'), 'utf8');
-		expect(checkout).toMatch(/searchParams\.get\('sku'\)[\s\S]*?\{ search: \['sku'\] \}\)/);
-		expect(checkout).toMatch(/searchParams\.get\('upgrade'\)[^\n]*\{ search: \['upgrade'\] \}\)/);
+		expect(checkout).toMatch(/searchParams\.get\('sku'\)[\s\S]*?\{ search: \['sku'\][^}]*\}\)/);
+		expect(checkout).toMatch(/searchParams\.get\('upgrade'\)[^\n]*\{ search: \['upgrade'\][^}]*\}\)/);
 	});
 
 	it('no route names a brand: brand facts come from src/brand/hosts.json and license.json', () => {

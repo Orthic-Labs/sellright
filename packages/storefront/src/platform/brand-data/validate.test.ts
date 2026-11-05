@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { validateJson, type JsonSchema } from './json-schema';
 import { pageSchemasProblems, staticSchemaProblems } from './static-schema';
-import { validateHeadData, validateHostsData, validateLicenseData, validateRoutesData } from './validate';
+import { duplicateHeadTitles, validateHeadData, validateHostsData, validateLicenseData, validateRoutesData } from './validate';
 import { BrandDataValidationError, loadBrandData, renderBrandDataModule } from './vite-plugin';
 
 const ROUTE_DIRS = ['about', 'blog', 'shop', 'checkout'];
@@ -358,5 +358,21 @@ describe('license.json (license flow data)', () => {
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('duplicateHeadTitles (#408 item 5)', () => {
+	it('names every path that repeats a title, ignoring case and spacing', () => {
+		const out = duplicateHeadTitles({
+			content: [{ path: '/collections/edc/', head: { title: 'Shop All Premium Knives & Tools' } }],
+			pages: { '/shop/': { head: { title: 'shop all  premium knives & tools' } }, '/about/': { head: { title: 'About' } } },
+		});
+		expect(out).toHaveLength(1);
+		expect(out[0]).toContain("/collections/edc/ and /shop/");
+	});
+
+	it('is quiet when every declared title is distinct or absent', () => {
+		expect(duplicateHeadTitles({ pages: { '/shop/': { head: { title: 'Shop' } }, '/blog/': { head: {} }, '/x/': {} } })).toEqual([]);
+		expect(duplicateHeadTitles({})).toEqual([]);
 	});
 });

@@ -7,8 +7,8 @@
  *
  * Implementation sits at the API client boundary (api.ts) so:
  *   - component code doesn't know it's talking to a mock;
- *   - production builds tree-shake this file out when VITE_QA_MOCK !== '1'
- *     (Vite inlines `import.meta.env.VITE_*` at build time);
+ *   - api.ts imports this file only when VITE_QA_MOCK=1 or in unit tests (a build-time
+ *     constant), so production builds do not contain it at all;
  *   - tests can mount a component with `?qa=1` + a dev server, and the page
  *     just renders against the mock dataset.
  *

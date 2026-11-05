@@ -9,6 +9,7 @@ import { generateDocumentHead } from '~/utils';
 import { BRAND_HEAD, BRAND_ROUTES, DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath, type DeclaredContent } from '~/platform/content-routes';
 import type { SrStoreIdentity } from '~/utils/sellright';
+import { fitTitle, truncateAtWord } from '~/utils/seo-title';
 
 /** A JSON-LD object a brand declares for a page (allowlisted at build: see brand-data/static-schema.ts). */
 export type StaticSchema = { '@type': string | string[]; '@context'?: string; [key: string]: unknown };
@@ -20,7 +21,7 @@ export interface BrandHeadSpec {
 	/** `appleTouch`: the 180x180 PNG iOS uses for home-screen and share icons (else it probes /apple-touch-icon.png). */
 	favicon?: { svg?: string; ico?: string; appleTouch?: string };
 	/** `paths`: exact paths, or a prefix ending in `*` (`/blog/*` is every path under /blog/, /blog/ included). */
-	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[] }[];
+	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[]; fetchpriority?: 'high' | 'auto' }[];
 	imagePreloads?: {
 		paths: string[];
 		type: 'image/avif' | 'image/webp' | 'image/jpeg';
@@ -108,10 +109,10 @@ const ROBOTS_NOINDEX = 'noindex, nofollow, noai, noimageai'; // utils/seo.ts
 /** Strips the ` | <store>` suffix createSEOHead adds. */
 const stripSuffix = (title: string, store: string) => (title.endsWith(` | ${store}`) ? title.slice(0, -` | ${store}`.length) : title);
 
-/** Title under a template. A title that already equals the store name or carries the suffix is left alone, as createSEOHead does. */
+/** Title under a template, held to the 60-character limit like createSEOHead (utils/seo-title.ts): the suffix is dropped first, then words. */
 const applyTemplate = (title: string, store: string, template: BrandHeadSpec['titleTemplate']): string => {
-	if (template === '%s') return stripSuffix(title, store);
-	return title === store || title.endsWith(` | ${store}`) ? title : `${title} | ${store}`;
+	if (template === '%s') return truncateAtWord(stripSuffix(title, store));
+	return fitTitle(title, store);
 };
 
 const preloadKey = (l: Link) => l.href ?? l.imagesrcset ?? '';
@@ -233,12 +234,9 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 	// ---- brand preloads for this path, after the route's own, deduplicated by href / imagesrcset
 	const have = new Set(links.filter((l) => l.rel === 'preload').map(preloadKey).filter(Boolean));
 	const extraLinks: ExtraLink[] = [];
-	for (const f of spec.fontPreloads ?? []) {
-		if (f.paths && !pathListMatches(f.paths, path)) continue;
-		if (have.has(f.href)) continue;
-		have.add(f.href);
-		extraLinks.push({ rel: 'preload', as: 'font', type: f.type, href: f.href, crossOrigin: 'anonymous' });
-	}
+	// No font preloads (#429): head.json `fontPreloads` is accepted but ignored. A font preload, and the Cloudflare 103 Early
+	// Hint built from it, held first paint ~1 s on mobile (Damned home Lighthouse 61-70 with it, 93-98 without, #429). Faces load from the
+	// CSS with font-display: swap over metric-matched fallbacks, so text paints at once.
 	for (const im of spec.imagePreloads ?? []) {
 		if (!pathListMatches(im.paths, path)) continue;
 		const imagesrcset = im.srcset.map((s) => `${s.href} ${s.width}w`).join(', ');

@@ -2,13 +2,23 @@
  * The single place that decides cache headers for storefront responses (docs/adr/ADR-0001-edge-cached-shell.md).
  *
  * Route classes (ADR "Route classes"):
- *   shell   — `/`, `/shop/`, product pages (`/products/*`, and `/shop/<slug>/` when routes.json productPath is `/shop/:slug/`),
- *             `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, legal pages, `/checkout/` (exact).
+ *   shell   — `/`, `/shop/`, `/checkout/`, product pages (`/products/*`, and `/shop/<slug>/` when routes.json productPath is
+ *             `/shop/:slug/`), `/collections/<slug>`, `/blog`, `/blog/<slug>`, `/about`, `/contact`, legal pages.
  *             The HTML is free of per-visitor data, stock and price (live values are read by the browser), so it MAY be stored
  *             at the edge — but only when SHELL_CACHE=1 and the finished response passes I-6 (below).
- *   dynamic — every other path (checkout steps, account, sign-in, search, track-order, verify, password routes, /api, /cache*),
+ *             `/shop/` and `/checkout/` were `dynamic` from 2026-10-31 (DP-5, DP-6) because their live values arrived after hydration
+ *             (checkout LCP 4.1 s, shop CLS 0.36-0.52). They are shells again (2026-11-04) because the values now arrive from the
+ *             parse-time inline reads and paint scripts (early-paint.ts): the shop grid stays hidden until the live stock filter is
+ *             applied, the checkout summary paints from the live cart read into reserved space.
+ *             Rollback per store, per path, no rebuild: list the path in SHELL_CACHE_EXCLUDE (`/shop/`, `/checkout/`): that request is
+ *             NOT marked a shell render, so it renders exactly as with the switch off (the SSR stock-filtered grid; the server-rendered
+ *             order summary), `private, no-store`, with the per-request nonce CSP.
+ *   dynamic — every other path (`/checkout/` steps (payment, cart-link, confirmation, aliases), account, sign-in, search, track-order,
+ *             verify, password routes, /api, /cache*),
  *             any non-GET request, any preview request (preview_token query or sr_preview_token cookie), any shell path with a
- *             query other than ad-click tracking parameters (I-3), and every unclassified path (I-5 fail closed).
+ *             query other than ad-click tracking parameters (I-3: `/shop/?facets=x`, `/shop/?style=long` and `/shop/?q=` stay dynamic,
+ *             the SSR in-stock grid, because a cached shell per query string could not be purged by the bare-path purge), and every
+ *             unclassified path (I-5 fail closed).
  *   data    — Qwik loader/action/server$ data (`q-loader-*.json`, `q-data.json`, `?qaction=`, `?qfunc=`) and `/v1/*`.
  *
  * Every response starts `private, no-store` (layout onRequest + the express fail-closed default). With SHELL_CACHE=1 the express
@@ -35,7 +45,7 @@ export interface RouteCacheProfile {
 	responseCacheControl: string;
 }
 
-export const CACHE_POLICY_VERSION = '2026-10-31.1';
+export const CACHE_POLICY_VERSION = '2026-11-04.1';
 
 // ─── switch ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -68,7 +78,7 @@ export const shellCacheControl = (ttlSeconds: number): string => `public, max-ag
 // ─── route classes ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Exact shell paths, matched with or without the trailing slash. */
-const SHELL_EXACT = ['/', '/shop', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog', '/checkout'];
+const SHELL_EXACT = ['/', '/about', '/contact', '/privacy', '/terms', '/returns', '/press', '/blog', '/shop', '/checkout'];
 const ONE_SEGMENT = '[^/]+';
 const DATA_PATH = /(^|\/)q-(loader|data|action)[^/]*\.json$/i;
 const DATA_QUERY = ['qaction', 'qfunc', 'qloaders', 'qdata'];
@@ -183,6 +193,34 @@ export function shellResponseVerdict(f: ShellResponseFacts): ShellVerdict {
 export const shellResponseCacheControl = (f: ShellResponseFacts, ttlSeconds: number): string =>
 	shellResponseVerdict(f).ok ? shellCacheControl(ttlSeconds) : NO_STORE_CACHE_CONTROL;
 
+// ─── error responses: never stored ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** Statuses that may keep a cacheable header: 2xx, 304 (revalidation of a stored file) and the deliberate permanent redirects 301/308. */
+export const mayKeepCacheHeader = (status: number): boolean => (status >= 200 && status < 300) || status === 304 || status === 301 || status === 308;
+
+/**
+ * Forces `private, no-store` on every 4xx/5xx and on every temporary 3xx, whatever set the header before (express.static's
+ * immutable on a 416/412, the static fallthrough, a handler that forgot, finalhandler). Hooks writeHead, which every path ends in
+ * (including the implicit one from end()), so it cannot be bypassed by ordering. Register first.
+ */
+export function createErrorNoStoreMiddleware() {
+	return (_req: unknown, res: { writeHead: (...a: any[]) => any; statusCode: number; setHeader(n: string, v: string): unknown; headersSent: boolean }, next: () => void): void => {
+		const writeHead = res.writeHead.bind(res);
+		res.writeHead = (...a: any[]) => {
+			const status = typeof a[0] === 'number' ? a[0] : res.statusCode;
+			if (!res.headersSent && !mayKeepCacheHeader(status)) {
+				res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
+				// An object/array header argument to writeHead would override setHeader: drop its cache keys.
+				for (const arg of a.slice(1)) {
+					if (arg && typeof arg === 'object' && !Array.isArray(arg)) for (const k of Object.keys(arg)) if (/^(cache-control|expires|surrogate-control|cdn-cache-control)$/i.test(k)) delete arg[k];
+				}
+			}
+			return writeHead(...a);
+		};
+		next();
+	};
+}
+
 // ─── express halves (server only; Node's Buffer is used lazily, nothing imported) ─────────────────────────────────────────
 
 type ShellReq = { method: string; path: string; originalUrl: string; headers: Record<string, string | string[] | undefined> };
@@ -198,6 +236,9 @@ type ShellRes = {
 };
 
 const SHELL_LOCAL = 'srShellRender';
+const SHELL_ANON_LOCAL = 'srShellAnonymous';
+
+const identityHeadersPresent = (headers: Record<string, unknown>): boolean => SHELL_STRIPPED_REQUEST_HEADERS.some((h) => headers[h] !== undefined);
 
 /** True when this response is an anonymous shell render (no nonce; hash CSP and the I-6 check at response end). */
 export const isShellRender = (res: { locals?: Record<string, unknown> }): boolean => res.locals?.[SHELL_LOCAL] === true;
@@ -226,6 +267,8 @@ export function createShellRequestMiddleware(opts: { enabled: boolean; exclude?:
 		}
 		for (const h of SHELL_STRIPPED_REQUEST_HEADERS) delete req.headers[h];
 		res.locals[SHELL_LOCAL] = true;
+		// I-6 fact: anonymous only if nothing identity-bearing survived the strip.
+		res.locals[SHELL_ANON_LOCAL] = !identityHeadersPresent(req.headers);
 		next();
 	};
 }
@@ -253,7 +296,7 @@ export function shellRenderUrl(req: { url: string; originalUrl: string }, res: {
  * no-store default and before the router.
  */
 export function createShellCacheMiddleware(opts: { enabled: boolean; ttlSeconds: number; sha256Base64: (text: string) => string }) {
-	return (_req: ShellReq, res: ShellRes, next: () => void): void => {
+	return (req: ShellReq, res: ShellRes, next: () => void): void => {
 		if (!opts.enabled || !isShellRender(res)) return next();
 		const chunks: Buffer[] = [];
 		const end = res.end.bind(res);
@@ -271,7 +314,7 @@ export function createShellCacheMiddleware(opts: { enabled: boolean; ttlSeconds:
 			if (chunk !== undefined && chunk !== null) chunks.push(toBuffer(chunk, enc));
 			const body = Buffer.concat(chunks.splice(0));
 			const facts: ShellResponseFacts = {
-				routeClass: 'shell', anonymous: true, enabled: opts.enabled, status: res.statusCode,
+				routeClass: 'shell', anonymous: res.locals[SHELL_ANON_LOCAL] === true && !identityHeadersPresent(req.headers), enabled: opts.enabled, status: res.statusCode,
 				contentType: res.getHeader('content-type') as string | undefined, setCookie: res.getHeader('set-cookie'), veto: res.getHeader(EDGE_VETO_HEADER),
 			};
 			const verdict = shellResponseVerdict(facts);

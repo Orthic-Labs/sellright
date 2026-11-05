@@ -8,7 +8,7 @@
  * allowlist for local dev. No wildcard-with-credentials: an unmatched origin
  * is rejected outright, never widened to '*'.
  */
-import { hostMatchesAny, normalizeHost, resolveStoreByHost } from './store-context.js';
+import { hostMatchesAny, normalizeHost, resolveStoreByHost, resolveStoreForRequest } from './store-context.js';
 import { env, adminPublicUrl } from './env.js';
 
 /** Always allowed in non-production, regardless of store.config — local dev
@@ -89,4 +89,26 @@ export async function isAllowedCorsOrigin(origin: string | undefined, opts: { re
   const store = await resolveStoreByHost(host);
   if (store === null) return false;
   return opts.requestStoreId === undefined || store.id === opts.requestStoreId;
+}
+
+/**
+ * CORS verdict for a shop-API request. A real (non-preflight) request resolves to ONE store, and the Origin must belong
+ * to that store, so a hostname one tenant registered can never make credentialed calls that the API answers as another
+ * tenant (security audit 2026-11-02). A preflight carries no x-store-slug (custom headers are not sent on OPTIONS), so
+ * it keeps the any-store check; the actual request that follows is what is held to its own store. When the request
+ * store cannot be resolved the route itself rejects the request, so the any-store check is only a fallback.
+ */
+export async function isAllowedShopCorsOrigin(
+  req: { method: string; header: (name: string) => string | undefined },
+  origin: string | undefined,
+): Promise<boolean> {
+  if (!origin) return false;
+  if (req.method === 'OPTIONS') return isAllowedCorsOrigin(origin);
+  let storeId: string | undefined;
+  try {
+    storeId = (await resolveStoreForRequest({
+      storeSlugHeader: req.header('x-store-slug'), host: req.header('host'), forwardedHost: req.header('x-forwarded-host'),
+    })).id;
+  } catch { /* unresolvable request store: fall through to the any-store check */ }
+  return isAllowedCorsOrigin(origin, storeId === undefined ? {} : { requestStoreId: storeId });
 }

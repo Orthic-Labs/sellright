@@ -1,6 +1,7 @@
 import { component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import type { LoyaltyProgram } from '~/sellright/types/rewards';
 import { pdpEarnPoints, pointsLabel, productMultiplier } from '~/utils/rewards';
+import { afterLoadIdleOrInteraction } from '~/utils/load-trigger';
 import { loadLoyaltyProgram } from './loyalty-program';
 
 /**
@@ -14,6 +15,9 @@ export const LoyaltyPdpEarn = component$<{ cents: number; productId?: string | n
 	({ cents, productId, from }) => {
 		const program = useSignal<LoyaltyProgram | null>(null);
 		useVisibleTask$(async () => {
+			// Lane 11: the program terms (GET /v1/shop/config, shared per page) are read after the page has loaded and gone idle, or on
+			// the first interaction, never on the PDP's critical path.
+			await afterLoadIdleOrInteraction();
 			program.value = await loadLoyaltyProgram();
 		});
 		const pts = pdpEarnPoints({ priceCents: cents, productId, program: program.value });

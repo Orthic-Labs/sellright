@@ -2,7 +2,7 @@ import { test, expect, skipExternal, setCardToken } from './fixtures';
 import type { Page, Request } from '@playwright/test';
 import { SHIPPING, SKU, readRows, sentEmails, uniq, PRODUCT } from './support/api';
 import { mock } from './support/mock';
-import { addToCart, applyPromoAtCheckout, fillShipping, goToCheckout, clickPay, payAndConfirm, payButton, placeOrder, placeOrderButton } from './support/flows';
+import { addToCart, applyPromoAtCheckout, fillShipping, goToCheckout, clickPay, expectDeclined, payAndConfirm, payButton, placeOrder, placeOrderButton } from './support/flows';
 
 /**
  * Plan 1.3 P0 #1-#3 — the shopper's money path through the real storefront UI, real checkout + payment code in the API,
@@ -23,19 +23,9 @@ test.describe('#1 guest checkout, NMI card', () => {
 		await addToCart(page, PRODUCT.shirt.slug);
 		await goToCheckout(page);
 		await fillShipping(page, email);
+		// With the card controls mounted, PLACE ORDER creates the order and submits the card in the same click (#403).
 		const placed = await placeOrder(page);
 		expect(placed.grandTotal).toBe(PRODUCT.shirt.price + 500);
-		await expect(payButton(page)).toBeVisible();
-
-		// PLACE ORDER reserves the unit at once (live read): allocated +1, available -1, on-hand untouched.
-		const reserved = await api.stock(SKU.shirt);
-		expect(reserved.allocated).toBe(before.allocated + 1);
-		expect(reserved.available).toBe(before.available - 1);
-		expect(reserved.onHand).toBe(before.onHand);
-		// ...and nothing has been charged yet: PLACE ORDER never starts a payment.
-		expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
-		expect((await api.order(placed.code)).state).toBe('PendingPayment');
-
 		await payAndConfirm(page, placed.code);
 		await expect(page.getByText(`#${placed.code}`).first()).toBeVisible();
 
@@ -68,12 +58,11 @@ test.describe('#1 guest checkout, NMI card', () => {
 		await addToCart(page, PRODUCT.mug.slug);
 		await goToCheckout(page);
 		await fillShipping(page, email);
-		const placed = await placeOrder(page);
-		await expect(payButton(page)).toBeVisible();
-
+		// PLACE ORDER submits the card in the same click, so the declining card is entered first.
 		await setCardToken(page, 'tok_decline');
-		await clickPay(page);
-		await expect(page.getByText(/try a different card/i).first()).toBeVisible({ timeout: 15_000 });
+		const placed = await placeOrder(page);
+		await expectDeclined(page);
+		await expect(payButton(page)).toBeVisible();
 		expect((await api.order(placed.code)).state).toBe('PendingPayment');
 		// The decline is recorded on the ledger as a declined tender; nothing was captured.
 		const tenders = (await api.order(placed.code)).payments as Array<{ state: string }>;
@@ -90,10 +79,9 @@ test.describe('#1 guest checkout, NMI card', () => {
 		await addToCart(page, PRODUCT.mug.slug);
 		await goToCheckout(page);
 		await fillShipping(page, `${uniq('retry')}@example.net`);
-		const placed = await placeOrder(page);
 		await setCardToken(page, 'tok_decline');
-		await clickPay(page);
-		await expect(page.getByText(/try a different card/i).first()).toBeVisible({ timeout: 15_000 });
+		const placed = await placeOrder(page);
+		await expectDeclined(page);
 		await setCardToken(page, 'tok_visa');
 		await clickPay(page);
 		await expect(page.getByRole('heading', { name: /thank you/i })).toBeVisible({ timeout: 10_000 });
@@ -117,9 +105,9 @@ test.describe('#2 coupons and promotions', () => {
 		// 10% of $25.00 merchandise = $2.50 off; the $5.00 shipping is not discounted: 25.00 - 2.50 + 5.00.
 		await expect(page.getByText('-$2.50').first()).toBeVisible();
 		await fillShipping(page, email);
+		await expect(placeOrderButton(page)).toContainText('$27.50');
 		const placed = await placeOrder(page);
 		expect(placed.grandTotal).toBe(2500 - 250 + 500);
-		await expect(payButton(page)).toContainText('$27.50');
 		await payAndConfirm(page, placed.code);
 
 		const order = await api.order(placed.code);
@@ -207,11 +195,10 @@ test.describe('#3 changed-total consent gate', () => {
 		await expect(notice.getByText('$8.00', { exact: true })).toBeVisible();
 		await expect(notice.getByText('$33.00', { exact: true })).toBeVisible();
 		expect(checkoutRequests, 'a fresh quote does not authorize order creation').toHaveLength(0);
-		await expect(payButton(page)).toBeHidden();
 		return { notice, quote, checkoutRequests };
 	}
 
-	test('shown $30.00, refreshed quote $33.00: confirming the quote and placing the order never charge; PAY charges exactly the accepted total', async ({ apiProxyPage: page, api }) => {
+	test('shown $30.00, refreshed quote $33.00: confirming the quote never charges; paying charges exactly the accepted total', async ({ apiProxyPage: page, api }) => {
 		const flatId = await flatShippingId(api);
 		try {
 			await addToCart(page, PRODUCT.shirt.slug);
@@ -232,10 +219,6 @@ test.describe('#3 changed-total consent gate', () => {
 			expect(placed.grandTotal, 'the order is priced by the accepted server quote').toBe(2500 + 800);
 			expect(checkoutRequests).toHaveLength(1);
 			expect(checkoutRequests[0]!.postDataJSON().acceptedQuoteHash).toBe(quote.quoteHash);
-
-			await expect(payButton(page)).toContainText('$33.00');
-			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(salesBefore);
-			expect((await api.order(placed.code)).state).toBe('PendingPayment');
 
 			await payAndConfirm(page, placed.code);
 			const sales = (await mock.nmiCalls()).filter((c) => c.type === 'sale');
@@ -260,10 +243,9 @@ test.describe('#3 changed-total consent gate', () => {
 			const { notice, quote, checkoutRequests } = await requestUpdatedQuote(page);
 			// A repeated PLACE ORDER cannot accept the changed quote on the shopper's behalf.
 			await placeOrderButton(page).click();
-			await expect(page.getByText('Review updated amounts & confirm this quote before placing your order.', { exact: true })).toBeVisible();
+			await expect(page.getByText(/review updated amounts & confirm this quote before placing your order\./i)).toBeVisible();
 			await expect(notice).toBeVisible();
 			expect(checkoutRequests).toHaveLength(0);
-			await expect(payButton(page)).toBeHidden();
 			expect(await api.stock(SKU.shirt)).toEqual(before);
 			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
 
@@ -274,10 +256,8 @@ test.describe('#3 changed-total consent gate', () => {
 			expect(placed.grandTotal).toBe(3300);
 			expect(checkoutRequests).toHaveLength(1);
 			expect(checkoutRequests[0]!.postDataJSON().acceptedQuoteHash).toBe(quote.quoteHash);
-			await expect(payButton(page)).toContainText('$33.00', { timeout: 5_000 });
-			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
-			expect((await api.order(placed.code)).state).toBe('PendingPayment');
-			await expect(payButton(page)).toBeEnabled();
+			await payAndConfirm(page, placed.code);
+			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale').at(-1)!.amount).toBe('33.00');
 		} finally {
 			await api.patch(`/shipping-methods/${flatId}`, { calculator: { flat: 500 } });
 		}

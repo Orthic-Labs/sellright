@@ -78,6 +78,9 @@ interface RegenState {
   trailing: RegenScope | null;
 }
 
+/** Where no catalog is published: the product page + collection pages to purge now (both needed, else host purge). */
+export interface ContentPurgeOpts { productPath?: string; collectionSlugs?: readonly string[] }
+
 const states = new Map<string, RegenState>();
 
 function stateFor(storeSlug: string): RegenState {
@@ -123,11 +126,11 @@ export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
  * the product page then follows the publication (N9) instead of preceding it. Same fire-and-forget contract as
  * onStockChanged: call after commit, never awaited, never throws.
  */
-export function onCatalogContentChanged(storeSlug: string, productIds: string[], opts: { productPath?: string } = {}): void {
+export function onCatalogContentChanged(storeSlug: string, productIds: string[], opts: ContentPurgeOpts = {}): void {
   schedule(storeSlug, productIds.length ? new Set(productIds.map((id) => `p:${id}`)) : 'full', opts, true);
 }
 
-function schedule(storeSlug: string, scope: RegenScope, purgeOpts: { productPath?: string }, purgeHtml: boolean): void {
+function schedule(storeSlug: string, scope: RegenScope, purgeOpts: ContentPurgeOpts, purgeHtml: boolean): void {
   // N9: with publication configured for this store, the purge runs AFTER the new generation is published
   // (manifest/catalog.ts). Without it there is no content artifact to wait for, so purge now — a deployment with
   // the catalog manifest disabled must still get Cloudflare cache purges. Never throws (see purge-hook.ts).

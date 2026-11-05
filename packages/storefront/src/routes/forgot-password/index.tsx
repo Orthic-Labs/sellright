@@ -69,7 +69,7 @@ export default component$(() => {
 								/>
 							</div>
 						</div>
-						{TURNSTILE_SITE_KEY && <div id="forgot-turnstile" class="min-h-[65px] flex justify-center"></div>}
+						{TURNSTILE_SITE_KEY && <div id="forgot-turnstile" class="flex justify-center"></div>}
 						{error.value !== '' && (
 							<div class="rounded-md bg-red-50 p-4">
 								<div class="flex">

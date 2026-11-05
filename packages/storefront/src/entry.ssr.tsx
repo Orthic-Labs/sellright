@@ -16,6 +16,24 @@ import Root from './root';
 import { extractBase } from './utils/i18n';
 import { identityFromStaticTheme } from './theme/theme.config';
 import { ipCountry } from './platform/head-analytics';
+import { headOrderWriter } from './platform/head-order';
+import { clientDistDir, inlineStylesheetInjections, readBuiltCss } from './platform/inline-stylesheet.server';
+import { loadWarmScript } from './platform/warm-graph.server';
+import { earlyReadsStream } from './platform/early-reads.server';
+import { deferredLoaderInjections } from './platform/deferred-loader.server';
+
+// #425 step 2: the global stylesheet inline (platform/inline-stylesheet.server.ts), resolved once per manifest object.
+const distDir = import.meta.env.PROD ? clientDistDir(import.meta.url) : null;
+const readCss = readBuiltCss(distDir);
+// #425 step 3: the targeted warm graph that replaces Qwik's preloader (platform/warm-graph.server.ts), built once per process.
+const warm = loadWarmScript(distDir);
+const inlined = new WeakMap<object, typeof manifest>();
+function withInlineStylesheet(m: typeof manifest): typeof manifest {
+	if (!m?.injections) return m;
+	let r = inlined.get(m);
+	if (!r) inlined.set(m, (r = { ...m, injections: inlineStylesheetInjections(m.injections, readCss) }));
+	return r;
+}
 
 // Extend RenderToStreamOptions to include the request headers this app's
 // render() actually receives.
@@ -42,9 +60,25 @@ export default function (opts: ExtendedRenderOptions) {
 	// edge-cached) never sees cf-ipcountry or a nonce: the express layer strips both, so country and nonce are undefined there.
 	const country = ipCountry(opts.serverData?.requestHeaders?.['cf-ipcountry']);
 
-	return renderToStream(<Root nonce={nonce} country={country} />, {
-		manifest,
+	// F2: the render-blocking stylesheet first in <head>, Qwik's speculative preloads after it (platform/head-order.ts).
+	// #415: the parse-time live reads script, first in <head> (platform/early-reads.server.ts).
+	const stream = headOrderWriter(earlyReadsStream(opts.stream, opts.serverData?.url, nonce));
+	const base = withInlineStylesheet((opts.manifest as typeof manifest | undefined) ?? manifest);
+	// Per request: the warm script carries this render's nonce (a shell render has none; the express layer hashes it instead).
+	// #425: Qwik's loader starts after the first frame (platform/deferred-loader.server.ts); the framework's own loader tag is off below.
+	const loaderSrc = base?.qwikLoader ? `/build/${base.qwikLoader}` : null;
+	const extra = [
+		...(loaderSrc ? deferredLoaderInjections(loaderSrc, nonce) : []),
+		...(warm ? [{ tag: 'script', location: 'head' as const, attributes: { ...(nonce ? { nonce } : {}), dangerouslySetInnerHTML: warm } }] : []),
+	];
+	const renderManifest = base && extra.length ? { ...base, injections: [...(base.injections ?? []), ...extra] } : base;
+	const result = renderToStream(<Root nonce={nonce} country={country} />, {
 		...opts,
+		manifest: renderManifest,
+		// #425 step 3: no speculative preloader (115-271 script requests per page); the warm graph above fetches what is needed.
+		preloader: false,
+		...(loaderSrc ? { qwikLoader: 'never' as const } : {}),
+		stream,
 		base: extractBase,
 		// Use container attributes to set attributes on the html tag.
 		//
@@ -76,4 +110,5 @@ export default function (opts: ExtendedRenderOptions) {
 			nonce,
 		},
 	});
+	return result.finally(() => stream.flush());
 }

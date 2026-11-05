@@ -3,6 +3,7 @@ import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandContactMount, useContactForm } from '~/platform/controllers/content';
 import { hasView } from '~/platform/gateway';
+import { TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 
 const SUBJECTS = [
 	{ value: 'GENERAL', label: 'General Inquiry' },
@@ -94,7 +95,7 @@ const BaseContactPage = component$(() => {
 										</div>
 
 										{/* Turnstile */}
-										<div id="turnstile-container" class="min-h-[65px]"></div>
+										<div id="turnstile-container" style={TURNSTILE_SITE_KEY ? 'min-height:65px' : undefined}></div>
 
 										{formState.value === 'error' && (
 											<p class="text-red-600 text-sm font-['IBM_Plex_Sans']">{errorMessage.value}</p>

@@ -3,6 +3,7 @@ import {
 	$,
 	Slot,
 	component$,
+	useComputed$,
 	useContextProvider,
 	useOn,
 	useOnDocument,
@@ -35,6 +36,7 @@ import { BRAND_HEAD } from '~/platform/brand-data';
 import { canRestorePreferredCountry } from '~/components/checkout/checkout-country';
 import { anonymousCustomer, fetchSessionCustomer, nextCustomer } from '~/utils/session-customer';
 import { getCookie } from '~/utils';
+import { enablePostPaintEffects } from '~/utils/post-paint-fx';
 import { CartService } from '~/services/CartService';
 
 /** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
@@ -96,8 +98,7 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	search: ['preview_token'],
 	// The shell reads this loader in the browser as well. With the router's default ('never')
 	// each read after load re-fetched it from the server, re-running it and its API call on every page (#362). The value
-	// is small and already rendered into the page. The maintenance loader keeps the default on purpose: passing options
-	// makes a loader skip query-only navigations, and maintenance must be re-read on every navigation.
+	// is small and already rendered into the page. The maintenance loader below uses 'always' too (#425).
 	serializationStrategy: 'always',
 });
 
@@ -130,6 +131,11 @@ export const useMaintenanceLoader = routeLoader$(async ({ headers }): Promise<Sr
 		vetoEdgeCache(headers, 'maintenance-unknown');
 		return { maintenance: false };
 	}
+}, {
+	// #425: serialized into the page. With the default ('never') the layout's first client re-render (opening the cart drawer, any
+	// client state change) re-fetched it as q-loader data, ~300 ms on the add-to-cart -> checkout path. Still run on every document
+	// request and every client navigation to a new path; only query-only navigations (same path) reuse the value.
+	serializationStrategy: 'always',
 });
 
 /*
@@ -153,6 +159,12 @@ const LoginModalComponent = component$(() => {
 	);
 });
 
+// #360: nothing of the modal (auth, signup flow, providers) is rendered or loaded until an opener sets `everOpened`.
+export const LoginModalGate = component$(() => {
+	const loginModalState = useLoginModalState();
+	return loginModalState.everOpened ? <LoginModalComponent /> : null;
+});
+
 export default component$(() => {
 	const location = useLocation();
 	const isHomePage = location.url.pathname === '/';
@@ -171,6 +183,11 @@ export default component$(() => {
 
 	const identityData = useStoreIdentityLoader();
 	const maintenanceData = useMaintenanceLoader();
+	// #427: read through a computed, not in this render body. This component re-renders whenever the cart or menu opens
+	// (state.showCart / showMenu); a loader value read in the body is re-requested from the server on each client re-render
+	// (the loader keeps the router default on purpose, see above), which made opening the cart wait on a /q-loader request
+	// (776 ms from the US origin). The computed re-runs only when the loader itself updates, i.e. on navigation.
+	const inMaintenance = useComputed$(() => maintenanceData.value.maintenance);
 
 	const state = useStore<AppState>({
 		showCart: false,
@@ -206,11 +223,6 @@ export default component$(() => {
 		addressBook: [],
 	});
 
-	// Initialize cross-tab storage listener (T4: idle, no UVT needed)
-	useOnDocument('qidle', $(() => {
-		LocalAddressService.setupCrossTabSync();
-	}));
-
 	useContextProvider(APP_STATE, state);
 
 	// The signed-in customer, read in the browser (ADR-0001 I-2): once when the document starts, and again on each client
@@ -234,20 +246,31 @@ export default component$(() => {
 			});
 		}
 	});
-	useOnDocument('qinit', $(() => {
-		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
-		const cookieCountry = getCookie(COUNTRY_COOKIE);
-		if (cookieCountry && !state.shippingAddress.countryCode) state.shippingAddress.countryCode = cookieCountry;
-		readSession();
-	}));
 	useTask$(({ track }) => {
 		track(() => location.url.pathname);
 		if (!isBrowser) return;
 		readSession();
 	});
 
-	// T3: Restore persisted country selection (qidle — lazy, no urgency)
+	// #360: the non-urgent start-up work, in one idle handler (it was three qinit/qidle handlers) so first paint and the first
+	// interaction are not behind it. Header user state, the country default and cross-tab address sync appear a moment later.
+	// Order matters: the cookie is the initial country, the stored preference below it wins. Stock reads are NOT here.
 	useOnDocument('qidle', $(() => {
+		// F1: header blur and scroll-timeline effects switch on only after load + first paint (html.sr-fx).
+		enablePostPaintEffects();
+		// #425/#427: the global stylesheet link loads as media="print" (never render-blocking; the same rules are inline). It applies
+		// on the first interaction, which every client navigation starts with, so a navigation that drops the inline <style> still
+		// has the rules. Not at idle: re-applying the whole sheet restyles the page, a long task on the shop grid at load.
+		const applyGlobalSheet = () => {
+			for (const t of ['pointerdown', 'keydown', 'touchstart']) document.removeEventListener(t, applyGlobalSheet, true);
+			document.querySelectorAll<HTMLLinkElement>('link[data-sr-global][media="print"]').forEach((l) => { l.media = 'all'; });
+		};
+		for (const t of ['pointerdown', 'keydown', 'touchstart']) document.addEventListener(t, applyGlobalSheet, { capture: true, passive: true });
+		LocalAddressService.setupCrossTabSync();
+		// countryCode cookie (ADR-0001 I-2: read here, not in SSR). Initial value only; the stored preference below wins.
+		const cookieCountry = getCookie(COUNTRY_COOKIE);
+		if (cookieCountry && !state.shippingAddress.countryCode) state.shippingAddress.countryCode = cookieCountry;
+		readSession();
 		const storedCountry = CountryPreferenceService.getCountry();
 		// A saved or entered address keeps its own country (the checkout may have loaded one before this idle task).
 		if (storedCountry && canRestorePreferredCountry(state.shippingAddress)) {
@@ -290,7 +313,7 @@ export default component$(() => {
 
 	// Maintenance takes priority over the publish gate: a store mid-update is a
 	// temporary outage regardless of whether it's published yet.
-	if (maintenanceData.value.maintenance) {
+	if (inMaintenance.value) {
 		return <MaintenanceScreen storeName={identityData.value.identity.storeName} />;
 	}
 
@@ -304,7 +327,7 @@ export default component$(() => {
 			<div>
 				{!isAffiliateSurface && (hasView('shell.header') ? <BrandHeaderMount /> : <Header />)}
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
-				{!isAffiliateSurface && <Menu />}
+				{!isAffiliateSurface && state.showMenu && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
 					<main id="main-content" class={`flex-1 bg-[var(--color-page)] ${isHomePage || isAffiliateSurface ? '' : 'pt-[var(--header-offset)]'}`}>
 						<Slot />
@@ -313,7 +336,7 @@ export default component$(() => {
 					{HAS_ANALYTICS && <AnalyticsMount />}
 				</div>
 				{/* Global Login Modal */}
-				<LoginModalComponent />
+				<LoginModalGate />
 			</div>
 		</LoginModalProvider>
 		</CartProvider>

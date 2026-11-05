@@ -20,6 +20,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  uniqueIndex,
   primaryKey,
 } from 'drizzle-orm/pg-core';
 
@@ -255,6 +256,36 @@ export const adminHandoffCode = pgTable('admin_handoff_code', {
   expiresAt: timestamp({ withTimezone: true }).notNull(),
   createdAt: ts(),
 }, (t) => [index('admin_handoff_code_expires').on(t.expiresAt)]);
+
+// #355 phase 2 (0118): the hub side of saved accounts. Global like admin_handoff_code (no store_id, no RLS).
+export const hubSession = pgTable('hub_session', {
+  id: uuid().primaryKey().defaultRandom(),
+  tokenHash: text().notNull().unique(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  lastSeenAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  createdAt: ts(),
+}, (t) => [index('hub_session_expires').on(t.expiresAt)]);
+
+export const hubEnrolment = pgTable('hub_enrolment', {
+  stateHash: text().primaryKey(),
+  hubSessionId: uuid().notNull().references(() => hubSession.id, { onDelete: 'cascade' }),
+  targetId: text().notNull(),
+  verifierSealed: jsonb().notNull(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  createdAt: ts(),
+}, (t) => [index('hub_enrolment_expires').on(t.expiresAt)]);
+
+export const hubAccountSlot = pgTable('hub_account_slot', {
+  id: uuid().primaryKey(),
+  hubSessionId: uuid().notNull().references(() => hubSession.id, { onDelete: 'cascade' }),
+  targetId: text().notNull(),
+  adminId: text().notNull(),
+  adminEmail: text().notNull(),
+  tokenSealed: jsonb().notNull(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  lastUsedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+}, (t) => [uniqueIndex('hub_account_slot_identity').on(t.hubSessionId, t.targetId, t.adminId)]);
 
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),

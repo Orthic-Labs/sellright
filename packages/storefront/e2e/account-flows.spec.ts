@@ -161,7 +161,8 @@ test.describe('#19 order history and guest tracking', () => {
 		await page.goto('/account/orders');
 		const row = page.getByRole('link', { name: new RegExp(`Order #${placed.code}`) });
 		await expect(row).toBeVisible({ timeout: 15_000 });
-		await expect(row).toContainText(`$${placed.grandTotal / 100}`); // whole-dollar totals print without cents
+		// The total sits beside the link in the same order card, not inside the link; whole-dollar totals print without cents.
+		await expect(row.locator('xpath=ancestor::*[contains(@class, "sm:p-6")][1]')).toContainText(`$${placed.grandTotal / 100}`);
 		await row.click();
 		await page.waitForURL(`**/account/orders/${placed.code}**`);
 		await expect(page.getByText('E2E Mug').first()).toBeVisible({ timeout: 15_000 });

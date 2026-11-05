@@ -33,6 +33,7 @@
         "properties": {
           "href": { "type": "string", "pattern": "^/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" },
           "type": { "const": "font/woff2" },
+          "fetchpriority": { "enum": ["high", "auto"] },
           "paths": { "type": "array", "maxItems": 40, "items": { "type": "string", "pattern": "^/[A-Za-z0-9._~!$&()*+,;=:@%/-]{0,200}$" } }
         }
       }

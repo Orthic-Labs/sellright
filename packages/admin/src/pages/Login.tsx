@@ -4,6 +4,7 @@ import { api, ApiError, auth, type LoginResp, type SecondFactorMethod } from '..
 import { useAuth } from '../auth';
 import { AuthAlert, AuthField, AuthShell, AuthSpinner, CodeInput, formatWait, useCountdown } from '../components/auth/AuthShell';
 import { adminHref } from '../lib/base-path';
+import { pendingHandoff } from '../lib/handoff-pending';
 import { browserSupportsWebAuthn, capabilities, loginWithPasskey, passkeyErrorMessage } from '../lib/passkeys';
 
 /**
@@ -47,7 +48,8 @@ export default function Login() {
     // Same post-login path for every method (a pending 2FA enrolment is handled by the app shell after load).
     auth.store = r.stores?.[0]?.slug ?? null;
     // The full load below boots the shell, whose AuthProvider reads /me once: no separate /me first (#362).
-    location.assign(adminHref('/'));
+    // #355: a saved-account request that sent this tab to sign in continues there.
+    location.assign(adminHref(pendingHandoff() ? '/handoff' : '/'));
   }
 
   // Passkeys are modal only, like GitHub: the button starts the one ceremony. No conditional (autofill) ceremony runs in

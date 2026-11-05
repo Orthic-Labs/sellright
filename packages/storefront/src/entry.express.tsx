@@ -13,13 +13,17 @@ import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
-import { NO_STORE_CACHE_CONTROL, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
+import { NO_STORE_CACHE_CONTROL, createErrorNoStoreMiddleware, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
 import { shellRenderContext } from"./platform/shell-render-context.server";
 import { snapshotGuard } from"./utils/snapshot-guard";
+import { precompressedStatic } from"./utils/precompressed-static";
 import { createErrorPathLog } from "./utils/error-path-log";
+import { createServerFunctionGuard, createServerFunctionRateLimit } from "./utils/qrl-guard";
+import { readFileSync } from 'node:fs';
 import { appleClientId, appleIdentityCsp, appleSignInHosts, appleSignInRefusedForMissingPin } from "./config/apple-signin";
 import { googleClientId, googleIdentityCsp, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
-import { socialSignInIdsForHost } from "./utils/social-sign-in.server";
+import { socialSignInIdsForHost, storeGatewaysForHost } from "./utils/social-sign-in.server";
+import { GATEWAYS_HEADER } from "./platform/dns-prefetch";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
 import { theme } from"./theme/theme.config";
@@ -64,6 +68,8 @@ const app = express();
 app.disable('x-powered-by');
 // #364: first in the chain so every 404 and 5xx (static, guard, router, notFound) is named in the log (utils/error-path-log.ts).
 app.use(createErrorPathLog());
+// Every 4xx/5xx and temporary 3xx leaves `private, no-store`, whichever handler (static, guard, router, notFound, express error) answers.
+app.use(createErrorNoStoreMiddleware());
 
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both
@@ -178,6 +184,9 @@ app.use(async (req, res, next) => {
 	// is enabled; SheerID (script-src + frame-src) uses the same built theme flag as its homepage offer.
 	// Google Identity origins (script/style/connect/frame) join only when Google sign-in is on.
 	const socialIds = await socialSignInIdsForHost(validatedRequestHost(req.headers)).catch(() => ({ google: '', apple: '' }));
+	// #425: the store's configured payment gateways (same cached config read) for the head's dns-prefetch hints. Always overwritten:
+	// a client-sent value never reaches the render. Store-level and public, so a shell render may carry it.
+	req.headers[GATEWAYS_HEADER] = (await storeGatewaysForHost(validatedRequestHost(req.headers)).catch(() => [] as string[])).join(',');
 	const cspDirectives = buildCsp({
 		nonce,
 		apiOrigin,
@@ -230,6 +239,7 @@ app.use((req, _res, next) => {
 app.use(snapshotGuard);
 
 // Static asset handlers
+app.use(`/build`, precompressedStatic(buildDir, { skip: (p) => neverServedFromDisk(p) }));
 app.use(`/build`, express.static(buildDir, { immutable: true, maxAge:"1y" }));
 app.use(`/assets`, express.static(assetsDir, { immutable: true, maxAge:"1y" }));
 // Add specific handler for fonts
@@ -294,8 +304,21 @@ app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRO
 // unless SHELL_CACHE=1 marked this request a shell render.
 app.use(shellRenderUrl);
 
+// #332: per-IP limit on server-function POSTs (429), and an unknown/unloadable QRL (Q6) is a 404 with one sampled warn line.
+app.use(createServerFunctionRateLimit({ limit: Number(process.env.SELLRIGHT_SERVER_FN_PER_MINUTE) || 60 }));
+
 // Use Qwik Router's page and endpoint request handler
-app.use(router);
+// #332: every symbol hash this build ships (dist/q-manifest.json; the '@qwik-client-manifest' import is empty in this
+// entry); an id outside it (a replayed old build) is a 404 before the router. No manifest: the check is off.
+const knownServerFunctionHashes = (() => {
+	try {
+		const m = JSON.parse(readFileSync(join(distDir, 'q-manifest.json'), 'utf8')) as { symbols?: Record<string, { hash?: string }> };
+		return new Set(Object.values(m.symbols ?? {}).flatMap((sym) => (sym.hash ? [sym.hash] : [])));
+	} catch {
+		return new Set<string>();
+	}
+})();
+app.use(createServerFunctionGuard({ knownHashes: knownServerFunctionHashes })(router));
 
 // Use Qwik Router's 404 handler
 app.use(notFound);

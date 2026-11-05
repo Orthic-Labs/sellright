@@ -21,7 +21,7 @@ let cachedJwks: { at: number; keys: AppleJwk[] } | null = null;
 
 async function fetchAppleJwks(): Promise<AppleJwk[]> {
   if (cachedJwks && Date.now() - cachedJwks.at < JWKS_CACHE_TTL_MS) return cachedJwks.keys;
-  const res = await fetch(APPLE_JWKS_URL);
+  const res = await fetch(APPLE_JWKS_URL, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`apple jwks fetch failed: ${res.status}`);
   const body = (await res.json()) as { keys: AppleJwk[] };
   cachedJwks = { at: Date.now(), keys: body.keys };
@@ -138,6 +138,16 @@ export function appleAuthoritativeForEmail(a: Pick<AppleIdentity, 'email' | 'ema
   const at = a.email.lastIndexOf('@');
   if (at < 1) return false;
   return APPLE_MAIL_DOMAINS.has(a.email.slice(at + 1).trim().toLowerCase());
+}
+
+/** True when the identity's address is an Apple Hide My Email relay (flag from the token, or the relay domain itself).
+ *  A relay address is minted per app and can never match an account created another way, so it must never be used to
+ *  find and link an existing account by email — linking happens through the signed-in endpoint instead. */
+export function isAppleRelayIdentity(a: Pick<AppleIdentity, 'email' | 'isPrivateRelay'>): boolean {
+  if (a.isPrivateRelay) return true;
+  if (!a.email) return false;
+  const at = a.email.lastIndexOf('@');
+  return at > 0 && a.email.slice(at + 1).trim().toLowerCase() === 'privaterelay.appleid.com';
 }
 
 /** Test seam: reset the memoized JWKS (so a test can mock fetch and re-fetch). */

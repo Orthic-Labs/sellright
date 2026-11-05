@@ -7,13 +7,13 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
-import { api } from '../api';
+import { api, hub } from '../api';
 import { initials } from '../lib/format';
 import { ThemeMenu } from '../theme';
 import { AppErrorBoundary } from './ErrorBoundary';
 import { Loading } from './ui';
 import { confirmLeave, useLeaveGuardRoot } from '../redesign/leave-guard';
-import { OPEN_PALETTE_EVENT } from './CommandPalette';
+import { OPEN_PALETTE_EVENT } from './palette-event';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
 interface NavItem { to: string; label: string; icon: IconType; end?: boolean; count?: 'tofulfil' }
@@ -189,7 +189,7 @@ function AccountMenu() {
   return (
     <div className="me">
       <span className="av">{me ? initials(me.email) : '··'}</span>
-      <span className="truncate">{me?.email}</span>
+      <span className="truncate" title={hub.slot ? 'Saved account (via this admin)' : undefined}>{me?.email}{hub.slot ? ' · saved' : ''}</span>
       <span className="sp" />
       <div className="relative">
         <button className="iconbtn" style={{ color: 'inherit', width: 24, height: 24 }} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
@@ -199,7 +199,8 @@ function AccountMenu() {
           <>
             <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
             <div className="menu" style={{ left: 14, bottom: 46 }} role="menu">
-              <button role="menuitem" className="dng" onClick={() => void logout()}><LogOut size={14} /> Sign out</button>
+              <Link role="menuitem" to="/accounts" onClick={() => setOpen(false)}><Users size={14} /> Saved accounts</Link>
+              <button role="menuitem" className="dng" onClick={() => void logout()}><LogOut size={14} /> {hub.slot ? 'Leave this saved account' : 'Sign out'}</button>
             </div>
           </>
         )}

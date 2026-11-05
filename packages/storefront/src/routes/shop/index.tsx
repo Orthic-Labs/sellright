@@ -10,15 +10,19 @@ import { FacetWithValues } from '~/types';
 import { shopCategoryFilters } from '~/theme/theme.config';
 import { categoryFacets, filterCategoryProducts } from '~/config/shop-categories';
 import { readShopCatalog, useCatalogLoader } from '~/platform/shop';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { PRICE_PLACEHOLDER, useLiveRead } from '~/platform/live-values';
 import type { BrowseCatalog } from '~/services/browse-catalog';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
 import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
+import { earlyHintsOnRequest } from '~/platform/early-reads.server';
 
 export { useCatalogLoader };
 export { useConfiguratorDetail } from '~/platform/configurator-detail';
 export { head, onStaticGenerate } from '~/platform/shop';
+// ADR-0001: the shell's `Link: rel=preload` header (Early Hints), only on a shell render (platform/early-reads.server.ts).
+export const onRequest = earlyHintsOnRequest;
 
 // Both shop and search use the same configured category identities and tags.
 const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
@@ -26,10 +30,10 @@ const SHOP_FILTERS = categoryFacets(shopCategoryFilters);
 const BaseShopPage = component$(() => {
  const catalog = useCatalogLoader();
  const location = useLocation();
- // ADR-0001 §2: a deferred (shell) listing is read in the browser on load, from the manifest, no-store. Not deferred: no read.
+ // ADR-0001 §2 / DP-6: a deferred (shell) listing is read in the browser from the LIVE catalog, no-store (started at document parse, early-paint.ts). Not deferred: no read.
  const listingKey = useComputed$(() => (catalog.value.deferred ? location.url.pathname : null));
- const liveCatalog = useLiveRead<BrowseCatalog>($(() => readShopCatalog()), listingKey);
- /** The manifest listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
+ const liveCatalog = useLiveRead<BrowseCatalog>($(() => earlyJsonOr(liveReadUrl('shop-catalog'), () => readShopCatalog())), listingKey);
+ /** The listing this view holds: the loader's, or the browser read's (empty until it lands; a failed read is empty). */
  const listingProducts = (): CatalogListItem[] => (catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || []);
  const listingPending = catalog.value.deferred && (liveCatalog.status === 'idle' || liveCatalog.status === 'loading');
 
@@ -40,7 +44,10 @@ const BaseShopPage = component$(() => {
  const isSearching = useSignal(false);
  const searchTerm = useSignal('');
  const facetIds = useSignal<string[]>([]);
- const inStockOnly = useSignal(true);
+ // #425 (architecture note step 1): on the cached shell the products are in the HTML and shown at once; only availability and price
+ // are live. So the shell's listing starts on "all products", each sold-out one marked Sold Out in place when the live read lands
+ // (never hidden, never moved); the in-stock toggle still filters on request. The normal (uncached) render keeps in-stock only.
+ const inStockOnly = useSignal(!catalog.value.deferred);
  // Overrides populated ONLY when the in-stock toggle is flipped — live backend check
  // at that exact moment. Never consulted at any other time. Keyed by slug (the
  // catalog's stable identity — SellRight has no numeric product id).
@@ -103,11 +110,20 @@ const BaseShopPage = component$(() => {
   // Category filter
   products = filterCategoryProducts(products, shopCategoryFilters, facetIds.value);
 
-  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then manifest order
+  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then the loader's order. On the shell
+  // the loader's order is the structure the grid already paints (and the early script revealed), so the live read re-sorts nothing.
+  const structureOrder = new Map((catalog.value.products || []).map((p, i) => [p.slug, i] as const));
+  const orderOf = (slug: string) => structureOrder.get(slug) ?? Number.MAX_SAFE_INTEGER;
+  // #425: the shell keeps the order its HTML painted (merchandising order), so nothing moves when availability lands.
   const sorted = [...products].sort((a, b) => {
+   if (catalog.value.deferred) {
+    const byRank = listingRank(a.slug) - listingRank(b.slug);
+    return byRank !== 0 ? byRank : orderOf(a.slug) - orderOf(b.slug);
+   }
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
-   return listingRank(a.slug) - listingRank(b.slug); // equal ranks keep manifest order (stable sort)
+   const byRank = listingRank(a.slug) - listingRank(b.slug);
+   return byRank !== 0 ? byRank : orderOf(a.slug) === orderOf(b.slug) ? 0 : orderOf(a.slug) < orderOf(b.slug) ? -1 : 1;
   });
 
   return { products: sorted, count: sorted.length };
@@ -136,9 +152,10 @@ const BaseShopPage = component$(() => {
  // The listing's live read (the toggle, and shop.stockOnLoad = live on load): fail closed per platform/listing-availability.ts, and
  // only the latest request applies (an older response can never overwrite a newer one).
  const listingGen = useSignal(0);
- const readLiveListing = $(async (): Promise<boolean> => {
+ // #415: `early` only from the load trigger (useShopListingOnLoad): takes this document's early listing read once, else live.
+ const readLiveListing = $(async (early?: boolean): Promise<boolean> => {
   const gen = ++listingGen.value;
-  const live = await fetchLiveListing((p) => searchProducts(p));
+  const live = await fetchLiveListing((p) => searchProducts(early === true ? { ...p, early: true } : p));
   if (live === null) console.error('[shop] Live stock read failed');
   if (gen !== listingGen.value) return live !== null;
   const listed = catalog.value.deferred ? liveCatalog.value?.products ?? [] : catalog.value.products || [];
@@ -154,7 +171,7 @@ const BaseShopPage = component$(() => {
   inStockOnly.value = inStock;
   isSearching.value = true;
   try {
-   await readLiveListing();
+   await readLiveListing(false);
   } finally {
    isSearching.value = false;
   }
@@ -169,6 +186,10 @@ const BaseShopPage = component$(() => {
  const displayData = getDisplayProducts();
  const displayProducts = displayData.products;
  const displayCount = displayData.count;
+ // The shell's live read failed (both the parse-time GET and the server$ fallback): nothing is purchasable that was not confirmed.
+ const liveFailed = catalog.value.deferred && liveCatalog.status === 'error' && !searchTerm.value;
+ const gridPending = listingPending && !searchTerm.value && shellProducts.length > 0;
+ const showGrid = gridPending || (!(listingPending && !searchTerm.value) && !(isSearching.value && displayProducts.length === 0) && displayProducts.length > 0);
 
  return (
   <div class="bg-[var(--color-parchment)] min-h-screen">
@@ -245,8 +266,49 @@ const BaseShopPage = component$(() => {
 
    {/* ── PRODUCT GRID ── */}
    <div class="max-w-[1920px] mx-auto">
-    {listingPending && !searchTerm.value && shellProducts.length > 0 ? (
-     shellGrid(shellProducts)
+    {showGrid ? (
+     <>
+     {/* #425: ONE keyed grid for the pending shell and the live listing, so the browser's read updates the shell's cards in place
+        (same nodes): a separate shell grid was replaced wholesale, and its re-created titles became a late LCP (~1.1 s).
+        #425: on the shell the pending grid is VISIBLE from the cached HTML (names, images, links; no price, no availability); the
+        live read then fills price and marks sold-out cards in place (same order, nothing hidden or moved). The wrapper is
+        `display:contents`. */}
+     <div
+      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
+      style={{ contain: 'layout' }}
+      data-listing-pending={gridPending ? '' : undefined}
+     >
+      {(gridPending ? shellProducts : displayProducts).map((item, index) => (
+       <div key={item.slug} class="contents" data-slug={item.slug}>
+        <ProductCard
+         href={productPath(item.slug)}
+         image={item.image}
+         name={item.name}
+         slug={item.slug}
+         /* pending shell card: placeholder price, neither Sold Out nor in stock (ADR-0001 #412) */
+         price={gridPending ? null : item.pricingVariant?.price ?? item.minPrice}
+         pending={gridPending}
+         pricePending={gridPending}
+         maxPrice={!gridPending && SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
+         inStock={gridPending ? undefined : item.inStock}
+         priority={index === 0}
+         eager={index > 0 && index < 4}
+         /* #425: on a slow link the first card's image (the LCP) shared bandwidth with every eager card; the second card stays at normal
+            priority (same row on mobile), the rest of the first desktop row loads after them. */
+         lowPriority={index >= 2 && index < 4}
+         salePrice={gridPending ? null : item.pricingVariant?.salePrice ?? null}
+         preOrderPrice={gridPending ? null : item.pricingVariant?.preOrderPrice ?? null}
+         isPreOrder={!gridPending && !!item.pricingVariant?.isPreOrder}
+        />
+       </div>
+      ))}
+     </div>
+     {gridPending && (
+      <p data-shop-slow="" role="status" class="px-4 sm:px-8 lg:px-12 py-6 text-[13px] tracking-[0.5px] text-[var(--color-ink-soft)] font-body">
+       Still checking what is in stock. If this does not load, reload the page.
+      </p>
+     )}
+     </>
     ) : listingPending && !searchTerm.value ? (
      /* ADR-0001: the shell's listing space (two rows at every breakpoint) until the browser's manifest read lands */
      <div
@@ -279,16 +341,22 @@ const BaseShopPage = component$(() => {
      <div class="flex flex-col items-center justify-center py-32 text-center px-12">
       <div class="w-16 h-px bg-[var(--color-card-border)] mb-8"></div>
       <h3 class="font-heading font-normal text-2xl text-[var(--color-ink)] mb-3">
-       No products found
+       {liveFailed ? 'We could not check what is in stock' : 'No products found'}
       </h3>
       <p class="text-[13px] text-[var(--color-ink-muted)] mb-8 max-w-xs leading-loose tracking-wide">
-       {searchTerm.value
+       {liveFailed
+        ? 'Nothing is shown as available until it is confirmed. Reload the page to try again.'
+        : searchTerm.value
         ? `Nothing matched "${searchTerm.value}".`
         : 'Nothing matches your current filters.'}
       </p>
       <button
        class="px-6 py-3 bg-[var(--color-ink)] text-[var(--color-ink-contrast)] text-[13px] tracking-[2.5px] uppercase font-heading cursor-pointer hover:bg-[var(--color-ink-hover)] transition-colors duration-150 min-h-[44px]"
        onClick$={() => {
+        if (liveFailed) {
+         window.location.reload();
+         return;
+        }
         facetIds.value = [];
         searchTerm.value = '';
         state.facetValues = SHOP_FILTERS.map(facet => ({
@@ -297,65 +365,14 @@ const BaseShopPage = component$(() => {
         }));
        }}
       >
-       Clear filters
+       {liveFailed ? 'Reload' : 'Clear filters'}
       </button>
      </div>
-    ) : (
-     <div
-      class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
-      style={{ contain: 'layout' }}
-     >
-      {displayProducts.map((item, index) => (
-       <ProductCard
-        key={item.slug}
-        href={productPath(item.slug)}
-        image={item.image}
-        name={item.name}
-        slug={item.slug}
-        price={item.pricingVariant?.price ?? item.minPrice}
-        maxPrice={SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
-        inStock={item.inStock}
-        priority={index < 6}
-        salePrice={item.pricingVariant?.salePrice ?? null}
-        preOrderPrice={item.pricingVariant?.preOrderPrice ?? null}
-        isPreOrder={!!item.pricingVariant?.isPreOrder}
-       />
-      ))}
-     </div>
-    )}
+    ) : null}
    </div>
 
   </div>
  );
 });
-
-/**
- * ADR-0001 #412: the shell's grid from the cached structure (names, images, links). No price, no availability and no stock filtering
- * until the browser's manifest read lands (pending cards: placeholder price, neither Sold Out nor in stock). Defined after the page so
- * the page's own JSX keeps its keys (the switch-off render is unchanged byte for byte).
- */
-function shellGrid(products: CatalogListItem[]) {
- return (
-  <div
-   class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
-   style={{ contain: 'layout' }}
-   data-listing-pending=""
-  >
-   {products.map((item, index) => (
-    <ProductCard
-     key={item.slug}
-     href={productPath(item.slug)}
-     image={item.image}
-     name={item.name}
-     slug={item.slug}
-     price={null}
-     pending
-     pricePending
-     priority={index < 6}
-    />
-   ))}
-  </div>
- );
-}
 
 export default hasView('route.shop') ? BrandShopMount : BaseShopPage;

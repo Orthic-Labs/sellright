@@ -5,6 +5,7 @@ import { PricingGrid } from '../PricingGrid';
 import { useHostVariant } from './layout';
 import { licensePageHead, variantForHost } from '../variant';
 import { useLiveRead } from '~/platform/live-values';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { noStore, shellRender } from '~/platform/shell-render';
 import { validatedRequestHost } from '~/utils/trusted-request.server';
 
@@ -12,7 +13,7 @@ import { validatedRequestHost } from '~/utils/trusted-request.server';
 export const useCatalog = routeLoader$<{ items: PricedProduct[]; valuesPending: boolean }>(async ({ resolveValue }) => {
 	const items = await loadCatalog((await resolveValue(useHostVariant)).collection);
 	return shellRender() ? { items: redactCatalogPrices(items), valuesPending: true } : { items, valuesPending: false };
-});
+}, { serializationStrategy: 'always' });
 
 /** The live catalog of the request host's variant (no-store; the same host boundary as the layout). */
 const readCatalog = server$(async function () {
@@ -25,7 +26,8 @@ export default component$(() => {
 	const v = useHostVariant();
 	const catalog = useCatalog();
 	const valuesKey = useComputed$(() => (catalog.value.valuesPending ? 'license-home' : null));
-	const live = useLiveRead($(() => readCatalog()), valuesKey);
+	// #415/#425: this document's parse-time GET of the same catalog (once), else the server$ read.
+	const live = useLiveRead($(() => earlyJsonOr(liveReadUrl('license-catalog'), () => readCatalog())), valuesKey);
 	const ready = catalog.value.valuesPending && live.status === 'ready' && !!live.value;
 	return (
 		<main class="wrap section">

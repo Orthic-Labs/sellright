@@ -14,7 +14,10 @@ vi.mock('../payments/gateway-account.js', async (orig) => ({
 import { disputeRoutes } from './disputes.js';
 
 const storeId = '11111111-1111-4111-8111-111111111111';
-const sign = (body: string, key: string) => `t=1,s=${createHmac('sha256', key).update(`1.${body}`).digest('hex')}`;
+const sign = (body: string, key: string) => {
+  const t = Math.floor(Date.now() / 1000); // the signature timestamp must be fresh (5 minute tolerance)
+  return `t=${t},s=${createHmac('sha256', key).update(`${t}.${body}`).digest('hex')}`;
+};
 const post = (accountId: string, body: string, sig: string) => disputeRoutes.request(`/v1/webhooks/nmi/${storeId}/${accountId}`, {
   method: 'POST', body, headers: { 'content-type': 'application/json', 'webhook-signature': sig },
 });

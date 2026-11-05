@@ -118,8 +118,8 @@ export const NMI = component$<NMIProps>((props) => {
 		const isReady = track(() => ready.value);
 		if (disposed.value) return;
 		const decision = nextConfirm(t, isReady, handledTrigger.value);
-		if (!decision.run) return;
 		handledTrigger.value = decision.baseline;
+		if (!decision.run) return;
 		if (submitting.value) return; // double click: the attempt already in flight is this one
 		const getToken = getTokenRef.value as (() => Promise<string>) | null;
 		if (!getToken) {

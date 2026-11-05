@@ -2,14 +2,16 @@
 import { component$, useStyles$, useSignal, useContext, useComputed$, $ } from '@qwik.dev/core';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead, readHomeValues } from '~/platform/home';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { cardState, useLiveRead } from '~/platform/live-values';
 import { APP_STATE } from '~/constants';
 import type { CartLineEnrichment } from '~/sellright/types/cart';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
-import { stripHtml } from '~/utils/sanitize';
-import { homepageStyles, hasView, HomeHero, HomeTeeSection, HomeServiceSection, HomeTrustBar, Price, ProductCard } from '~/platform/gateway';
+import { htmlToText } from '~/utils/sanitize-lite';
+import { homepageStyles } from '~/platform/gateway/home-styles';
+import { hasView, HomeHero, HomeTeeSection, HomeServiceSection, HomeTrustBar, Price, ProductCard } from '~/platform/gateway';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandHomeMount, useNewsletterForm } from '~/platform/controllers/content';
 import { projectHeroPolicies, projectPolicies, projectFeatureProduct, projectFeatureVariant, projectPrice, projectProductTiles } from '~/platform/controllers/project';
@@ -44,7 +46,8 @@ const BaseHomePage = component$(() => {
   const valuesKey = useComputed$(() =>
     featuredLoader.value.valuesPending || preorderLoader.value?.valuesPending || featureLoader.value?.valuesPending ? 'home' : null,
   );
-  const live = useLiveRead($(() => readHomeValues()), valuesKey);
+  // #415: this document's early GET of the same values (once), else the server$ read.
+  const live = useLiveRead($(() => earlyJsonOr(liveReadUrl('home-values'), () => readHomeValues())), valuesKey);
   const pending = valuesKey.value !== null;
   const ready = pending && live.status === 'ready' && !!live.value;
   const preorderProduct = { value: ready ? live.value!.preorder : preorderLoader.value };
@@ -64,7 +67,7 @@ const BaseHomePage = component$(() => {
   // here as a fallback, which is wrong for every configured spotlight
   // product. No fallback text when a product has no description; the
   // paragraph simply doesn't render rather than showing something untrue.
-  const spotlightBody = preorderProduct.value?.description ? stripHtml(preorderProduct.value.description).trim() : '';
+  const spotlightBody = preorderProduct.value?.description ? htmlToText(preorderProduct.value.description).trim() : '';
 
   // The newsletter state, its Turnstile widget and its submit live in the platform (platform/controllers/content.tsx).
   const { email: nlEmail, honeypot: nlHoneypot, state: nlState, error: nlError, token: nlToken, handleSubmit: handleNewsletterSubmit } = useNewsletterForm();
@@ -236,7 +239,7 @@ const BaseHomePage = component$(() => {
                 required
                 disabled={nlState.value === 'sending'}
               />
-              <div id="nl-turnstile" class="min-h-[65px] w-full"></div>
+              <div id="nl-turnstile" class="w-full"></div>
               <button
                 type="submit"
                 class="nl-submit"

@@ -7,10 +7,10 @@ import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, passwordNeedsRehash, verifyPasswordBounded } from '../auth/password.js';
 import { customerToken, resolveLegacySession, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
-import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
+import { consumeMagicLink, consumeMagicLinkCode, magicLinkPolicy, mintMagicLinkWithCode, normalizeMagicCode } from '../auth/magic-link.js';
 import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity } from '../auth/google.js';
 import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
-import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
+import { appleAuthoritativeForEmail, appleClientIds, isAppleRelayIdentity, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, legacyCustomerToken, clearReadableLegacyToken, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
 import { checkEmailRetryAfter, clientIp, customerAuthIpRetryAfter, loginRetryAfter, recordCustomerAuthIpFailure, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -274,7 +274,7 @@ auth.openapi(
 // caller already proved CURRENT control of the address (the authoritative-domain
 // check, or a click on the fresh-verification link); only then may an existing
 // account be linked by email.
-type SignInOutcome = { kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> };
+type SignInOutcome = { kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'no_email' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> };
 async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, g: Pick<GoogleIdentity, 'sub' | 'email' | 'firstName' | 'lastName'>, mailboxProven: boolean): Promise<SignInOutcome> {
   // Match by googleSub first, then link by email, else create.
   let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
@@ -335,6 +335,9 @@ function signInOutcomeResponse(c: Parameters<typeof errJson>[0], st: StoreCtx, o
   }
   if (out.kind === 'not_linkable') {
     return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
+  }
+  if (out.kind === 'no_email') {
+    return errJson(c, 409, 'APPLE_EMAIL_REQUIRED', 'Apple did not share an email address for this sign-in — sign in with a sign-in link or your password, then link Apple from your account');
   }
   setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
   return c.json({ token: out.token, customer: out.customer }, 200);
@@ -457,11 +460,14 @@ auth.openapi(
 // Find-or-link-or-create for an Apple identity. `mailboxProven` is true when the caller already proved CURRENT control
 // of the address (Apple authoritative for it, or a click on the confirmation link); only then may an existing account
 // be linked by email. apple_user_id is read/written via raw SQL (see the route comment below).
-async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
+async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean; isPrivateRelay?: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
   const { sub, email: appleEmail, emailVerified } = apple;
+  // A Hide My Email relay address never matches an account by email (it was minted for this app alone); an existing
+  // account is linked to the Apple identity through the signed-in POST /v1/shop/account/apple instead.
+  const linkByEmail = !!appleEmail && !isAppleRelayIdentity({ email: appleEmail, isPrivateRelay: apple.isPrivateRelay ?? false });
   type CustomerRow = { id: string; email: string; title: string | null; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
   let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-  if (!cust && appleEmail) {
+  if (!cust && appleEmail && linkByEmail) {
     // SEC: an identity naming an address without mailbox proof was matched by subject a moment ago and has since been
     // unbound; it may neither link nor create.
     if (!mailboxProven) return { kind: 'not_linkable' };
@@ -482,8 +488,8 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     // (different per-team `sub` for the same Apple ID, e.g. after a
     // bundle-id / audience change) no longer relinks to their account by
     // email: they get 409 EMAIL_TAKEN and must sign in another way. There
-    // is no signed-in "link Apple" endpoint yet, so the 409 message points
-    // only at sign-in methods that exist; it does not promise a link step.
+    // is the signed-in POST /v1/shop/account/apple, so the 409 message points
+    // at the sign-in methods that exist today.
     if (byEmail) {
       if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
       if (byEmail.apple_user_id && byEmail.apple_user_id !== sub) {
@@ -498,12 +504,11 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     }
   }
   if (!cust) {
-    // Apple's Private Relay can omit email on repeat sign-ins; a fresh
-    // account with no email yet is legitimate here — the email column is
-    // NOT NULL so fall back to an opaque per-sub placeholder that can
-    // never collide with a real address (.invalid is reserved, RFC 2606)
-    // and is never shown to the user.
-    const email = appleEmail ? normalizeEmail(appleEmail) : `apple-${sub}@no-email.invalid`;
+    // Apple omits the email on repeat sign-ins, which the apple_user_id match above handles. A FIRST-time identity with
+    // no email would need a placeholder address no magic link can reach (an account the shopper can never get back
+    // into), so it is refused instead (409 APPLE_EMAIL_REQUIRED).
+    if (!appleEmail) return { kind: 'no_email' };
+    const email = normalizeEmail(appleEmail);
     const [created] = (await tx.execute(sql`
       INSERT INTO customer (store_id, email, apple_user_id, email_verified)
       VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) ON CONFLICT DO NOTHING RETURNING *`)).rows as CustomerRow[];
@@ -534,7 +539,7 @@ auth.openapi(
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED)', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
@@ -579,7 +584,7 @@ auth.openapi(
         await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), to, { url, providerName: 'Apple', providerEmail: to, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
         return { kind: 'verify_sent' };
       }
-      return completeAppleSignIn(tx, st, apple, authoritative);
+      return completeAppleSignIn(tx, st, apple, authoritative); // apple carries isPrivateRelay
     });
     if (out.kind === 'verify_sent') {
       await gate?.record();
@@ -633,9 +638,10 @@ auth.openapi(
       // (B2.16 magic-link vs e-mail-change race).
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
       if (!cust) return; // enumeration-safe: identical 200, no token, no email
-      const raw = await mintMagicLink(tx, st.id, cust.id, policy.ttlMinutes);
+      const { raw, code } = await mintMagicLinkWithCode(tx, st.id, cust.id, policy.ttlMinutes);
       const url = `${resolveStorefrontUrl(emailStoreCtx(st))}${policy.path}?token=${raw}`;
-      await enqueueMagicLink(tx, st.id, emailStoreCtx(st), email, { url, ttlMinutes: policy.ttlMinutes });
+      // #350: the same email also carries a one-time code redeemable with this address (POST /auth/magic-link/consume-code).
+      await enqueueMagicLink(tx, st.id, emailStoreCtx(st), email, { url, ttlMinutes: policy.ttlMinutes, code });
     });
     await recordLoginFailure(ip, bucket);
     return c.json({ ok: true }, 200);
@@ -670,18 +676,71 @@ auth.openapi(
       if (!cust) return { ok: false };
       const consumed = await consumeMagicLink(tx, st.id, raw);
       if (!consumed || consumed.customerId !== cust.id) return { ok: false };
-      // A magic-link sign-in proves control of the mailbox — treat it the same
-      // as an explicit email-verify token.
-      if (!cust.emailVerified) await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
-      await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
-      const sessionToken = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+      return magicLinkSignedIn(tx, st, cust);
     });
     if (!out.ok) return errJson(c, 409, 'MAGIC_LINK_INVALID', 'token is invalid, expired, or already used');
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );
+
+// POST /v1/shop/auth/magic-link/consume-code (#350) — the same sign-in for platforms where the emailed link cannot open
+// the app or storefront: the email address plus the one-time code printed beside the link. The code lives on the link's
+// own row (auth/magic-link.ts), so redeeming either burns both, they share one TTL, and a code is single use. Throttled
+// per email (across every network, and per network) on FAILURES only; an unknown address, a wrong code, an expired or
+// used code and a malformed code are one identical 409, so the route reveals nothing about which addresses have accounts.
+auth.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/auth/magic-link/consume-code',
+    summary: 'Exchange the emailed one-time code (with the email address) for a session',
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().max(254).email(), code: z.string().min(1).max(32) }) } } } },
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
+      409: { description: 'Invalid/expired/used code or not enabled', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    if (!magicLinkPolicy(st.config).enabled) return errJson(c, 409, 'MAGIC_LINK_DISABLED', 'magic-link sign-in is not enabled for this store');
+    const { email: rawEmail, code: rawCode } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
+    const ip = clientIp(c);
+    const ipBucket = `magiccode:${email}`;
+    const addrBucket = `magiccode-addr:${email}`;
+    const retry = Math.max(await loginRetryAfter(ip, ipBucket), await loginRetryAfter('*', addrBucket));
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+    const code = normalizeMagicCode(rawCode);
+    const out = !code ? { ok: false as const } : await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
+      // Same owner-first order as the link: lock the customer row, then consume atomically.
+      const [cust] = await tx.select().from(s.customer).where(and(eq(s.customer.email, email), eq(s.customer.storeId, st.id))).limit(1).for('update');
+      if (!cust) return { ok: false };
+      const consumed = await consumeMagicLinkCode(tx, st.id, cust.id, code);
+      if (!consumed) return { ok: false };
+      return magicLinkSignedIn(tx, st, cust);
+    });
+    if (!out.ok) {
+      await recordLoginFailure(ip, ipBucket);
+      await recordLoginFailure('*', addrBucket);
+      return errJson(c, 409, 'MAGIC_LINK_INVALID', 'code is invalid, expired, or already used');
+    }
+    await clearLoginAttempts(ip, ipBucket);
+    await clearLoginAttempts('*', addrBucket);
+    setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
+    return c.json({ token: out.token, customer: out.customer }, 200);
+  },
+);
+
+// Shared tail of a redeemed magic link or code (the token has just been consumed under the customer row lock).
+async function magicLinkSignedIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, cust: typeof s.customer.$inferSelect): Promise<{ ok: true; token: string; customer: z.infer<typeof CustomerOut> }> {
+  // A magic-link sign-in proves control of the mailbox — treat it the same
+  // as an explicit email-verify token.
+  if (!cust.emailVerified) await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
+  await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
+  const sessionToken = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
+  return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, title: cust.title ?? null, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+}
 
 // GET /v1/shop/auth/me
 auth.openapi(

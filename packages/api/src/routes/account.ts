@@ -11,9 +11,10 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, loadOrderLinesBatch, summarizeOrderForList, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
-import { normalizeEmail } from '../auth/email.js';
+import { reviewedProductSlugs } from '../reviews/reviews.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -145,6 +146,8 @@ account.openapi(
           items: z.array(z.object({
             sku: z.string(), name: z.string(), productName: z.string().nullable(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
             image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(), shipDateLabel: z.string().nullable(),
+            // #315: lets the order history link each line to its product's write-review entry.
+            productSlug: z.string().nullable(), reviewed: z.boolean(),
           })),
         })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
@@ -186,6 +189,7 @@ account.openapi(
       const ids = items.map((o) => o.id);
       const linesByOrder = await loadOrderLinesBatch(tx, ids);
       const fulfillmentsByOrder = await loadOrderFulfillmentsBatch(tx, ids);
+      const reviewedSlugs = await reviewedProductSlugs(tx, cust, [...linesByOrder.values()].flat().flatMap((l) => (l.productSlug ? [l.productSlug] : [])));
       return {
         total,
         items: items.map((o) => {
@@ -196,7 +200,7 @@ account.openapi(
             code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null,
             subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, shippingMethodName: o.shippingMethodName,
             ...list,
-            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel })),
+            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel, productSlug: l.productSlug, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) })),
           };
         }),
       };
@@ -318,11 +322,7 @@ account.openapi(
       if (!order) return { kind: 'notfound' as const };
       const baseLines = await loadOrderLines(tx, order.id);
       // Whether this customer already reviewed each line's product (any status): the review form is refused as a duplicate then.
-      const slugs = [...new Set(baseLines.flatMap((l) => (l.productSlug ? [l.productSlug] : [])))];
-      const reviewedRows = slugs.length ? await tx.select({ slug: s.product.slug }).from(s.productReview)
-        .innerJoin(s.product, eq(s.productReview.productId, s.product.id))
-        .where(and(inArray(s.product.slug, slugs), or(eq(s.productReview.customerId, cust.id), eq(s.productReview.authorEmail, normalizeEmail(cust.email))))) : [];
-      const reviewedSlugs = new Set(reviewedRows.map((r) => r.slug));
+      const reviewedSlugs = await reviewedProductSlugs(tx, cust, baseLines.flatMap((l) => (l.productSlug ? [l.productSlug] : [])));
       const lines = baseLines.map((l) => ({ ...l, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) }));
       const payments = await loadOrderPayments(tx, order.id);
       const fulfillments = await loadOrderFulfillments(tx, order.id);
@@ -443,6 +443,71 @@ account.openapi(
     if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     if (out === 'changed') return errJson(c, 409, 'CREDENTIAL_CHANGED', 'your password changed meanwhile — sign in again');
     return c.json({ ok: true }, 200);
+  },
+);
+
+// POST /v1/shop/account/apple — link a verified Apple identity to the signed-in account (#349). The session is the
+// proof of the mailbox, which is why this is the only way an existing account gains a Sign in with Apple identity when
+// Apple hands the store a Hide My Email relay address (sign-in never links by relay address). Same audience rules as
+// POST /v1/shop/auth/apple. An unverified account is refused: its holder has not proven the mailbox, and a binding made
+// now would carry over to whoever verifies the address later.
+account.openapi(
+  createRoute({
+    method: 'post', path: '/v1/shop/account/apple', summary: 'Link Sign in with Apple to my account',
+    request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20).max(16384) }) } } } },
+    responses: {
+      200: { description: 'Linked (also when this account already holds this Apple identity)', content: { 'application/json': { schema: z.object({ linked: z.literal(true) }) } } },
+      401: { description: 'Unauthenticated, or invalid Apple identity token (APPLE_TOKEN_INVALID)', content: { 'application/json': { schema: errSchema } } },
+      403: { description: 'CSRF', content: { 'application/json': { schema: errSchema } } },
+      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), email unverified (EMAIL_UNVERIFIED), this Apple identity belongs to another account (APPLE_ALREADY_LINKED), or this account holds a different one (APPLE_ACCOUNT_MISMATCH)', content: { 'application/json': { schema: errSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const tok = customerToken(c);
+    // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
+    if (!tok) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
+    const audiences = appleClientIds(st.config);
+    if (!audiences.length) return errJson(c, 409, 'APPLE_SIGNIN_NOT_CONFIGURED', 'Sign in with Apple is not configured for this store');
+    const { identityToken } = c.req.valid('json');
+    let apple: Awaited<ReturnType<typeof verifyAppleIdentityToken>> = null;
+    for (const aud of audiences) {
+      apple = await verifyAppleIdentityToken(identityToken, aud);
+      if (apple) break;
+    }
+    if (!apple) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
+    const sub = apple.sub;
+    type LinkOutcome = 'unauth' | 'unverified' | 'ok' | 'taken' | 'other';
+    let out: LinkOutcome;
+    try {
+      out = await withStore(st.id, async (tx): Promise<LinkOutcome> => {
+        const cust = await me(tx, tok);
+        if (!cust) return 'unauth';
+        // Lock the account row: a concurrent link or sign-in that binds it waits, then sees the binding.
+        const [row] = (await tx.execute(sql`SELECT email_verified, apple_user_id FROM customer WHERE id = ${cust.id} AND store_id = ${st.id} LIMIT 1 FOR UPDATE`)).rows as Array<{ email_verified: boolean; apple_user_id: string | null }>;
+        if (!row) return 'unauth';
+        if (!row.email_verified) return 'unverified';
+        if (row.apple_user_id === sub) return 'ok';
+        if (row.apple_user_id) return 'other';
+        const linked = (await tx.execute(sql`
+          UPDATE customer SET apple_user_id = ${sub}, updated_at = now()
+          WHERE id = ${cust.id} AND store_id = ${st.id} AND apple_user_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM customer o WHERE o.store_id = ${st.id} AND o.apple_user_id = ${sub})
+          RETURNING id`)).rows;
+        return linked.length ? 'ok' : 'taken';
+      });
+    } catch (e) {
+      // Two accounts racing to claim one Apple subject: the per-store unique index lets exactly one win.
+      const code = (e as { code?: string; cause?: { code?: string } } | null);
+      if ((code?.code ?? code?.cause?.code) === '23505') return errJson(c, 409, 'APPLE_ALREADY_LINKED', 'this Apple account is already linked to another account');
+      throw e;
+    }
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'unverified') return errJson(c, 409, 'EMAIL_UNVERIFIED', 'verify your email address before linking Apple');
+    if (out === 'taken') return errJson(c, 409, 'APPLE_ALREADY_LINKED', 'this Apple account is already linked to another account');
+    if (out === 'other') return errJson(c, 409, 'APPLE_ACCOUNT_MISMATCH', 'this account is already linked to a different Apple account');
+    return c.json({ linked: true as const }, 200);
   },
 );
 

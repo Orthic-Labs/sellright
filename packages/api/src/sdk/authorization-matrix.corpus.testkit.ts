@@ -8,6 +8,7 @@ import { createContentCases } from './authorization-matrix.content-cases.testkit
 import { createCustomerCases, createCustomerControls } from './authorization-matrix.customer-cases.testkit.js';
 import { createOrderCases } from './authorization-matrix.order-cases.testkit.js';
 import { createIdentityCases, runIdentityControls } from './authorization-matrix.identity-cases.testkit.js';
+import { createHubCases } from './authorization-matrix.hub-cases.testkit.js';
 import { createPublicReadCases, prepareSheeridCustomerControl } from './authorization-matrix.public-read-cases.testkit.js';
 import { createConfigurationCases } from './authorization-matrix.configuration-cases.testkit.js';
 import { createCartCases, createCartControls } from './authorization-matrix.cart-cases.testkit.js';
@@ -44,7 +45,7 @@ export function createEnrolledAuthorizationCases(f: Fixture, adapters: CoreAutho
   const customer = { billingPortal: createProviderBillingPortal(f, transport) };
   return [
     ...createReadCases(f), ...createMutationCases(f), ...createPermissionCases(f), ...createContentCases(f),
-    ...createCustomerCases(f, customer), ...createOrderCases(f), ...createIdentityCases(f), ...createPublicReadCases(f),
+    ...createCustomerCases(f, customer), ...createOrderCases(f), ...createIdentityCases(f), ...createHubCases(f), ...createPublicReadCases(f),
     ...createResourceCases(f), ...createBoundaryCases(f), ...createCartCases(f), ...createIntegrationCases(f), ...createAccountCreditCases(f),
     ...createPublicAuthCases(f), ...createLicenseCases(f), ...createConfigurationCases(f), ...createReconciliationCases(f),
     ...createStorefrontCases(f), ...createWebhookCases(f), ...createAssetCases(f), ...createProviderCases(f, transport),

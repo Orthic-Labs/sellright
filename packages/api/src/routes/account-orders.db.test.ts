@@ -161,3 +161,64 @@ describe('order detail payments — card facts only (#393)', () => {
     expect(text).not.toContain('"avs"');
   });
 });
+
+// --- #315: the `reviewed` lookup (order detail lines + order list items) ------------------------------------------------
+describe('reviewed lookup on order lines (#315)', () => {
+  const ORDER = '11111111-1111-1111-1111-111111111101';
+  const OTHER = 'eeeeeeee-eeee-eeee-eeee-0000000000e2';
+  type Line = { sku: string; productSlug: string | null; reviewed: boolean };
+
+  async function seedLines() {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO customer (id, store_id, email, email_verified) VALUES (${OTHER}, ${STORE}, 'other@acct-orders.test', true) ON CONFLICT (id) DO NOTHING`);
+      const ids: Record<string, { product: string; variant: string }> = {};
+      for (const k of ['a', 'b', 'c', 'd']) {
+        const product = (await tx.execute(sql`INSERT INTO product (store_id, slug, name) VALUES (${STORE}, ${'rev-' + k}, ${'Rev ' + k}) RETURNING id`)).rows as Array<{ id: string }>;
+        const variant = (await tx.execute(sql`INSERT INTO product_variant (store_id, product_id, sku, name, price) VALUES (${STORE}, ${product[0]!.id}, ${'REV-' + k.toUpperCase()}, ${'Rev ' + k}, 1000) RETURNING id`)).rows as Array<{ id: string }>;
+        ids[k] = { product: product[0]!.id, variant: variant[0]!.id };
+        await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total)
+          VALUES (${STORE}, ${ORDER}, ${variant[0]!.id}, ${'REV-' + k.toUpperCase()}, ${'Rev ' + k}, 1, 1000, 1000, 1000)`);
+      }
+      // a: reviewed by this account (still pending: any status counts)
+      await tx.execute(sql`INSERT INTO product_review (store_id, product_id, customer_id, author_name, author_email, rating, body, status)
+        VALUES (${STORE}, ${ids.a!.product}, ${CUSTOMER}, 'Buyer', 'someone-else@acct-orders.test', 5, 'Great knife, would buy again', 'pending')`);
+      // b: reviewed under the account's email as a guest (no customer id), normalized case
+      await tx.execute(sql`INSERT INTO product_review (store_id, product_id, customer_id, author_name, author_email, rating, body, status)
+        VALUES (${STORE}, ${ids.b!.product}, NULL, 'Guest', 'buyer@acct-orders.test', 4, 'Good value for the price', 'approved')`);
+      // c: reviewed only by ANOTHER shopper: must not count for this customer
+      await tx.execute(sql`INSERT INTO product_review (store_id, product_id, customer_id, author_name, author_email, rating, body, status)
+        VALUES (${STORE}, ${ids.c!.product}, ${OTHER}, 'Other', 'other@acct-orders.test', 3, 'Fine, nothing special', 'approved')`);
+      // d: not reviewed by anyone. A line whose variant is gone has no slug and is never "reviewed".
+      await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total)
+        VALUES (${STORE}, ${ORDER}, NULL, 'GONE-1', 'Gone variant', 1, 1000, 1000, 1000)`);
+    });
+  }
+  const bySku = (lines: Line[]) => Object.fromEntries(lines.map((l) => [l.sku, l]));
+
+  it('order detail marks a line reviewed by account id or by account email (any status), and not by someone else', async () => {
+    await seedLines();
+    const res = await app.request('/v1/shop/account/orders/ORD-PAGE-1', { headers: hdr() });
+    expect(res.status).toBe(200);
+    const lines = bySku(((await res.json()) as { lines: Line[] }).lines);
+    expect(lines['REV-A']).toMatchObject({ productSlug: 'rev-a', reviewed: true });
+    expect(lines['REV-B']).toMatchObject({ productSlug: 'rev-b', reviewed: true });
+    expect(lines['REV-C']).toMatchObject({ productSlug: 'rev-c', reviewed: false });
+    expect(lines['REV-D']).toMatchObject({ productSlug: 'rev-d', reviewed: false });
+    expect(lines['GONE-1']).toMatchObject({ productSlug: null, reviewed: false });
+  });
+
+  it('the order list carries the same slug + reviewed facts per item, in one place with the detail', async () => {
+    await seedLines();
+    const res = await app.request('/v1/shop/account/orders', { headers: hdr() });
+    const order = ((await res.json()) as { items: Array<{ code: string; items: Line[] }> }).items.find((o) => o.code === 'ORD-PAGE-1')!;
+    const items = bySku(order.items);
+    expect(items['REV-A']).toMatchObject({ productSlug: 'rev-a', reviewed: true });
+    expect(items['REV-B']).toMatchObject({ productSlug: 'rev-b', reviewed: true });
+    expect(items['REV-C']).toMatchObject({ productSlug: 'rev-c', reviewed: false });
+    expect(items['GONE-1']).toMatchObject({ productSlug: null, reviewed: false });
+    // An order with no lines still lists fine (the lookup is skipped for an empty slug set).
+    const empty = ((await (await app.request('/v1/shop/account/orders', { headers: hdr() })).json()) as { items: Array<{ code: string; items: Line[] }> }).items.find((o) => o.code === 'ORD-PAGE-2')!;
+    expect(empty.items).toEqual([]);
+  });
+
+});

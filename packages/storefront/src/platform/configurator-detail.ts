@@ -83,7 +83,7 @@ export const useConfiguratorDetail = routeLoader$(async (): Promise<Configurator
 	if (!hasView('route.shop')) return null;
 	const d = await buildConfiguratorDetail();
 	return shellRender() ? shellConfiguratorDetail(d) : d;
-});
+}, { serializationStrategy: 'always' });
 
 /** The branded shop's live values in the browser (ADR-0001): the same build, per request, no-store. */
 export const readConfiguratorDetail = server$(async function (): Promise<ConfiguratorDetail | null> {

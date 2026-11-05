@@ -3,6 +3,7 @@
 import { $, component$, useComputed$, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { useLiveRead } from '~/platform/live-values';
+import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { hasPendingValues, pickLiveSource } from './configurator-model';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { readConfiguratorDetail, useConfiguratorDetail, type ConfiguratorDetail } from '~/platform/configurator-detail';
@@ -24,8 +25,8 @@ export function applyOverride(listing: readonly ShopListingItem[], override: Rec
 }
 
 /** The listing's live read: fail closed for every listed slug (platform/listing-availability.ts); a failed read is all out of stock. */
-export async function liveListingOverride(listedSlugs: readonly string[], search = searchProducts): Promise<{ override: Record<string, boolean>; ok: boolean }> {
-	const live = await readLiveListing((p) => search(p));
+export async function liveListingOverride(listedSlugs: readonly string[], search = searchProducts, early = false): Promise<{ override: Record<string, boolean>; ok: boolean }> {
+	const live = await readLiveListing((p) => search(early ? { ...p, early: true } : p));
 	if (live === null) console.error('[shop] Live stock read failed');
 	return { override: liveListingAvailability(listedSlugs, live), ok: live !== null };
 }
@@ -37,12 +38,14 @@ export const BrandShopMount = component$(() => {
 	// ADR-0001 §2: a shell detail (no listing, prices pending) is read in the browser on load from the manifest, no-store (LOCKED layer 2:
 	// still the manifest on load; the in-stock toggle stays the live API hit).
 	const liveKey = useComputed$(() => (hasPendingValues(detail.value, 'shop') ? location.url.pathname : null));
-	const live = useLiveRead<ConfiguratorDetail>($(() => readConfiguratorDetail()), liveKey);
+	// #415: this document's early GET of the same values (once), else the server$ read.
+	const live = useLiveRead<ConfiguratorDetail>($(() => earlyJsonOr(liveReadUrl('shop-configurator'), () => readConfiguratorDetail())), liveKey);
 	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'shop', live);
 	const inStockOnly = useSignal(true);
 	const override = useSignal<Record<string, boolean> | null>(null);
 	const listCtl = useStore<ActionCtl>({ disposed: false, admitted: [] });
-	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }));
+	// Only the unmount flag: registered when the browser is idle, not eagerly at load (QWIK-TASK-AUDIT #1).
+	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }), { strategy: 'document-idle' });
 
 	// One request generation for the automatic read and the toggle: only the latest response applies.
 	const listingGen = useSignal(0);
@@ -53,10 +56,11 @@ export const BrandShopMount = component$(() => {
 		const d = pickLiveSource(track(() => detail.value), track(() => live.value), 'shop');
 		listed.slugs = (d?.listing ?? []).map((item) => item.slug);
 	});
-	const readListing = $(async (): Promise<boolean> => {
+	// #415: `early` only from the load trigger (useShopListingOnLoad): takes this document's early listing read once, else live.
+	const readListing = $(async (early?: boolean): Promise<boolean> => {
 		const gen = ++listingGen.value;
 		const slugs = [...listed.slugs];
-		const { override: next, ok } = await liveListingOverride(slugs);
+		const { override: next, ok } = await liveListingOverride(slugs, searchProducts, early === true);
 		if (gen === listingGen.value && !listCtl.disposed) override.value = next;
 		return ok;
 	});
@@ -68,7 +72,7 @@ export const BrandShopMount = component$(() => {
 		dispatch<ActionResult>(listCtl, 'listing', ACTION_RESULTS, async () => {
 			if (typeof inStock !== 'boolean') return { ok: false, reason: 'invalid' };
 			inStockOnly.value = inStock;
-			return (await readListing()) ? { ok: true } : { ok: false, reason: 'error' };
+			return (await readListing(false)) ? { ok: true } : { ok: false, reason: 'error' };
 		}),
 	);
 

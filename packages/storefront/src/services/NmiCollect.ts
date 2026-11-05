@@ -9,6 +9,7 @@
  * The account environment selects the host independently of payment mode;
  * the tokenization key comes from GET /v1/shop/config (gateways.nmi).
  */
+import { activationGate } from '~/utils/prerender';
 
 declare global {
   interface Window { CollectJS?: NmiCollectJs }
@@ -30,6 +31,10 @@ export interface NmiCollectJs {
     placeholderCss?: Record<string, string>;
     invalidCss?: Record<string, string>;
     timeoutDuration?: number;
+    /** Collect.js builds its wallet (PaymentRequest) probe from these; without them it logs an error on every configure. */
+    currency?: string;
+    country?: string;
+    price?: string;
     validationCallback?: (field: string, valid: boolean, message: string) => void;
     /** Inline variant: fires once the card number validates, with the card details Collect.js looked up for it. */
     lookUpCallback?: (card: { type?: string } | null | undefined) => void;
@@ -54,6 +59,9 @@ export const COLLECT_LOAD_TIMEOUT_MS = 15000;
 /** Load the Collect.js script once per tokenization key. */
 export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', doc?: Document, environment?: 'sandbox' | 'production', timeoutMs = COLLECT_LOAD_TIMEOUT_MS): Promise<NmiCollectJs> {
   if (typeof window === 'undefined') return Promise.reject(new Error('Collect.js is browser-only'));
+  // #425: a prerendered checkout starts no payment widget (a third-party script and its hosted-field iframes) until it is shown.
+  const activation = activationGate();
+  if (activation) return activation.then(() => loadCollectJs(tokenizationKey, mode, doc, environment, timeoutMs));
   const src = collectJsSrc(mode, environment);
   const key = `${src}:${tokenizationKey}`;
   if (inflight && inflight.key === key) return inflight.promise;
@@ -62,6 +70,11 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
     const script = documentRef.createElement('script');
     script.src = src;
     script.setAttribute('data-tokenization-key', tokenizationKey);
+    // #408: Collect.js reads its wallet probe settings from the tag at load; without them it logs
+    // "Could not create PaymentRequestAbstraction". No wallet buttons are configured; the amount is set server-side.
+    script.setAttribute('data-currency', 'USD');
+    script.setAttribute('data-country', 'US');
+    script.setAttribute('data-price', '0.00');
     script.async = true;
     // A failed load must not stay cached: the next call (the retry) has to request the script again, and the dead
     // script element must not linger in the head.
@@ -190,6 +203,10 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
       invalidCss: { color: '#b3261e' },
       // A tokenization that never answers ends in timeoutCallback (a retryable error), not an endless "Processing".
       timeoutDuration: 20000,
+      // #408: Collect.js always probes PaymentRequest (wallets) and console.errors "Could not create
+      // PaymentRequestAbstraction" unless currency, price and country are valid. No wallet fields are configured, so
+      // the values only satisfy that probe; the charge amount is set server-side.
+      currency: 'USD', country: 'US', price: '0.00',
       // The lookup runs only when a listener wants the brand: it is an extra request to the gateway per validated number.
       ...(listeners?.onCardBrand ? { lookUpCallback: (card: { type?: string } | null | undefined) => listeners.onCardBrand?.(normalizeCardBrand(card?.type)) } : {}),
       validationCallback: (field, valid, message) => {

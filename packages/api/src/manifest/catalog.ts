@@ -25,6 +25,7 @@ import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } fr
 import { CatalogReuseError, publishGeneration, readCurrentCatalogReuseSnapshot, type CatalogReuse } from './publish.js';
 import { aggregatesForProducts } from '../reviews/reviews.js';
 import { purgeAfterPublish } from '../cache/purge-hook.js';
+import { collectionSlugsForProducts } from '../catalog/product-collections.js';
 import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 /**
@@ -362,7 +363,8 @@ function mergeByName<T extends { name: string }>(unchanged: T[], fresh: T[]): T[
  * be given, both are unioned. Neither means a full rebuild.
  *
  * N9 / F5: the edge purge runs only AFTER `publishGeneration` atomically and durably swapped `current` — the
- * standard shop set, plus every affected product's page (old and new slug, so a rename purges both). Set
+ * standard shop set, every affected product's page (old and new slug, so a rename purges both) and every collection
+ * page that can list them; a full rebuild (affected set unknown) purges the whole host (ADR-0001 I-4). Set
  * `purge: false` to publish without purging. A failed/timed-out purge throws CatalogPurgeError after publication so
  * the caller's durable marker survives for retry.
  */
@@ -372,6 +374,7 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
   const priceRule = variantPriceRuleFromConfig(store.config);
   const wantsScope = !!(args.variantIds?.length || args.productIds?.length);
   let affectedSlugs: string[] = [];
+  let affectedCollectionSlugs: string[] = [];
 
   const current = wantsScope ? await readCurrentCatalogReuseSnapshot(args.outDir, args.storeSlug) : null;
   const scoped: PublishPayload | null = current && wantsScope
@@ -389,6 +392,7 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
         const affectedIds = new Set(affectedProductIds);
         const staleSlugs = new Set([...possiblyStaleSlugs, ...current.v2.manifest.products.filter(p => affectedIds.has(p.id as string)).map(p => p.slug)]);
         affectedSlugs = [...staleSlugs];
+        affectedCollectionSlugs = await collectionSlugsForProducts(tx, store.id, affectedProductIds);
         const unchanged = current.v1.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as ManifestProductEntry[];
         const unchangedV2 = current.v2.manifest.products.filter(p => !staleSlugs.has(p.slug)) as unknown as NativeProductManifestEntryV2[];
         const manifestProducts = mergeByName(unchanged, freshEntries);
@@ -415,15 +419,36 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
   });
   const publish = (payload: PublishPayload) => publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, ...payload });
   let result: Awaited<ReturnType<typeof publishGeneration>> | null = null;
+  let scopedPublished = false;
   if (scoped) {
-    try { result = await publish(scoped); }
+    try { result = await publish(scoped); scopedPublished = true; }
     catch (error) { if (!(error instanceof CatalogReuseError)) throw error; }
   }
   // A stale identity/race discards its stage before exactly one full rebuild.
   result ??= await publish(await fullPayload());
   if (args.purge !== false) {
     const seo = seoConfigFromStore({ name: store.name, config: store.config });
-    const outcome = await purgeAfterPublish(args.storeSlug, affectedSlugs.map((slug) => productPath(seo, slug)));
+    // #420: a product-triggered publication that fell back to a full rebuild (no reusable snapshot, or a stale identity)
+    // still knows the products that triggered it. Purge their pages by URL first: a URL purge takes effect in well
+    // under a second, a whole-host purge took ~37 s to reach the edge (live Rotten edit, 2026-11-04). The host purge
+    // below still runs, so nothing the full rebuild touched stays cached.
+    if (!scopedPublished && wantsScope) {
+      const known = await withStore(store.id, async (tx) => {
+        const ids = [...new Set([
+          ...await productIdsForVariants(tx, store.id, args.variantIds ?? []),
+          ...await productIdsInStore(tx, store.id, args.productIds ?? []),
+        ])];
+        return ids.length ? { slugs: await slugsForProductIds(tx, store.id, ids), collections: await collectionSlugsForProducts(tx, store.id, ids) } : null;
+      });
+      if (known?.slugs.length) {
+        await purgeAfterPublish(args.storeSlug, { productPaths: known.slugs.map((slug) => productPath(seo, slug)), collectionSlugs: known.collections });
+      }
+    }
+    // ADR-0001 I-4: a scoped publication knows its products (page, collections, /, /shop/); a full rebuild does not,
+    // so it purges the whole host.
+    const outcome = await purgeAfterPublish(args.storeSlug, scopedPublished
+      ? { productPaths: affectedSlugs.map((slug) => productPath(seo, slug)), collectionSlugs: affectedCollectionSlugs }
+      : null);
     if (outcome === 'failed') throw new CatalogPurgeError(result);
   }
   return result;

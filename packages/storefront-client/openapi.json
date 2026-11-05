@@ -14,6 +14,9 @@
           "ADDRESS_NOT_FOUND",
           "ALREADY_REVIEWED",
           "AMOUNT_MISMATCH",
+          "APPLE_ACCOUNT_MISMATCH",
+          "APPLE_ALREADY_LINKED",
+          "APPLE_EMAIL_REQUIRED",
           "APPLE_SIGNIN_NOT_CONFIGURED",
           "APPLE_TOKEN_INVALID",
           "AUTH_REQUIRED",
@@ -34,6 +37,7 @@
           "CSRF_INVALID",
           "AGENT_NOT_ALLOWED",
           "DOWNLOAD_NOT_FOUND",
+          "EMAIL_UNVERIFIED",
           "DOWNLOADS_NOT_CONFIGURED",
           "EMAIL_NOT_VERIFIED",
           "EMAIL_SAME",
@@ -1971,6 +1975,23 @@
                       "maxLength": 255
                     },
                     "maxItems": 100
+                  },
+                  "pricingIntent": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "checkout"
+                    ]
+                  },
+                  "shippingMethodCode": {
+                    "type": "string"
+                  },
+                  "redeemPoints": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "shipCountry": {
+                    "type": "string"
                   }
                 }
               }
@@ -7494,7 +7515,7 @@
             }
           },
           "409": {
-            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)",
+            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN), or a first-time identity carries no email (APPLE_EMAIL_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7681,6 +7702,120 @@
           },
           "409": {
             "description": "Invalid/expired/used or not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/auth/magic-link/consume-code": {
+      "post": {
+        "summary": "Exchange the emailed one-time code (with the email address) for a session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "email",
+                  "code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "customer": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "firstName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lastName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "phone": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "isMigrated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "email",
+                        "title",
+                        "firstName",
+                        "lastName",
+                        "phone",
+                        "emailVerified",
+                        "isMigrated"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "customer"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid/expired/used code or not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -9525,11 +9660,13 @@
                 "properties": {
                   "token": {
                     "type": "string",
-                    "minLength": 20
+                    "minLength": 20,
+                    "maxLength": 512
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 8
+                    "minLength": 8,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -9646,11 +9783,13 @@
                 "properties": {
                   "newEmail": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email"
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -10239,6 +10378,13 @@
                                 "shipDateLabel": {
                                   "type": "string",
                                   "nullable": true
+                                },
+                                "productSlug": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "reviewed": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": [
@@ -10251,7 +10397,9 @@
                                 "image",
                                 "isPreOrder",
                                 "shipDate",
-                                "shipDateLabel"
+                                "shipDateLabel",
+                                "productSlug",
+                                "reviewed"
                               ]
                             }
                           }
@@ -11004,6 +11152,83 @@
           },
           "409": {
             "description": "Password changed meanwhile (CREDENTIAL_CHANGED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/apple": {
+      "post": {
+        "summary": "Link Sign in with Apple to my account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identityToken": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 16384
+                  }
+                },
+                "required": [
+                  "identityToken"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Linked (also when this account already holds this Apple identity)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "linked": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "linked"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated, or invalid Apple identity token (APPLE_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), email unverified (EMAIL_UNVERIFIED), this Apple identity belongs to another account (APPLE_ALREADY_LINKED), or this account holds a different one (APPLE_ACCOUNT_MISMATCH)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16722,6 +16947,444 @@
         }
       }
     },
+    "/v1/hub/session": {
+      "post": {
+        "summary": "Saved accounts (#355): start or resume this browser's hub session; returns the CSRF token for hub mutations",
+        "responses": {
+          "200": {
+            "description": "Hub session ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "csrf": {
+                      "type": "string"
+                    },
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "csrf",
+                    "targets"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many new sessions from this address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/accounts": {
+      "get": {
+        "summary": "Saved accounts (#355): the configured servers and the accounts saved in this hub session",
+        "responses": {
+          "200": {
+            "description": "Targets and saved accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "targetId": {
+                            "type": "string"
+                          },
+                          "targetLabel": {
+                            "type": "string"
+                          },
+                          "adminEmail": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          },
+                          "lastUsedAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "targetId",
+                          "targetLabel",
+                          "adminEmail",
+                          "expiresAt",
+                          "lastUsedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "targets",
+                    "accounts"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/enrol": {
+      "post": {
+        "summary": "Saved accounts (#355): begin adding an account on a configured server; navigate to redirectTo to sign in there",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "targetId": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "targetId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The target's sign-in handoff page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "redirectTo": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "redirectTo"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/callback/{targetId}": {
+      "get": {
+        "summary": "Saved accounts (#355): the target sends the browser here with a one-use code; the hub redeems it and returns to the saved-accounts screen",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "required": true,
+            "name": "targetId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "required": false,
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "required": false,
+            "name": "iss",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Back to the hub admin with enrolled=<account id> or error=<reason>"
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/accounts/{slotId}": {
+      "delete": {
+        "summary": "Saved accounts (#355): forget one saved account and sign its session out on the target",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "required": true,
+            "name": "slotId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled, or no such saved account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hub/signout": {
+      "post": {
+        "summary": "Saved accounts (#355): sign out of the hub; every saved account is signed out on its server",
+        "responses": {
+          "200": {
+            "description": "Signed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No hub session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hub not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/setup/status": {
       "get": {
         "summary": "Whether this installation still needs claiming",
@@ -16784,7 +17447,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 12
+                    "minLength": 12,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -16962,10 +17626,12 @@
                 "properties": {
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "totp": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   }
                 },
                 "required": [
@@ -18035,6 +18701,10 @@
                     "minimum": 0,
                     "exclusiveMinimum": true,
                     "maximum": 36500
+                  },
+                  "expectedUpdatedAt": {
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -18051,10 +18721,14 @@
                   "properties": {
                     "id": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "id"
+                    "id",
+                    "updatedAt"
                   ]
                 }
               }
@@ -18072,6 +18746,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -18158,6 +18842,10 @@
                   "onHand": {
                     "type": "integer",
                     "minimum": 0
+                  },
+                  "expectedOnHand": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 },
                 "required": [
@@ -18202,6 +18890,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stock changed since loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -26340,8 +27038,10 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "minLength": 1
-                    }
+                      "minLength": 1,
+                      "maxLength": 253
+                    },
+                    "maxItems": 50
                   },
                   "storefrontUrl": {
                     "type": "string",
@@ -27918,7 +28618,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "setupId": {
                     "type": "string",
@@ -28007,11 +28708,13 @@
                 "type": "object",
                 "properties": {
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -28099,7 +28802,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -31923,7 +32627,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 10
+                    "minLength": 10,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -32239,11 +32944,13 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 10
+                    "minLength": 10,
+                    "maxLength": 1024
                   },
                   "currentPassword": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "totp": {
                     "type": "string"
@@ -35313,6 +36020,15 @@
             },
             "required": false,
             "name": "turnstileToken",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "required": false,
+            "name": "rt",
             "in": "query"
           }
         ],

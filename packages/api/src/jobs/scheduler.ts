@@ -10,6 +10,8 @@
  *   JOBS_RELEASE_STALE_TTL_MIN=60   unpaid-order age threshold (minutes)
  *   JOBS_PURGE_CANCELLED_APPLY=1    actually delete expired Cancelled orders (default: dry-run)
  *   JOBS_PURGE_CANCELLED_HOURS=24   hours an order stays Cancelled before deletion
+ *   JOBS_TRASH_ABANDONED_APPLY=1    actually trash release-stale-cancelled orders (default: dry-run)
+ *   JOBS_TRASH_ABANDONED_MINUTES=60 minutes after the release-stale cancel before the order is trashed
  *
  * ⚠ release-stale APPLY mass-cancels old PendingPayment orders. DD's imported
  * catalog has thousands of historical PendingPayment rows that are NOT abandoned
@@ -25,6 +27,7 @@ import { isMaintenanceOn } from '../maintenance.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { purgeCancelledOrders } from './purge-cancelled-orders.js';
+import { TRASH_ABANDONED_DEFAULT_MINUTES, trashAbandonedOrders } from './trash-abandoned-orders.js';
 import { capiConfig, openaiCapiPass } from '../ads/openai-capi.js';
 import { reservationReleaseSweep } from './reservation-release-sweep.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
@@ -189,6 +192,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;
   const purgeCancelledApply = env.JOBS_PURGE_CANCELLED_APPLY === '1';
   const purgeCancelledHours = env.JOBS_PURGE_CANCELLED_HOURS ?? 24;
+  const trashAbandonedApply = env.JOBS_TRASH_ABANDONED_APPLY === '1';
+  const trashAbandonedMinutes = env.JOBS_TRASH_ABANDONED_MINUTES ?? TRASH_ABANDONED_DEFAULT_MINUTES;
   const capi = capiConfig();
 
   log.info('scheduler on', {
@@ -198,6 +203,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     releaseTtlMin,
     purgeCancelledApply,
     purgeCancelledHours,
+    trashAbandonedApply,
+    trashAbandonedMinutes,
     openaiCapi: capi ? (capi.validateOnly ? 'validate_only' : 'live') : 'off',
     cartAbandonHours: env.CART_ABANDON_HOURS,
     cartTtlDays: env.CART_TTL_DAYS,
@@ -261,6 +268,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   every(state, 15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
   // #374: a Cancelled, money-free order is deleted `purgeCancelledHours` after cancellation.
   every(state, 15 * 60_000, 'purge-cancelled', 'purge-cancelled', () => purgeCancelledOrders({ apply: purgeCancelledApply, hours: purgeCancelledHours, log: jobLog }));
+  // #359: a release-stale-cancelled, money-free order is trashed (soft delete) `trashAbandonedMinutes` after the cancellation.
+  every(state, 15 * 60_000, 'trash-abandoned', 'trash-abandoned', () => trashAbandonedOrders({ apply: trashAbandonedApply, minutes: trashAbandonedMinutes, log: jobLog }));
   // #375: server-side OpenAI order_created for live-paid orders; registered only when the pixel id and key are configured.
   if (capi) every(state, 5 * 60_000, 'openai-capi', 'openai-capi', () => openaiCapiPass({ log: jobLog }));
   // PAYMENT-TIMING §5.2: safety net for release requests and R5 projections deferred by a failing policy hook.

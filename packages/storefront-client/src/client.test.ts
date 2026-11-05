@@ -123,3 +123,27 @@ describe('timeout', () => {
     await expect(client.raw.GET('/v1/health')).rejects.toBeInstanceOf(NetworkError);
   });
 });
+
+describe('ready', () => {
+  it('holds the request until ready() settles, and the timeout budget starts only then', async () => {
+    const { fetchFn, calls } = fakeFetch(() => jsonResponse(200, { status: 'ok' }));
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const client = createStorefrontClient({ baseUrl: 'http://api.test', timeoutMs: 50, fetch: fetchFn, ready: () => gate });
+    const pending = client.raw.GET('/v1/health');
+    await new Promise((r) => setTimeout(r, 120)); // longer than the timeout: the wait must not spend it
+    expect(calls).toHaveLength(0);
+    open();
+    const { data } = await pending;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.signal.aborted).toBe(false);
+    expect(data).toEqual({ status: 'ok' });
+  });
+
+  it('a ready() that returns nothing sends the request at once', async () => {
+    const { fetchFn, calls } = fakeFetch(() => jsonResponse(200, { status: 'ok' }));
+    const client = createStorefrontClient({ baseUrl: 'http://api.test', fetch: fetchFn, ready: () => undefined });
+    await client.raw.GET('/v1/health');
+    expect(calls).toHaveLength(1);
+  });
+});

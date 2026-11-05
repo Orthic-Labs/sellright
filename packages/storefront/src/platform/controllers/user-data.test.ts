@@ -112,6 +112,50 @@ describe('user data (#375)', () => {
 		beforeEach(async () => { localStorage.clear(); head_ = await import('~/platform/head-analytics'); });
 		const settle = () => new Promise((r) => setTimeout(r, 20));
 
+		it('#430: gtm.js is inserted only on the first interaction, never after load or on a timer; the dataLayer is filled at once', () => {
+			const { GTM_LOADER_SOURCE } = head_;
+			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
+			const d = {
+				readyState: 'loading', currentScript: { getAttribute: (k: string) => (k === 'data-gtm-id' ? 'GTM-TEST' : null), nonce: '' },
+				getElementsByTagName: () => [{ parentNode: { insertBefore: (j: unknown) => { inserted.push(j); } } }],
+				createElement: () => ({ setAttribute: () => undefined }), cookie: '',
+			};
+			const timers: Array<{ cb: () => void; ms: number }> = [];
+			const w = { localStorage, crypto: globalThis.crypto, location: { protocol: 'https:' }, dataLayer: [] as DL,
+				addEventListener: (e: string, cb: () => void) => { (handlers[e] ??= []).push(cb); },
+				setTimeout: (cb: () => void, ms: number) => { timers.push({ cb, ms }); return 0; } };
+			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, w.setTimeout);
+			expect(w.dataLayer[w.dataLayer.length - 1]).toMatchObject({ event: 'gtm.js' });
+			expect(inserted).toHaveLength(0);
+			expect(handlers.load).toBeUndefined();
+			timers.forEach((x) => x.cb());
+			expect(inserted).toHaveLength(0);
+			handlers.pointerdown!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
+			handlers.scroll!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
+		});
+
+		it('#360: the first interaction inserts gtm.js once; a loaded page alone inserts nothing', () => {
+			const { GTM_LOADER_SOURCE } = head_;
+			const inserted: unknown[] = []; const handlers: Record<string, Array<() => void>> = {};
+			const d = {
+				readyState: 'complete', currentScript: { getAttribute: (k: string) => (k === 'data-gtm-id' ? 'GTM-TEST' : null), nonce: '' },
+				getElementsByTagName: () => [{ parentNode: { insertBefore: (j: unknown) => { inserted.push(j); } } }],
+				createElement: () => ({ setAttribute: () => undefined }), cookie: '',
+			};
+			const timers: Array<{ cb: () => void; ms: number }> = [];
+			const w = { localStorage, crypto: globalThis.crypto, location: { protocol: 'https:' }, dataLayer: [] as DL,
+				addEventListener: (e: string, cb: () => void) => { (handlers[e] ??= []).push(cb); } };
+			new Function('window', 'document', 'setTimeout', GTM_LOADER_SOURCE.replace('(window,document,', '(arguments[0],arguments[1],'))(w, d, (cb: () => void, ms: number) => { timers.push({ cb, ms }); return 0; });
+			expect(inserted).toHaveLength(0);
+			for (const e of ['pointerdown', 'keydown', 'touchstart', 'scroll']) expect(handlers[e]).toHaveLength(1);
+			handlers.scroll!.forEach((cb) => cb());
+			expect(inserted).toHaveLength(1);
+			timers.forEach((x) => x.cb());
+			expect(inserted).toHaveLength(1);
+		});
+
 		it('pushes the stored user data before gtm.js', async () => {
 			localStorage.setItem('sr-user-data', JSON.stringify({ sha256_email_address: sha('a@b.co') }));
 			const { w } = run({ 'data-gtm-id': 'GTM-TEST' });

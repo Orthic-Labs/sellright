@@ -154,7 +154,7 @@
     },
     "typeOnlyAllow": ["~/components/slots/registry"],
     "transitiveL1Allow": [
-      "src/utils/price-format.ts", "src/utils/sanitize.ts", "src/utils/image-cache.ts", "src/types/**", "src/types.ts", "src/config/**",
+      "src/utils/price-format.ts", "src/utils/sanitize.ts", "src/utils/sanitize-lite.ts", "src/utils/image-cache.ts", "src/types/**", "src/types.ts", "src/config/**",
       "src/theme/**", "src/media/**", "src/data/**"
     ],
     "transitivePackagesAllow": ["isomorphic-dompurify"],

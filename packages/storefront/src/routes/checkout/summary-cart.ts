@@ -16,10 +16,19 @@ export const SERVER_CART_TIMEOUT_MS = 1500;
 /** The client's own default destination (CountryPreferenceService DEFAULT_COUNTRY) when nothing says otherwise. */
 const DEFAULT_SHIP_COUNTRY = 'US';
 
-/** The ship country the server read quotes for: the country cookie when it is a valid code, else the client's default. */
-export function serverCartShipCountry(cookieValue: string | null | undefined): string {
-  const code = (cookieValue ?? '').trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(code) ? code : DEFAULT_SHIP_COUNTRY;
+/** #425: the `countryCode` cookie the server (and the edge reads Worker, edge/edge-reads.worker.js) sets from the visitor's country
+ *  when there is none: read by the browser (the early script, the checkout boot, the layout), so not HttpOnly. */
+export const COUNTRY_COOKIE_OPTIONS = { path: '/', maxAge: 60 * 60 * 24 * 30, sameSite: 'lax' as const, secure: true };
+
+/** The ship country the server read quotes for: the country cookie when it is a valid code, else the visitor's country from the edge
+ *  (`cf-ipcountry`, the same source the client's geo default comes from), else the client's default. #425: the server quote and the
+ *  client's entry read then price the same destination, so the first total painted is the one that stays. */
+export function serverCartShipCountry(cookieValue: string | null | undefined, ipCountry?: string | null): string {
+  for (const candidate of [cookieValue, ipCountry]) {
+    const code = (candidate ?? '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(code) && code !== 'XX' && code !== 'T1') return code;
+  }
+  return DEFAULT_SHIP_COUNTRY;
 }
 
 /**
@@ -44,7 +53,7 @@ export function toDisplayCart(server: ServerCart | null | undefined, requestToke
 type CartGet = (
   path: '/v1/shop/cart/{token}',
   init: {
-    params: { path: { token: string }; query: { pricingIntent: 'checkout'; shipCountry: string } };
+    params: { path: { token: string }; query: { pricingIntent: 'checkout'; shipCountry: string; includeShippingMethods: '1' } };
     signal: AbortSignal;
   },
 ) => Promise<{ data?: ServerCart }>;
@@ -68,7 +77,9 @@ export async function readCheckoutServerCart(
   const read = (async () => {
     try {
       const { data } = await get('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: { pricingIntent: 'checkout', shipCountry } },
+        // #425: quote shipping in the same read (the API prices the cart with the requested method, else the cheapest eligible: the
+        // client entry read's own rule), so the summary's total includes shipping instead of changing when the client read lands.
+        params: { path: { token }, query: { pricingIntent: 'checkout', shipCountry, includeShippingMethods: '1' } },
         signal: abort.signal,
       });
       return toDisplayCart(data, token);
@@ -81,6 +92,29 @@ export async function readCheckoutServerCart(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The cart the checkout order summary shows for one request's cookies: the `sr_cart` token and the `countryCode` value, read as
+ * today's server-rendered summary reads them. ONE function for the document loader (routes/checkout/index.tsx useCheckoutServerCart)
+ * and for the shell's /api/live/checkout-summary/ endpoint, so both produce the same numbers. No token: null, no API call.
+ */
+export function readCheckoutSummaryCart(
+  get: CartGet,
+  tokenCookie: string | null | undefined,
+  countryCookie: string | null | undefined,
+  ipCountry?: string | null,
+  timeoutMs: number = SERVER_CART_TIMEOUT_MS,
+): Promise<Cart | null> {
+  return readCheckoutServerCart(get, tokenCookie, serverCartShipCountry(countryCookie, ipCountry), timeoutMs);
+}
+
+/** The /api/live/checkout-summary/ answer: the display cart, or null (no cookie, no lines, not an active checkout quote, any failure). */
+export interface CheckoutSummaryResponse {
+  cart: Cart | null;
+  /** #425: the destination the server quoted (serverCartShipCountry). The page adopts it as the geolocated country when the
+   *  shopper has no stored one, so its own checkout read prices the same destination (never a different total a moment later). */
+  shipCountry?: string;
 }
 
 export type SummarySource = 'client' | 'server' | 'skeleton';
@@ -132,4 +166,13 @@ export function isCheckoutShell(value: unknown): value is CheckoutShellMarker {
 /** The display cart of a loader value (null for the shell marker). */
 export function displayServerCart(value: ServerCartValue | undefined): Cart | null {
   return value && !isCheckoutShell(value) ? value : null;
+}
+
+/**
+ * The empty-cart view instead of the form: after the LOCKED entry read, whenever the cart is empty; before it, only when the
+ * document request carried no cart cookie (no cart the server could know of), so that view paints from SSR (LCP). The entry
+ * read still runs and replaces it with the form when it finds lines.
+ */
+export function showsEmptyCart(input: { isCartEmpty: boolean; pageLoading: boolean; noCartCookie?: boolean }): boolean {
+  return input.isCartEmpty && (!input.pageLoading || !!input.noCartCookie);
 }

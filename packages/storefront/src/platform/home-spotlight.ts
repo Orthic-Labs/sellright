@@ -28,7 +28,7 @@ export async function buildHomeSpotlight(): Promise<HomeSpotlightDetail | null> 
 export const useHomeSpotlight = routeLoader$(async (): Promise<HomeSpotlightDetail | null> => {
 	const d = await buildHomeSpotlight();
 	return d && shellRender() ? { ...d, detail: d.detail.map(redactModel) } : d;
-});
+}, { serializationStrategy: 'always' });
 
 /** The spotlight's live values in the browser (ADR-0001): the same build, per request, no-store. */
 export const readHomeSpotlight = server$(async function (): Promise<HomeSpotlightDetail | null> {

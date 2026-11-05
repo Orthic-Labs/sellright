@@ -95,7 +95,7 @@ describe('addLine — blind append', () => {
   it('uses live shipping copy after refresh, including fresh tabs without enrichment', async () => {
     const shipDateLabel = 'Ships late fall & updates';
     const live = serverCart({ lines: [{ ...serverCart().lines[0], isPreOrder: true, shipDate: null, shipDateLabel }] });
-    enqueue(respond(200, serverCart()), respond(200, live));
+    enqueue(respond(200, live)); // POST /cart seeded with the line: its one response is the priced cart
     const added = await CartService.addLine('SKU1', 1, { shipDateLabel: 'stale copy', shipDate: '2020-01-01', isPreOrder: false });
     expect(added.cart.lines[0]).toMatchObject({ shipDateLabel, shipDate: null, isPreOrder: true });
     resetService();
@@ -110,27 +110,68 @@ describe('addLine — blind append', () => {
 		enqueue(respond(200, withImage));
 		expect((await CartService.refresh()).cart.lines[0].image).toBe('/assets/store/media/preview/server.webp');
 		resetService();
-		enqueue(respond(200, serverCart()), respond(200, withImage));
+		enqueue(respond(200, withImage)); // POST /cart seeded with the line
 		const added = await CartService.addLine('SKU1', 1, { image: 'local/enriched.webp' });
 		expect(added.cart.lines[0].image).toBe('/assets/local/enriched.webp');
 	});
 
-	it('creates the cart lazily then appends without a revision', async () => {
-		enqueue(
-			respond(200, serverCart()), // POST /cart (ensureCart)
-			respond(200, serverCart({ revision: 2, lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }], subtotal: 5000 })), // PATCH lines
-		);
+	it('#425: the first add (no cart yet) creates the cart WITH its line in one POST — no second request', async () => {
+		enqueue(respond(200, serverCart({ revision: 1, lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }], subtotal: 5000 })));
 		const res = await CartService.addLine('SKU1', 2);
-		const create = calls.find((c) => c.url.endsWith('/v1/shop/cart'));
-		expect(create?.init.method).toBe('POST');
+		expect(calls).toHaveLength(1);
+		expect(calls[0].init.method).toBe('POST');
+		expect(calls[0].url.replace(/^https?:\/\/[^/]+/, '')).toBe('/v1/shop/cart');
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({ items: [{ sku: 'SKU1', quantity: 2 }], shipCountry: 'US' });
+		expect(patchCalls()).toHaveLength(0);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(res.applied).toBe(true);
+		expect(res.line).toMatchObject({ sku: 'SKU1', quantity: 2, available: true });
+		expect(res.cart.lines[0].quantity).toBe(2);
+		expect(res.cart.subtotal).toBe(5000); // server-priced mirror
+		expect(res.dropped).toEqual([]);
+	});
+
+	it('#425: the seeded create carries the quote context like the append does', async () => {
+		CartService.setQuoteContext({ pricingIntent: 'checkout', shipCountry: 'IN' });
+		enqueue(respond(200, serverCart({ pricingIntent: 'checkout' })));
+		await CartService.addLine('SKU1', 1);
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({ items: [{ sku: 'SKU1', quantity: 1 }], pricingIntent: 'checkout', shipCountry: 'IN' });
+		expect(calls).toHaveLength(1); // the snapshot already priced for checkout: no re-read
+	});
+
+	it('#425: a failed seeded create leaves no cart cookie, adds nothing and is not retried', async () => {
+		enqueue(respond(500, { error: { code: 'INTERNAL', message: 'boom' } }));
+		await expect(CartService.addLine('SKU1', 1)).rejects.toBeTruthy();
+		expect(calls).toHaveLength(1);
+		expect(cookieValue()).toBeNull();
+		expect(CartService.getCart().lines).toHaveLength(0);
+	});
+
+	it('with a cart already, appends without a revision (blind, commutative)', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ revision: 2, lines: [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }], subtotal: 5000 })));
+		const res = await CartService.addLine('SKU1', 2);
+		expect(createCalls()).toHaveLength(0);
 		const patch = patchCalls()[0];
 		expect(patch.url.replace(/^https?:\/\/[^/]+/, '')).toBe('/v1/shop/cart/tok_srv/lines');
 		const body = JSON.parse(String(patch.init.body));
 		expect(body).toEqual({ lines: [{ sku: 'SKU1', quantity: 2 }], shipCountry: 'US' });
 		expect(body.expectedRevision).toBeUndefined();
 		expect(res.cart.lines[0].quantity).toBe(2);
-		expect(res.cart.subtotal).toBe(5000); // server-priced mirror wins
+		expect(res.cart.subtotal).toBe(5000);
 		expect(res.dropped).toEqual([]);
+	});
+
+	it('the first add announces the added line, never the empty cart it created for it', async () => {
+		enqueue(respond(200, serverCart())); // POST /cart seeded with the line (#425): the cart is never announced empty
+		const seen: number[] = [];
+		const off = CartService.onChange(() => seen.push(CartService.getCart().lines.length));
+		try {
+			await CartService.addLine('SKU1', 1);
+		} finally {
+			off();
+		}
+		expect(seen).toEqual([1]);
 	});
 });
 
@@ -293,15 +334,13 @@ describe('legacy cart migration', () => {
 		expect(calls.filter(c => c.url.endsWith('/v1/shop/cart'))).toHaveLength(0);
 	});
 
-	it('a missing or empty legacy cart creates a plain new cart', async () => {
-		enqueue(
-			respond(200, serverCart({ lines: [], subtotal: 0 })), // POST /cart — nothing to seed
-			respond(200, serverCart({ lines: [{ sku: 'SKU1', name: 'Widget', quantity: 1, unitPrice: 2500, lineSubtotal: 2500, lineDiscount: 0, lineTotal: 2500, available: true, availableQuantity: 999 }] })),
-		);
+	it('a missing or empty legacy cart creates a plain new cart, seeded with only the line being added', async () => {
+		enqueue(respond(200, serverCart())); // POST /cart seeded with the add's own line (#425)
 		await CartService.addLine('SKU1', 1);
+		expect(calls.filter((c) => c.url.endsWith('/v1/shop/cart/legacy-migration'))).toHaveLength(0);
 		const create = calls.find((c) => c.url.endsWith('/v1/shop/cart'));
 		const body = JSON.parse(create!.init.body!);
-		expect(body.items).toBeUndefined();
+		expect(body.items).toEqual([{ sku: 'SKU1', quantity: 1 }]);
 	});
 });
 
@@ -503,8 +542,7 @@ describe('one cart creation across tabs (I4)', () => {
 		const tabB = (await freshTab()).CartService;
 		const createRes = deferred();
 		enqueue(
-			createRes.promise,
-			respond(200, serverCart({ revision: 2, lines: oneLine('SKU1') })), // tab A PATCH
+			createRes.promise, // tab A: POST /cart seeded with SKU1 (#425)
 			respond(200, serverCart({ revision: 3, lines: [...oneLine('SKU1'), ...oneLine('SKU2')] })), // tab B PATCH
 		);
 
@@ -514,12 +552,13 @@ describe('one cart creation across tabs (I4)', () => {
 		await settle();
 		expect(calls).toHaveLength(1); // tab B waits for the lock instead of creating a competing cart
 
-		createRes.resolve(await respond(200, serverCart({ lines: [] })));
+		createRes.resolve(await respond(200, serverCart({ lines: oneLine('SKU1') })));
 		await Promise.all([addA, addB]);
 
 		expect(createCalls()).toHaveLength(1);
-		expect(patchCalls().map((c) => c.url.replace(/^https?:\/\/[^/]+/, ''))).toEqual(['/v1/shop/cart/tok_srv/lines', '/v1/shop/cart/tok_srv/lines']);
-		expect(patchCalls().map((c) => JSON.parse(String(c.init.body)).lines[0].sku)).toEqual(['SKU1', 'SKU2']);
+		expect(JSON.parse(String(createCalls()[0].init.body)).items).toEqual([{ sku: 'SKU1', quantity: 1 }]);
+		expect(patchCalls().map((c) => c.url.replace(/^https?:\/\/[^/]+/, ''))).toEqual(['/v1/shop/cart/tok_srv/lines']);
+		expect(patchCalls().map((c) => JSON.parse(String(c.init.body)).lines[0].sku)).toEqual(['SKU2']);
 		expect(cookieValue()).toBe('tok_srv');
 		expect(tabB.getCart().lines).toHaveLength(2);
 		expect(locks.maxConcurrent).toBe(1);
