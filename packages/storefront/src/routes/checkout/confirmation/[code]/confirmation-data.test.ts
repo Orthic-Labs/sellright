@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, CONFIRMATION_POLL_DELAYS_MS, resolveConfirmationEmail, sleepAbortable, gatewayReturnVerificationError, PAYMENT_UNVERIFIED_MESSAGE, PAYMENT_VERIFY_FAILED_MESSAGE } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, CONFIRMATION_POLL_DELAYS_MS, resolveConfirmationEmail, sleepAbortable, gatewayReturnVerificationError, gatewayReturnProcessing, reverifyUntilSettled, PAYMENT_UNVERIFIED_MESSAGE, PAYMENT_VERIFY_FAILED_MESSAGE } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
@@ -182,8 +182,14 @@ describe('gatewayReturnVerificationError (hosted-gateway return must never read 
     expect(gatewayReturnVerificationError(false, { kind: 'threw' }, 'PendingPayment')).toBeNull();
   });
 
-  it('shows the error when a gateway return is still PendingPayment after polling', () => {
-    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'pending' }, 'PendingPayment')).toBe(PAYMENT_UNVERIFIED_MESSAGE);
+  it('shows the error when a gateway return is still PendingPayment after polling and verify gave no pending answer', () => {
+    expect(gatewayReturnVerificationError(true, none, 'PendingPayment')).toBe(PAYMENT_UNVERIFIED_MESSAGE);
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'processing' }, 'PendingPayment')).toBe(PAYMENT_UNVERIFIED_MESSAGE);
+  });
+
+  it('a verified-pending return (approved, capture not posted yet — DD30367) is processing, not an error', () => {
+    expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'pending' }, 'PendingPayment')).toBeNull();
+    expect(gatewayReturnProcessing(true, { kind: 'verified', status: 'pending' }, 'PendingPayment')).toBe(true);
   });
 
   it('shows the API message for a failed or unknown verification, with a default when it has none', () => {
@@ -209,5 +215,39 @@ describe('gatewayReturnVerificationError (hosted-gateway return must never read 
 
   it('a verified-settled gateway return shows the order as usual', () => {
     expect(gatewayReturnVerificationError(true, { kind: 'verified', status: 'settled' }, 'Paid')).toBeNull();
+  });
+});
+
+describe('gatewayReturnProcessing', () => {
+  it('only for a verified-pending gateway return on a PendingPayment order', () => {
+    expect(gatewayReturnProcessing(false, { kind: 'verified', status: 'pending' }, 'PendingPayment')).toBe(false);
+    expect(gatewayReturnProcessing(true, { kind: 'threw' }, 'PendingPayment')).toBe(false);
+    expect(gatewayReturnProcessing(true, { kind: 'verified', status: 'unknown' }, 'PendingPayment')).toBe(false);
+    expect(gatewayReturnProcessing(true, { kind: 'verified', status: 'pending' }, 'Paid')).toBe(false);
+  });
+});
+
+describe('reverifyUntilSettled', () => {
+  const noSleep = async () => {};
+  it('re-verifies each tick and stops once the order settles', async () => {
+    const states = ['PendingPayment', 'PendingPayment', 'Paid', 'Paid'];
+    const reverify = vi.fn(async () => {});
+    const read = vi.fn(async () => ({ state: states.shift()! }));
+    const order = await reverifyUntilSettled(reverify, read, new AbortController().signal, { delaysMs: [1, 1, 1, 1, 1], sleep: noSleep });
+    expect(order?.state).toBe('Paid');
+    expect(reverify).toHaveBeenCalledTimes(3);
+  });
+  it('keeps going when a re-verify or read throws, and returns the last order when time runs out', async () => {
+    let n = 0;
+    const reverify = vi.fn(async () => { if (n++ === 0) throw new Error('down'); });
+    const read = vi.fn(async () => ({ state: 'PendingPayment' }));
+    const order = await reverifyUntilSettled(reverify, read, new AbortController().signal, { delaysMs: [1, 1, 1], sleep: noSleep });
+    expect(order?.state).toBe('PendingPayment');
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+  it('returns null once aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(await reverifyUntilSettled(async () => {}, async () => ({ state: 'Paid' }), ac.signal, { delaysMs: [1], sleep: noSleep })).toBeNull();
   });
 });

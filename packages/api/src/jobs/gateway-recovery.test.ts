@@ -55,7 +55,7 @@ vi.mock('../payments/policy/host.js', async (original) => ({
   runBeforeCapture: async () => ({ action: 'capture' }),
 }));
 
-import { decideSezzleRecovery, recoverGatewayAttempts, recoveryBackoffMs, recoveryDue } from './gateway-recovery.js';
+import { decideSezzleRecovery, recoverGatewayAttempts, recoveryBackoffMs, recoveryDue, verifyReturnedSezzleAttempts } from './gateway-recovery.js';
 
 const now = new Date('2026-09-29T12:00:00Z');
 const sezzleOrder = (over: Record<string, unknown> = {}) => ({
@@ -183,5 +183,31 @@ describe('recoverGatewayAttempts', () => {
     await recoverGatewayAttempts({ ...opts, sezzle });
     expect(sezzle.releaseOrder).toHaveBeenCalledWith(expect.anything(), 'ord', { amount_in_cents: 1000, currency: 'USD' }, 'att:release');
     expect(sezzle.captureOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('verifyReturnedSezzleAttempts (DD30367)', () => {
+  beforeEach(() => { verify.mockReset(); h.state.updates.length = 0; h.state.audits.length = 0; });
+  const returned = { id: 'att', orderId: 'o', method: 'sezzle', operation: 'session', status: 'pending', paymentId: 'p', providerRef: 'ord' };
+
+  it('re-verifies a returned Sezzle attempt and counts it once Sezzle reports the capture', async () => {
+    h.state.attempts = [returned];
+    verify.mockResolvedValue({ status: 'settled' });
+    expect(await verifyReturnedSezzleAttempts({ maxAgeMin: 15, now })).toEqual({ checked: 1, resolved: 1 });
+    expect(verify).toHaveBeenCalledWith('store', 'att');
+  });
+  it('leaves a still-pending attempt alone and never writes, captures or releases', async () => {
+    h.state.attempts = [returned];
+    verify.mockResolvedValue({ status: 'pending' });
+    expect(await verifyReturnedSezzleAttempts({ maxAgeMin: 15, now })).toEqual({ checked: 1, resolved: 0 });
+    expect(h.state.updates).toHaveLength(0);
+    expect(h.state.audits).toHaveLength(0);
+  });
+  it('a verify error is logged, not thrown', async () => {
+    h.state.attempts = [returned];
+    verify.mockRejectedValue(new Error('sezzle down'));
+    const log = vi.fn();
+    expect(await verifyReturnedSezzleAttempts({ maxAgeMin: 15, now, log })).toEqual({ checked: 1, resolved: 0 });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('sezzle down'));
   });
 });

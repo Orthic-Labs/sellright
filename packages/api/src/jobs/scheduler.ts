@@ -31,7 +31,7 @@ import { TRASH_ABANDONED_DEFAULT_MINUTES, trashAbandonedOrders } from './trash-a
 import { capiConfig, openaiCapiPass } from '../ads/openai-capi.js';
 import { reservationReleaseSweep } from './reservation-release-sweep.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
-import { recoverGatewayAttempts } from './gateway-recovery.js';
+import { recoverGatewayAttempts, verifyReturnedSezzleAttempts } from './gateway-recovery.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { prunePasskeyChallenges } from './passkey-prune.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
@@ -227,6 +227,14 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     backoffBaseMin: 5,
     log: jobLog,
   }));
+  // DD30367: a shopper who came back from Sezzle before its capture posted is re-verified every minute (read-and-settle
+  // only), so the order turns Paid and the confirmation email goes out within a minute or two, not after 15.
+  if (gatewayRecoveryApply) {
+    every(state, 60_000, 'gateway-return-verify', 'gateway-recovery', () => verifyReturnedSezzleAttempts({
+      maxAgeMin: env.JOBS_GATEWAY_RECOVERY_AGE_MIN ?? 15,
+      log: jobLog,
+    }), 'returns');
+  }
   // Stock is never cached/polled (locked invariant): the catalog manifest used
   // to regenerate on a 60s interval, which meant a stock change could sit
   // stale for up to a minute. It now regenerates IMMEDIATELY from

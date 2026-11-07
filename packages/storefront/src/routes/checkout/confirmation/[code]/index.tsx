@@ -6,8 +6,9 @@ import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/check
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { trackPurchaseOnce } from '~/platform/controllers/conversion';
-import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail, gatewayReturnVerificationError, type GatewayVerifyOutcome } from './confirmation-data';
+import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail, gatewayReturnVerificationError, gatewayReturnProcessing, reverifyUntilSettled, type GatewayVerifyOutcome } from './confirmation-data';
 import { PaymentVerificationError } from '~/components/checkout/PaymentVerificationError';
+import { PaymentProcessing } from '~/components/checkout/PaymentProcessing';
 import { APP_STATE } from '~/constants';
 import { displayOrderCode } from '~/utils/order-code';
 import { orderLineLabel } from '~/utils/line-label';
@@ -33,6 +34,8 @@ const ConfirmationPage = component$(() => {
 		error?: string;
 		/** Set when a hosted-gateway return (Sezzle) could not be verified — shows the "Payment verification error" screen instead of a confirmation. */
 		verificationError?: string;
+		/** A hosted-gateway return that is approved but not captured yet: 'checking' while the page re-verifies, 'waiting' after. */
+		processing?: 'checking' | 'waiting';
 	}>({
 		loading: true,
 	});
@@ -71,9 +74,29 @@ const ConfirmationPage = component$(() => {
 			// Tolerate webhook lag: Stripe redirects here the instant the shopper
 			// returns, but the webhook that flips the order to Paid may land a
 			// moment later. Poll a few times while still PendingPayment.
-			const order = await readOrderUntilSettled((signal) => getOrder(code, rt, signal), ac.signal);
+			let order = await readOrderUntilSettled((signal) => getOrder(code, rt, signal), ac.signal);
 			if (!order) return; // aborted — the page is gone, touch nothing
 			store.order = order as ConfirmationOrder;
+
+			// DD30367: Sezzle approved the checkout but had not posted the capture yet. Say so, and keep re-verifying until it
+			// lands (the background return-verify job covers a shopper who closes the page).
+			if (paymentAttempt && gatewayReturnProcessing(true, verify, order.state)) {
+				store.processing = 'checking';
+				store.loading = false;
+				const later = await reverifyUntilSettled(
+					(signal) => verifyGatewayPayment(code, paymentAttempt, rt, signal),
+					(signal) => getOrder(code, rt, signal),
+					ac.signal,
+				);
+				if (!later) return;
+				order = later;
+				store.order = order as ConfirmationOrder;
+				if (order.state === 'PendingPayment') {
+					store.processing = 'waiting';
+					return;
+				}
+				store.processing = undefined;
+			}
 
 			// A gateway return that could not be verified (and an order that is not settled) is never shown as a confirmation.
 			const verificationError = gatewayReturnVerificationError(!!paymentAttempt, verify, order.state);
@@ -130,13 +153,18 @@ const ConfirmationPage = component$(() => {
 				</div>
 			)}
 
+			{/* ── Payment processing (approved at the gateway, capture not posted yet) ── */}
+			{store.order && !store.error && store.processing && (
+				<PaymentProcessing code={code} email={resolveConfirmationEmail(store.order, appState.customer?.emailAddress)} stillChecking={store.processing === 'checking'} />
+			)}
+
 			{/* ── Payment verification error (hosted-gateway return that could not be verified) ── */}
-			{store.order && !store.error && store.verificationError && (
+			{store.order && !store.error && !store.processing && store.verificationError && (
 				<PaymentVerificationError code={code} message={store.verificationError} />
 			)}
 
 			{/* ── Cancelled / declined ── */}
-			{store.order && !store.error && !store.verificationError && isOrderTerminalUnpaid(store.order.state) && (
+			{store.order && !store.error && !store.processing && !store.verificationError && isOrderTerminalUnpaid(store.order.state) && (
 				<div class="max-w-2xl mx-auto pt-20 pb-24 px-6 text-center">
 					<svg class="w-10 h-10 mx-auto text-[var(--color-accent)] mb-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z" />
@@ -164,7 +192,7 @@ const ConfirmationPage = component$(() => {
 			)}
 
 			{/* ── Confirmation ── */}
-			{store.order && !store.error && !store.verificationError && !isOrderTerminalUnpaid(store.order.state) && (() => {
+			{store.order && !store.error && !store.processing && !store.verificationError && !isOrderTerminalUnpaid(store.order.state) && (() => {
 				const order = store.order!;
 				const activeStep = activeStepFromState(order.state);
 				const addr = order.shippingAddress as OrderAddressSnapshot | null | undefined;

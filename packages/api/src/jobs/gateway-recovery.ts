@@ -24,7 +24,7 @@ import { importedFinancialReconciliationRequired, IMPORTED_FINANCIAL_RECONCILIAT
  * checks). After maxAttempts the attempt is flagged manual (stays in
  * /v1/admin/payment-reconciliation, unresolved) with an audit row.
  */
-import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { pool, withAdvisoryLock, withStore } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
@@ -234,6 +234,43 @@ async function decideSezzleCapture(storeId: string, attempt: Attempt, ref: strin
     }).where(eq(s.paymentAttempt.id, attempt.id));
     return verdict.action === 'capture' ? { action: 'capture' } : { action: 'cancel', reason: `policy:${verdict.reason}` };
   });
+}
+
+/**
+ * Returned-but-uncaptured Sezzle sessions (DD30367). The shopper finished Sezzle and came back — the verify bound a
+ * payment row — but Sezzle had not posted its capture yet, so the attempt stayed 'pending' and the order waited for the
+ * 15-minute recovery window. Re-verify those every minute through the same read path the shopper's verify uses: it
+ * only reads Sezzle and settles (or fails) what Sezzle reports. It never captures, releases or expires — that stays
+ * with recoverGatewayAttempts once the attempt is older than its age window.
+ */
+export async function verifyReturnedSezzleAttempts(opts: { maxAgeMin: number; now?: Date; log?: (m: string) => void }): Promise<{ checked: number; resolved: number }> {
+  const now = opts.now ?? new Date();
+  const since = new Date(now.getTime() - opts.maxAgeMin * 60_000);
+  const stores = await pool.query<{ id: string }>('SELECT id FROM store');
+  const totals = { checked: 0, resolved: 0 };
+  for (const store of stores.rows) {
+    const rows = await withStore(store.id, (tx) => tx.select().from(s.paymentAttempt).where(and(
+      eq(s.paymentAttempt.method, 'sezzle'),
+      eq(s.paymentAttempt.operation, 'session'),
+      eq(s.paymentAttempt.status, 'pending'),
+      isNotNull(s.paymentAttempt.paymentId),
+      isNotNull(s.paymentAttempt.providerRef),
+      gte(s.paymentAttempt.createdAt, since),
+    )).orderBy(asc(s.paymentAttempt.createdAt), asc(s.paymentAttempt.id)).limit(RECOVERY_BATCH_LIMIT));
+    for (const attempt of rows) {
+      totals.checked++;
+      try {
+        const result = await verifyGatewayAttempt(store.id, attempt.id);
+        if (['settled', 'failed'].includes(result.status)) {
+          totals.resolved++;
+          opts.log?.(`[jobs:gateway-return-verify] sezzle attempt ${attempt.id} resolved (verified:${result.status})`);
+        }
+      } catch (e) {
+        opts.log?.(`[jobs:gateway-return-verify] sezzle attempt ${attempt.id}: ${(e instanceof Error ? e.message : 'unknown').slice(0, 120)}`);
+      }
+    }
+  }
+  return totals;
 }
 
 export async function recoverGatewayAttempts(opts: RecoveryOptions): Promise<{ checked: number; resolved: number; manual: number }> {

@@ -87,7 +87,44 @@ export function gatewayReturnVerificationError(returnedFromGateway: boolean, ver
   if (isOrderSettled(orderState) || isOrderTerminalUnpaid(orderState)) return null;
   if (verify.kind === 'verified' && (verify.status === 'failed' || verify.status === 'unknown')) return verify.message || PAYMENT_VERIFY_FAILED_MESSAGE;
   if (verify.kind === 'threw') return PAYMENT_UNVERIFIED_MESSAGE;
+  if (gatewayReturnProcessing(returnedFromGateway, verify, orderState)) return null;
   return orderState === 'PendingPayment' ? PAYMENT_UNVERIFIED_MESSAGE : null;
+}
+
+/**
+ * True when the shopper came back from the hosted gateway, the API verified the return and the attempt is still
+ * 'pending' — Sezzle approved the checkout but has not posted its capture yet (DD30367: it landed minutes later). That is
+ * not an error: the page shows "Payment processing" and keeps re-verifying instead of "Payment verification error".
+ */
+export function gatewayReturnProcessing(returnedFromGateway: boolean, verify: GatewayVerifyOutcome, orderState?: string): boolean {
+  return returnedFromGateway && verify.kind === 'verified' && verify.status === 'pending' && orderState === 'PendingPayment';
+}
+
+/** Re-verify cadence while the "Payment processing" screen is up: every 6s for 3 minutes. After that the background
+ *  return-verify job (every minute) settles it and the confirmation email goes out. */
+export const PROCESSING_REVERIFY_DELAYS_MS: readonly number[] = Array.from({ length: 30 }, () => 6000);
+
+/**
+ * While a gateway return is processing: wait, re-verify the attempt (best effort — a failed call is retried on the next
+ * tick), re-read the order, and stop as soon as it leaves PendingPayment. Returns the last order read, or null if aborted.
+ */
+export async function reverifyUntilSettled<T extends { state: string }>(
+  reverify: (signal: AbortSignal) => Promise<unknown>,
+  read: (signal: AbortSignal) => Promise<T>,
+  signal: AbortSignal,
+  opts: { delaysMs?: readonly number[]; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
+): Promise<T | null> {
+  const { delaysMs = PROCESSING_REVERIFY_DELAYS_MS, sleep = sleepAbortable } = opts;
+  let order: T | null = null;
+  for (const delay of delaysMs) {
+    await sleep(delay, signal);
+    if (signal.aborted) return null;
+    try { await reverify(signal); } catch { /* retried next tick */ }
+    if (signal.aborted) return null;
+    try { order = await read(signal); } catch { continue; }
+    if (order.state !== 'PendingPayment') break;
+  }
+  return signal.aborted ? null : order;
 }
 
 /** Builds an absolute-or-root asset URL from the API's stored path, mirroring
