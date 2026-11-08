@@ -181,8 +181,8 @@ importers:
   .:
     devDependencies:
       '@rightkit/release':
-        specifier: 0.6.29
-        version: 0.6.29
+        specifier: 0.6.49
+        version: 0.6.49
       '@typescript-eslint/parser':
         specifier: 8.72.1
         version: 8.72.1(@typescript/typescript6@6.0.2)(eslint@10.14.0)
@@ -290,11 +290,11 @@ importers:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
       vite:
-        specifier: 8.3.5
-        version: 8.3.5(@types/node@26.6.6)(tsx@4.23.15)
+        specifier: 8.3.6
+        version: 8.3.6(@types/node@26.6.6)(tsx@4.23.15)
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15))
+        version: 4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15))
 
   packages/sample-plugin:
     devDependencies:
@@ -323,11 +323,11 @@ importers:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
       vite:
-        specifier: 8.3.5
-        version: 8.3.5(@types/node@26.6.6)
+        specifier: 8.3.6
+        version: 8.3.6(@types/node@26.6.6)
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6))
+        version: 4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6))
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -345,10 +345,10 @@ importers:
     dependencies:
       '@qwik.dev/core':
         specifier: 2.0.0-rc.3
-        version: 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
+        version: 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)))
       '@qwik.dev/router':
         specifier: 2.0.0-rc.3
-        version: 2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       '@sellright/storefront-client':
         specifier: workspace:*
         version: link:../storefront-client
@@ -375,7 +375,7 @@ importers:
         version: 1.13.15
       qwik-image:
         specifier: ^2.0.4
-        version: 2.0.4(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))
+        version: 2.0.4(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))))
       us-state-converter:
         specifier: ^1.0.8
         version: 1.0.8
@@ -387,8 +387,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.14.0)
       '@playwright/test':
-        specifier: ^1.64.1
-        version: 1.64.1
+        specifier: ^1.65.0
+        version: 1.65.0
       '@tailwindcss/forms':
         specifier: ^0.5.11
         version: 0.5.11(tailwindcss@4.3.4)
@@ -447,20 +447,20 @@ importers:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
       vite:
-        specifier: ^8.3.5
-        version: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+        specifier: ^8.3.6
+        version: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
       vite-imagetools:
         specifier: ^12.0.1
-        version: 12.0.1(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 12.0.1(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       vite-plugin-compression:
         specifier: ^0.5.1
-        version: 0.5.1(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 0.5.1(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       vite-tsconfig-paths:
         specifier: ^6.1.1
-        version: 6.1.1(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 6.1.1(@typescript/typescript6@6.0.2)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
 
   packages/storefront-client:
     dependencies:
@@ -484,11 +484,11 @@ importers:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
       vite:
-        specifier: 8.3.5
-        version: 8.3.5(@types/node@26.6.6)(tsx@4.23.15)
+        specifier: 8.3.6
+        version: 8.3.6(@types/node@26.6.6)(tsx@4.23.15)
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15))
+        version: 4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15))
 
 packages:
 
@@ -1601,8 +1601,8 @@ packages:
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
 
-  '@playwright/test@1.64.1':
-    resolution: {integrity: sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==}
+  '@playwright/test@1.65.0':
+    resolution: {integrity: sha512-iGURLGuKDLakSEl7Pgfv8h7f+XLT+V861Wfhz0zlEl5nyFuKUopdkFBPKqTllTUp06aOwPuH8iuUEb3yp3MpbQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1659,8 +1659,8 @@ packages:
     engines: {node: '>=26.8.0'}
     hasBin: true
 
-  '@rightkit/release@0.6.29':
-    resolution: {integrity: sha512-L7VFBHCSba/UfXu3l1UmgNUgyym9+5XnVA+NK+KoKAQftLzLYjLlc97FZM2fV39yC15uoz0EV5rdWz5FaBXdpg==}
+  '@rightkit/release@0.6.49':
+    resolution: {integrity: sha512-qxzG2KXND8oxFPcdSNI7yIAB9Xom4RSsah9sOk9wKELtSuDK/0A9osi8YxqsfU95GqMNnRenWgziob9XHa2vVw==}
     hasBin: true
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
@@ -4071,13 +4071,13 @@ packages:
   pkg-types@1.3.1:
     resolution: {integrity: sha512-/Jm5M4RvtBFVkKWRu2BLUTNP8/M2a+UwuAX+ae4770q1qVGtfjG+WTCupoZixokjmHiry8uI+dlY8KXYV5HVVQ==}
 
-  playwright-core@1.64.1:
-    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
+  playwright-core@1.65.0:
+    resolution: {integrity: sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.64.1:
-    resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
+  playwright@1.65.0:
+    resolution: {integrity: sha512-F3AMWcR44qMBt4kq+6Kb6mX7bjGXshktKFOPULd7reED6ZJWevjbNRqysP7q+AATE9kdPEZBibex1BYsvpVoeA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -4776,8 +4776,8 @@ packages:
     peerDependencies:
       vite: '*'
 
-  vite@8.3.5:
-    resolution: {integrity: sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==}
+  vite@8.3.6:
+    resolution: {integrity: sha512-UI7dK29NnS54Fk+mmo7o+jI6U8Fp7hDl+X5Q1k45WH+d4dSlbLVUETGQ+hfkNgvLQGyoElPj837nZyv4MBc0VA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -5809,28 +5809,28 @@ snapshots:
 
   '@pinojs/redact@0.4.0': {}
 
-  '@playwright/test@1.64.1':
+  '@playwright/test@1.65.0':
     dependencies:
-      playwright: 1.64.1
+      playwright: 1.65.0
 
-  '@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))':
+  '@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)))':
     dependencies:
       '@emnapi/core': 1.11.3
       '@emnapi/runtime': 1.11.3
       '@qwik.dev/optimizer': 2.1.0-beta.9
       csstype: 3.2.3
       launch-editor: 2.14.2
-      magic-regexp: 0.11.2(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+      magic-regexp: 0.11.2(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       magic-string: 0.30.21
       oxc-parser: 0.144.0
       oxc-transform: 0.144.0
       oxc-walker: 1.1.1(oxc-parser@0.144.0)
       pathe: 2.0.3
       siphash: 1.2.0
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
     optionalDependencies:
       prettier: 3.9.10
-      vitest: 4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+      vitest: 4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@oxc-project/types'
@@ -5845,12 +5845,12 @@ snapshots:
 
   '@qwik.dev/optimizer@2.1.0-beta.9': {}
 
-  '@qwik.dev/router@2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))':
+  '@qwik.dev/router@2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))':
     dependencies:
       '@azure/functions': 3.5.1
       '@mdx-js/mdx': 3.1.1
       '@netlify/edge-functions': 3.0.8
-      '@qwik.dev/core': 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
+      '@qwik.dev/core': 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)))
       '@types/mdx': 2.0.14
       estree-util-value-to-estree: 3.5.0
       github-slugger: 2.0.0
@@ -5871,8 +5871,8 @@ snapshots:
       unist-util-visit: 5.2.0
       valibot: 1.5.0(@typescript/typescript6@6.0.2)
       vfile: 6.0.3
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
-      vite-imagetools: 10.0.0(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
+      vite-imagetools: 10.0.0(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       yaml: 2.9.1
       zod: 4.6.7
     transitivePeerDependencies:
@@ -5913,7 +5913,7 @@ snapshots:
       '@rightkit/ci': 0.3.2
       smol-toml: 1.9.1
 
-  '@rightkit/release@0.6.29':
+  '@rightkit/release@0.6.49':
     dependencies:
       '@rightkit/outdated': 0.3.0
       smol-toml: 1.9.1
@@ -6361,29 +6361,29 @@ snapshots:
       chai: 6.3.0
       tinyrainbow: 3.2.0
 
-  '@vitest/mocker@4.1.12(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))':
+  '@vitest/mocker@4.1.12(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))':
     dependencies:
       '@vitest/spy': 4.1.12
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
 
-  '@vitest/mocker@4.1.12(vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15))':
+  '@vitest/mocker@4.1.12(vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15))':
     dependencies:
       '@vitest/spy': 4.1.12
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.3.5(@types/node@26.6.6)(tsx@4.23.15)
+      vite: 8.3.6(@types/node@26.6.6)(tsx@4.23.15)
 
-  '@vitest/mocker@4.1.12(vite@8.3.5(@types/node@26.6.6))':
+  '@vitest/mocker@4.1.12(vite@8.3.6(@types/node@26.6.6))':
     dependencies:
       '@vitest/spy': 4.1.12
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.3.5(@types/node@26.6.6)
+      vite: 8.3.6(@types/node@26.6.6)
 
   '@vitest/pretty-format@4.1.12':
     dependencies:
@@ -7939,12 +7939,12 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
-  magic-regexp@0.11.2(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  magic-regexp@0.11.2(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       magic-string: 1.4.5
       regexp-tree: 0.1.27
       type-level-regexp: 0.1.17
-      unplugin: 3.7.0(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+      unplugin: 3.7.0(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@rsbuild/core'
@@ -8770,11 +8770,11 @@ snapshots:
       mlly: 1.8.2
       pathe: 2.0.3
 
-  playwright-core@1.64.1: {}
+  playwright-core@1.65.0: {}
 
-  playwright@1.64.1:
+  playwright@1.65.0:
     dependencies:
-      playwright-core: 1.64.1
+      playwright-core: 1.65.0
 
   pluralize@8.0.0: {}
 
@@ -8832,9 +8832,9 @@ snapshots:
 
   quick-format-unescaped@4.0.4: {}
 
-  qwik-image@2.0.4(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))):
+  qwik-image@2.0.4(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)))):
     dependencies:
-      '@qwik.dev/core': 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
+      '@qwik.dev/core': 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)))
 
   range-parser@1.3.0: {}
 
@@ -9538,14 +9538,14 @@ snapshots:
 
   unpipe@1.0.0: {}
 
-  unplugin@3.7.0(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  unplugin@3.7.0(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       '@rolldown/pluginutils': 1.0.1
       picomatch: 4.0.7
       webpack-virtual-modules: 0.6.2
     optionalDependencies:
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
 
   unzipper@0.10.14:
     dependencies:
@@ -9592,46 +9592,46 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-imagetools@10.0.0(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  vite-imagetools@10.0.0(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       '@rollup/pluginutils': 5.5.1
       imagetools-core: 9.1.0
       sharp: 0.35.5(@types/node@26.6.6)
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
     transitivePeerDependencies:
       - '@types/node'
       - rollup
 
-  vite-imagetools@12.0.1(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  vite-imagetools@12.0.1(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       '@rollup/pluginutils': 5.5.1
       imagetools-core: 12.0.0
       sharp: 0.35.5(@types/node@26.6.6)
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
     transitivePeerDependencies:
       - '@types/node'
       - rollup
 
-  vite-plugin-compression@0.5.1(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  vite-plugin-compression@0.5.1(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       chalk: 4.1.2
       debug: 4.4.3
       fs-extra: 10.1.0
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
     transitivePeerDependencies:
       - supports-color
 
-  vite-tsconfig-paths@6.1.1(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  vite-tsconfig-paths@6.1.1(@typescript/typescript6@6.0.2)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       debug: 4.4.3
       globrex: 0.1.2
       tsconfck: 3.1.6(@typescript/typescript6@6.0.2)
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
     transitivePeerDependencies:
       - supports-color
       - typescript
 
-  vite@8.3.5(@types/node@26.6.6):
+  vite@8.3.6(@types/node@26.6.6):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -9642,7 +9642,7 @@ snapshots:
       '@types/node': 26.6.6
       fsevents: 2.3.3
 
-  vite@8.3.5(@types/node@26.6.6)(terser@5.51.2):
+  vite@8.3.6(@types/node@26.6.6)(terser@5.51.2):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -9654,7 +9654,7 @@ snapshots:
       fsevents: 2.3.3
       terser: 5.51.2
 
-  vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15):
+  vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -9666,10 +9666,10 @@ snapshots:
       fsevents: 2.3.3
       tsx: 4.23.15
 
-  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)):
+  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2)):
     dependencies:
       '@vitest/expect': 4.1.12
-      '@vitest/mocker': 4.1.12(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+      '@vitest/mocker': 4.1.12(vite@8.3.6(@types/node@26.6.6)(terser@5.51.2))
       '@vitest/pretty-format': 4.1.12
       '@vitest/runner': 4.1.12
       '@vitest/snapshot': 4.1.12
@@ -9686,17 +9686,17 @@ snapshots:
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tinyrainbow: 3.2.0
-      vite: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      vite: 8.3.6(@types/node@26.6.6)(terser@5.51.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.6.6
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15)):
+  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15)):
     dependencies:
       '@vitest/expect': 4.1.12
-      '@vitest/mocker': 4.1.12(vite@8.3.5(@types/node@26.6.6)(tsx@4.23.15))
+      '@vitest/mocker': 4.1.12(vite@8.3.6(@types/node@26.6.6)(tsx@4.23.15))
       '@vitest/pretty-format': 4.1.12
       '@vitest/runner': 4.1.12
       '@vitest/snapshot': 4.1.12
@@ -9713,17 +9713,17 @@ snapshots:
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tinyrainbow: 3.2.0
-      vite: 8.3.5(@types/node@26.6.6)(tsx@4.23.15)
+      vite: 8.3.6(@types/node@26.6.6)(tsx@4.23.15)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.6.6
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)):
+  vitest@4.1.12(@types/node@26.6.6)(vite@8.3.6(@types/node@26.6.6)):
     dependencies:
       '@vitest/expect': 4.1.12
-      '@vitest/mocker': 4.1.12(vite@8.3.5(@types/node@26.6.6))
+      '@vitest/mocker': 4.1.12(vite@8.3.6(@types/node@26.6.6))
       '@vitest/pretty-format': 4.1.12
       '@vitest/runner': 4.1.12
       '@vitest/snapshot': 4.1.12
@@ -9740,7 +9740,7 @@ snapshots:
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tinyrainbow: 3.2.0
-      vite: 8.3.5(@types/node@26.6.6)
+      vite: 8.3.6(@types/node@26.6.6)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.6.6

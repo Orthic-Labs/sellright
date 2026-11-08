@@ -53,7 +53,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@playwright/test": "^1.64.1",
+		"@playwright/test": "^1.65.0",
 		"@tailwindcss/forms": "^0.5.11",
 		"@tailwindcss/postcss": "^4.3.4",
 		"@types/eslint": "^9.6.1",
@@ -73,7 +73,7 @@
 		"tailwindcss": "^4.3.4",
 		"terser": "^5.51.2",
 		"typescript": "npm:@typescript/typescript6@^6.0.2",
-		"vite": "^8.3.5",
+		"vite": "^8.3.6",
 		"vite-imagetools": "^12.0.1",
 		"vite-plugin-compression": "^0.5.1",
 		"vite-tsconfig-paths": "^6.1.1",
