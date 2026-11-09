@@ -420,8 +420,8 @@ importers:
         specifier: ^10.14.0
         version: 10.14.0
       eslint-plugin-qwik:
-        specifier: 2.0.0-rc.3
-        version: 2.0.0-rc.3(@typescript/typescript6@6.0.2)(eslint@10.14.0)
+        specifier: 2.0.0-rc.4
+        version: 2.0.0-rc.4(@typescript/typescript6@6.0.2)(eslint@10.14.0)
       globals:
         specifier: ^17.14.0
         version: 17.14.0
@@ -2801,8 +2801,8 @@ packages:
     resolution: {integrity: sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw==}
     engines: {node: '>=12'}
 
-  eslint-plugin-qwik@2.0.0-rc.3:
-    resolution: {integrity: sha512-3Vv93rwb43FDsUPYSd3ZXDu4dJyy1yFt36aJLgaWDbG/NLG+bE5YtL9el+lCZTkgQ+YYhPxBOb+6aekhc9d+lw==}
+  eslint-plugin-qwik@2.0.0-rc.4:
+    resolution: {integrity: sha512-X4tOgG0CNzST1QPvjyG0OUxXKbmnO0KEoYMg1N/o46yGbDjb6q+rh/s0FVIYBMRrv+Ton1U4jWPShiYC2ocMYg==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -7021,7 +7021,7 @@ snapshots:
 
   escape-string-regexp@5.0.0: {}
 
-  eslint-plugin-qwik@2.0.0-rc.3(@typescript/typescript6@6.0.2)(eslint@10.14.0):
+  eslint-plugin-qwik@2.0.0-rc.4(@typescript/typescript6@6.0.2)(eslint@10.14.0):
     dependencies:
       '@typescript-eslint/utils': 8.72.1(@typescript/typescript6@6.0.2)(eslint@10.14.0)
       eslint: 10.14.0
