@@ -344,11 +344,11 @@ importers:
   packages/storefront:
     dependencies:
       '@qwik.dev/core':
-        specifier: 2.0.0-rc.3
-        version: 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
+        specifier: 2.0.0-rc.4
+        version: 2.0.0-rc.4(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
       '@qwik.dev/router':
         specifier: 2.0.0-rc.3
-        version: 2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
+        version: 2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.4(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
       '@sellright/storefront-client':
         specifier: workspace:*
         version: link:../storefront-client
@@ -1603,8 +1603,8 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  '@qwik.dev/core@2.0.0-rc.3':
-    resolution: {integrity: sha512-s87/I5hyQAPXzLg1ihKwoGzA5931uIYdqBzwR6tKUCixrH2fijLrLQSZgAQk1Z0wA5Cw4KsfHMNX8tzx/tNSkg==}
+  '@qwik.dev/core@2.0.0-rc.4':
+    resolution: {integrity: sha512-z6M5WHPHD0IlCOFWCfuwk8ngUyQYQkkVdIlWBFWr5S9uTIVkYm8rugdF6JE06ICCh+08OHJsxjsuG0QA5wSVmw==}
     engines: {node: ^20.3.0 || >=21.0.0}
     hasBin: true
     peerDependencies:
@@ -1617,8 +1617,8 @@ packages:
       vitest:
         optional: true
 
-  '@qwik.dev/optimizer@2.1.0-beta.9':
-    resolution: {integrity: sha512-PKZedb4+/Goi5KS7HCiJXZO9g3prbmI7lTi+yhy0GBPHUFlmRWVCXhllGrgRBHbvuPxfLTOAfZ5d/sG2QufTXQ==}
+  '@qwik.dev/optimizer@2.1.0-rc.10':
+    resolution: {integrity: sha512-0yI+yY15xSEbBG0LSK5SYQSGU7EVXysHhea/BWb4yy0sGwThZsT6k4D7CgUrwVcuhfHPfBqSXALLvO8O5tc92Q==}
     engines: {node: ^20.3.0 || >=21.0.0}
 
   '@qwik.dev/router@2.0.0-rc.3':
@@ -5805,11 +5805,11 @@ snapshots:
     dependencies:
       playwright: 1.64.1
 
-  '@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))':
+  '@qwik.dev/core@2.0.0-rc.4(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))':
     dependencies:
       '@emnapi/core': 1.11.3
       '@emnapi/runtime': 1.11.3
-      '@qwik.dev/optimizer': 2.1.0-beta.9
+      '@qwik.dev/optimizer': 2.1.0-rc.10
       csstype: 3.2.3
       launch-editor: 2.14.2
       magic-regexp: 0.11.2(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
@@ -5835,14 +5835,14 @@ snapshots:
       - unloader
       - webpack
 
-  '@qwik.dev/optimizer@2.1.0-beta.9': {}
+  '@qwik.dev/optimizer@2.1.0-rc.10': {}
 
-  '@qwik.dev/router@2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))':
+  '@qwik.dev/router@2.0.0-rc.3(@qwik.dev/core@2.0.0-rc.4(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))':
     dependencies:
       '@azure/functions': 3.5.1
       '@mdx-js/mdx': 3.1.1
       '@netlify/edge-functions': 3.0.8
-      '@qwik.dev/core': 2.0.0-rc.3(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
+      '@qwik.dev/core': 2.0.0-rc.4(prettier@3.9.10)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))(vitest@4.1.12(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2)))
       '@types/mdx': 2.0.14
       estree-util-value-to-estree: 3.5.0
       github-slugger: 2.0.0
