@@ -19,6 +19,12 @@ import { normalizeEmail } from '../auth/email.js';
 import { parseDate, parseStrArray } from './store.js';
 import { optionalColumn } from './source-schema.js';
 import type { ImportContext, ManifestExclusion } from './context.js';
+import { sanitizeBlogHtml } from '../lib/sanitize-html.js';
+
+/** Imported blog markup is sanitised exactly like the admin write path, so stored HTML is never trusted as-is. */
+export function sanitizeImportedBlogHtml(value: unknown): string | null {
+  return typeof value === 'string' ? sanitizeBlogHtml(value) : null;
+}
 
 export async function importBusiness(ctx: ImportContext): Promise<void> {
   const { tx, q, storeId } = ctx;
@@ -72,7 +78,7 @@ export async function importBusiness(ctx: ImportContext): Promise<void> {
       await tx.insert(s.blogPost).values({
         id: ctx.id('blog-post', post.id), storeId,
         title: post.title, slug: post.slug,
-        excerpt: post.excerpt ?? null, body: post.body ?? null, bodyHtml: post.bodyHtml ?? null,
+        excerpt: post.excerpt ?? null, body: sanitizeImportedBlogHtml(post.body), bodyHtml: sanitizeImportedBlogHtml(post.bodyHtml),
         authorName: post.authorName ?? null,
         readingTime: post.readingTime ?? null,
         featuredAssetId: featured && assetIds.has(featured) ? featured : null,

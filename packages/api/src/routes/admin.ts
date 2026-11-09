@@ -42,7 +42,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
 import { variantShippingLabel } from '../lib/shipping-label.js';
-import { ORDER_TABS, orderTabFilterSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, removedQtySql, shippedQtySql } from '../orders/tabs-sql.js';
+import { ORDER_TABS, orderTabFilterSql, orderTabSql, orderTabCountsSql, openQtySql, openPreOrderQtySql, removedQtySql, shippedQtySql } from '../orders/tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 import { orderAttribution } from '../orders/attribution.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -333,11 +333,23 @@ admin.openapi(
 );
 
 // ── orders: list / detail / fulfill / cancel ────────────────────────────────
+/** API-L1: explicit boolean query flag. `z.coerce.boolean()` turned the string `false` (and `0`) into true, so
+ *  `?trashed=false` returned the trash. Only true/false/1/0 are accepted; anything else is a 400. */
+const queryFlag = z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1');
+
+/** Tabs decided by `order.state` alone: `orderTabSql` for them is a plain state test with no child-table subqueries, so
+ *  the list filters on it directly instead of aggregating every order's lines and payments (orderTabFilterSql). Same
+ *  rows by construction: tabs-sql.ts defines both forms from the same predicate.
+ *  BP-M2 before numbers (dd, pg_stat_statements 2026-10-24..2026-11-09, ol/pay/ref/t aggregation over all orders): mean 111 ms,
+ *  max 479 ms, 60,186 blocks per call. The remaining tabs and GET /v1/admin/orders/tab-counts still aggregate per store; that
+ *  statement lives in orders/tabs-sql.ts (orderAggregatesSql), outside this lane. */
+const STATE_ONLY_TABS: ReadonlySet<string> = new Set(['refunded', 'cancelled']);
+
 admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
     request: { query: z.object({
-      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), excludeDemo: z.enum(['1']).optional(), trashed: z.coerce.boolean().default(false),
+      state: z.string().optional(), q: z.string().optional(), preOrder: queryFlag.optional(), excludeDemo: z.enum(['1']).optional(), trashed: queryFlag.optional(),
       // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
       // top of the legacy combined `state` filter above.
       // 'active' = open + completed (the owner-facing "Open": not cancelled, not archived).
@@ -356,7 +368,8 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, tab, from, to, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, excludeDemo, trashed: trashedFlag, status, paymentStatus, shippingMethod, fulfillmentStatus, tab, from, to, page, pageSize } = c.req.valid('query');
+    const trashed = trashedFlag === true;
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
@@ -372,7 +385,10 @@ admin.openapi(
       if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
-      if (tab) conds.push(orderTabFilterSql(tab) as never); // set-based; same rows as orderTabSql(tab)
+      // BP-M2: state-only tabs skip the all-orders aggregation; the other tabs depend on per-order line/payment aggregates
+      // and keep the set-based filter (same rows as orderTabSql(tab)).
+      const aggregateTab = tab !== undefined && !STATE_ONLY_TABS.has(tab);
+      if (tab) conds.push((aggregateTab ? orderTabFilterSql(tab) : orderTabSql(tab)) as never);
       if (q) conds.push(orderSearchSql(q, 'customer') as never);
       const where = conds.length ? and(...conds) : undefined;
       const contactSql = orderContactSql('customer');
@@ -386,7 +402,7 @@ admin.openapi(
           firstName: s.customer.firstName, lastName: s.customer.lastName,
           openQty: openQtySql(), openPreOrderQty: openPreOrderQtySql(), shippedQty: shippedQtySql(), removedQty: removedQtySql(),
           // A tab filter aggregates every order once; count the matches in the same pass instead of a second statement.
-          ...(tab ? { matchTotal: sql<number>`(count(*) over())::int` } : {}),
+          ...(aggregateTab ? { matchTotal: sql<number>`(count(*) over())::int` } : {}),
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -399,7 +415,7 @@ admin.openapi(
         ? tx.select({ n: sql<number>`count(*)::int` }).from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         : tx.select({ n: sql<number>`count(*)::int` }).from(s.order)).$dynamic();
       // The window total rides on the page rows; only a page past the end (no rows) still needs the count statement.
-      const windowTotal = tab && rows.length ? (rows[0] as { matchTotal?: number }).matchTotal : undefined;
+      const windowTotal = aggregateTab && rows.length ? (rows[0] as { matchTotal?: number }).matchTotal : undefined;
       const [cnt] = windowTotal === undefined ? await (where ? cntBase.where(where) : cntBase) : [{ n: windowTotal }];
       return {
         items: rows.map(({ matchTotal: _total, ...r }: typeof rows[number] & { matchTotal?: number }) => ({ ...r, placedAt: r.placedAt ? r.placedAt.toISOString() : null, createdAt: r.createdAt.toISOString() })),

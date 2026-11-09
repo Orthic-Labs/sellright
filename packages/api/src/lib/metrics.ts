@@ -253,7 +253,11 @@ function renderHistogram(lines: string[], name: string, labels: Record<string, s
 }
 
 /** Prometheus text exposition (version 0.0.4). `extraGauges` lets the caller add e.g. job admission gauges. */
-export function renderPrometheus(extraGauges: Record<string, { help: string; value: number }> = {}): string {
+export interface LabeledGauge { name: string; help: string; type?: 'gauge' | 'counter'; series: ReadonlyArray<{ labels: Record<string, string>; value: number }> }
+
+/** Prometheus text exposition (version 0.0.4). `extraGauges` lets the caller add e.g. job admission gauges; `labeled` adds
+ *  labelled families (pool error counters, edge-purge queue depth) whose values the caller sampled. */
+export function renderPrometheus(extraGauges: Record<string, { help: string; value: number }> = {}, labeled: readonly LabeledGauge[] = []): string {
   const lines: string[] = [];
   const head = (name: string, type: string, help: string) => { lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`); };
   for (const fam of [httpDuration, httpDbWait]) {
@@ -295,6 +299,10 @@ export function renderPrometheus(extraGauges: Record<string, { help: string; val
   head('sellright_nodejs_heap_used_bytes', 'gauge', 'V8 heap used');
   lines.push(`sellright_nodejs_heap_used_bytes ${rt.heapUsedBytes}`);
   for (const [name, g] of Object.entries(extraGauges)) { head(name, 'gauge', g.help); lines.push(`${name} ${g.value}`); }
+  for (const f of labeled) {
+    head(f.name, f.type ?? 'gauge', f.help);
+    for (const { labels, value } of f.series) lines.push(`${f.name}${fmtLabels(labels)} ${value}`);
+  }
   return `${lines.join('\n')}\n`;
 }
 

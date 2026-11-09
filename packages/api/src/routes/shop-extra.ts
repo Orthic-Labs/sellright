@@ -22,6 +22,8 @@ import {
 import { tokensMatch } from './orders.js';
 import { loadOrderLines, loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
 import { orderCodeCandidates } from '../orders/order-number.js';
+import { MAX_CART_LINES } from '../cart/bounds.js';
+import { consumeShippingQuote } from './shop-extra.public-limits.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -48,15 +50,13 @@ shopExtra.openapi(
     const emailKey = trackingEmailKey(st.id, ip, email);
     const emailRetry = ipRetry ? 0 : await trackingEmailFailureRetryAfter(emailKey);
     if (ipRetry || emailRetry) {
-      c.header('Retry-After', String(ipRetry || emailRetry));
-      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
+      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts', { retryAfter: ipRetry || emailRetry });
     }
     // previous-platform parity (order-tracking.service.ts getClientKey): the per-code throttle key is IP + order code, never the email.
     const key = trackingKey(st.id, ip, code);
     const retry = await trackingRetryAfter(key);
     if (retry) {
-      c.header('Retry-After', String(retry));
-      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
+      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts', { retryAfter: retry });
     }
     if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: ip }))) {
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
@@ -184,7 +184,7 @@ shopExtra.openapi(
     // smaller budget of misses (rate-limit.ts), checked before any database read.
     const ip = clientIp(c);
     const retry = await giftCardLookupRetryAfter(ip, st.id);
-    if (retry > 0) { c.header('Retry-After', String(retry)); return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`); }
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`, { retryAfter: retry });
     const gc = await withStore(st.id, async (tx) => {
       const [g] = await tx.select({ code: s.giftCard.code, balance: s.giftCard.balance, currency: s.giftCard.currency, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
       return g ?? null;
@@ -209,6 +209,13 @@ shopExtra.openapi(
 // emails. The cooldown is checked INSIDE the transaction against
 // `last_sent_at` — at most one confirmation per address per hour, in
 // addition to the per-IP throttle above.
+// Topics are app keys (e.g. 'viewright'), 'restock:<variant id>' or empty for the general newsletter; the topic is shown in
+// the confirmation email, so it is limited to those characters and a short length.
+export const SignupTopic = z.string().max(64).regex(/^[A-Za-z0-9][A-Za-z0-9:_.-]*$|^$/);
+// Free-form signup metadata is bounded: few keys, primitive values, short strings.
+export const SignupMeta = z.record(z.string().max(64), z.union([z.string().max(500), z.number(), z.boolean()]))
+  .refine((m) => Object.keys(m).length <= 20, { message: 'meta may have at most 20 keys' });
+
 shopExtra.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/newsletter-signup', summary: 'Subscribe an email to the newsletter',
@@ -219,18 +226,18 @@ shopExtra.openapi(
       // schema boundary means the 400 is reserved for genuinely malformed
       // addresses.
       email: z.string().trim().pipe(z.email()),
-      name: z.string().optional(),
+      name: z.string().max(200).optional(),
       // Waitlist vs newsletter (default). Both share this endpoint and the
       // confirmation/unsubscribe plumbing — only `topic` differs.
       kind: z.enum(['newsletter', 'waitlist']).optional(),
       // App key for waitlist (e.g. 'scraperight'); empty string for the
       // general newsletter. Migration 0041 marks topic NOT NULL DEFAULT ''
       // so this collides correctly with the UNIQUE constraint.
-      topic: z.string().optional(),
+      topic: SignupTopic.optional(),
       // Source for analytics + audit. Defaults to 'storefront' for the
       // public route. Other callers (checkout, import) can override.
       source: z.enum(['storefront', 'checkout', 'import', 'api']).optional(),
-      meta: z.record(z.string(), z.unknown()).optional(),
+      meta: SignupMeta.optional(),
       // Turnstile token from the storefront widget; required when the store has
       // a secret (or production with no secret and no TURNSTILE_DISABLED).
       turnstileToken: z.string().max(2048).optional(),
@@ -253,7 +260,7 @@ shopExtra.openapi(
     // 1. Per-IP throttle (gate 1). Same shape as auth.ts's check-email probe.
     const ip = clientIp(c);
     const retry = await newsletterRetryAfter(ip);
-    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`, { retryAfter: retry });
     await recordNewsletterAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
@@ -295,7 +302,7 @@ shopExtra.openapi(
 
 const ShippingQuoteIn = z.object({
   country: z.string().length(2),
-  items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
+  items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(MAX_CART_LINES),
   couponCode: z.string().optional(), couponCodes: CouponCodesIn.optional(), redeemPoints: z.number().int().min(1).optional(),
 });
 
@@ -306,9 +313,12 @@ shopExtra.openapi(createRoute({
   responses: {
     200: { description: 'Quoted methods', content: J(ShippingQuoteOut) },
     409: { description: 'Credit quote unavailable', content: J(apiErrorSchema()) },
+    429: { description: 'Rate limited', content: J(apiErrorSchema()) },
   },
 }), async c => {
   const st = await resolveStoreFromCtx(c);
+  const quoteRetry = await consumeShippingQuote(st.id, clientIp(c));
+  if (quoteRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many requests — try again in ${quoteRetry}s`, { retryAfter: quoteRetry });
   const body = c.req.valid('json') as z.infer<typeof ShippingQuoteIn>;
   try {
     const result = await withStore(st.id, tx => quoteShippingMethods(tx, st, body.items,

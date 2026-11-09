@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../env.js', () => ({ env: {} }));
 vi.mock('../db/client.js', () => ({ withStore: vi.fn() }));
-vi.mock('../cache/purge-hook.js', () => ({ onStoreShellConfigChanged: vi.fn() }));
+vi.mock('../cache/purge-hook.js', () => ({ queueStoreShellConfigPurgeInTx: vi.fn() }));
 
 describe('shellConfigChanged (ADR-0001 I-4: fail closed for anything the shell/CSP may render)', () => {
   it('flags identity/theme, published, hostnames, storefrontUrl, sign-in providers, seo, payments mode changes', async () => {

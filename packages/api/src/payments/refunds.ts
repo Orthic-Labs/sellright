@@ -214,6 +214,45 @@ async function retryCreditMerchandiseCompletion(tx: Tx, storeId: string, order: 
   }
 }
 
+/**
+ * Read-only preview of what POST /v1/admin/returns/{id}/approve would reserve for each return request (integer cents):
+ * the sum of refundLineCashAmount() over the request's lines, the same per-line function requestRefund uses with no
+ * explicit amount and no shipping amount. Null when it cannot be computed here without the full refund engine: the
+ * order carries a posted account-credit redemption (credit-unit allocation), the basis is unresolved, or the line
+ * is missing. Takes no locks and writes nothing; the approve route remains the authority.
+ */
+export async function previewReturnRefundAmounts(tx: Tx, returns: ReadonlyArray<{ id: string; orderId: string }>): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>(returns.map(r => [r.id, null]));
+  if (!returns.length) return out;
+  const orderIds = [...new Set(returns.map(r => r.orderId))];
+  const [orders, lineRows, returnLines, redemptions] = await Promise.all([
+    tx.select({ id: s.order.id, currency: s.order.currency, pricingSnapshot: s.order.pricingSnapshot }).from(s.order).where(inArray(s.order.id, orderIds)),
+    tx.select().from(s.orderLine).where(inArray(s.orderLine.orderId, orderIds)),
+    tx.select().from(s.returnLine).where(inArray(s.returnLine.returnId, returns.map(r => r.id))),
+    tx.select({ orderId: s.accountCreditTransaction.orderId }).from(s.accountCreditTransaction)
+      .where(and(inArray(s.accountCreditTransaction.orderId, orderIds), eq(s.accountCreditTransaction.kind, 'REDEEM'), eq(s.accountCreditTransaction.status, 'POSTED'))),
+  ]);
+  const creditOrders = new Set(redemptions.map(r => r.orderId));
+  for (const r of returns) {
+    const order = orders.find(o => o.id === r.orderId);
+    if (!order || creditOrders.has(order.id)) continue;
+    try {
+      const orderLines = billedLines(lineRows.filter(l => l.orderId === order.id));
+      const picked = returnLines.filter(l => l.returnId === r.id);
+      if (!picked.length) continue;
+      const units = refundUnitBases(order, orderLines);
+      let total = 0;
+      for (const line of picked) {
+        const row = orderLines.find(l => l.id === line.orderLineId);
+        if (!row) throw new Error('missing line');
+        total += refundLineCashAmount(row, line.quantity, units.get(row.id) ?? null, false);
+      }
+      if (Number.isSafeInteger(total)) out.set(r.id, total);
+    } catch { /* not computable here: stays null */ }
+  }
+  return out;
+}
+
 export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLocks) {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new RefundError(400, 'A refund idempotency key is required');
   if (input.editId && input.source !== 'order_edit') throw new RefundError(400, 'Edit identity requires an order edit refund');

@@ -9,7 +9,7 @@ const JOBS: Array<[string, number]> = [
   ['auto-deliver', HOUR], ['release-stale', 15 * MIN], ['purge-cancelled', 15 * MIN], ['trash-abandoned', 15 * MIN], ['openai-capi', 5 * MIN], ['reservation-release-sweep', 15 * MIN], ['cart-maintenance', 15 * MIN],
   ['webhooks', MIN], ['emails', MIN], ['push', MIN], ['listmonk-sync', 5 * MIN], ['sheerid-expiry', HOUR],
   ['birthday-bonus', HOUR], ['restock-notify', MIN], ['webhook-reaper', 5 * MIN], ['processed-event-reaper', HOUR],
-  ['rate-limit-reaper', HOUR],
+  ['rate-limit-reaper', HOUR], ['session-reaper', HOUR], ['outbox-retention', HOUR], ['cache-purge-drain', 45_000],
 ];
 // Sub-minute and plugin jobs: offsets and slots must hold for them too.
 const OTHER: Array<[string, number]> = [['pending-effects', 15_000], ['acme:sync', 5 * MIN], ['acme:nightly', HOUR]];

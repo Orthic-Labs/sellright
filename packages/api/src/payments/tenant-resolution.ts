@@ -9,6 +9,13 @@ import { onEngineClose } from '../resources.js';
 import { Pool } from 'pg';
 import { env } from '../env.js';
 import { attachPoolMetrics, poolMax } from '../db/client.js';
+import { err as logErr } from '../lib/logger.js';
+
+/** DB-M3: the lookup is one indexed SECURITY DEFINER call; bound it server-side and client-side so two slow calls
+ *  cannot pin the 2-connection pool for the cluster's 30 s statement_timeout. The client ceiling sits just above the
+ *  server's so Postgres cancels first and the connection survives. */
+export const TENANT_RESOLUTION_STATEMENT_TIMEOUT_MS = 3_000;
+export const TENANT_RESOLUTION_QUERY_TIMEOUT_MS = 3_500;
 
 export type GatewayProviderName = 'stripe' | 'nmi' | 'sezzle';
 
@@ -48,9 +55,11 @@ function tenantPool(): Pool {
     idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
     connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
     allowExitOnIdle: true,
+    options: `-c statement_timeout=${TENANT_RESOLUTION_STATEMENT_TIMEOUT_MS}`,
+    query_timeout: TENANT_RESOLUTION_QUERY_TIMEOUT_MS,
   });
   p.on('error', (err) => {
-    console.error('[pg tenant-resolution pool error]', err);
+    logErr.error('pg tenant-resolution pool error', err);
   });
   tenantPoolInstance = p;
   const detachMetrics = attachPoolMetrics('tenantResolution', p); // P0: gauges, acquire/hold latency, timeouts

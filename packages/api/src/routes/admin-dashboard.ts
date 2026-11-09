@@ -30,10 +30,10 @@ adminDashboard.openapi(
       const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       const published = isStorePublished(storeRow?.config);
       const [agg] = await tx
-        .select({ revenue: sql<number>`coalesce(sum(${s.order.grandTotal}),0)::int`, cnt: sql<number>`count(*)::int` })
+        .select({ revenue: sql<string>`coalesce(sum(${s.order.grandTotal}),0)::bigint`, cnt: sql<number>`count(*)::int` })
         .from(s.order)
         .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null and not ${s.order.isDemo}`);
-      const revenue = agg?.revenue ?? 0;
+      const revenue = Number(agg?.revenue ?? 0); // bigint aggregate: read as a string, no int4 overflow
       const cnt = agg?.cnt ?? 0;
       // The Orders page's Unfulfilled view, counted set-based (orders/tabs-sql.ts pendingFulfillmentCountSql; the per-row
       // status projections cost ~280 ms here). tabs-sql.db.test.ts keeps it equal to the status-sql predicate.

@@ -9,8 +9,10 @@
 import { env } from '../env.js';
 import { appValue } from '../email/dispatch.js';
 import { purgeCloudflareHosts, purgeCloudflareUrls, resolveCloudflareConfig } from './cloudflare-purge.js';
-import { err as logErr } from '../lib/logger.js';
+import { err as logErr, log } from '../lib/logger.js';
 import { collectionPath } from '../seo/config.js';
+import { afterCommit } from '../db/after-commit.js';
+import { enqueuePurge, settlePurge, type Executor, type PendingPurge } from './purge-queue.js';
 
 function storefrontOrigin(storeSlug: string): string | null {
   const raw = appValue(env.STOREFRONT_ORIGIN_BY_STORE, storeSlug) ?? env.STOREFRONT_URL;
@@ -156,7 +158,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => { const t = setTime
  * `alert: 'cache_purge_failed'` plus event/store/mode/counts, which the log alerting keys on (QS-7). 'skipped' (no
  * storefront origin or no Cloudflare config) is not a failure.
  */
-export async function runPurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec): Promise<PurgeResult> {
+export async function runPurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec, opts: { maxAttempts?: number; quiet?: boolean } = {}): Promise<PurgeResult> {
+  const maxAttempts = opts.maxAttempts ?? retryPolicy.maxAttempts;
   let plan: ReturnType<typeof planPurge>;
   let base: string | null;
   try {
@@ -175,25 +178,62 @@ export async function runPurge(event: PurgeEvent, storeSlug: string, spec: Purge
     return Promise.race([call, deadline]).finally(() => { if (timer) clearTimeout(timer); });
   };
   let last = 'rejected';
-  for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const out = await attemptOnce();
       if (out === true) return 'purged';
       last = out === 'timeout' ? 'timeout' : 'rejected';
     } catch (e) { last = e instanceof Error ? e.message : 'error'; }
-    if (attempt < retryPolicy.maxAttempts) await sleep(retryPolicy.backoffBaseMs * 4 ** (attempt - 1));
+    if (attempt < maxAttempts) await sleep(retryPolicy.backoffBaseMs * 4 ** (attempt - 1));
   }
-  logErr.error('cache purge failed after retries', new Error(`purge ${last}`), {
-    alert: 'cache_purge_failed', event, storeSlug, host: hostname, mode: plan.mode,
+  const fields = {
+    event, storeSlug, host: hostname, mode: plan.mode,
     urlCount: plan.mode === 'urls' ? plan.urls.length : undefined, reason: plan.mode === 'host' ? plan.reason : undefined,
-    attempts: retryPolicy.maxAttempts, last,
-  });
+    attempts: maxAttempts, last,
+  };
+  // A queue-drain retry is quiet: the durable row schedules the next one and the alert fires when it goes dead.
+  if (opts.quiet) log.warn('cache purge retry failed (queued for another attempt)', fields);
+  else logErr.error('cache purge failed after retries', new Error(`purge ${last}`), { alert: 'cache_purge_failed', ...fields });
   return 'failed';
 }
 
-/** Fire-and-forget wrapper for request handlers. Never throws, never rejects. */
-export function firePurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec): void {
-  void runPurge(event, storeSlug, spec).catch((e) => logErr.error('cache purge crashed', e, { alert: 'cache_purge_failed', event, storeSlug }));
+/**
+ * Fire-and-forget wrapper for request handlers. Never throws, never rejects. The immediate attempt starts at once, as
+ * before (same latency); a durable row (purge-queue.ts, API-H1) is written alongside it, or passed in as `pending` when
+ * the caller queued it in its own transaction. The attempt's outcome settles the row: success deletes it, failure leaves
+ * it for the cache-purge-drain job to retry with backoff.
+ */
+export function firePurge(event: PurgeEvent, storeSlug: string, spec: PurgeSpec, pending?: PendingPurge): void {
+  const queued: PendingPurge = pending ?? enqueuePurge(undefined, event, storeSlug, spec);
+  void runPurge(event, storeSlug, spec)
+    .then((result) => settlePurge(queued, result))
+    .catch((e) => logErr.error('cache purge crashed', e, { alert: 'cache_purge_failed', event, storeSlug }));
+}
+
+/**
+ * Same-transaction variant (API-H1): write the pending purge as part of the edit's transaction `tx`, and run the
+ * immediate attempt after COMMIT. A rolled-back edit leaves no row and fires nothing. Await it inside the transaction.
+ */
+export async function queuePurgeInTx(tx: Executor & { $client: object }, event: PurgeEvent, storeSlug: string, spec: PurgeSpec): Promise<void> {
+  const id = await enqueuePurge(tx, event, storeSlug, spec);
+  afterCommit(tx, () => firePurge(event, storeSlug, spec, id));
+}
+
+/** Blog edit purge queued in the edit's own transaction (see queuePurgeInTx). */
+export async function queueBlogContentPurgeInTx(tx: Executor & { $client: object }, storeSlug: string, postSlugs: readonly string[]): Promise<void> {
+  const urls = blogPurgeUrls(storeSlug, postSlugs);
+  if (urls) await queuePurgeInTx(tx, 'blog-content', storeSlug, { urls });
+}
+
+/** Collection edit purge queued in the edit's own transaction (see queuePurgeInTx). */
+export async function queueCollectionPurgeInTx(tx: Executor & { $client: object }, storeSlug: string, collectionSlugs: readonly string[]): Promise<void> {
+  const urls = collectionPurgeUrls(storeSlug, collectionSlugs);
+  if (urls) await queuePurgeInTx(tx, 'collection', storeSlug, { urls });
+}
+
+/** Shell/store-config edit purge (whole host) queued in the edit's own transaction (see queuePurgeInTx). */
+export function queueStoreShellConfigPurgeInTx(tx: Executor & { $client: object }, storeSlug: string): Promise<void> {
+  return queuePurgeInTx(tx, 'store-config', storeSlug, { everything: true });
 }
 
 /** Collection page + shop listing (+ collection sitemaps) for the changed collections. Null: no storefront origin. */

@@ -39,3 +39,17 @@ describe('metricsAccess', () => {
     expect(await res.text()).not.toContain('sellright_x');
   });
 });
+
+describe('readyz detail uses the same access verdict', () => {
+  it('grants only where the metrics endpoint would serve', async () => {
+    const { metricsAccessVerdict } = await import('./app.js');
+    const ctx = (remote: string, headers: Record<string, string> = {}) => ({
+      env: { incoming: { socket: { remoteAddress: remote } } },
+      req: { header: (n: string) => headers[n] },
+    }) as never;
+    expect(await metricsAccessVerdict('off', ctx('127.0.0.1'))).toBe('denied');
+    expect(await metricsAccessVerdict('loopback', ctx('127.0.0.1'))).toBe('granted');
+    expect(await metricsAccessVerdict('loopback', ctx('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }))).toBe('denied');
+    expect(await metricsAccessVerdict('admin', ctx('127.0.0.1'))).toBe('unauthenticated');
+  });
+});

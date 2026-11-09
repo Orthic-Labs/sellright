@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLicenseGrants, canAccessDownload, canReceiveUpdate, isEntitlementBearing } from './entitlements.js';
+import { buildLicenseGrants, canAccessDownload, canDownloadRelease, canReceiveUpdate, isEntitlementBearing } from './entitlements.js';
 
 describe('license entitlement planning', () => {
   it('issues one license per purchased software seat and carries update eligibility', () => {
@@ -116,3 +116,17 @@ describe('isEntitlementBearing is the predicate issuance uses', () => {
   });
 });
 
+
+describe('canDownloadRelease (update window)', () => {
+  const until = new Date('2026-06-01T00:00:00Z');
+  it('allows any release for a licence without an update window', () => {
+    expect(canDownloadRelease({ updatesUntil: null }, new Date('2030-01-01T00:00:00Z'))).toBe(true);
+  });
+  it('allows a release published before or exactly at the end of the window', () => {
+    expect(canDownloadRelease({ updatesUntil: until }, new Date('2026-05-31T23:59:59Z'))).toBe(true);
+    expect(canDownloadRelease({ updatesUntil: until }, until)).toBe(true);
+  });
+  it('refuses a release published after the window ended', () => {
+    expect(canDownloadRelease({ updatesUntil: until }, new Date('2026-06-01T00:00:01Z'))).toBe(false);
+  });
+});

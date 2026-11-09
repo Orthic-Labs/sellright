@@ -310,7 +310,13 @@ export const session = pgTable('session', {
   // 0098: last use of an ADMIN session (touched at most once a minute) for the idle timeout; null = created_at.
   lastSeenAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
-});
+}, (t) => [
+  // 0120 (DB-M1/DB-L3): session reaper and delete-by-user paths. `session` is RLS-exempt.
+  index('session_expires_at_idx').on(t.expiresAt),
+  index('session_legacy_expires_at_idx').on(t.legacyExpiresAt).where(sql`${t.legacyExpiresAt} IS NOT NULL`),
+  index('session_customer_idx').on(t.customerId).where(sql`${t.customerId} IS NOT NULL`),
+  index('session_admin_user_idx').on(t.adminUserId).where(sql`${t.adminUserId} IS NOT NULL`),
+]);
 
 // ── catalog ─────────────────────────────────────────────────────────────────
 export const asset = pgTable('asset', {

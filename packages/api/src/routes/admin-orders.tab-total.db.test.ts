@@ -84,4 +84,35 @@ describe('order list ?tab= total', () => {
     expect(all.total).toBe(5);
     expect(all.items).toHaveLength(2);
   });
+  // BP-M2: refunded/cancelled are decided by order.state alone and no longer aggregate every order's lines and payments.
+  // Before (dd, 20k orders, pg_stat_statements 2026-10-24..11-09): the aggregating all-orders statement averaged 111 ms
+  // and 60,186 blocks per call (tab-counts, the same ol/pay/ref/t CTEs). Rows and totals must be unchanged.
+  it('state-only tabs return the same rows and totals without the window total', async () => {
+    const cancelled = await list('tab=cancelled');
+    expect(cancelled.total).toBe(1);
+    expect(cancelled.items.map((r) => r.code)).toEqual(['T-CANCELLED']);
+    const refunded = await list('tab=refunded&pageSize=1');
+    expect(refunded.total).toBe(1);
+    expect(refunded.items.map((r) => r.code)).toEqual(['T-REFUNDED']);
+    const past = await list('tab=refunded&page=5');
+    expect(past.items).toEqual([]);
+    expect(past.total).toBe(1);
+  });
+});
+
+describe('order list boolean flags (API-L1)', () => {
+  it('trashed=false and trashed=0 mean live orders, not the trash', async () => {
+    expect((await list('trashed=false')).total).toBe(5);
+    expect((await list('trashed=0')).total).toBe(5);
+    expect((await list('trashed=true')).total).toBe(0);
+    expect((await list('trashed=1')).total).toBe(0);
+  });
+
+  it('preOrder=false does not filter to pre-orders; anything but true/false/1/0 is a 400', async () => {
+    expect((await list('preOrder=false')).total).toBe(5);
+    expect((await list('preOrder=0')).total).toBe(5);
+    expect((await list('preOrder=true')).total).toBe(0);
+    const bad = await app.request('/v1/admin/orders?trashed=maybe', { headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG } });
+    expect(bad.status).toBe(400);
+  });
 });

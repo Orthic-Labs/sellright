@@ -371,6 +371,7 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
 export async function createSubscriptionCheckout(storeId: string, mode: StripeMode, args: {
   priceId: string; successUrl: string; cancelUrl: string;
   customerEmail?: string; metadata: Record<string, string>; // {storeId, orderCode, customerId?}
+  idempotencyKey?: string;
 }): Promise<{ url: string; sessionId: string }> {
   const stripe = await resolveStripeClient(storeId, mode);
   const session = await stripe.checkout.sessions.create({
@@ -381,7 +382,7 @@ export async function createSubscriptionCheckout(storeId: string, mode: StripeMo
     customer_email: args.customerEmail,
     subscription_data: { metadata: args.metadata },
     metadata: args.metadata,
-  });
+  }, args.idempotencyKey ? { idempotencyKey: args.idempotencyKey } : undefined);
   if (!session.url) throw new Error('stripe did not return a checkout url');
   return { url: session.url, sessionId: session.id };
 }

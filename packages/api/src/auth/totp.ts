@@ -2,7 +2,7 @@
  * RFC 6238 TOTP (admin 2FA) — HMAC-SHA1, 30s step, 6 digits. No dependency.
  * Compatible with Google Authenticator / Authy / 1Password.
  */
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -29,6 +29,13 @@ function base32Decode(s: string): Buffer {
   return Buffer.from(bytes);
 }
 
+/** Constant-time comparison of two codes (equal-length buffers; unequal lengths never match). */
+export function codesEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a, 'utf8');
+  const y = Buffer.from(b, 'utf8');
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
 function hotp(secret: Buffer, counter: number): string {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64BE(BigInt(counter));
@@ -53,7 +60,7 @@ export function verifyTotp(secretB32: string, code: string, actorId?: string): b
   const secret = base32Decode(secretB32);
   const step = Math.floor(Date.now() / 30000);
   for (let w = -1; w <= 1; w++) {
-    if (hotp(secret, step + w) !== code.trim()) continue;
+    if (!codesEqual(hotp(secret, step + w), code.trim())) continue;
     if (actorId) {
       const prev = recentByActor.get(actorId);
       const now = Date.now();
@@ -75,7 +82,7 @@ export function matchTotpStep(secretB32: string, code: string): number | null {
   if (!/^\d{6}$/.test(code.trim())) return null;
   const secret = base32Decode(secretB32);
   const step = Math.floor(Date.now() / 30000);
-  for (const w of [0, -1, 1]) if (hotp(secret, step + w) === code.trim()) return step + w;
+  for (const w of [0, -1, 1]) if (codesEqual(hotp(secret, step + w), code.trim())) return step + w;
   return null;
 }
 

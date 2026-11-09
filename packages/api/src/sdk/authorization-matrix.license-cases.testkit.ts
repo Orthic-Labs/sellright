@@ -102,7 +102,7 @@ function licenseSource(f: Fixture) {
         const link = new URL(b.url, 'http://matrix.invalid');
         proof.equal(link.pathname, '/v1/dl/' + s.artifactKey, 'download URL names own artifact');
         proof.equal(link.searchParams.get('store'), f.storeId, 'signed URL binds own store');
-        proof.ok(verifyDownloadSig(f.storeId, s.artifactKey, Number(link.searchParams.get('exp')), link.searchParams.get('sig') ?? ''), 'download URL carries valid short-lived signature');
+        proof.ok(verifyDownloadSig(f.storeId, s.artifactKey, Number(link.searchParams.get('exp')), link.searchParams.get('sig') ?? '', link.searchParams.get('rel') ?? undefined), 'download URL carries valid short-lived signature');
         proof.equal(response.headers.get('cache-control')?.includes('no-store'), true, 'download credential is never cached');
       }
       proof.equal(await f.snapshot(), before, 'licensed metadata read leaves full domain/files/providers unchanged', 'state');

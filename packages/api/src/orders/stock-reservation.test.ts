@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { StockReservationError, reserveStockOrThrow, validateReservableItems } from './stock-reservation.js';
+import { StockReservationError, isStockReservable, reserveStockOrThrow, validateReservableItems } from './stock-reservation.js';
 
 const variant = (overrides: Partial<{ id: string; sku: string; enabled: boolean; isPreOrder: boolean; fulfillmentType: string }> = {}) => ({
   id: overrides.id ?? 'variant-1',
@@ -58,5 +58,18 @@ describe('stock reservation', () => {
     const tx = { async execute() { return { rowCount: 1 }; } };
     const bySku = new Map([['A', variant({ id: 'a', sku: 'A' })]]);
     await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'A', quantity: 1 }], bySku)).resolves.toBe(true);
+  });
+});
+
+describe('isStockReservable', () => {
+  it('accepts enabled physical non-pre-order variants (fulfillmentType defaults to physical)', () => {
+    expect(isStockReservable(variant())).toBe(true);
+    expect(isStockReservable({ enabled: true, isPreOrder: false })).toBe(true);
+  });
+  it('rejects missing, disabled, pre-order and non-physical variants', () => {
+    expect(isStockReservable(undefined)).toBe(false);
+    expect(isStockReservable(variant({ enabled: false }))).toBe(false);
+    expect(isStockReservable(variant({ isPreOrder: true }))).toBe(false);
+    expect(isStockReservable(variant({ fulfillmentType: 'license' }))).toBe(false);
   });
 });

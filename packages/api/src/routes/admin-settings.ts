@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { normalizeStoreCurrency } from '../money/currency-codes.js';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { formatOrderCode, highestMatchingCode, orderNumberingError, readOrderNumbering, MAX_AFFIX_LENGTH, MAX_MIN_DIGITS, MAX_ORDER_NUMBER, type OrderNumbering } from '../orders/order-number.js';
@@ -7,12 +8,13 @@ import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
-import { onStoreShellConfigChanged } from '../cache/purge-hook.js';
+import { queueStoreShellConfigPurgeInTx } from '../cache/purge-hook.js';
 import { appleServicesId } from '../auth/apple.js';
 import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { findHostnameConflict, validateStoreHostnames } from '../lib/store-hostnames.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireHuman, guard } from './admin-helpers.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
 // is safe: both bindings are only ever called from inside route handlers,
 // never at module-evaluation time, so ESM's live-binding semantics resolve
@@ -98,11 +100,12 @@ export async function mutateStoreConfig(
       });
     }
     if (hooks?.after) await hooks.after(tx);
+    // ADR-0001 item 5 / I-4: a change to any config key the shell or its CSP can render purges the host. The durable
+    // row is written in this transaction; the immediate attempt runs after commit.
+    if (shellConfigChanged(prev, v)) await queueStoreShellConfigPurgeInTx(tx, row!.slug);
     return { slug: row!.slug, next: v, prev };
   });
   await broadcastStoreCacheInvalidation(slug);
-  // ADR-0001 item 5 / I-4: after commit, a change to any config key the shell or its CSP can render purges the host.
-  if (shellConfigChanged(prev, next)) onStoreShellConfigChanged(slug);
   return next;
 }
 
@@ -148,7 +151,7 @@ adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/store', summary: 'Update store details / tax',
     request: { body: { content: J(z.object({
-      name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(),
+      name: z.string().trim().min(1).max(255).optional(), currency: z.string().max(16).optional(), taxRate: z.number().int().min(0).max(10000).optional(),
       taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional(),
       // Domain checklist item (plan §1.5): the Host(s) store-context.ts's
       // resolveStoreByHost matches against. Lives in config.hostnames
@@ -168,6 +171,12 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { hostnames: hostnamesRaw, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    // Two-decimal ISO 4217 codes only, stored upper-case (a lower-case or zero-decimal code breaks pricing and gateway amounts).
+    if (b.currency !== undefined) {
+      const currency = normalizeStoreCurrency(b.currency);
+      if (!currency) throw new HttpError(400, 'currency must be a two-decimal ISO 4217 code such as USD, EUR or GBP');
+      b.currency = currency;
+    }
     let hostnames: string[] | undefined;
     if (hostnamesRaw !== undefined) {
       const checked = validateStoreHostnames(hostnamesRaw);
@@ -218,6 +227,8 @@ adminSettings.openapi(
           action: 'settings_update',
           data: { section: 'store', before: pick(before), after: pick({ ...before, ...b }) },
         });
+        // Name/currency/tax flags render into the shell (header, JSON-LD, price format): queue the host purge atomically with the edit.
+        await queueStoreShellConfigPurgeInTx(tx, st.slug);
       }
     });
     if (hostnames) {
@@ -250,8 +261,6 @@ adminSettings.openapi(
       });
     }
     await broadcastStoreCacheInvalidation(st.slug);
-    // Name/currency/tax flags render into the shell (header, JSON-LD, price format); hostnames/storefrontUrl are handled by mutateStoreConfig.
-    if (Object.keys(b).length > 0) onStoreShellConfigChanged(st.slug);
     return c.json({ ok: true }, 200);
   }),
 );
@@ -485,7 +494,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/shipping-methods', summary: 'Create shipping method',
-    request: { body: { content: J(z.object({ code: z.string().min(1), name: z.string().min(1), calculator: ShippingCalculatorSchema.default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
+    request: { body: { content: J(z.object({ code: z.string().trim().min(1).max(64), name: z.string().trim().min(1).max(255), calculator: ShippingCalculatorSchema.default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -504,7 +513,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/shipping-methods/{id}', summary: 'Update shipping method',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().trim().min(1).optional(), code: z.string().trim().min(1).max(64).optional(), calculator: ShippingCalculatorSchema.optional(), enabled: z.boolean().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().trim().min(1).max(255).optional(), code: z.string().trim().min(1).max(64).optional(), calculator: ShippingCalculatorSchema.optional(), enabled: z.boolean().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Code in use', ...errBody }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -564,7 +573,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/tax-zones', summary: 'Create a tax zone',
-    request: { body: { content: J(z.object({ name: z.string().min(1), countries: z.array(z.string()).min(1), rate: z.number().int().min(0), priority: z.number().int().default(0), enabled: z.boolean().default(true) })) } },
+    request: { body: { content: J(z.object({ name: z.string().trim().min(1).max(255), countries: z.array(z.string().trim().length(2)).min(1).max(300), rate: z.number().int().min(0).max(10000), priority: z.number().int().default(0), enabled: z.boolean().default(true) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -583,7 +592,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/tax-zones/{id}', summary: 'Update a tax zone',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), countries: z.array(z.string()).optional(), rate: z.number().int().min(0).optional(), priority: z.number().int().optional(), enabled: z.boolean().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().trim().min(1).max(255).optional(), countries: z.array(z.string().trim().length(2)).min(1).max(300).optional(), rate: z.number().int().min(0).max(10000).optional(), priority: z.number().int().optional(), enabled: z.boolean().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -713,7 +722,7 @@ adminSettings.openapi(
     responses: {
       200: { description: 'OK', content: J(z.object({ published: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody },
-      409: { description: 'Readiness checks not met', content: J(z.object({ error: z.string(), failing: z.array(z.string()) })) },
+      409: { description: 'Readiness checks not met', content: J(apiErrorSchema().extend({ failing: z.array(z.string()) })) },
     },
   }),
   async (c) => guard(c, async () => {
@@ -730,7 +739,7 @@ adminSettings.openapi(
       const readiness = await computeReadiness(st.storeId, admin.isInstallationAdmin ? admin.id : null);
       const failing = (['payments', 'email', 'recoveryKit'] as const).filter((k) => !readiness[k].ok);
       if (failing.length > 0) {
-        return c.json({ error: 'readiness checks not met', failing }, 409);
+        return errJson(c, 409, 'READINESS_NOT_MET', 'readiness checks not met', { extra: { failing } });
       }
     }
 

@@ -25,6 +25,18 @@ import pino, { type Logger as PinoLogger } from 'pino';
 let baseInstance: PinoLogger | undefined;
 let nodeEnvOverride: string | undefined;
 
+/**
+ * Fields that carry personal data or credentials. Recipient addresses, auth headers, cookies and tokens never reach
+ * the log stream; `*.x` covers one level of nesting (for example a request or error context object).
+ */
+const REDACTED_KEYS = ['to', 'email', 'authorization', 'cookie', 'password', 'token'] as const;
+export const LOG_REDACT_PATHS: string[] = [
+  ...REDACTED_KEYS,
+  ...REDACTED_KEYS.map((k) => `*.${k}`),
+  'req.headers.authorization',
+  'req.headers.cookie',
+];
+
 function createBase(): PinoLogger {
   const nodeEnv = nodeEnvOverride ?? process.env.NODE_ENV;
   return pino({
@@ -33,6 +45,7 @@ function createBase(): PinoLogger {
     timestamp: pino.stdTimeFunctions.isoTime,
     // Keep the default field names — collectors parse on `time`, `level`, `msg`.
     base: { service: 'sellright-api' },
+    redact: { paths: LOG_REDACT_PATHS, censor: '[Redacted]' },
   });
 }
 

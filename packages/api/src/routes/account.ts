@@ -14,6 +14,7 @@ import { loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, load
 import { reviewedProductSlugs } from '../reviews/reviews.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { attemptRetryAfter, clientIp } from '../auth/rate-limit.js';
 import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -410,6 +411,7 @@ account.openapi(
       200: { description: 'Changed', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       401: { description: 'Unauthenticated or wrong current password', content: { 'application/json': { schema: errSchema } } },
       409: { description: 'Password changed meanwhile (CREDENTIAL_CHANGED)', content: { 'application/json': { schema: errSchema } } },
+      429: { description: 'Too many attempts', content: { 'application/json': { schema: errSchema } } },
     },
   }),
   async (c) => {
@@ -422,6 +424,10 @@ account.openapi(
     const tok = customerToken(c);
     const probe = await withStore(st.id, async (tx) => (tok ? await me(tx, tok) : null));
     if (!probe) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    // Every attempt (the current-password check included) is counted per customer before any password work, so a
+    // held session cannot be used to guess the current password. Same helper the email-change request uses.
+    const attemptRetry = await attemptRetryAfter(clientIp(c), `password-change:${st.id}:${probe.id}`);
+    if (attemptRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${attemptRetry}s`, { retryAfter: attemptRetry });
     const verifiedHash = (await withStore(st.id, async (tx) => (await tx.select({ passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.id, probe.id)).limit(1))[0]?.passwordHash)) ?? null;
     if (!(await verifyPassword(currentPassword, verifiedHash))) return errJson(c, 401, 'PASSWORD_INCORRECT', 'current password is incorrect');
     const hash = await hashPassword(newPassword);

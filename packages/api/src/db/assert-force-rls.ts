@@ -25,6 +25,9 @@ const EXEMPT = new Set([
   // stock-hook path via the unscoped owner pool, outside any store context —
   // same cross-cutting-infra posture as processed_event.
   'catalog_manifest_pending',
+  // API-H1 (0123): durable edge-purge queue (cache/purge-queue.ts). Same posture as catalog_manifest_pending: store_id for
+  // the cross-store drain job, written outside/alongside store context, holds URLs only.
+  'edge_purge_pending',
   // admin_api_token: registry resolved before store context (0094); isolation = token hash ⋈ single grant, tested in routes/admin-agents.db.test.ts
   'admin_api_token',
   // passkeys (0108): global admin credential/challenge registries, resolved before any store context like admin_recovery_code

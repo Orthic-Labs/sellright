@@ -86,6 +86,12 @@ const JOB_KEYS = {
   'openai-capi': NAMESPACE | 44n,
   // #359: soft-deletes release-stale-cancelled orders after the delay (jobs/trash-abandoned-orders.ts).
   'trash-abandoned': NAMESPACE | 45n,
+  // DB-M1: expired-session retention (jobs/session-reaper.ts).
+  'session-reaper': NAMESPACE | 46n,
+  // DB-M2: sent/dead outbox retention (jobs/outbox-retention.ts).
+  'outbox-retention': NAMESPACE | 47n,
+  // API-H1: durable edge-purge drain (cache/purge-queue.ts).
+  'cache-purge-drain': NAMESPACE | 48n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;

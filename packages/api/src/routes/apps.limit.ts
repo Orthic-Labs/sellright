@@ -54,6 +54,14 @@ export const recordCartAttempt = cart.record;
 export const storekitVerifyFailureRetryAfter = storekitVerifyFailure.retryAfter;
 export const recordStorekitVerifyFailure = storekitVerifyFailure.record;
 
+/**
+ * Per-IP budget for the public licensing routes, independent of the licence key (the per-key throttle above does not
+ * limit a caller that varies the key). One bucket per route family, 60/min per IP. Atomic; returns retryAfter seconds (0 = allowed).
+ */
+export type AppsIpRoute = 'activate' | 'updates' | 'downloads';
+export const consumeAppsIpAttempt = (route: AppsIpRoute, ip: string): Promise<number> =>
+  rateLimitBackend().consume('apps-ip', JSON.stringify([route, ip]), MIN, 60);
+
 /** Public cart work shares one atomic, tenant + trusted-IP budget. Call outside withStore. */
 export const consumeCartAttempt = (storeId: string, ip: string): Promise<number> =>
   rateLimitBackend().consume('apps-cart-public', JSON.stringify([storeId, ip]), MIN, 60);

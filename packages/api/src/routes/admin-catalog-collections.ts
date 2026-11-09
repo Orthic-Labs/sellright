@@ -3,7 +3,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
-import { onCollectionChanged } from '../cache/purge-hook.js';
+import { queueCollectionPurgeInTx } from '../cache/purge-hook.js';
 import { smartCollectionProducts, uniqueSlug } from './admin-catalog-utils.js';
 
 export function registerCollectionRoutes(adminCatalog: any) {
@@ -39,9 +39,9 @@ export function registerCollectionRoutes(adminCatalog: any) {
         const slug = await uniqueSlug(tx, s.collection, body.slug ? slugify(body.slug) : slugify(body.name));
         const [col] = await tx.insert(s.collection).values({ storeId: st.storeId, name: body.name, slug, description: body.description ?? null, parentId: body.parentId ?? null, rules: body.rules ?? null, published: body.published ?? true, seoTitle: body.seoTitle ?? null, seoDescription: body.seoDescription ?? null }).returning({ id: s.collection.id });
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'collection', entityId: col!.id, action: 'create', data: { name: body.name } });
+        await queueCollectionPurgeInTx(tx, st.slug, [slug]); // durable row atomic with the edit; immediate attempt runs after commit
         return { id: col!.id, slug };
       });
-      onCollectionChanged(st.slug, [out.slug]); // after commit
       return c.json(out, 200);
     }),
   );
@@ -89,10 +89,10 @@ export function registerCollectionRoutes(adminCatalog: any) {
         const [col] = await tx.select({ id: s.collection.id, slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
         if (!col) return null;
         await tx.update(s.collection).set(patch).where(eq(s.collection.id, id));
+        await queueCollectionPurgeInTx(tx, st.slug, [col.slug]);
         return col.slug;
       });
       if (ok === null) throw new HttpError(404, 'collection not found');
-      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ id }, 200);
     }),
   );
@@ -113,10 +113,10 @@ export function registerCollectionRoutes(adminCatalog: any) {
         await tx.delete(s.collectionProduct).where(eq(s.collectionProduct.collectionId, id));
         await tx.delete(s.collection).where(eq(s.collection.id, id));
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'collection', entityId: id, action: 'delete' });
+        await queueCollectionPurgeInTx(tx, st.slug, [col.slug]);
         return col.slug;
       });
       if (ok === null) throw new HttpError(404, 'collection not found');
-      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ id }, 200);
     }),
   );
@@ -137,10 +137,10 @@ export function registerCollectionRoutes(adminCatalog: any) {
         const [p] = await tx.select({ id: s.product.id }).from(s.product).where(eq(s.product.id, productId)).limit(1);
         if (!col || !p) return null;
         await tx.insert(s.collectionProduct).values({ storeId: st.storeId, collectionId: id, productId }).onConflictDoNothing();
+        await queueCollectionPurgeInTx(tx, st.slug, [col.slug]);
         return col.slug;
       });
       if (ok === null) throw new HttpError(404, 'collection or product not found');
-      onCollectionChanged(st.slug, [ok]); // after commit
       return c.json({ ok: true }, 200);
     }),
   );
@@ -155,12 +155,12 @@ export function registerCollectionRoutes(adminCatalog: any) {
       const { admin } = await requireAdmin(c);
       const st = requireStore(admin, c); requireWrite(st);
       const { id, productId } = c.req.valid('param');
-      const slug = await withStore(st.storeId, async (tx) => {
+      await withStore(st.storeId, async (tx) => {
         const [col] = await tx.select({ slug: s.collection.slug }).from(s.collection).where(eq(s.collection.id, id)).limit(1);
         await tx.delete(s.collectionProduct).where(and(eq(s.collectionProduct.collectionId, id), eq(s.collectionProduct.productId, productId)));
+        if (col) await queueCollectionPurgeInTx(tx, st.slug, [col.slug]);
         return col?.slug ?? null;
       });
-      if (slug !== null) onCollectionChanged(st.slug, [slug]); // after commit
       return c.json({ ok: true }, 200);
     }),
   );

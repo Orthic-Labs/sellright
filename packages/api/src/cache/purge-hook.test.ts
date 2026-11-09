@@ -12,9 +12,11 @@ const { envMock, errError, purgeSpy, cfConfig } = vi.hoisted(() => ({
 vi.mock('../env.js', () => ({ env: envMock }));
 vi.mock('../lib/logger.js', () => ({ log: { info: vi.fn() }, err: { error: (...a: unknown[]) => errError(...a) } }));
 const { hostSpy } = vi.hoisted(() => ({ hostSpy: vi.fn().mockResolvedValue(true) }));
+const { enqueueSpy, settleSpy } = vi.hoisted(() => ({ enqueueSpy: vi.fn(async (..._a: unknown[]): Promise<string | null> => 'row-1'), settleSpy: vi.fn(async (..._a: unknown[]) => undefined) }));
+vi.mock('./purge-queue.js', () => ({ enqueuePurge: (...a: unknown[]) => enqueueSpy(...a), settlePurge: (...a: unknown[]) => settleSpy(...a) }));
 vi.mock('./cloudflare-purge.js', () => ({ purgeCloudflareUrls: (...a: unknown[]) => purgeSpy(...a), purgeCloudflareHosts: (...a: unknown[]) => hostSpy(...a), resolveCloudflareConfig: () => cfConfig() }));
 
-import { onBlogContentChanged, onCatalogCacheChanged, onCollectionChanged, onStoreShellConfigChanged, planPurge, purgeAfterPublish, purgeHostForMaintenance, PURGE_MAX_ATTEMPTS, PURGE_URL_FALLBACK_THRESHOLD, runPurge, _setPurgeRetryPolicyForTest } from './purge-hook.js';
+import { queueBlogContentPurgeInTx, onBlogContentChanged, onCatalogCacheChanged, onCollectionChanged, onStoreShellConfigChanged, planPurge, purgeAfterPublish, purgeHostForMaintenance, PURGE_MAX_ATTEMPTS, PURGE_URL_FALLBACK_THRESHOLD, runPurge, _setPurgeRetryPolicyForTest } from './purge-hook.js';
 
 beforeEach(() => {
   for (const k of Object.keys(envMock)) delete envMock[k];
@@ -234,5 +236,56 @@ describe('ADR-0001 item 5 triggers', () => {
   it('K-3: exactly the threshold stays a URL purge (deduplicated)', () => {
     const urls = Array.from({ length: PURGE_URL_FALLBACK_THRESHOLD }, (_, i) => `${O}/p${i}/`);
     expect(planPurge({ urls: [...urls, urls[0]!] })).toEqual({ mode: 'urls', urls });
+  });
+});
+
+
+describe('durable purge queue (API-H1)', () => {
+  const O = 'https://acme.example.com';
+  beforeEach(() => {
+    cfConfig.mockImplementation(() => ({ zoneId: 'z', apiToken: 't' }));
+    purgeSpy.mockReset(); purgeSpy.mockResolvedValue(true);
+    enqueueSpy.mockClear(); settleSpy.mockClear();
+    _setPurgeRetryPolicyForTest({ attemptTimeoutMs: 20, backoffBaseMs: 1 });
+    envMock.STOREFRONT_URL = O;
+  });
+  afterEach(() => _setPurgeRetryPolicyForTest());
+
+  it('firePurge starts the immediate attempt at once (same latency) and queues a row alongside it', async () => {
+    onBlogContentChanged('acme', ['hello']);
+    expect(purgeSpy).toHaveBeenCalledTimes(1); // synchronous, before any queue await
+    expect(enqueueSpy).toHaveBeenCalledWith(undefined, 'blog-content', 'acme', expect.objectContaining({ urls: expect.arrayContaining([`${O}/blog/hello/`]) }));
+    await vi.waitFor(() => expect(settleSpy).toHaveBeenCalledTimes(1));
+    expect(settleSpy.mock.calls[0]![1]).toBe('purged');
+  });
+
+  it('a failed immediate attempt settles the row as failed, so the drain job retries it', async () => {
+    purgeSpy.mockResolvedValue(false);
+    _setPurgeRetryPolicyForTest({ attemptTimeoutMs: 20, backoffBaseMs: 1, maxAttempts: 2 });
+    onCollectionChanged('acme', ['summer']);
+    await vi.waitFor(() => expect(settleSpy).toHaveBeenCalledTimes(1));
+    expect(settleSpy.mock.calls[0]![1]).toBe('failed');
+    expect(errError).toHaveBeenCalledWith('cache purge failed after retries', expect.anything(), expect.objectContaining({ alert: 'cache_purge_failed' }));
+  });
+
+  it('with a transaction the row is written inside it and the attempt only fires after COMMIT', async () => {
+    const executed: unknown[] = [];
+    const hooks: Array<() => void> = [];
+    const client = {};
+    const { beginAfterCommit, flushAfterCommit, discardAfterCommit } = await import('../db/after-commit.js');
+    const tx = { $client: client, execute: vi.fn(async (q: unknown) => { executed.push(q); return { rows: [] }; }) };
+    // enqueuePurge is mocked, so assert on how the hook uses it.
+    beginAfterCommit(client);
+    await queueBlogContentPurgeInTx(tx as never, 'acme', ['hello']);
+    expect(enqueueSpy).toHaveBeenCalledWith(tx, 'blog-content', 'acme', expect.anything());
+    expect(purgeSpy).not.toHaveBeenCalled(); // rolled back or not yet committed: nothing fires
+    discardAfterCommit(client);
+    expect(purgeSpy).not.toHaveBeenCalled();
+    beginAfterCommit(client);
+    await queueBlogContentPurgeInTx(tx as never, 'acme', ['hello']);
+    flushAfterCommit(client);
+    expect(purgeSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(settleSpy).toHaveBeenCalledWith('row-1', 'purged'));
+    void hooks; void executed;
   });
 });

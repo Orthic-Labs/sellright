@@ -12,7 +12,7 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
-import { ORDER_TABS, orderTabCountsSql, orderTabFilterSql, orderTabSql, pendingFulfillmentCountSql } from './tabs-sql.js';
+import { ORDER_TABS, orderTabCountsSql, orderTabCountsSqlLegacy, orderTabFilterSql, orderTabSql, pendingFulfillmentCountSql } from './tabs-sql.js';
 import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from './status-sql.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -135,6 +135,11 @@ describe('orderTabCountsSql', () => {
     expect(await setCounts(excludeDemo)).toEqual(expected);
     // The fixtures reach every tab, so equality is not vacuous.
     for (const t of ORDER_TABS) expect(expected[t], t).toBeGreaterThan(0);
+  });
+
+  it.each([false, true])('BP-M2: the scoped statement equals the legacy whole-store aggregation (excludeDemo=%s)', async (excludeDemo) => {
+    const run = (q: ReturnType<typeof orderTabCountsSql>) => withStore(STORE, async (tx) => (await tx.execute(q)).rows[0] as Record<string, number>);
+    expect(await run(orderTabCountsSql({ excludeDemo }))).toEqual(await run(orderTabCountsSqlLegacy({ excludeDemo })));
   });
 
   it('pins the fixture counts', async () => {

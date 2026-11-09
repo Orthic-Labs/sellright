@@ -108,6 +108,22 @@ describe('POST /v1/shop/account/orders/{code}/returns', () => {
     expect(rows).toEqual([{ restock: false, quantity: 1 }]);
   });
 
+  it('returns the same request for a repeated Idempotency-Key and rejects an empty or over-long key', async () => {
+    const send = (key: string) => app.request('/v1/shop/account/orders/RET-MINE/returns', {
+      method: 'POST', headers: { ...hdr(token), 'idempotency-key': key },
+      body: JSON.stringify({ lines: [{ sku: 'SKU-A', quantity: 1 }], reason: 'arrived with a cracked handle' }),
+    });
+    const first = await send('return-key-1');
+    expect(first.status).toBe(201);
+    const second = await send('return-key-1');
+    expect(second.status).toBe(201);
+    expect((await second.json() as { id: string }).id).toBe((await first.json() as { id: string }).id);
+    const count = await withStore(STORE, async (tx) => (await tx.execute(sql`SELECT count(*)::int AS n FROM return_request`) as unknown as { rows: Array<{ n: number }> }).rows[0]!.n);
+    expect(count).toBe(1);
+    expect((await send('')).status).toBe(400);
+    expect((await send('k'.repeat(201))).status).toBe(400);
+  });
+
   it('refuses more units than shipped-and-not-yet-requested, including across two requests', async () => {
     expect((await post('RET-MINE', { lines: [{ sku: 'SKU-A', quantity: 3 }], reason: 'too many' })).status).toBe(409);
     expect((await post('RET-MINE', { lines: [{ sku: 'SKU-A', quantity: 2 }], reason: 'both' })).status).toBe(201);

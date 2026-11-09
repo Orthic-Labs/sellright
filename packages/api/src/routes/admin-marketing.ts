@@ -8,6 +8,7 @@ import { withRequestDeadline } from '../security/request-deadline.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
+import { applyGiftCardAdjust } from './admin-marketing-gift-card.js';
 import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
 export const adminMarketing = new OpenAPIHono();
@@ -22,24 +23,24 @@ export const adminMarketing = new OpenAPIHono();
 // version so the two paths can't drift, then removed. BREAKING (pre-1.0, see
 // CHANGELOG.md): new API consumers should call `/discounts`.
 const promoBodyBase = z.object({
-  code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
+  code: z.string().min(1).max(100).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
   value: money.default(0), // percentage: 0–100; fixed: cents
   // R24: layer free shipping on top of a percentage/fixed discount (DD's
   // combined discount + free_shipping action pair). Redundant (but harmless)
   // when type is already 'free_shipping'.
   freeShipping: z.boolean().default(false),
-  conditions: z.array(z.unknown()).nullable().optional(),
+  conditions: z.array(z.unknown()).max(100).nullable().optional(),
   usageLimit: z.number().int().nullable().optional(),
   perCustomerUsageLimit: z.number().int().nullable().optional(),
   priority: z.number().int().optional(), // automatic-discount tie-break (higher wins)
-  exclusionGroup: z.string().nullable().optional(),
-  startsAt: z.string().nullable().optional(),
-  endsAt: z.string().nullable().optional(),
+  exclusionGroup: z.string().max(100).nullable().optional(),
+  startsAt: z.string().max(64).nullable().optional(),
+  endsAt: z.string().max(64).nullable().optional(),
   enabled: z.boolean().default(true),
   // PAR affiliate parity: binding a recipient email auto-onboards the affiliate
   // (welcome mail) and rotates the access token on recipient change.
-  affiliateEmail: z.string().email().nullable().optional(),
+  affiliateEmail: z.string().email().max(320).nullable().optional(),
 });
 // #383: usage on a Cancelled order does not count (the previous platform coupon-validation.service.ts). promotion.used_count is a
 // monotonic counter, so the shown/enforced figure is used_count less the ledger rows of Cancelled orders
@@ -253,7 +254,7 @@ adminMarketing.openapi(
 adminMarketing.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/marketing/config', summary: 'Set Listmonk connection',
-    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1), apiToken: z.string().min(1), listId: z.number().int().positive().optional() })) } },
+    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1).max(255), apiToken: z.string().min(1).max(1024), listId: z.number().int().positive().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean(), lists: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Cannot connect', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -341,7 +342,7 @@ adminMarketing.openapi(
 adminMarketing.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/marketing/campaigns', summary: 'Create a Listmonk campaign',
-    request: { body: { content: J(z.object({ name: z.string().min(1), subject: z.string().min(1), listId: z.number().int(), body: z.string().default('') })) } },
+    request: { body: { content: J(z.object({ name: z.string().min(1).max(255), subject: z.string().min(1).max(998), listId: z.number().int(), body: z.string().max(500_000).default('') })) } },
     responses: { 200: { description: 'OK', content: J(z.any()) }, 409: { description: 'Not configured', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -503,7 +504,7 @@ adminMarketing.openapi(
 adminMarketing.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/gift-cards', summary: 'Issue a gift card',
-    request: { body: { content: J(z.object({ balance: money, code: z.string().optional(), expiresAt: z.string().nullable().optional() })) } },
+    request: { body: { content: J(z.object({ balance: money, code: z.string().min(1).max(100).optional(), expiresAt: z.string().max(64).nullable().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), code: z.string() })) }, 409: { description: 'Code exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -528,7 +529,7 @@ adminMarketing.openapi(
 adminMarketing.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/gift-cards/{id}', summary: 'Enable/disable or adjust a gift card',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ enabled: z.boolean().optional(), adjust: z.number().int().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ enabled: z.boolean().optional(), adjust: z.number().int().min(-100_000_000).max(100_000_000).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), balance: money })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -538,11 +539,13 @@ adminMarketing.openapi(
     const b = c.req.valid('json');
     if (b.enabled === true || b.adjust) requireHuman(admin); // D12: enabling or changing balance is a human act; disabling stays allowed
     const res = await withStore(st.storeId, async (tx) => {
-      const [g] = await tx.select().from(s.giftCard).where(eq(s.giftCard.id, id)).limit(1);
+      // Row lock: checkout draws down under the same lock, so the adjust applies to the balance it will commit against.
+      const [g] = await tx.select().from(s.giftCard).where(eq(s.giftCard.id, id)).limit(1).for('update');
       if (!g) return null;
-      const balance = Math.max(0, g.balance + (b.adjust ?? 0));
+      const { balance, appliedDelta } = applyGiftCardAdjust(g.balance, b.adjust ?? 0);
       await tx.update(s.giftCard).set({ enabled: b.enabled ?? g.enabled, balance, updatedAt: new Date() }).where(eq(s.giftCard.id, id));
-      if (b.adjust) await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: id, amount: b.adjust });
+      // Ledger records the delta actually applied (clamped), so its sum equals the balance.
+      if (appliedDelta !== 0) await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: id, amount: appliedDelta });
       return { balance };
     });
     if (!res) throw new HttpError(404, 'gift card not found');

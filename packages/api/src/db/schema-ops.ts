@@ -15,6 +15,7 @@ import {
   timestamp,
   jsonb,
   check,
+  index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -51,6 +52,24 @@ export const catalogManifestPending = pgTable('catalog_manifest_pending', {
   storeSlug: text().notNull(),
   requestedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
+
+// API-H1 (migration 0123): durable queue of Cloudflare edge purges (cache/purge-queue.ts). Global infra table like
+// catalogManifestPending (no RLS; exempt in assert-force-rls.ts); read and written through the raw pool / tx.execute.
+export const edgePurgePending = pgTable('edge_purge_pending', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  storeSlug: text().notNull(),
+  event: text().notNull(),
+  spec: jsonb().notNull(), // { urls: string[] } | { everything: true }
+  status: text({ enum: ['pending', 'dead'] }).notNull().default('pending'),
+  attempts: integer().notNull().default(0),
+  nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  lastError: text(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('edge_purge_pending_due_idx').on(t.nextAttemptAt, t.id).where(sql`${t.status} = 'pending'`),
+  index('edge_purge_pending_dead_idx').on(t.createdAt).where(sql`${t.status} = 'dead'`),
+]);
 
 // PAR-04: one row per SheerID verification attempt. The customer-facing
 // read model stays on `customer` (sheeridVerifications/activeVerifications/

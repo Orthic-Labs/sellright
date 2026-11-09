@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { onBlogContentChanged } from '../cache/purge-hook.js';
+import { queueBlogContentPurgeInTx } from '../cache/purge-hook.js';
 import * as s from '../db/schema.js';
 import { autoExcerpt, computeReadingTime, sanitizeBlogHtml } from '../lib/sanitize-html.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
@@ -76,11 +76,10 @@ adminContent.openapi(
         }).returning({ id: s.blogPost.id });
         const result = { id: p!.id, slug };
         await recordCreate(tx, st.storeId, admin.email, prior.receiptId, prior.requestHash, result);
+        await queueBlogContentPurgeInTx(tx, st.slug, [slug]); // durable row atomic with the edit; immediate attempt runs after commit
         return result;
       });
     } catch (e) { rethrowSlugConflict(e, slug); }
-    // After commit: the edge-cached blog index/post must not keep serving the old version (#360 P4b).
-    onBlogContentChanged(st.slug, [out.slug]);
     return c.json(out, 200);
   }),
 );
@@ -156,11 +155,11 @@ adminContent.openapi(
         if (b.publishDate !== undefined) patch.publishDate = b.publishDate ? new Date(b.publishDate) : null;
         if (!Object.keys(patch).length) throw new HttpError(400, 'no editable blog fields');
         const [updated] = await tx.update(s.blogPost).set(patch).where(eq(s.blogPost.id, id)).returning();
+        await queueBlogContentPurgeInTx(tx, st.slug, [...new Set([p.slug, updated!.slug])]);
         return { id, seoRevision: blogRevision(updated), slugs: [p.slug, updated!.slug] };
       });
     } catch (e) { rethrowSlugConflict(e, slug); }
-    const { slugs, ...body } = result;
-    onBlogContentChanged(st.slug, [...new Set(slugs)]);
+    const { slugs: _slugs, ...body } = result;
     return c.json(body, 200);
   }),
 );
@@ -175,8 +174,10 @@ adminContent.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
-    const deleted = await withStore(st.storeId, async (tx) => tx.delete(s.blogPost).where(eq(s.blogPost.id, id)).returning({ slug: s.blogPost.slug }));
-    onBlogContentChanged(st.slug, deleted.map((d) => d.slug));
+    await withStore(st.storeId, async (tx) => {
+      const deleted = await tx.delete(s.blogPost).where(eq(s.blogPost.id, id)).returning({ slug: s.blogPost.slug });
+      if (deleted.length) await queueBlogContentPurgeInTx(tx, st.slug, deleted.map((d) => d.slug));
+    });
     return c.json({ id }, 200);
   }),
 );

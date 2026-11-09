@@ -7,6 +7,8 @@ import { uniqueSlug } from './admin-catalog-utils.js';
 import { registerCollectionRoutes } from './admin-catalog-collections.js';
 import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { lockStockRowsInOrder } from '../db/locks.js';
+import { applyLocationDelta } from './admin-catalog-location-stock.js';
 
 export const adminCatalog = new OpenAPIHono();
 
@@ -14,7 +16,7 @@ export const adminCatalog = new OpenAPIHono();
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/products', summary: 'Create a product',
-    request: { body: { content: J(z.object({ name: z.string().min(1), slug: z.string().optional(), description: z.string().optional(), status: z.enum(['draft', 'active']).default('draft') })) } },
+    request: { body: { content: J(z.object({ name: z.string().min(1).max(255), slug: z.string().max(255).optional(), description: z.string().max(50000).optional(), status: z.enum(['draft', 'active']).default('draft') })) } },
     responses: { 200: { description: 'Created', content: J(z.object({ id: z.string(), slug: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -106,18 +108,18 @@ adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/products/{id}/variants', summary: 'Add a variant',
     request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
-      sku: z.string().min(1),
-      name: z.string().min(1),
+      sku: z.string().min(1).max(100),
+      name: z.string().min(1).max(255),
       price: money,
       salePrice: money.nullable().optional(),
       isPreOrder: z.boolean().default(false),
       preOrderPrice: money.min(0).nullable().optional(),
       shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
       shipDateLabel: z.string().max(255).nullable().optional(),
-      onHand: z.number().int().min(0).default(0),
+      onHand: z.number().int().min(0).max(100_000_000).default(0),
       fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).default('physical'),
-      appKey: z.string().nullable().optional(),
-      artifactKey: z.string().nullable().optional(),
+      appKey: z.string().max(255).nullable().optional(),
+      artifactKey: z.string().max(1024).nullable().optional(),
       licenseSeats: z.number().int().min(1).max(100).default(1),
       licenseDurationDays: z.number().int().positive().max(36500).nullable().optional(),
       updatesDurationDays: z.number().int().positive().max(36500).nullable().optional(),
@@ -199,7 +201,7 @@ registerCollectionRoutes(adminCatalog);
 adminCatalog.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/inventory', summary: 'Inventory list (stock per variant)',
-    request: { query: z.object({ q: z.string().optional(), lowStock: z.coerce.boolean().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }) },
+    request: { query: z.object({ q: z.string().optional(), lowStock: z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1').optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -265,7 +267,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/locations', summary: 'Create a location',
-    request: { body: { content: J(z.object({ name: z.string().min(1), code: z.string().min(1), isDefault: z.boolean().default(false), address: z.record(z.string(), z.any()).optional() })) } },
+    request: { body: { content: J(z.object({ name: z.string().min(1).max(255), code: z.string().min(1).max(64), isDefault: z.boolean().default(false), address: z.record(z.string(), z.any()).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -283,8 +285,8 @@ adminCatalog.openapi(
 
 adminCatalog.openapi(
   createRoute({
-    method: 'patch', path: '/v1/admin/variants/{id}/location-stock', summary: 'Set a variant on-hand at a location (recomputes aggregate)',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ locationId: z.string(), onHand: z.number().int().min(0) })) } },
+    method: 'patch', path: '/v1/admin/variants/{id}/location-stock', summary: 'Set a variant on-hand at a location (change applied to the aggregate as a delta)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ locationId: z.string().max(64), onHand: z.number().int().min(0).max(100_000_000) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -292,15 +294,24 @@ adminCatalog.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    // Location figures are per-location counts applied to sellable stock as deltas (see
+    // admin-catalog-location-stock.ts); the aggregate is never recomputed from the location sum.
     const total = await withStore(st.storeId, async (tx) => {
+      // Ensure a stock row exists, then take the standard stock row lock before touching location rows.
+      await tx.insert(s.stock).values({ storeId: st.storeId, variantId: id, onHand: 0, allocated: 0 }).onConflictDoNothing();
+      const [cur] = await lockStockRowsInOrder(tx, st.storeId, [id]);
+      if (!cur) throw new HttpError(404, 'variant not found');
+      const prevRows = await tx.execute(sql`SELECT on_hand FROM ${s.stockLocation} WHERE variant_id = ${id} AND location_id = ${b.locationId} AND store_id = ${st.storeId} FOR UPDATE`);
+      const previousLocation = prevRows.rows[0] ? Number((prevRows.rows[0] as { on_hand: number }).on_hand) : 0;
       await tx.insert(s.stockLocation).values({ storeId: st.storeId, variantId: id, locationId: b.locationId, onHand: b.onHand })
         .onConflictDoUpdate({ target: [s.stockLocation.variantId, s.stockLocation.locationId], set: { onHand: b.onHand } });
-      const [sum] = await tx.select({ n: sql<number>`coalesce(sum(${s.stockLocation.onHand}),0)::int` }).from(s.stockLocation).where(eq(s.stockLocation.variantId, id));
-      const agg = sum?.n ?? 0;
-      await tx.insert(s.stock).values({ storeId: st.storeId, variantId: id, onHand: agg, allocated: 0 })
-        .onConflictDoUpdate({ target: s.stock.variantId, set: { onHand: agg } });
+      const r = applyLocationDelta({ previousLocation, newLocation: b.onHand, onHand: cur.onHand, allocated: cur.allocated });
+      if (r.appliedDelta !== 0) {
+        await tx.update(s.stock).set({ onHand: r.onHand }).where(eq(s.stock.variantId, id));
+        await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: r.appliedDelta, reason: 'admin_adjust', actor: admin.email });
+      }
       await emitVariantProductChanged(tx, st.storeId, id);
-      return agg;
+      return r.onHand;
     });
     onStockChanged(st.slug);
     return c.json({ id, onHand: total }, 200);
@@ -310,7 +321,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/variants/{id}/transfer', summary: 'Transfer stock between locations (aggregate unchanged)',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ fromLocationId: z.string(), toLocationId: z.string(), quantity: z.number().int().min(1) })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ fromLocationId: z.string().max(64), toLocationId: z.string().max(64), quantity: z.number().int().min(1).max(100_000_000) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Insufficient at source', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -318,10 +329,17 @@ adminCatalog.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    if (b.fromLocationId === b.toLocationId) throw new HttpError(400, 'source and destination locations must differ');
     const res = await withStore(st.storeId, async (tx) => {
-      const [from] = await tx.select({ onHand: s.stockLocation.onHand }).from(s.stockLocation).where(and(eq(s.stockLocation.variantId, id), eq(s.stockLocation.locationId, b.fromLocationId))).limit(1);
-      if (!from || from.onHand < b.quantity) return { ok: false as const };
-      await tx.update(s.stockLocation).set({ onHand: sql`${s.stockLocation.onHand} - ${b.quantity}` }).where(and(eq(s.stockLocation.variantId, id), eq(s.stockLocation.locationId, b.fromLocationId)));
+      // Lock both location rows in a fixed (location id) order; the aggregate stock row is untouched.
+      const ids = [b.fromLocationId, b.toLocationId].sort();
+      for (const lid of ids) {
+        await tx.execute(sql`SELECT 1 FROM ${s.stockLocation} WHERE variant_id = ${id} AND location_id = ${lid} AND store_id = ${st.storeId} FOR UPDATE`);
+      }
+      const dec = await tx.update(s.stockLocation).set({ onHand: sql`${s.stockLocation.onHand} - ${b.quantity}` })
+        .where(and(eq(s.stockLocation.variantId, id), eq(s.stockLocation.locationId, b.fromLocationId), sql`${s.stockLocation.onHand} >= ${b.quantity}`))
+        .returning({ onHand: s.stockLocation.onHand });
+      if (dec.length === 0) return { ok: false as const };
       await tx.insert(s.stockLocation).values({ storeId: st.storeId, variantId: id, locationId: b.toLocationId, onHand: b.quantity })
         .onConflictDoUpdate({ target: [s.stockLocation.variantId, s.stockLocation.locationId], set: { onHand: sql`${s.stockLocation.onHand} + ${b.quantity}` } });
       return { ok: true as const };
@@ -361,7 +379,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/products/{id}/option-groups', summary: 'Add an option group to a product',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().min(1), values: z.array(z.string()).optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().min(1).max(255), values: z.array(z.string().min(1).max(255)).max(200).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -385,7 +403,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/option-groups/{groupId}/options', summary: 'Add a value to an option group',
-    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ value: z.string().min(1) })) } },
+    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ value: z.string().min(1).max(255) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -416,7 +434,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'put', path: '/v1/admin/products/{id}/option-groups/reorder', summary: "Reorder a product's option groups",
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ order: z.array(z.string()).min(1) })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ order: z.array(z.string().max(64)).min(1).max(500) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'Bad request', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -442,7 +460,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'put', path: '/v1/admin/option-groups/{groupId}/options/reorder', summary: "Reorder an option group's values",
-    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ order: z.array(z.string()).min(1) })) } },
+    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ order: z.array(z.string().max(64)).min(1).max(500) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'Bad request', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -469,7 +487,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'put', path: '/v1/admin/variants/{id}/options', summary: 'Set the option values for a variant (replaces the set)',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ optionIds: z.array(z.string()) })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ optionIds: z.array(z.string().max(64)).max(200) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

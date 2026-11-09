@@ -206,3 +206,24 @@ describe('multi-host / multi-zone store', () => {
     ]);
   });
 });
+
+
+describe('fetch timeout (API-L6)', () => {
+  it('both purge calls carry an AbortSignal so a hung Cloudflare connection cannot hold the purge open', async () => {
+    envMock.CLOUDFLARE_ZONE_ID = 'zone-1';
+    envMock.CLOUDFLARE_API_TOKEN = 'token-1';
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true }) });
+    await purgeCloudflareUrls('acme', ['https://acme.example.com/']);
+    await purgeCloudflareHosts('acme', ['acme.example.com']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('a timed-out call is logged and reported as a failure, never thrown', async () => {
+    envMock.CLOUDFLARE_ZONE_ID = 'zone-1';
+    envMock.CLOUDFLARE_API_TOKEN = 'token-1';
+    fetchMock.mockRejectedValue(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+    await expect(purgeCloudflareUrls('acme', ['https://acme.example.com/'])).resolves.toBe(false);
+    expect(errError).toHaveBeenCalled();
+  });
+});

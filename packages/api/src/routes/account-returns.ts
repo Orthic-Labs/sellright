@@ -17,7 +17,7 @@
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { billedLines } from '../orders/line-quantity.js';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -137,6 +137,9 @@ accountReturns.openapi(
   },
 );
 
+/** Idempotency keys are 1-200 characters; an empty key must not silently disable idempotency. */
+export const isValidIdempotencyKey = (key: string): boolean => key.length >= 1 && key.length <= 200;
+
 const CreateIn = z.object({
   lines: z.array(z.object({ sku: z.string().min(1).max(200), quantity: z.number().int().min(1).max(100000) })).min(1).max(100),
   reason: z.string().trim().min(3).max(2000),
@@ -145,8 +148,15 @@ const CreateIn = z.object({
 accountReturns.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/account/orders/{code}/returns', summary: 'Request a return for shipped units of an owned order',
-    request: { params: z.object({ code: z.string().min(1).max(128) }), body: { content: { 'application/json': { schema: CreateIn } } } },
+    request: {
+      params: z.object({ code: z.string().min(1).max(128) }),
+      // Optional. A repeat of the same key on the same order returns the request it created instead of a second one.
+      // Length is checked in the handler so a bad value answers with the standard error envelope.
+      headers: z.object({ 'idempotency-key': z.string().optional() }),
+      body: { content: { 'application/json': { schema: CreateIn } } },
+    },
     responses: {
+      400: { description: 'Invalid Idempotency-Key header', content: J(errSchema) },
       201: { description: 'Requested', content: J(z.object({ id: z.string(), status: z.literal('requested') })) },
       401: { description: 'Unauthenticated', content: J(errSchema) },
       404: { description: 'Not found', content: J(errSchema) },
@@ -157,11 +167,24 @@ accountReturns.openapi(
     const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
+    const idemKey = c.req.header('idempotency-key');
+    if (idemKey !== undefined && !isValidIdempotencyKey(idemKey)) {
+      return errJson(c, 400, 'INVALID_IDEMPOTENCY_KEY', 'Invalid Idempotency-Key header', { param: 'idempotency-key' });
+    }
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return { kind: 'unauth' as const };
       const loaded = await loadOwnedOrder(tx, cust, code, true); // row lock: two concurrent requests cannot both claim the same units
       if (!loaded) return { kind: 'notfound' as const };
+      // Replay: the order row is locked above, so a concurrent repeat waits and then finds the first request here.
+      if (idemKey && loaded.requests.length) {
+        const [prior] = await tx.select({ id: s.auditLog.entityId }).from(s.auditLog).where(and(
+          eq(s.auditLog.storeId, st.id), eq(s.auditLog.entity, 'return'), eq(s.auditLog.action, 'create'),
+          inArray(s.auditLog.entityId, loaded.requests.map((r) => r.id)),
+          sql`${s.auditLog.data}->>'idempotencyKey' = ${idemKey}`,
+        )).limit(1);
+        if (prior?.id) return { kind: 'ok' as const, id: prior.id };
+      }
       const left = returnableByLine(loaded);
       if (left.size === 0) return { kind: 'conflict' as const, message: 'no items on this order can be returned yet' };
       // Allocate each requested SKU across its lines (oldest line first).
@@ -180,7 +203,7 @@ accountReturns.openapi(
       const [rr] = await tx.insert(s.returnRequest).values({ storeId: st.id, orderId: loaded.order.id, reason: body.reason, status: 'requested' }).returning({ id: s.returnRequest.id });
       // restock=false: nothing is shelved again because a customer asked; the merchant opts in when approving.
       await tx.insert(s.returnLine).values(picks.map((p) => ({ storeId: st.id, returnId: rr!.id, orderLineId: p.orderLineId, quantity: p.quantity, restock: false })));
-      await tx.insert(s.auditLog).values({ storeId: st.id, actor: cust.email, entity: 'return', entityId: rr!.id, action: 'create', data: { orderCode: code, lines: picks.length, source: 'customer' } });
+      await tx.insert(s.auditLog).values({ storeId: st.id, actor: cust.email, entity: 'return', entityId: rr!.id, action: 'create', data: { orderCode: code, lines: picks.length, source: 'customer', ...(idemKey ? { idempotencyKey: idemKey } : {}) } });
       return { kind: 'ok' as const, id: rr!.id };
     });
     if (out.kind === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');

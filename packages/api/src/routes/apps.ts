@@ -7,7 +7,7 @@ import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } f
 import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
 import { activateLicenseOnDevice, deactivateDevice, findActivationByToken } from '../licensing/activations.js';
-import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
+import { canAccessDownload, canDownloadRelease, canReceiveUpdate } from '../licensing/entitlements.js';
 import { callEntitlementHook, entitlementProvider, withEntitlementVeto } from '../licensing/entitlement-provider.js';
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
@@ -21,7 +21,7 @@ import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePer
 import { err as logErr } from '../lib/logger.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
-import { trialRetryAfter, recordTrialAttempt, licenseActionRetryAfter, recordLicenseAction } from './apps.limit.js';
+import { trialRetryAfter, recordTrialAttempt, licenseActionRetryAfter, recordLicenseAction, consumeAppsIpAttempt } from './apps.limit.js';
 import { turnstileSecret } from './contact.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -107,12 +107,14 @@ apps.openapi(
     const rawBody = await c.req.json().catch(() => ({}));
     const ext = parseRequestExtensions('activate', rawBody);
     enforcePreRoute({ path: 'activate', rawBody, ext, header: (n) => c.req.header(n) });
+    const ip = clientIp(c);
+    const ipRetry = await consumeAppsIpAttempt('activate', ip);
+    if (ipRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${ipRetry}s`, { retryAfter: ipRetry });
     const st = await store(c);
     const { appKey } = c.req.valid('param');
     const { licenseKey, deviceId, deviceLabel } = c.req.valid('json');
-    const ip = clientIp(c);
     const retry = await licenseActionRetryAfter(ip, licenseKey);
-    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`, { retryAfter: retry });
     await recordLicenseAction(ip, licenseKey);
     const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel, ext }));
     if (out.kind === 'notfound') return errJson(c, 404, 'LICENSE_NOT_FOUND', 'license not found');
@@ -150,11 +152,13 @@ apps.on('POST', ['/api/licenses/activate', '/v1/licenses/activate'], async (c) =
   enforcePreRoute({ path: 'activate', rawBody, ext, header: (n) => c.req.header(n) });
   const offered = offeredVersions(c);
   const ip = clientIp(c);
+  const ipRetry = await consumeAppsIpAttempt('activate', ip);
+  if (ipRetry > 0) { c.header('Retry-After', String(ipRetry)); return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${ipRetry}s` }, 429); }
   // SEC: throttle per (ip, licenseKey) — blunts key-guessing/credential
   // stuffing against the activation endpoint without penalizing an
   // unrelated caller who happens to share an IP (NAT/office/VPN).
   const retry = await licenseActionRetryAfter(ip, body.licenseKey);
-  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  if (retry > 0) { c.header('Retry-After', String(retry)); return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429); }
   await recordLicenseAction(ip, body.licenseKey);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
@@ -221,7 +225,7 @@ apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => 
   const ip = clientIp(c);
   // SEC: throttle per (ip, activationToken) — same rationale as activate.
   const retry = await licenseActionRetryAfter(ip, body.activationToken);
-  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  if (retry > 0) { c.header('Retry-After', String(retry)); return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429); }
   await recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
@@ -270,7 +274,7 @@ apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (
   const ip = clientIp(c);
   // SEC: throttle per (ip, activationToken) — same rationale as activate.
   const retry = await licenseActionRetryAfter(ip, body.activationToken);
-  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  if (retry > 0) { c.header('Retry-After', String(retry)); return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429); }
   await recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
@@ -319,7 +323,7 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
   // SEC: trial mints a real license + sends mail per call — throttle per
   // (ip, email) BEFORE resolving the store / touching the DB.
   const retry = await trialRetryAfter(ip, email);
-  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  if (retry > 0) { c.header('Retry-After', String(retry)); return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429); }
   await recordTrialAttempt(ip, email);
 
   const { appKey, st } = await publicAppStore(c, body.app);
@@ -488,9 +492,12 @@ apps.openapi(
       200: { description: 'Eligibility + manifest', content: J(z.object({ eligible: z.boolean(), reason: z.string().optional(), manifest: z.any().optional(), version: z.string().optional() })) },
       401: { description: 'Missing or invalid license key', ...errBody },
       404: { description: 'Not found', ...errBody },
+      429: { description: 'Rate limited', ...errBody },
     },
   }),
   async (c) => {
+    const ipRetry = await consumeAppsIpAttempt('updates', clientIp(c));
+    if (ipRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${ipRetry}s`, { retryAfter: ipRetry });
     const st = await store(c);
     const { appKey } = c.req.valid('param');
     // ra-006: read license key from Authorization: Bearer header only.
@@ -538,10 +545,13 @@ apps.openapi(
       401: { description: 'Missing or invalid license key', ...errBody },
       403: { description: 'Not entitled', ...errBody },
       404: { description: 'Not found', ...errBody },
+      429: { description: 'Rate limited', ...errBody },
       503: { description: 'Downloads not configured (DOWNLOAD_URL_SECRET unset)', ...errBody },
     },
   }),
   async (c) => {
+    const ipRetry = await consumeAppsIpAttempt('downloads', clientIp(c));
+    if (ipRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${ipRetry}s`, { retryAfter: ipRetry });
     const st = await store(c);
     const { appKey, artifactKey } = c.req.valid('param');
     // ra-006: read license key from Authorization: Bearer header only.
@@ -551,21 +561,28 @@ apps.openapi(
       const [lic] = await tx.select().from(s.license).where(and(eq(s.license.licenseKey, licenseKey), eq(s.license.appKey, appKey))).limit(1);
       if (!lic) return { kind: 'notfound' as const };
       if (!canAccessDownload(lic)) return { kind: 'forbidden' as const };
-      const [artifact] = await tx
+      const candidates = await tx
         .select({
           artifactKey: s.downloadArtifact.artifactKey,
           path: s.downloadArtifact.path,
           sha256: s.downloadArtifact.sha256,
           sizeBytes: s.downloadArtifact.sizeBytes,
+          releaseId: s.downloadArtifact.appReleaseId,
+          publishedAt: s.appRelease.publishedAt,
         })
         .from(s.downloadArtifact)
         .innerJoin(s.appRelease, eq(s.appRelease.id, s.downloadArtifact.appReleaseId))
         .where(and(eq(s.downloadArtifact.artifactKey, artifactKey), eq(s.appRelease.appKey, appKey)))
-        .limit(1);
-      if (!artifact) return { kind: 'notfound' as const };
+        .orderBy(desc(s.appRelease.publishedAt))
+        .limit(50);
+      if (!candidates.length) return { kind: 'notfound' as const };
+      // The update window applies to downloads too: only a build published within it may be fetched.
+      const artifact = candidates.find((a) => canDownloadRelease(lic, a.publishedAt));
+      if (!artifact) return { kind: 'window_ended' as const };
       return { kind: 'ok' as const, artifact };
     });
     if (out.kind === 'forbidden') return errJson(c, 403, 'LICENSE_NOT_ACTIVE', 'license is not active');
+    if (out.kind === 'window_ended') return errJson(c, 403, 'LICENSE_NOT_ACTIVE', 'license update window has ended for this release');
     if (out.kind === 'notfound') return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'download not found');
     // ra-005: hand back a short-lived HMAC-signed URL (15 min) to the streaming
     // /v1/dl route instead of the permanent artifact path. Fail loud if the signing
@@ -574,7 +591,7 @@ apps.openapi(
     c.header('Cache-Control', 'no-store');
     return c.json({
       artifactKey: out.artifact.artifactKey,
-      url: signedDownloadPath(st.id, out.artifact.artifactKey),
+      url: signedDownloadPath(st.id, out.artifact.artifactKey, undefined, out.artifact.releaseId),
       sha256: out.artifact.sha256,
       sizeBytes: out.artifact.sizeBytes,
     }, 200);
@@ -591,16 +608,25 @@ apps.get('/v1/dl/:artifactKey', async (c) => {
   const storeId = c.req.query('store') ?? '';
   const exp = Number(c.req.query('exp'));
   const sig = c.req.query('sig') ?? '';
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId) || !verifyDownloadSig(storeId, artifactKey, exp, sig)) {
-    return c.json({ error: 'invalid or expired download link' }, 403);
+  const releaseId = c.req.query('rel') || undefined;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(storeId) || (releaseId !== undefined && !uuid.test(releaseId)) || !verifyDownloadSig(storeId, artifactKey, exp, sig, releaseId)) {
+    return errJson(c, 403, 'DOWNLOAD_LINK_INVALID', 'invalid or expired download link');
   }
-  // storeId is signed, so trusting it for the RLS scope is safe.
+  // storeId (and releaseId, when present) are signed, so trusting them for the RLS scope and the lookup is safe.
+  // A release-bound link resolves only that release's artifact. A link issued before release binding (no `rel`) is
+  // honoured until it expires, but only while exactly one release carries this artifactKey: otherwise it could
+  // resolve to a different release than the one entitlement was checked for.
   const artifact = await withStore(storeId, async (tx) => {
-    const [a] = await tx.select({ path: s.downloadArtifact.path })
-      .from(s.downloadArtifact).where(eq(s.downloadArtifact.artifactKey, artifactKey)).limit(1);
-    return a ?? null;
+    const rows = await tx.select({ path: s.downloadArtifact.path })
+      .from(s.downloadArtifact)
+      .where(releaseId
+        ? and(eq(s.downloadArtifact.artifactKey, artifactKey), eq(s.downloadArtifact.appReleaseId, releaseId))
+        : eq(s.downloadArtifact.artifactKey, artifactKey))
+      .limit(2);
+    return rows.length === 1 ? rows[0]! : null;
   });
-  if (!artifact) return c.json({ error: 'not found' }, 404);
+  if (!artifact) return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'not found');
   c.header('Cache-Control', 'no-store');
   // External storage (S3/CDN) can't be streamed by us — redirect (best-effort;
   // prefer a local DOWNLOAD_DIR path for full protection). SEC-4: only redirect
@@ -612,21 +638,21 @@ apps.get('/v1/dl/:artifactKey', async (c) => {
       return c.redirect(artifact.path, 302);
     }
     logErr.error('SEC-4 rejected redirect', undefined, { artifactHost: artifact.path });
-    return c.json({ error: 'download is not available' }, 502);
+    return errJson(c, 502, 'DOWNLOAD_UNAVAILABLE', 'download is not available');
   }
   // Local file: resolve under DOWNLOAD_DIR with a traversal guard, then stream.
   const baseDir = resolve(env.DOWNLOAD_DIR);
   const filePath = resolve(baseDir, artifact.path);
-  if (filePath !== baseDir && !filePath.startsWith(baseDir + sep)) return c.json({ error: 'not found' }, 404);
+  if (filePath !== baseDir && !filePath.startsWith(baseDir + sep)) return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'not found');
   try {
     const info = await stat(filePath);
-    if (!info.isFile()) return c.json({ error: 'not found' }, 404);
+    if (!info.isFile()) return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'not found');
     c.header('Content-Type', 'application/octet-stream');
     c.header('Content-Length', String(info.size));
     c.header('Content-Disposition', `attachment; filename="${artifactKey.replace(/[^\w.\-]/g, '_')}"`);
     return c.body(Readable.toWeb(createReadStream(filePath)) as unknown as ReadableStream);
   } catch {
-    return c.json({ error: 'not found' }, 404);
+    return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'not found');
   }
 });
 

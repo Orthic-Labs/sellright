@@ -7,7 +7,8 @@
  * the token matches a row (enumeration defense).
  *
  * Routes:
- *   GET  /v1/shop/subscriber/confirm/:token       — confirm email, returns HTML
+ *   GET  /v1/shop/subscriber/confirm/:token       — landing page, returns HTML (no state change)
+ *   POST /v1/shop/subscriber/confirm/:token       — confirm email, returns HTML
  *   GET  /v1/shop/subscriber/unsubscribe/:token   — landing page, returns HTML
  *   POST /v1/shop/subscriber/unsubscribe/:token   — RFC 8058 one-click, returns 200
  *
@@ -125,12 +126,35 @@ export async function sendSubscriberConfirmation(
   });
 }
 
-// ── GET /v1/shop/subscriber/confirm/:token ───────────────────────────────────
+// ── GET /v1/shop/subscriber/confirm/:token (landing page) ────────────────────
+// The link in the confirmation email lands here. GET never changes state: a mail
+// scanner that pre-fetches links must not confirm a subscription. The page posts
+// to the same URL, and the POST below does the confirmation (same pattern as
+// unsubscribe). Older emailed links keep working: they land on this page.
+subscriberRoutes.openapi(
+  createRoute({
+    method: 'get',
+    path: '/v1/shop/subscriber/confirm/{token}',
+    summary: 'Confirm subscription landing page (HTML form; does not change state)',
+    request: { params: z.object({ token: z.string().uuid() }) },
+    responses: { 200: { description: 'HTML page', content: { 'text/html': { schema: z.string() } } } },
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const body = `<p>Click the button below to confirm your subscription.</p>
+      <form method="post" action="">
+        <button type="submit" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">Confirm subscription</button>
+      </form>`;
+    return c.html(html('Confirm your subscription', body), 200);
+  },
+);
+
+// ── POST /v1/shop/subscriber/confirm/:token ──────────────────────────────────
 // Idempotent. Unknown tokens get the same generic success page so an attacker
 // who scrapes confirm URLs can't enumerate subscriber ids.
 subscriberRoutes.openapi(
   createRoute({
-    method: 'get',
+    method: 'post',
     path: '/v1/shop/subscriber/confirm/{token}',
     summary: 'Confirm a subscriber (double opt-in)',
     request: { params: z.object({ token: z.string().uuid() }) },
@@ -151,6 +175,7 @@ subscriberRoutes.openapi(
       );
       return (r.rows[0] as { id: string } | undefined)?.id;
     });
+    c.header('Cache-Control', 'no-store');
     // Enumeration defense: same body for hit + miss.
     return c.html(html('Subscription confirmed',
       updated

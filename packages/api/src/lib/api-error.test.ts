@@ -123,3 +123,20 @@ describe('apiErrorSchema', () => {
     expect(schema.safeParse({ error: { code: 'X' } }).success).toBe(false);
   });
 });
+
+describe('errJson Retry-After', () => {
+  it('sets Retry-After on 429 and 503 when seconds are passed', async () => {
+    const limited = await appWithRoute((c) => errJson(c, 429, 'RATE_LIMITED', 'slow down', { retryAfter: 12 })).request('/t');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('12');
+    const busy = await appWithRoute((c) => errJson(c, 503, 'BUSY', 'later', { retryAfter: 2 })).request('/t');
+    expect(busy.headers.get('retry-after')).toBe('2');
+  });
+
+  it('does not set it for other statuses or when no seconds are passed', async () => {
+    const other = await appWithRoute((c) => errJson(c, 404, 'NOT_FOUND', 'nope', { retryAfter: 5 })).request('/t');
+    expect(other.headers.get('retry-after')).toBeNull();
+    const none = await appWithRoute((c) => errJson(c, 429, 'RATE_LIMITED', 'slow down')).request('/t');
+    expect(none.headers.get('retry-after')).toBeNull();
+  });
+});

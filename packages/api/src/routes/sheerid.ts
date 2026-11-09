@@ -23,6 +23,7 @@ import { sheeridVerification } from '../db/schema-ops.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { HttpError, J, errBody, guard, hasPermission, requireAdmin, requireManage, requirePermission, requireStore, requireWrite } from './admin-helpers.js';
+import { errJson } from '../lib/api-error.js';
 import {
   applyVerificationDetails, clearVerification, fetchVerificationDetails, recomputeCustomerVerifications,
   revokeVerification, sheeridConfig, sheeridProgram, startVerification,
@@ -104,9 +105,9 @@ sheeridRoutes.openapi(
 // reject everything (fail closed, like DD's controller).
 sheeridRoutes.post('/v1/webhooks/sheerid/:storeId', async (c) => {
   const storeId = c.req.param('storeId');
-  if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'unknown store' }, 404);
+  if (!z.string().uuid().safeParse(storeId).success) return errJson(c, 404, 'UNKNOWN_STORE', 'unknown store');
   const raw = await c.req.text();
-  if (Buffer.byteLength(raw) > 262144) return c.json({ error: 'payload too large' }, 413);
+  if (Buffer.byteLength(raw) > 262144) return errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'payload too large');
   const signature = c.req.header('x-sheerid-signature') ?? '';
 
   const { rows } = await pool.query<{ config: unknown }>('SELECT config FROM store WHERE id = $1 LIMIT 1', [storeId]);
@@ -115,13 +116,13 @@ sheeridRoutes.post('/v1/webhooks/sheerid/:storeId', async (c) => {
   const expected = secret ? createHmac('sha256', secret).update(raw).digest('hex') : '';
   const ok = secret && /^[0-9a-f]+$/i.test(signature) && signature.length === expected.length
     && timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
-  if (!ok) return c.json({ error: 'invalid signature' }, 401);
+  if (!ok) return errJson(c, 401, 'INVALID_SIGNATURE', 'invalid signature');
 
   let payload: { verificationId?: string };
-  try { payload = JSON.parse(raw); } catch { return c.json({ error: 'invalid event' }, 400); }
+  try { payload = JSON.parse(raw); } catch { return errJson(c, 400, 'INVALID_EVENT', 'invalid event'); }
   const verificationId = String(payload.verificationId ?? '');
-  if (!verificationId) return c.json({ error: 'verificationId required' }, 400);
-  if (!cfg?.clientId || !cfg?.clientSecret) return c.json({ error: 'SheerID API credentials not configured' }, 503);
+  if (!verificationId) return errJson(c, 400, 'VERIFICATION_ID_REQUIRED', 'verificationId required');
+  if (!cfg?.clientId || !cfg?.clientSecret) return errJson(c, 503, 'SHEERID_NOT_CONFIGURED', 'SheerID API credentials not configured');
 
   // Network FIRST (no pooled txn held across provider I/O), then one tx writes.
   const details = await fetchVerificationDetails(cfg, verificationId);

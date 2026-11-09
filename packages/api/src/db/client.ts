@@ -37,6 +37,12 @@ let poolsClosed = false;
 
 const jobScope = new AsyncLocalStorage<true>();
 
+/** DB-L5: idle-client 'error' events per pool name since process start (pool names carry PGAPPNAME). */
+const poolErrors = new Map<string, number>();
+export function poolErrorCounts(): Record<string, number> {
+  return Object.fromEntries(poolErrors);
+}
+
 /** Run `fn` with `pool` / `withStore` / `unsafeUnscopedDb` resolving to the jobs pool (the scheduler wraps every pass). */
 export function runInJobScope<T>(fn: () => Promise<T>): Promise<T> {
   return jobScope.run(true, fn);
@@ -77,13 +83,17 @@ export function initPools(e: Env = getEnv()): Pool {
     // — NOT on in-flight queries. Without this handler Node throws an EventEmitter
     // "unhandled error" and exits; in-flight queries keep returning whatever they
     // were doing, masking the silent-failure footgun. See DISPATCH.md §3a REL-5.
-    p.on('error', (err) => { console.error(`[pg pool error] ${name}`, err); });
+    // DB-L5: structured log line plus a per-pool counter (poolErrorCounts(), exported for the metrics surface).
+    p.on('error', (err) => {
+      poolErrors.set(name, (poolErrors.get(name) ?? 0) + 1);
+      logErr.error('pg pool error', err, { pool: name });
+    });
     return p;
   };
   const pool = make(e.PGAPPNAME, e.PGPOOL_MAX);
   // Client-side ceilings (#360 H2/M1) on top of the server's statement_timeout: a query on a hung connection is
   // abandoned (and its client discarded) even when the server never answers.
-  const jobsPool = make(`${e.PGAPPNAME}-jobs`, e.PGJOBS_POOL_MAX, { allowExitOnIdle: true, options: JOBS_SESSION, query_timeout: JOBS_QUERY_TIMEOUT_MS });
+  const jobsPool = make(`${e.PGAPPNAME}-jobs`, jobsPoolMax(e), { allowExitOnIdle: true, options: JOBS_SESSION, query_timeout: JOBS_QUERY_TIMEOUT_MS });
   const locksPool = make(`${e.PGAPPNAME}-lease`, e.PGLOCKS_POOL_MAX, { allowExitOnIdle: true, query_timeout: LOCKS_QUERY_TIMEOUT_MS });
   const advisoryLockPool = make(`${e.PGAPPNAME}-locks`, advisoryPoolMax(e), { allowExitOnIdle: true, options: advisorySession(e) });
   // P0: acquisition latency, hold time and timeout/cancel counters per pool (lib/metrics.ts), under the same names
@@ -144,7 +154,20 @@ export function _resetPoolsForTest(): void {
   poolsClosed = false;
 }
 
-const advisoryPoolMax = (e: Env) => Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4)));
+/** DB-M5: PGADVISORY_POOL_MAX (1..16, validated by env.ts) overrides the default formula. */
+function advisoryPoolOverride(e: Env): number | undefined {
+  return e.PGADVISORY_POOL_MAX;
+}
+const advisoryPoolMax = (e: Env) => advisoryPoolOverride(e) ?? Math.max(1, Math.min(4, Math.ceil(e.PGPOOL_MAX / 4)));
+
+/** DB-M4: jobs pool ceiling used by a process that does not run the scheduler (JOBS_ENABLED != 1). Such a process
+ *  still draws on the jobs pool for stock-triggered manifest regeneration (manifest/stock-hook.ts), one pass per
+ *  store at a time, so a small pool is enough. An explicit PGJOBS_POOL_MAX in the environment always wins. */
+export const JOBS_POOL_MAX_WITHOUT_SCHEDULER = 2;
+export function jobsPoolMax(e: Env): number {
+  if (e.JOBS_ENABLED === '1' || process.env.PGJOBS_POOL_MAX !== undefined) return e.PGJOBS_POOL_MAX;
+  return Math.min(e.PGJOBS_POOL_MAX, JOBS_POOL_MAX_WITHOUT_SCHEDULER);
+}
 
 /** #360 N7: the fixed-size consumers outside initPools(). Their constructors take `max` from HERE (poolMax), so
  *  the budget below and the pools actually opened cannot drift apart:
@@ -157,7 +180,7 @@ export type BudgetedPool = 'requests' | 'jobs' | 'locks' | 'advisory' | keyof ty
 /** #360 N7: the most connections one API process can open, by consumer. */
 export function connectionBudget(e: Env = getEnv()): { total: number; parts: Record<BudgetedPool, number> } {
   const parts: Record<BudgetedPool, number> = {
-    requests: e.PGPOOL_MAX, jobs: e.PGJOBS_POOL_MAX, locks: e.PGLOCKS_POOL_MAX, advisory: advisoryPoolMax(e),
+    requests: e.PGPOOL_MAX, jobs: jobsPoolMax(e), locks: e.PGLOCKS_POOL_MAX, advisory: advisoryPoolMax(e),
     ...FIXED_POOL_MAX,
   };
   return { total: Object.values(parts).reduce((a, b) => a + b, 0), parts };
@@ -438,9 +461,17 @@ export async function runStoreTransaction<T>(
  * query to that store. This is THE entry point for all store-scoped work —
  * the request layer resolves the store, then wraps handlers in withStore.
  */
-export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+export const DEFAULT_STORE_TX_TIMEOUT_MS = 35_000;
+
+/**
+ * DB-L4: outside a job pass every store transaction has a client-side deadline (default 35 s, just past the 30 s
+ * cluster statement_timeout), so a hung socket cannot hold a pooled connection until TCP keepalive gives up. Job
+ * passes keep their own bounds (120 s statements, the pass deadline). `options.timeoutMs` overrides; 0 disables.
+ */
+export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>, options: { timeoutMs?: number } = {}): Promise<T> {
   const client: PoolClient = await pool.connect();
-  return runStoreTransaction(client, storeId, fn);
+  const requested = options.timeoutMs ?? (inJobScope() ? undefined : DEFAULT_STORE_TX_TIMEOUT_MS);
+  return runStoreTransaction(client, storeId, fn, undefined, { timeoutMs: requested && requested > 0 ? requested : undefined });
 }
 
 /**

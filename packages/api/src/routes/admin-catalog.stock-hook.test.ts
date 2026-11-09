@@ -134,4 +134,26 @@ describe('routes/admin-catalog.ts — zero-cache stock hook wiring', () => {
     await locationStock(VARIANT, token, 4);
     expect(onStockChangedCalls).toEqual([SLUG, SLUG]);
   });
+
+  it('PATCH location-stock applies a delta to a drifted aggregate and writes a movement (no overwrite from the location sum)', async () => {
+    await seedPhysicalVariant();
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, 7, 0)`);
+      await tx.execute(sql`INSERT INTO stock_location (store_id, variant_id, location_id, on_hand) VALUES (${STORE}, ${VARIANT}, ${LOCATION}, 18)`);
+    });
+    const res = await locationStock(VARIANT, token, 20);
+    expect(res.body).toEqual({ id: VARIANT, onHand: 9 });
+    const mv = await withStore(STORE, (tx) => tx.execute(sql`SELECT delta FROM stock_movement WHERE variant_id = ${VARIANT}`).then((r) => r.rows as { delta: number }[]));
+    expect(mv.map((m) => m.delta)).toEqual([2]);
+  });
+
+  it('PATCH location-stock never takes on_hand below allocated', async () => {
+    await seedPhysicalVariant();
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, 10, 4)`);
+      await tx.execute(sql`INSERT INTO stock_location (store_id, variant_id, location_id, on_hand) VALUES (${STORE}, ${VARIANT}, ${LOCATION}, 10)`);
+    });
+    const res = await locationStock(VARIANT, token, 0);
+    expect(res.body).toEqual({ id: VARIANT, onHand: 4 });
+  });
 });

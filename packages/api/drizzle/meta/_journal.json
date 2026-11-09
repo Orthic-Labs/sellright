@@ -778,6 +778,27 @@
       "when": 1790000021000,
       "tag": "0119_order_line_edit_removed_qty",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1790000022000,
+      "tag": "0120_session_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1790000023000,
+      "tag": "0121_outbox_poll_partial_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1790000025000,
+      "tag": "0123_edge_purge_pending",
+      "breakpoints": true
     }
   ]
 }

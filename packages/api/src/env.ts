@@ -45,6 +45,8 @@ const EnvSchema = z.object({
   // workflow that still holds its lock is reported as stuck. The lock is never released while its workflow runs.
   PGADVISORY_LOCK_WAIT_MS: z.coerce.number().int().positive().default(5000),
   PGADVISORY_WORKFLOW_ALARM_MS: z.coerce.number().int().positive().default(120_000),
+  // DB-M5: ceiling of the advisory-lock session pool (1..16). Unset = the formula in db/client.ts (min(4, ceil(PGPOOL_MAX/4))).
+  PGADVISORY_POOL_MAX: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(16).optional()),
   // #360 N7: this process's share of the cluster's connections. At boot the API logs its maximum (all pools, the
   // tenant resolver, the webhook pass and the LISTEN session) and warns when that exceeds this budget, the role's
   // connection limit, or max_connections minus the superuser reserve.
@@ -339,6 +341,9 @@ const EnvSchema = z.object({
   JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
   // auto-deliver job: age threshold in days before Shipped becomes Delivered.
   JOBS_AUTO_DELIVER_DAYS: z.coerce.number().int().positive().optional(),
+  // session-reaper (DB-M1) and outbox-retention (DB-M2) jobs apply by default; '0' = dry-run log only.
+  JOBS_SESSION_REAPER_APPLY: z.enum(['0', '1']).optional(),
+  JOBS_OUTBOX_RETENTION_APPLY: z.enum(['0', '1']).optional(),
   // release-stale-allocations job: actually cancel + release (default: dry-run).
   // ⚠ DANGER: Enabling against imported historical PendingPayment orders will mass-cancel them.
   JOBS_RELEASE_STALE_APPLY: z.enum(['0', '1']).optional(),

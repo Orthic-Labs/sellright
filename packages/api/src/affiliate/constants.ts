@@ -14,9 +14,15 @@ export const COMMISSION_PCT = 10;
 export const COMMISSION_STATES = ['Paid', 'PartiallyRefunded'] as const;
 
 /** Commission basis of one order: merchandise subtotal AFTER discounts (the
- *  affiliate's own coupon included), pre shipping/tax — the same net figure
- *  every total, list and per-order row uses. */
-export const commissionBasis = (o: { subtotal: number; discountTotal: number }) => Math.max(o.subtotal - o.discountTotal, 0);
+ *  affiliate's own coupon included) and after merchandise already refunded
+ *  (items_amount of Settled refunds), pre shipping/tax; never below 0. The SQL
+ *  twin is `orderBasisSql` (affiliate/commission-sql.ts); keep them identical. */
+export const commissionBasis = (o: { subtotal: number; discountTotal: number; refundedMerchandise?: number }) =>
+  Math.max(o.subtotal - o.discountTotal - (o.refundedMerchandise ?? 0), 0);
+
+/** Commission on one order's basis, rounded half up in integer arithmetic (no float step), once per order.
+ *  The SQL twin is `floor(basis * pct / 100.0 + 0.5)`. */
+export const commissionOf = (basisCents: number, pct: number): number => Math.floor((basisCents * pct + 50) / 100);
 
 /** Public dashboard order list cap (DD affiliate-stats.service.ts LIMIT 500). */
 export const AFFILIATE_ORDER_LIMIT = 500;

@@ -85,3 +85,18 @@ describe('logger', () => {
     expect(baseLogger()).toBeTruthy();
   });
 });
+describe('log redaction', () => {
+  it('redacts recipient, credential and token fields at the top level and one level down', async () => {
+    const { default: pino } = await import('pino');
+    const { LOG_REDACT_PATHS } = await import('./logger.js');
+    const lines: string[] = [];
+    const stream = { write: (s: string) => { lines.push(s); } };
+    const l = pino({ redact: { paths: LOG_REDACT_PATHS, censor: '[Redacted]' } }, stream);
+    l.info({ to: 'a@example.com', email: 'b@example.com', password: 'pw', token: 't', authorization: 'Bearer x', cookie: 'c=1', ctx: { to: 'c@example.com', email: 'd@example.com' }, orderId: 'o-1' }, 'sent');
+    const out = JSON.parse(lines[0]!) as Record<string, unknown>;
+    const text = lines[0]!;
+    for (const secret of ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'Bearer x', 'c=1']) expect(text).not.toContain(secret);
+    expect(out.orderId).toBe('o-1');
+    expect(out.to).toBe('[Redacted]');
+  });
+});

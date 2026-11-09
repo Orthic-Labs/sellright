@@ -22,6 +22,7 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
+import { errJson } from '../lib/api-error.js';
 import {
   feedConfigFromStore, generateFeed, toFeedItem,
   type FeedRow,
@@ -171,7 +172,10 @@ feeds.openapi(
     const channel = c.req.valid('param').channel;
     const cfg = feedConfigFromStore({ name: st.name, currency: st.currency, config: st.config }, env.STOREFRONT_URL);
     const release = admitFeedBuild(st.id);
-    if (!release) return c.json({ error: 'feed busy' }, 503, { 'retry-after': '30', 'cache-control': 'private, no-store' });
+    if (!release) {
+      c.header('cache-control', 'private, no-store');
+      return errJson(c, 503, 'FEED_BUSY', 'feed busy', { retryAfter: 30 });
+    }
     let csv: string;
     try {
       const rows = await loadFeedRows(st.id);

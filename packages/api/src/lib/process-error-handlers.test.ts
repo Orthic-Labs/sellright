@@ -74,3 +74,25 @@ describe('registerProcessErrorHandlers (REL-2)', () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('default logger', () => {
+  afterEach(() => {
+    process.removeAllListeners('unhandledRejection');
+    process.removeAllListeners('uncaughtException');
+  });
+
+  it('logs through the structured logger and still exits 1 on an unhandled rejection', async () => {
+    const logger = await import('./logger.js');
+    const spy = vi.spyOn(logger.err, 'error').mockImplementation(() => undefined);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.fn();
+    registerProcessErrorHandlers(exit as unknown as ExitFn, undefined, () => false);
+    const boom = new Error('boom');
+    for (const l of process.listeners('unhandledRejection')) (l as (r: unknown, p: unknown) => void)(boom, Promise.resolve());
+    expect(spy).toHaveBeenCalledWith('[api:unhandledRejection]', boom);
+    expect(consoleSpy).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(1);
+    spy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+});

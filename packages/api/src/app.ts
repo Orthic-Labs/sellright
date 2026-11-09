@@ -2,7 +2,7 @@ import { ImportedFinancialReconciliationError } from './orders/imported-financia
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
 import { checkout } from './routes/checkout.js';
@@ -47,6 +47,7 @@ import { adminPush } from './routes/admin-push.js';
 import { adminLicenses } from './routes/admin-licenses.js';
 import { adminAgents } from './routes/admin-agents.js';
 import { createAdminAgentGuard } from './routes/admin-agent-guard.js';
+import { storePublishGate } from './store-publish-gate.js';
 import { buildAgentRouteContext, type AgentRouteContext } from './auth/agent-policy.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
@@ -78,7 +79,7 @@ import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
 import { isAllowedAdminCorsOrigin, isAllowedShopCorsOrigin } from './cors-origins.js';
 import { bodyLimit } from 'hono/body-limit';
-import { isPoolTimeout, locksPool, poolGauges } from './db/client.js';
+import { isPoolTimeout, locksPool, poolGauges, poolErrorCounts, pool as dbPool } from './db/client.js';
 import { admissionGauges } from './jobs/admission.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
@@ -117,18 +118,26 @@ const isLoopbackPeer = (addr: string | undefined) => !!addr && (/^127\.\d+\.\d+\
  *  did not exist; `loopback` admits only a DIRECT loopback TCP peer that sent no forwarding header (a request relayed
  *  by nginx or any proxy on the host carries one, and nginx on the Docker bridge is not loopback) and answers 404
  *  otherwise; `admin` requires an admin session or agent token (401 without). */
+export async function metricsAccessVerdict(
+  mode: 'off' | 'loopback' | 'admin',
+  c: Context,
+): Promise<'granted' | 'unauthenticated' | 'denied'> {
+  if (mode === 'loopback') {
+    const peer = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress;
+    if (isLoopbackPeer(peer) && FORWARDING_HEADERS.every((h) => c.req.header(h) === undefined)) return 'granted';
+  } else if (mode === 'admin') {
+    const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+    const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
+    return admin ? 'granted' : 'unauthenticated';
+  }
+  return 'denied';
+}
+
 export function metricsAccess(mode: () => 'off' | 'loopback' | 'admin'): MiddlewareHandler {
   return async (c, next) => {
-    const m = mode();
-    if (m === 'loopback') {
-      const peer = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress;
-      if (isLoopbackPeer(peer) && FORWARDING_HEADERS.every((h) => c.req.header(h) === undefined)) return next();
-    } else if (m === 'admin') {
-      const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
-      const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
-      if (!admin) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
-      return next();
-    }
+    const verdict = await metricsAccessVerdict(mode(), c);
+    if (verdict === 'granted') return next();
+    if (verdict === 'unauthenticated') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return errJson(c, 404, 'NOT_FOUND', 'not found');
   };
 }
@@ -231,7 +240,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
-      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug', 'x-receipt-token', 'idempotency-key'],
+      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug', 'x-receipt-token', 'idempotency-key', 'x-preview-token'],
+      exposeHeaders: ['x-request-id', 'retry-after'],
     });
     return handler(c, next);
   });
@@ -370,6 +380,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     await next();
   });
 
+  // An unpublished store answers 404 on every shop read and write unless the request carries its preview token
+  // (/v1/shop/config keeps its own check). Store resolution is cached in-process, so a published store costs no extra query.
+  app.use('/v1/shop/*', storePublishGate());
+
   // Plugin hooks run only after credential, CSRF & agent guards. Track their entries separately so
   // preRoute handlers never become engine-owned routes in the agent policy snapshot.
   const routesBeforePreRoute = app.routes.length;
@@ -464,6 +478,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   });
 
   app.openapi(readyzRoute, async (c) => {
+    // Pool and job gauges are operator data: only a caller that passes the /v1/internal/metrics access check sees them.
+    const detail = (await metricsAccessVerdict(env.METRICS_ACCESS, c)) === 'granted';
+    const gauges = () => (detail ? { pools: poolGauges(), jobs: admissionGauges() } : {});
     // The probe runs on the small locks pool (#358 / #360), so it neither queues
     // behind shoppers on a saturated request pool nor takes a connection from
     // them, and it reports every pool's counts so saturation is visible before
@@ -485,14 +502,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       if (rowCount < 1) {
         // eslint-disable-next-line no-console
         console.error('[readyz] SELECT 1 returned no rows');
-        return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges(), jobs: admissionGauges() }, 503);
+        return c.json({ status: 'unavailable' as const, db: 'error' as const, ...gauges() }, 503);
       }
-      return c.json({ status: 'ok' as const, db: 'ok' as const, pools: poolGauges(), jobs: admissionGauges() }, 200);
+      return c.json({ status: 'ok' as const, db: 'ok' as const, ...gauges() }, 200);
     } catch (err) {
       // SEC-5 parity: log full detail server-side, never echo to client.
       // eslint-disable-next-line no-console
       console.error('[readyz] db ping failed', err);
-      return c.json({ status: 'unavailable' as const, db: 'error' as const, pools: poolGauges(), jobs: admissionGauges() }, 503);
+      return c.json({ status: 'unavailable' as const, db: 'error' as const, ...gauges() }, 503);
     } finally {
       clearTimeout(timer);
     }
@@ -501,12 +518,24 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // Perf plan P0: private metrics (Prometheus text): per-route request histograms, every pool's gauges, latency
   // histograms and timeout/cancel counters, job admission and event-loop delay/utilization. Gated by METRICS_ACCESS
   // (default off → 404). Not in the OpenAPI contract: it is an operator surface, not an API.
-  app.get('/v1/internal/metrics', metricsAccess(() => env.METRICS_ACCESS), (c) => {
+  app.get('/v1/internal/metrics', metricsAccess(() => env.METRICS_ACCESS), async (c) => {
     const jobs = admissionGauges();
+    // DB-L5: pg pool 'error' events per pool, and the durable edge-purge queue depth (API-H1): one cheap grouped query;
+    // a failed read omits the depth family rather than failing the scrape.
+    let purgeDepth: { pending: number; dead: number } | undefined;
+    try {
+      const r = await dbPool.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM edge_purge_pending WHERE status IN ('pending', 'dead') GROUP BY status`);
+      purgeDepth = { pending: r.rows.find((x) => x.status === 'pending')?.n ?? 0, dead: r.rows.find((x) => x.status === 'dead')?.n ?? 0 };
+    } catch { /* depth unavailable */ }
     const body = renderPrometheus({
       sellright_jobs_active_passes: { help: 'Job passes holding an admission slot', value: jobs.active },
       sellright_jobs_overdue_passes: { help: 'Admitted job passes past JOBS_PASS_DEADLINE_MS (still holding their slots)', value: jobs.overdue },
-    });
+    }, [
+      { name: 'sellright_db_pool_errors_total', type: 'counter', help: 'Idle-client errors emitted by each pg pool',
+        series: Object.entries(poolErrorCounts()).map(([pool, value]) => ({ labels: { pool }, value })) },
+      ...(purgeDepth ? [{ name: 'sellright_edge_purge_queue_rows', help: 'Durable edge-purge rows by status (dead rows need operator attention)',
+        series: [{ labels: { status: 'pending' }, value: purgeDepth.pending }, { labels: { status: 'dead' }, value: purgeDepth.dead }] }] : []),
+    ]);
     return c.body(body, 200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
   });
 

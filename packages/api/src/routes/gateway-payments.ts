@@ -178,7 +178,7 @@ gatewayPayments.openapi(
 // Signature selects the configured account. Request headers never select another tenant.
 gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
   const storeId = c.req.param('storeId');
-  if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'Unknown account' }, 404);
+  if (!z.string().uuid().safeParse(storeId).success) return errJson(c, 404, 'UNKNOWN_ACCOUNT', 'Unknown account');
   const accountId = c.req.param('accountId');
   // A DB-backed account holds one credential set per mode; the signature
   // selects the mode (same rule as the NMI chargeback webhook).
@@ -186,20 +186,20 @@ gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
   for (const mode of accountId === DB_ACCOUNT_ID ? (['live', 'test'] as const) : [undefined]) {
     try { candidates.push(await resolveGatewayAccount(storeId, 'sezzle', accountId, mode)); } catch { /* not configured */ }
   }
-  if (!candidates.length) return c.json({ error: 'Unknown account' }, 404);
+  if (!candidates.length) return errJson(c, 404, 'UNKNOWN_ACCOUNT', 'Unknown account');
   const raw = await c.req.text();
-  if (Buffer.byteLength(raw) > 262144) return c.json({ error: 'Payload too large' }, 413);
+  if (Buffer.byteLength(raw) > 262144) return errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'Payload too large');
   const account = candidates.find((a) => verifySezzleSignature(raw, c.req.header('sezzle-signature'), a.privateKey ?? ''));
-  if (!account) return c.json({ error: 'Invalid signature' }, 401);
+  if (!account) return errJson(c, 401, 'INVALID_SIGNATURE', 'Invalid signature');
   let payload: unknown;
-  try { payload = JSON.parse(raw); } catch { return c.json({ error: 'Invalid event' }, 400); }
+  try { payload = JSON.parse(raw); } catch { return errJson(c, 400, 'INVALID_EVENT', 'Invalid event'); }
   // SR-06: per-event normalization, not one universal schema — documented
   // dispute events carry data.order_uuid (no data.uuid). A correctly signed
   // dispute must never 400 on that. Non-envelopes (no uuid AND no event) are
   // the only 400; everything else is durably recorded for the reconcile
   // worker (it parks non-order events as 'manual' for operators).
   const normalized = normalizeSezzleEvent(payload);
-  if (!normalized) return c.json({ error: 'Invalid event' }, 400);
+  if (!normalized) return errJson(c, 400, 'INVALID_EVENT', 'Invalid event');
   // A signed event with no envelope uuid still lands durably — dedupe keys on
   // the exact body hash so a provider redelivery collapses to the same row.
   const eventId = normalized.eventId ??

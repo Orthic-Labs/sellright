@@ -3,6 +3,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { errorEnvelope } from '../lib/api-error.js';
 import { HttpError, requireAdmin, requireStore } from './admin-helpers.js';
 import {
   countExportOrders, exportCsv, exportWorkbook, fetchExportLines, parseExportShape, parseOrderExportFilters, shapeExport,
@@ -16,7 +17,7 @@ adminOrderExport.get('/v1/admin/order-export/count', async (c) => {
     const st = requireStore(admin, c);
     return c.json({ totalOrders: await countExportOrders(st.storeId, parseOrderExportFilters((k) => c.req.query(k))) }, 200);
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status);
     throw e;
   }
 });
@@ -40,7 +41,7 @@ adminOrderExport.get('/v1/admin/order-export', async (c) => {
     const buf = await exportWorkbook(shaped, store?.name ?? st.slug);
     return c.body(new Uint8Array(buf), 200, { ...headers, 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status);
     throw e;
   }
 });

@@ -72,6 +72,9 @@ function groupByZone<T>(cfg: CloudflareStoreConfig, items: T[], hostOf: (i: T) =
 
 const urlHost = (u: string): string => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } };
 
+/** API-L6: every Cloudflare call is bounded; a hung connection must not hold a purge (or its retry loop) open. */
+export const CF_FETCH_TIMEOUT_MS = 5_000;
+
 // Cloudflare's purge_cache endpoint accepts at most 30 files per call.
 const CF_PURGE_BATCH = 30;
 
@@ -107,6 +110,7 @@ export async function purgeCloudflareUrls(storeSlug: string, urls: string[]): Pr
           method: 'POST',
           headers: { authorization: `Bearer ${cfg.apiToken}`, 'content-type': 'application/json' },
           body: JSON.stringify({ files }),
+          signal: AbortSignal.timeout(CF_FETCH_TIMEOUT_MS),
         });
         const body = (await res.json().catch(() => null)) as { success?: boolean; errors?: unknown } | null;
         if (!res.ok || body?.success === false) {
@@ -154,6 +158,7 @@ export async function purgeCloudflareHosts(storeSlug: string, hosts: string[]): 
         method: 'POST',
         headers: { authorization: `Bearer ${cfg.apiToken}`, 'content-type': 'application/json' },
         body: JSON.stringify({ hosts: zoneHosts }),
+        signal: AbortSignal.timeout(CF_FETCH_TIMEOUT_MS),
       });
       const body = (await res.json().catch(() => null)) as { success?: boolean; errors?: unknown } | null;
       if (!res.ok || body?.success === false) {

@@ -61,6 +61,14 @@ export function canReceiveUpdate(license: { status: string; updatesUntil: Date |
   return license.status === 'active' && (license.updatesUntil == null || license.updatesUntil.getTime() >= now.getTime());
 }
 
+/**
+ * Update-window rule for downloads: a licence with an update window (updatesUntil set) may only fetch builds that were
+ * published on or before the end of that window. Perpetual licences (updatesUntil == null) are unrestricted.
+ */
+export function canDownloadRelease(license: { updatesUntil: Date | null }, releasePublishedAt: Date): boolean {
+  return license.updatesUntil == null || releasePublishedAt.getTime() <= license.updatesUntil.getTime();
+}
+
 export function canAccessDownload(license: { status: string; expiresAt: Date | null }, now = new Date()): boolean {
   return license.status === 'active' && (license.expiresAt == null || license.expiresAt.getTime() >= now.getTime());
 }

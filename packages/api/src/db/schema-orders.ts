@@ -11,6 +11,7 @@ import {
   unique,
   primaryKey,
   check,
+  index,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import {
@@ -437,7 +438,10 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
   firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
-});
+}, (t) => [
+  // 0121 (DB-M2): the claim poll's shape — tenant, open statuses only, ORDER BY next_attempt_at, id.
+  index('webhook_delivery_open_due_idx').on(t.storeId, t.nextAttemptAt, t.id).where(sql`${t.status} IN ('pending', 'processing')`),
+]);
 
 // REL-4 (DISPATCH.md): email outbox mirroring the webhook pattern. Enqueued
 // transactionally at the Paid transition; a scheduler pass (deliverEmails in
@@ -461,7 +465,10 @@ export const emailOutbox = pgTable('email_outbox', {
   // 0088 (de-fork 2.9 instrumentation).
   claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
   firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
-});
+}, (t) => [
+  // 0121 (DB-M2): poll shape — tenant, open statuses only, ORDER BY next_attempt_at.
+  index('email_outbox_open_due_idx').on(t.storeId, t.nextAttemptAt).where(sql`${t.status} IN ('pending', 'processing')`),
+]);
 
 // APNs device tokens for the admin iOS app (0039). One row per physical device;
 // `token` is unique, so re-registering rebinds the device to whoever is signed
@@ -503,7 +510,10 @@ export const pushOutbox = pgTable('push_outbox', {
   // 0088 (de-fork 2.9 instrumentation).
   claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
   firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
-});
+}, (t) => [
+  // 0121 (DB-M2): poll shape — tenant, open statuses only, ORDER BY next_attempt_at.
+  index('push_outbox_open_due_idx').on(t.storeId, t.nextAttemptAt).where(sql`${t.status} IN ('pending', 'processing')`),
+]);
 
 // Gift cards / store credit. A code carries a redeemable cent balance; checkout
 // draws it down as a 'gift_card' tender. Store-scoped (RLS).

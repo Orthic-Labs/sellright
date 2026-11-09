@@ -1,15 +1,15 @@
 import { isEngineClosed } from '../resources.js';
+import { err as logErr } from './logger.js';
 
 // REL-2: catch stray async / sync failures at the process boundary so a
 // supervisor (pm2 / systemd / docker restart) restarts us cleanly instead of
-// leaving the process wedged. Logs the full stack via console.error to match
-// the existing console-error pattern across the API (app.ts, jobs/, etc.).
+// leaving the process wedged. Logs the full stack through the structured logger
+// (lib/logger.ts), so the line is one JSON object with the error serialised.
 
 type ProcessErrorLogger = (label: string, err: unknown) => void;
 
-const defaultLogger: ProcessErrorLogger = (label, err) => {
-  // eslint-disable-next-line no-console
-  console.error(label, err);
+const defaultLogger: ProcessErrorLogger = (label, error) => {
+  logErr.error(label, error);
 };
 
 export function registerProcessErrorHandlers(

@@ -234,26 +234,30 @@ describe('subscriber (SUBSCRIBER-1) — confirm + unsubscribe', () => {
   });
   // No pool teardown here — the file-level afterAll owns it (see top of file).
 
-  it('GET confirm/:token flips pending → confirmed; idempotent on second call', async () => {
+  it('POST confirm/:token flips pending → confirmed; GET leaves the row pending; idempotent on second call', async () => {
     await signup({ email: 'confirmme@example.com' });
     const pending = await rowByEmail('confirmme@example.com');
     expect(pending?.status).toBe('pending');
 
-    const res1 = await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { headers: { 'x-store-slug': SLUG } });
+    const scanned = await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { headers: { 'x-store-slug': SLUG } });
+    expect(scanned.status).toBe(200);
+    expect((await rowByEmail('confirmme@example.com'))?.status).toBe('pending');
+
+    const res1 = await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { method: 'POST', headers: { 'x-store-slug': SLUG } });
     expect(res1.status).toBe(200);
     expect(res1.headers.get('content-type')).toMatch(/text\/html/);
     const after1 = await rowByEmail('confirmme@example.com');
     expect(after1?.status).toBe('confirmed');
 
-    const res2 = await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { headers: { 'x-store-slug': SLUG } });
+    const res2 = await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { method: 'POST', headers: { 'x-store-slug': SLUG } });
     expect(res2.status).toBe(200); // idempotent
     const after2 = await rowByEmail('confirmme@example.com');
     expect(after2?.status).toBe('confirmed');
   });
 
-  it('GET confirm/:token returns the same generic HTML on an unknown token (enumeration defense)', async () => {
+  it('POST confirm/:token returns the same generic HTML on an unknown token (enumeration defense)', async () => {
     const fakeToken = '00000000-0000-0000-0000-000000000000';
-    const res = await app.request(`http://localhost/v1/shop/subscriber/confirm/${fakeToken}`, { headers: { 'x-store-slug': SLUG } });
+    const res = await app.request(`http://localhost/v1/shop/subscriber/confirm/${fakeToken}`, { method: 'POST', headers: { 'x-store-slug': SLUG } });
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain('Subscription confirmed');
@@ -304,7 +308,7 @@ describe('subscriber (SUBSCRIBER-1) — confirm + unsubscribe', () => {
     expect(unsubscribed?.unsubscribedAt).toBeInstanceOf(Date);
     expect(unsubscribed?.confirmedAt).toBeNull();
 
-    expect((await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { headers })).status).toBe(200);
+    expect((await app.request(`http://localhost/v1/shop/subscriber/confirm/${pending!.token}`, { method: 'POST', headers })).status).toBe(200);
     expect(await rowByEmail(email)).toEqual(unsubscribed);
     expect((await app.request(unsubscribeUrl, { method: 'POST', headers })).status).toBe(200);
     expect(await rowByEmail(email)).toEqual(unsubscribed);

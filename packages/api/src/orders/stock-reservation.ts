@@ -19,6 +19,11 @@ export class StockReservationError extends Error {
   }
 }
 
+/** True when a variant takes part in stock allocation: enabled, not a pre-order, and physical. */
+export function isStockReservable(v: Pick<ReservableVariant, 'enabled' | 'isPreOrder' | 'fulfillmentType'> | null | undefined): boolean {
+  return !!v && v.enabled && !v.isPreOrder && (v.fulfillmentType ?? 'physical') === 'physical';
+}
+
 export function validateReservableItems(items: ReservableItem[], bySku: Map<string, ReservableVariant>): string[] {
   return items.flatMap((i) => {
     const v = bySku.get(i.sku);
@@ -55,7 +60,7 @@ export async function reserveStockOrThrow(
   // writer (db/locks.ts lockStockRowsInOrder) acquire stock row locks in the same order and cannot deadlock.
   const physical = items.flatMap((i, index) => {
     const v = bySku.get(i.sku);
-    return v && v.enabled && !v.isPreOrder && (v.fulfillmentType ?? 'physical') === 'physical' ? [{ i, v, index, key: v.id.toLowerCase() }] : [];
+    return v && isStockReservable(v) ? [{ i, v, index, key: v.id.toLowerCase() }] : [];
   }).sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
   const failedAt: number[] = [];
   for (const { i, v, index } of physical) {

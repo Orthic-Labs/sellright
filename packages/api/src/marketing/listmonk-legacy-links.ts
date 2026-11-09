@@ -21,6 +21,8 @@ import { resolveStoreFromCtx } from '../routes/store-context.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { getCfg, type ListmonkCfg } from '../jobs/listmonk-sync.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { consumeLegacyNewsletterLink } from '../routes/shop-extra.public-limits.js';
 import { withRequestDeadline } from '../security/request-deadline.js';
 
 export type LegacyLinkAction = 'confirm' | 'unsubscribe';
@@ -94,6 +96,7 @@ listmonkLegacyLinkRoutes.openapi(
       200: { description: 'Applied (idempotent)', content: { 'application/json': { schema: z.object({
         result: z.enum(['confirmed', 'already_confirmed', 'unsubscribed', 'already_unsubscribed']), email: z.string(),
       }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
       404: { description: 'Listmonk not configured for this store, or no such subscriber', content: { 'application/json': { schema: apiErrorSchema() } } },
       502: { description: 'Listmonk unreachable', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
@@ -101,6 +104,8 @@ listmonkLegacyLinkRoutes.openapi(
   async (c) => {
     const { action, uuid } = c.req.valid('param');
     const st = await resolveStoreFromCtx(c);
+    const retry = await consumeLegacyNewsletterLink(st.id, clientIp(c));
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`, { retryAfter: retry });
     const cfg = await getCfg(st.id);
     if (!cfg) return errJson(c, 404, 'NOT_FOUND', 'link not valid');
     let outcome: LegacyLinkOutcome;

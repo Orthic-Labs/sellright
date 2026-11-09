@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   trialRetryAfter, recordTrialAttempt,
   licenseActionRetryAfter, recordLicenseAction,
-  cartRetryAfter, recordCartAttempt, consumeCartAttempt,
+  cartRetryAfter, recordCartAttempt, consumeCartAttempt, consumeAppsIpAttempt,
 } from './apps.limit.js';
 
 // Unique IPs per test so the in-memory, per-process buckets never bleed
@@ -74,5 +74,21 @@ describe('atomic public cart budget', () => {
     expect(await consumeCartAttempt('another-cart-tenant', theIp)).toBe(0);
     expect(await consumeCartAttempt('atomic-cart-tenant', ip())).toBe(0);
     expect(await consumeCartAttempt('atomic-cart-tenant', theIp)).toBeGreaterThan(0);
+  });
+});
+
+describe('apps per-IP budget (60/min per ip and route, independent of the licence key)', () => {
+  it('allows 60 attempts then blocks that route for the ip', async () => {
+    const theIp = ip();
+    for (let i = 0; i < 60; i++) expect(await consumeAppsIpAttempt('downloads', theIp)).toBe(0);
+    expect(await consumeAppsIpAttempt('downloads', theIp)).toBeGreaterThan(0);
+  });
+
+  it('is keyed per route and per ip', async () => {
+    const theIp = ip();
+    for (let i = 0; i < 60; i++) await consumeAppsIpAttempt('activate', theIp);
+    expect(await consumeAppsIpAttempt('activate', theIp)).toBeGreaterThan(0);
+    expect(await consumeAppsIpAttempt('updates', theIp)).toBe(0);
+    expect(await consumeAppsIpAttempt('activate', ip())).toBe(0);
   });
 });

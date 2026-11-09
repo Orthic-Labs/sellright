@@ -35,6 +35,10 @@ import { recoverGatewayAttempts, verifyReturnedSezzleAttempts } from './gateway-
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { prunePasskeyChallenges } from './passkey-prune.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
+import { reapSessions } from './session-reaper.js';
+import { reapOutboxes } from './outbox-retention.js';
+import { runPurge } from '../cache/purge-hook.js';
+import { drainPendingPurges } from '../cache/purge-queue.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
@@ -344,6 +348,18 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   const processedEventReaperRetentionDays = env.JOBS_PROCESSED_EVENT_REAPER_RETENTION_DAYS ?? 30;
   every(state, HOUR, 'processed-event-reaper', 'processed-event-reaper', () =>
     reapProcessedEvents({ apply: processedEventReaperApply, retentionDays: processedEventReaperRetentionDays, log: jobLog }));
+  // API-H1: durable edge purges (blog, collection, store-config edits; cache/purge-queue.ts). The immediate attempt runs in
+  // the request path; anything Cloudflare did not accept is retried here with backoff until it does, then goes dead + alerts.
+  every(state, 45_000, 'cache-purge-drain', 'cache-purge-drain', () =>
+    drainPendingPurges((event, slug, spec) => runPurge(event, slug, spec, { maxAttempts: 1, quiet: true }), { log: jobLog }));
+  // DB-M1: expired sessions (7 days past expires_at, and legacy rows past legacy_expires_at) are deleted hourly in
+  // batches. Applies by default (expired credentials are useless); JOBS_SESSION_REAPER_APPLY=0 turns it into a dry run.
+  const sessionReaperApply = env.JOBS_SESSION_REAPER_APPLY !== '0';
+  every(state, HOUR, 'session-reaper', 'session-reaper', () => reapSessions({ apply: sessionReaperApply, log: jobLog }));
+  // DB-M2: sent rows after 30 days and dead rows after 90 days for email_outbox / push_outbox / webhook_delivery
+  // (docs/PRIVACY-DATA-RETENTION.md). JOBS_OUTBOX_RETENTION_APPLY=0 turns it into a dry run.
+  const outboxRetentionApply = env.JOBS_OUTBOX_RETENTION_APPLY !== '0';
+  every(state, HOUR, 'outbox-retention', 'outbox-retention', () => reapOutboxes({ apply: outboxRetentionApply, log: jobLog }));
   // SELLRIGHT-ISSUES P1: shared rate-limit backend retention cleanup. Every
   // window here is <=1hr, so rows older than a day are unambiguously stale —
   // always applies (no dry-run flag), same posture as cart-maintenance.ts.

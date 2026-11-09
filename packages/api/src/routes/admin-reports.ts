@@ -69,11 +69,11 @@ adminReports.openapi(
     const out = await withStore(st.storeId, async (tx) => {
       const series = await tx.execute(sql`
         select to_char(date_trunc('day', coalesce(placed_at, created_at)), 'YYYY-MM-DD') as day,
-               count(*)::int as orders, coalesce(sum(grand_total),0)::int as revenue
+               count(*)::int as orders, coalesce(sum(grand_total),0)::bigint as revenue
         from "order"
         where state = any(${PAID_STATES}) and deleted_at is null and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval and is_demo = false
         group by 1 order by 1`);
-      const rows = (series as unknown as { rows: Array<{ day: string; orders: number; revenue: number }> }).rows;
+      const rows = (series as unknown as { rows: Array<{ day: string; orders: number; revenue: string | number }> }).rows.map((r) => ({ ...r, revenue: Number(r.revenue) }));
       return { series: rows, totalRevenue: rows.reduce((a, r) => a + Number(r.revenue), 0), totalOrders: rows.reduce((a, r) => a + Number(r.orders), 0) };
     });
     return c.json(out, 200);
@@ -94,11 +94,11 @@ adminReports.openapi(
       const r = await tx.execute(sql`
         select case when ol.product_name is null or ol.product_name = '' then ol.variant_name
           when lower(ol.variant_name) = lower(ol.product_name) then ol.product_name
-          else ol.product_name || ' · ' || ol.variant_name end as name, ol.variant_sku as sku, sum(ol.quantity - ol.edit_removed_qty)::int as qty, sum(ol.line_total)::int as revenue
+          else ol.product_name || ' · ' || ol.variant_name end as name, ol.variant_sku as sku, sum(ol.quantity - ol.edit_removed_qty)::int as qty, sum(ol.line_total)::bigint as revenue
         from order_line ol join "order" o on o.id = ol.order_id
         where o.state = any(${PAID_STATES}) and o.deleted_at is null and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval and o.is_demo = false
         group by 1,2 order by revenue desc limit 15`);
-      return { items: (r as unknown as { rows: unknown[] }).rows };
+      return { items: (r as unknown as { rows: Array<{ revenue: string | number }> }).rows.map((row) => ({ ...row, revenue: Number(row.revenue) })) };
     });
     return c.json(out, 200);
   }),
@@ -116,11 +116,11 @@ adminReports.openapi(
     const { days } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const r = await tx.execute(sql`
-        select cu.id, cu.email, sum(o.grand_total)::int as spent, count(*)::int as orders
+        select cu.id, cu.email, sum(o.grand_total)::bigint as spent, count(*)::int as orders
         from "order" o join customer cu on cu.id = o.customer_id
         where o.state = any(${PAID_STATES}) and o.deleted_at is null and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval and o.is_demo = false
         group by 1,2 order by spent desc limit 15`);
-      return { items: (r as unknown as { rows: unknown[] }).rows };
+      return { items: (r as unknown as { rows: Array<{ spent: string | number }> }).rows.map((row) => ({ ...row, spent: Number(row.spent) })) };
     });
     return c.json(out, 200);
   }),
@@ -228,14 +228,15 @@ adminReports.openapi(
         ),
         per_cust as (select customer_id, count(*) as n from paid where customer_id is not null group by 1)
         select
-          (select coalesce(sum(grand_total),0) from paid)::int as revenue,
+          (select coalesce(sum(grand_total),0) from paid)::bigint as revenue,
           (select count(*) from paid)::int as orders,
           (select count(*) from per_cust)::int as customers,
           (select count(*) from per_cust where n > 1)::int as repeat_customers`);
-      const row = (r as unknown as { rows: Array<{ revenue: number; orders: number; customers: number; repeat_customers: number }> }).rows[0]!;
-      const aov = row.orders > 0 ? Math.round(row.revenue / row.orders) : 0;
+      const row = (r as unknown as { rows: Array<{ revenue: string | number; orders: number; customers: number; repeat_customers: number }> }).rows[0]!;
+      const revenue = Number(row.revenue);
+      const aov = row.orders > 0 ? Math.round(revenue / row.orders) : 0;
       const repeatRate = row.customers > 0 ? Number((row.repeat_customers / row.customers).toFixed(4)) : 0;
-      return { aov, orders: row.orders, revenue: row.revenue, repeatRate, newCustomers: row.customers - row.repeat_customers, returningCustomers: row.repeat_customers };
+      return { aov, orders: row.orders, revenue, repeatRate, newCustomers: row.customers - row.repeat_customers, returningCustomers: row.repeat_customers };
     });
     return c.json(out, 200);
   }),
@@ -266,14 +267,14 @@ adminReports.openapi(
         .select({
           id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, createdAt: s.customer.createdAt,
           orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false)::int`,
-          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::int`,
+          spent: sql<string>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::bigint`,
         })
         .from(s.customer)
         .where(where)
         .orderBy(desc(s.customer.createdAt))
         .limit(pageSize).offset((page - 1) * pageSize);
       const [cnt] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer).where(where);
-      return { items: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), total: cnt?.n ?? 0, page, pageSize };
+      return { items: rows.map((r) => ({ ...r, spent: Number(r.spent), createdAt: r.createdAt.toISOString() })), total: cnt?.n ?? 0, page, pageSize };
     });
     return c.json(out, 200);
   }),
@@ -297,14 +298,14 @@ adminReports.openapi(
       const [stats] = await tx
         .select({
           orderCount: sql<number>`count(*) filter (where ${s.order.state} = any(${PAID_STATES}) and not ${s.order.isDemo})::int`,
-          spent: sql<number>`coalesce(sum(${s.order.grandTotal}) filter (where ${s.order.state} = any(${PAID_STATES}) and not ${s.order.isDemo}),0)::int`,
+          spent: sql<string>`coalesce(sum(${s.order.grandTotal}) filter (where ${s.order.state} = any(${PAID_STATES}) and not ${s.order.isDemo}),0)::bigint`,
         })
         .from(s.order)
         .where(eq(s.order.customerId, id));
       const orders = await tx.select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt }).from(s.order).where(eq(s.order.customerId, id)).orderBy(desc(s.order.createdAt)).limit(50);
       return {
         id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, tags: cu.tags ?? [], emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
-        orderCount: stats?.orderCount ?? 0, spent: stats?.spent ?? 0,
+        orderCount: stats?.orderCount ?? 0, spent: Number(stats?.spent ?? 0),
         addresses: addresses.map((a) => ({ fullName: a.fullName, line1: a.line1, line2: a.line2, city: a.city, province: a.province, postalCode: a.postalCode, country: a.country, phone: a.phone })),
         orders: orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString() })),
       };

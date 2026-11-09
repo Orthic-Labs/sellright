@@ -28,6 +28,7 @@ import { recordDispute } from '../disputes/disputes.js';
 import { applyNmiChargebackToOrder } from '../disputes/nmi-chargeback.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { J, errBody, guard, requireAdmin, requireStore } from './admin-helpers.js';
+import { errJson } from '../lib/api-error.js';
 import { err as logErr } from '../lib/logger.js';
 
 export const disputeRoutes = new OpenAPIHono();
@@ -67,7 +68,7 @@ const NmiEvent = z.object({
 
 disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
   const storeId = c.req.param('storeId');
-  if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'unknown account' }, 404);
+  if (!z.string().uuid().safeParse(storeId).success) return errJson(c, 404, 'UNKNOWN_ACCOUNT', 'unknown account');
   const accountId = c.req.param('accountId');
   // Every named or DB-backed account can have distinct mode credentials.
   // Exactly one authenticated identity must own this callback.
@@ -75,17 +76,17 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
   for (const mode of ['live', 'test'] as const) {
     try { candidates.push(await resolveGatewayAccount(storeId, 'nmi', accountId, mode)); } catch { /* not configured */ }
   }
-  if (!candidates.length) return c.json({ error: 'invalid signature' }, 401);
+  if (!candidates.length) return errJson(c, 401, 'INVALID_SIGNATURE', 'invalid signature');
   const raw = await c.req.text();
   const verified = candidates.filter((a) => verifyNmiSignature(raw, c.req.header('webhook-signature'), a.privateKey ?? ''));
   if (verified.length !== 1) {
-    return c.json({ error: 'invalid signature' }, 401);
+    return errJson(c, 401, 'INVALID_SIGNATURE', 'invalid signature');
   }
   const account = verified[0]!;
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return c.json({ error: 'invalid event' }, 400); }
+  try { parsed = JSON.parse(raw); } catch { return errJson(c, 400, 'INVALID_EVENT', 'invalid event'); }
   const body = NmiEvent.safeParse(parsed);
-  if (!body.success) return c.json({ error: 'invalid event' }, 400);
+  if (!body.success) return errJson(c, 400, 'INVALID_EVENT', 'invalid event');
   if (body.data.event_type !== 'chargeback.batch.complete') return c.json({ received: true }, 200);
 
   const chargebacks = body.data.event_body?.chargebacks ?? [];

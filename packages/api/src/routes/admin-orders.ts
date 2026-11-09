@@ -15,7 +15,7 @@ import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/inv
 import { evaluateCoupon } from '../money/coupon.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
-import { requestRefund, RefundError } from '../payments/refunds.js';
+import { requestRefund, previewReturnRefundAmounts, RefundError } from '../payments/refunds.js';
 import { unitPrice } from './admin-order-utils.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
@@ -255,7 +255,10 @@ adminOrders.openapi(
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(25),
     }) },
-    responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(Page.extend({ items: z.array(z.object({
+      id: z.string(), status: z.string(), reason: z.string().nullable(), orderCode: z.string(), createdAt: z.string(),
+      refundAmount: z.number().int().nullable().optional(),
+    })) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -264,12 +267,14 @@ adminOrders.openapi(
     // Paginated (was a silent limit(200) that dropped older returns off the list).
     const out = await withStore(st.storeId, async (tx) => {
       const where = status ? eq(s.returnRequest.status, status) : undefined;
-      const base = tx.select({ id: s.returnRequest.id, status: s.returnRequest.status, reason: s.returnRequest.reason, orderCode: s.order.code, createdAt: s.returnRequest.createdAt })
+      const base = tx.select({ id: s.returnRequest.id, orderId: s.returnRequest.orderId, status: s.returnRequest.status, reason: s.returnRequest.reason, orderCode: s.order.code, createdAt: s.returnRequest.createdAt })
         .from(s.returnRequest).innerJoin(s.order, eq(s.order.id, s.returnRequest.orderId)).$dynamic();
       const rows = await (where ? base.where(where) : base).orderBy(desc(s.returnRequest.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
       const cntQ = tx.select({ n: sql<number>`count(*)::int` }).from(s.returnRequest).$dynamic();
       const cnt = await (where ? cntQ.where(where) : cntQ);
-      return { items: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), total: cnt[0]?.n ?? 0, page, pageSize };
+      // refundAmount: what approve would reserve for the request (integer cents), null when not computable here.
+      const amounts = await previewReturnRefundAmounts(tx, rows);
+      return { items: rows.map(({ orderId: _orderId, ...r }) => ({ ...r, refundAmount: amounts.get(r.id) ?? null, createdAt: r.createdAt.toISOString() })), total: cnt[0]?.n ?? 0, page, pageSize };
     });
     return c.json(out, 200);
   }),

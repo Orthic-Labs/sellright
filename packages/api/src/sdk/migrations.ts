@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
+import { explainMigrationError, MIGRATION_SESSION_OPTIONS, withMigrationLock } from '../db/migration-lock.js';
 import type { EnginePlugin, MigrationTableRef } from './types.js';
 
 export interface MigrationTrack {
@@ -163,21 +164,32 @@ export interface RunMigrationsOptions {
   plugins?: readonly EnginePlugin[];
   engineFolder?: string;
   engineTable?: string | MigrationTableRef;
+  /** Progress / wait messages (e.g. "another migration run holds the lock"). Default: silent. */
+  log?: (message: string) => void;
 }
 
 /** The migrate step: engine track first, then each plugin track, in plugin order. Returns what was applied. */
 export async function runMigrations(options: RunMigrationsOptions): Promise<TrackStatus[]> {
   const tracks = resolveTracks(options.plugins ?? [], { folder: options.engineFolder, table: options.engineTable });
-  const pool = new Pool({ connectionString: options.databaseUrl, max: 1, application_name: 'sellright-migrate' });
+  // Two connections: one dedicated to the run-wide advisory lock (DB-H1), one for the migrator itself. Every
+  // connection carries lock_timeout=5s so DDL fails fast on a blocked table lock (DB-L2).
+  const pool = new Pool({ connectionString: options.databaseUrl, max: 2, application_name: 'sellright-migrate', options: MIGRATION_SESSION_OPTIONS });
   const applied: TrackStatus[] = [];
+  const lockClient = await pool.connect();
   try {
-    const db = drizzle(pool);
-    for (const t of tracks) {
-      const before = await trackStatus(pool, t);
-      await migrate(db, { migrationsFolder: t.folder, migrationsSchema: t.schema, migrationsTable: t.table });
-      applied.push(before);
-    }
+    await withMigrationLock(lockClient, async () => {
+      const db = drizzle(pool);
+      for (const t of tracks) {
+        // Computed AFTER the lock is held: a run that waited sees what the first run already applied.
+        const before = await trackStatus(pool, t);
+        await migrate(db, { migrationsFolder: t.folder, migrationsSchema: t.schema, migrationsTable: t.table });
+        applied.push(before);
+      }
+    }, { log: options.log });
+  } catch (e) {
+    throw explainMigrationError(e);
   } finally {
+    lockClient.release();
     await pool.end();
   }
   return applied;

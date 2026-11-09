@@ -12,6 +12,7 @@ import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
+import { apiErrorSchema, errJson, errorEnvelope } from '../lib/api-error.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
@@ -70,7 +71,7 @@ adminOrderOps.openapi(
       shippingAddress: z.record(z.string(), z.unknown()).optional(),
       markPaid: z.boolean().default(false), // record a manual payment immediately
     })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), state: z.string(), grandTotal: money })) }, 409: { description: 'Unavailable', content: J(z.object({ error: z.string(), skus: z.array(z.string()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), state: z.string(), grandTotal: money })) }, 409: { description: 'Unavailable', content: J(apiErrorSchema().extend({ skus: z.array(z.string()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -151,7 +152,7 @@ adminOrderOps.openapi(
       throw e;
     });
     if (stockChanged) onStockChanged(st.slug);
-    if (res.kind === 'blocked') return c.json({ error: 'unavailable or out of stock', skus: res.skus }, 409);
+    if (res.kind === 'blocked') return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: res.skus } });
     return c.json({ code: res.code, state: res.state, grandTotal: res.grandTotal }, 200);
   }),
 );
@@ -199,7 +200,7 @@ adminOrderOps.get('/v1/admin/export/orders/columns', async (c) => {
     requireStore(admin, c);
     return c.json({ columns: exportColumnCatalog(), defaults: [...DEFAULT_EXPORT_COLUMNS], lineDefaults: [...DEFAULT_LINE_COLUMNS], cap: EXPORT_ROW_CAP }, 200);
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status);
     throw e;
   }
 });
@@ -220,7 +221,7 @@ adminOrderOps.get('/v1/admin/export/orders', async (c) => {
     }
     return c.body(lines.join('\n'), 200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="orders-${st.slug}.csv"`, 'x-export-rows': String(rows.length), 'x-export-capped': rows.length >= EXPORT_ROW_CAP ? '1' : '0' });
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status);
     throw e;
   }
 });
@@ -264,7 +265,7 @@ adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
       'content-disposition': `attachment; filename="orders-${st.slug}.xlsx"`,
     });
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status);
     throw e;
   }
 });

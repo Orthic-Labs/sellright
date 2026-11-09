@@ -2,11 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { assertConnectionBudget, ConnectionBudgetError, connectionBudget, FIXED_POOL_MAX, poolMax } from './client.js';
+import { assertConnectionBudget, ConnectionBudgetError, connectionBudget, FIXED_POOL_MAX, jobsPoolMax, poolMax } from './client.js';
 import type { Env } from '../env.js';
 
 // #360 N7: the per-process maximum counts every pool plus the tenant resolver, the webhook pass and the listener.
-const env = (requests: number) => ({ PGPOOL_MAX: requests, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4 }) as Env;
+const env = (requests: number) => ({ PGPOOL_MAX: requests, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4, JOBS_ENABLED: '1' }) as Env;
 
 describe('connectionBudget', () => {
   it('is 30 per process at the default request pool of 10', () => {
@@ -17,6 +17,22 @@ describe('connectionBudget', () => {
 
   it('is 41 at a request pool of 20 (the advisory pool caps at 4)', () => {
     expect(connectionBudget(env(20)).total).toBe(41);
+  });
+
+  it('DB-M4: a process without the scheduler reserves 2 job connections, not 8 (an explicit PGJOBS_POOL_MAX wins)', () => {
+    const noJobs = { ...env(10), JOBS_ENABLED: undefined } as Env;
+    expect(jobsPoolMax(noJobs)).toBe(2);
+    expect(connectionBudget(noJobs).total).toBe(24);
+    expect(jobsPoolMax({ ...noJobs, PGJOBS_POOL_MAX: 1 } as Env)).toBe(1);
+    expect(jobsPoolMax(env(10))).toBe(8);
+    const prev = process.env.PGJOBS_POOL_MAX;
+    process.env.PGJOBS_POOL_MAX = '8';
+    try { expect(jobsPoolMax(noJobs)).toBe(8); } finally { if (prev === undefined) delete process.env.PGJOBS_POOL_MAX; else process.env.PGJOBS_POOL_MAX = prev; }
+  });
+
+  it('DB-M5: PGADVISORY_POOL_MAX (validated by env.ts) overrides the advisory formula', () => {
+    expect(connectionBudget({ ...env(10), PGADVISORY_POOL_MAX: 6 } as Env).parts.advisory).toBe(6);
+    expect(connectionBudget(env(10)).parts.advisory).toBe(3);
   });
 
   it('counts every Pool and Client the serving process constructs', () => {
@@ -47,7 +63,7 @@ describe('connectionBudget', () => {
 });
 
 describe('connection budget enforcement (#360 N7)', () => {
-  const e = (over: Partial<Env>) => ({ PGPOOL_MAX: 10, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4, PG_CONNECTION_BUDGET_ENFORCE: '0', ...over }) as Env;
+  const e = (over: Partial<Env>) => ({ PGPOOL_MAX: 10, PGJOBS_POOL_MAX: 8, PGLOCKS_POOL_MAX: 4, JOBS_ENABLED: '1', PG_CONNECTION_BUDGET_ENFORCE: '0', ...over }) as Env;
 
   it('warn-only by default: an over-budget configuration still starts', () => {
     expect(() => assertConnectionBudget(e({ PG_CONNECTION_BUDGET: 20 }))).not.toThrow();

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
-import { schedulerLeaseAccess, checkConnectionBudget, closePools, currentLeaseSignal, inJobScope, LeaseLostError, LOCKS_QUERY_TIMEOUT_MS, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
+import { schedulerLeaseAccess, checkConnectionBudget, closePools, currentLeaseSignal, inJobScope, jobsPoolMax, LeaseLostError, LOCKS_QUERY_TIMEOUT_MS, locksPool, pool, poolGauges, runInJobScope, withAdvisoryLocks, withStore } from './client.js';
 import { afterCommit } from './after-commit.js';
 import { emailWakeIdleForTests, setEmailWakeEnabledForTests, wakeEmailDelivery } from '../email/wake.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
@@ -40,9 +40,9 @@ describe('pool isolation', () => {
   });
 
   it('a request still runs while every job connection is held', async () => {
-    const held = await runInJobScope(() => holdAll(env.PGJOBS_POOL_MAX, () => pool.connect()));
+    const held = await runInJobScope(() => holdAll(jobsPoolMax(env), () => pool.connect()));
     try {
-      expect(busy('jobs')).toBe(env.PGJOBS_POOL_MAX);
+      expect(busy('jobs')).toBe(jobsPoolMax(env));
       const r = await pool.query<{ ok: number }>('SELECT 1 AS ok');
       expect(r.rows[0]!.ok).toBe(1);
       expect(poolGauges().jobs!.waiting).toBe(0);

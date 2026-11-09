@@ -46,6 +46,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { createSession } from '../auth/session.js';
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 import { subscriptions } from './subscriptions.js';
 import { createSubscriptionCheckout } from '../payments/stripe.js';
 import {
@@ -70,6 +71,7 @@ app.route('/', subscriptions);
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
   await pool.query('DELETE FROM "session"');
+  _setRateLimitBackendForTest(createMemoryRateLimitBackend()); // fresh subscribe budget (10 per 10 min) per case
 }
 
 async function seed(): Promise<string> {
@@ -162,6 +164,34 @@ describe('POST /v1/shop/subscribe', () => {
     const res = await app.request('/v1/shop/subscribe', {
       method: 'POST', headers: auth(), body: JSON.stringify({ variantId: VARIANT }),
     });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a disabled variant and a variant of a draft product with 400', async () => {
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE product_variant SET enabled = false WHERE id = ${VARIANT}`));
+    const r1 = await app.request('/v1/shop/subscribe', { method: 'POST', headers: auth(), body: JSON.stringify({ variantId: VARIANT }) });
+    expect(r1.status).toBe(400);
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE product_variant SET enabled = true WHERE id = ${VARIANT}`);
+      await tx.execute(sql`UPDATE product SET status = 'draft' WHERE store_id = ${STORE}`);
+    });
+    const r2 = await app.request('/v1/shop/subscribe', { method: 'POST', headers: auth(), body: JSON.stringify({ variantId: VARIANT }) });
+    expect(r2.status).toBe(400);
+  });
+
+  it('a retry with the same Idempotency-Key returns the same session URL and creates one order', async () => {
+    const headers = { ...auth(), 'idempotency-key': 'sub-key-1' };
+    const r1 = await app.request('/v1/shop/subscribe', { method: 'POST', headers, body: JSON.stringify({ variantId: VARIANT }) });
+    const r2 = await app.request('/v1/shop/subscribe', { method: 'POST', headers, body: JSON.stringify({ variantId: VARIANT }) });
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect((await r2.json() as { url: string }).url).toBe((await r1.json() as { url: string }).url);
+    const n = await withStore(STORE, async (tx) => (await tx.execute(sql`SELECT count(*)::int AS n FROM "order" WHERE customer_id = ${CUSTOMER}`)).rows[0] as { n: number });
+    expect(n.n).toBe(1);
+  });
+
+  it('an empty Idempotency-Key is rejected (400)', async () => {
+    const res = await app.request('/v1/shop/subscribe', { method: 'POST', headers: { ...auth(), 'idempotency-key': '' }, body: JSON.stringify({ variantId: VARIANT }) });
     expect(res.status).toBe(400);
   });
 

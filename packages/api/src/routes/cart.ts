@@ -614,13 +614,23 @@ export async function quoteShippingMethods(tx: Tx, st: StoreCtx, items: Array<{ 
   const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
   const ctx = { country: opts.country, subtotal: quote.subtotal, discountedSubtotalWithTax: quote.grandTotal };
   const freeShipping = freeShippingThreshold(methods.map(m => m.calculator), ctx);
+  // Destination tax parity with the cart pricing above and checkout: the ship-to country's zone overrides the store rate.
+  const taxZones = await tx
+    .select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority })
+    .from(s.taxZone)
+    .where(eq(s.taxZone.enabled, true));
+  const taxRate = resolveTaxRate(taxZones, opts.country, st.taxRate);
   return { freeShipping, methods: methods.filter(method => isMethodEligible(method.calculator, ctx)).map(method => {
     const calc = method.calculator as ShippingCalculator;
-    const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
-      taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
-      shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
-    return { code: method.code, name: method.name, rate: shippingRate(calc), price: total.grandTotal };
+    return { code: method.code, name: method.name, rate: shippingRate(calc), price: shippingQuotePrice(st, calc, taxRate) };
   }) };
+}
+
+/** What one shipping method costs the shopper at `taxRate` (the destination rate): rate plus tax where shipping is taxable and tax-exclusive. */
+export function shippingQuotePrice(st: Pick<StoreCtx, 'taxInclusive' | 'shippingTaxable'>, calc: ShippingCalculator, taxRate: number): number {
+  return calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate,
+    taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
+    shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive }).grandTotal;
 }
 
 /** The method a quoted cart is priced with: the requested one while it is eligible, else the storefront's default — the

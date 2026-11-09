@@ -8,6 +8,8 @@ import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { isStockLimited } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { consumeCatalogSearch } from './shop-extra.public-limits.js';
 
 // Live, uncached: computed straight from stock.on_hand/allocated on every
 // call — never persisted, never TTL'd (locked stock-architecture rule).
@@ -131,7 +133,7 @@ catalog.openapi(
     request: {
       query: z.object({
         limit: z.coerce.number().int().min(1).max(100).default(24),
-        offset: z.coerce.number().int().min(0).default(0),
+        offset: z.coerce.number().int().min(0).max(10000).default(0),
         // Filter to a single collection (manual or smart, published only) —
         // same shape/semantics as catalog/search's collectionSlug, so both
         // list endpoints stay consistent for storefront callers.
@@ -168,7 +170,7 @@ catalog.openapi(
         .from(s.product)
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
         .where(where)
-        .orderBy(asc(s.product.name))
+        .orderBy(asc(s.product.name), asc(s.product.id))
         .limit(limit)
         .offset(offset);
       const totalRows = await tx
@@ -389,7 +391,7 @@ catalog.openapi(
               .select(productCols)
               .from(s.product)
               .where(baseWhere)
-              .orderBy(asc(s.product.name))
+              .orderBy(asc(s.product.name), asc(s.product.id))
               .limit(pageSize)
               .offset(offset);
             return [rows, countRows[0]?.count ?? 0] as const;
@@ -404,7 +406,7 @@ catalog.openapi(
               .select(productCols)
               .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
               .where(baseWhere)
-              .orderBy(asc(s.collectionProduct.position), s.product.name)
+              .orderBy(asc(s.collectionProduct.position), asc(s.product.name), asc(s.product.id))
               .limit(pageSize)
               .offset(offset);
             return [rows, countRows[0]?.count ?? 0] as const;
@@ -442,13 +444,18 @@ catalog.openapi(
       term: z.string().min(2).max(120),
       collectionSlug: z.string().max(200).optional(),
       take: z.coerce.number().int().min(1).max(100).default(24),
-      skip: z.coerce.number().int().min(0).default(0),
+      skip: z.coerce.number().int().min(0).max(10000).default(0),
       inStock: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
     }) },
-    responses: { 200: { description: 'Results', content: { 'application/json': { schema: z.object({ items: z.array(ProductListItem), total: z.number().int() }) } } } },
+    responses: {
+      200: { description: 'Results', content: { 'application/json': { schema: z.object({ items: z.array(ProductListItem), total: z.number().int() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
+    const searchRetry = await consumeCatalogSearch(st.id, clientIp(c));
+    if (searchRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many searches — try again in ${searchRetry}s`, { retryAfter: searchRetry });
     const { term, collectionSlug, take, skip, inStock } = c.req.valid('query');
     const like = `%${term}%`;
     const result = await withStore(st.id, async (tx) => {
@@ -472,7 +479,7 @@ catalog.openapi(
         })
         .from(s.product)
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
-        .where(where).orderBy(asc(s.product.name)).limit(take).offset(skip);
+        .where(where).orderBy(asc(s.product.name), asc(s.product.id)).limit(take).offset(skip);
       const totalRows = await tx.select({ total: sql<number>`count(*)::int` }).from(s.product).where(where);
       return { items, total: totalRows[0]?.total ?? 0 };
     });

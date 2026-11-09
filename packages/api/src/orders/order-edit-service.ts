@@ -1,4 +1,5 @@
 import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired } from './imported-financial-reconciliation.js';
+import { err as logErr } from '../lib/logger.js';
 /**
  * Order editing (spec G13 / G5) — the DB-bound half. `orders/order-edit.ts`
  * holds the pure model; this loads the facts, builds a PLAN (new totals, line
@@ -903,7 +904,7 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
   await tx.insert(s.orderEdit).values({ id: editId, storeId: input.storeId, orderId: plan.order.id, idempotencyKey: input.idempotencyKey, fingerprint,
     before: { ...plan.before, currentPricing: credit.current.snapshot, storedOrder: plan.order, financialLines: plan.storedLines, storedFingerprint: plan.storedFingerprint }, after: { ...plan.after, removedUnits: plan.removedUnits, proposal }, balance: plan.balance.amountDue,
     settlement: outcome, actor: input.actor, reason: input.reason ?? null });
-  if (positiveDeltas.length) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(input.storeSlug)); });
+  if (positiveDeltas.length) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(input.storeSlug)).catch((e: unknown) => logErr.error('stock hook after order edit failed', e)); });
   let emailQueued = false;
   if (settlement?.type === 'record_payment') {
     const amount = settlement.amount ?? requiredTender, providerRef = `manual:${editId}`;
@@ -1049,7 +1050,7 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
     await tx.insert(s.auditLog).values({ storeId: input.storeId, actor: a.actor, entity: 'order', entityId: input.orderId, action: 'edit', fromState: a.beforeOrder.state, toState: finalState, data: { editId: stage.row.id, proposalDigest: stage.proposal.proposalDigest, previousGrandTotal: a.beforeOrder.grandTotal, grandTotal: pricing.totals.grandTotal, balance: stage.row.balance } });
     await emitEvent(tx, input.storeId, 'order.updated', { code: order.code, editId: stage.row.id, previousGrandTotal: a.beforeOrder.grandTotal, grandTotal: pricing.totals.grandTotal, balance: stage.row.balance, currency: order.currency, reason: a.reason });
     await tx.execute(sql`RELEASE SAVEPOINT order_edit_activation`);
-    if (a.stockDeltas.some(([, delta]) => delta < 0)) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(a.storeSlug)); });
+    if (a.stockDeltas.some(([, delta]) => delta < 0)) afterCommit(tx, () => { void import('../manifest/stock-hook.js').then(({ onStockChanged }) => onStockChanged(a.storeSlug)).catch((e: unknown) => logErr.error('stock hook after order edit activation failed', e)); });
     return true;
   } catch (error) {
     await tx.execute(sql`ROLLBACK TO SAVEPOINT order_edit_activation`); await tx.execute(sql`RELEASE SAVEPOINT order_edit_activation`);

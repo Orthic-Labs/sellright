@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { errJson } from '../lib/api-error.js';
 
 /**
  * Apple App Site Association for iOS Password AutoFill (webcredentials).
@@ -56,6 +57,6 @@ export function composeAasa(baseIds: readonly string[], list: readonly AasaOverl
 wellKnown.get('/.well-known/apple-app-site-association', (c) => {
   const ids = (process.env.AASA_APP_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const doc = composeAasa(ids);
-  if (!doc) return c.json({ error: 'not found' }, 404);
+  if (!doc) return errJson(c, 404, 'NOT_FOUND', 'not found');
   return c.json(doc, 200);
 });

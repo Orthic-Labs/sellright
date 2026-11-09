@@ -1,3 +1,4 @@
+import { firstCycleOutcome } from './subscription-first-cycle.js';
 import { importedFinancialReconciliationRequired } from '../orders/imported-financial-reconciliation.js';
 /**
  * Subscription lifecycle — the issue-then-extend heart (invoice.paid is one frozen
@@ -299,13 +300,16 @@ async function recordInvoicePaidLocked(tx: Tx, storeId: string, sub: Subscriptio
     //    edit reconcile only once the balance is cleared, the deferred edit earn, and MONEY-4 on overpayment;
     //  - anything else records the money only (MONEY-4 when the order can no longer become Paid).
     // In every branch the subscription is linked to the order's licence (link-only: nothing issued here).
-    const remaining = (await amountDueForOrder(tx, storeId, order.id, order.grandTotal)) - order.grandTotal;
+    // The payment is booked at what the provider collected (amountPaid); Paid needs that to cover what is still due.
+    const due = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
     const payable = canTransition(order.state as OrderState, 'Paid');
-    const transitions = payable && remaining <= 0;
-    const balance = !payable && (order.state === 'Paid' || order.state === 'PartiallyRefunded') && remaining >= 0;
+    const { remaining, transitions, balance, mismatch } = firstCycleOutcome({
+      due, amountPaid, grandTotal: order.grandTotal, payable,
+      paidLifecycle: order.state === 'Paid' || order.state === 'PartiallyRefunded',
+    });
     const paidAtNow = new Date();
     const payment: SettlementMutation = { type: 'payment_insert', rows: [{
-      storeId, orderId: order.id, amount: order.grandTotal, method: 'stripe', providerRef, state: 'Settled',
+      storeId, orderId: order.id, amount: amountPaid, method: 'stripe', providerRef, state: 'Settled',
       gatewayMode: null, currency: order.currency, metadata: { stripeInvoiceId: invoice.id, amountPaid: invoice.amount_paid ?? null },
     }] };
     const link = { operationKind: 'stripe_invoice_paid', operationId: invoice.id, stripeSubscriptionId: subId };
@@ -318,24 +322,27 @@ async function recordInvoicePaidLocked(tx: Tx, storeId: string, sub: Subscriptio
     const recorded = await recordSettlementOperation(tx, {
       ...common, orderId: order.id,
       mutations: transitions ? [payment, { type: 'order_paid', orderId: order.id, placedAt: paidAtNow }] : [payment],
-      effects: transitions ? [issueLink(true), fanout[1]!, fanout[2]!]
-        : balance ? [issueLink(false), ...balanceEffects]
-        : [issueLink(false)],
+      effects: [
+        ...(transitions ? [issueLink(true), fanout[1]!, fanout[2]!]
+          : balance ? [issueLink(false), ...balanceEffects]
+          : [issueLink(false)]),
+        ...(mismatch ? [review('first-cycle invoice amount differs from the order total')] : []),
+      ],
     });
     if (!recorded.created) return;
     if (balance) {
       await tx.insert(s.auditLog).values({
         storeId, actor: 'system:settle', entity: 'order', entityId: order.id,
         action: 'balance_payment', fromState: order.state, toState: order.state,
-        data: { amount: order.grandTotal, method: 'stripe', providerRef },
+        data: { amount: amountPaid, method: 'stripe', providerRef },
       });
     }
-    if (invoice.amount_paid != null && invoice.amount_paid !== order.grandTotal) {
-      await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid: invoice.amount_paid, grandTotal: order.grandTotal });
+    if (mismatch) {
+      await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid, grandTotal: order.grandTotal, orderHeldUnpaid: !transitions && payable });
     }
     // MONEY-4: captured money on an order that can no longer transition to Paid (and is not a balance) is never silent
     if (!payable && !balance) {
-      await recordPaymentAfterCancel(tx, storeId, order, { method: 'stripe', providerRef, amount: order.grandTotal });
+      await recordPaymentAfterCancel(tx, storeId, order, { method: 'stripe', providerRef, amount: amountPaid });
     }
     return;
   }

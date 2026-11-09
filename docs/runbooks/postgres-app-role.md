@@ -93,9 +93,9 @@ sets its own session limits per connection pool, so each limit bounds only the w
 | Pool | Env | Session settings |
 |---|---|---|
 | requests | `PGPOOL_MAX` (10) | role defaults above |
-| jobs (every background pass) | `PGJOBS_POOL_MAX` (8) | `statement_timeout = 120s` (a job may scan a whole store); client-side query ceiling 125 s |
+| jobs (every background pass) | `PGJOBS_POOL_MAX` (8; **2 on a process with `JOBS_ENABLED` not `1`** unless `PGJOBS_POOL_MAX` is set explicitly) | `statement_timeout = 120s` (a job may scan a whole store); client-side query ceiling 125 s |
 | locks (scheduler lease, readiness probe) | `PGLOCKS_POOL_MAX` (4) | role defaults above; client-side query ceiling 3 s |
-| advisory (payment/refund workflow locks) | `min(4, ceil(PGPOOL_MAX/4))` | `statement_timeout = 30s`, `lock_timeout = PGADVISORY_LOCK_WAIT_MS` (5 s) |
+| advisory (payment/refund workflow locks) | `PGADVISORY_POOL_MAX` (1-16), default `min(4, ceil(PGPOOL_MAX/4))` | `statement_timeout = 30s`, `lock_timeout = PGADVISORY_LOCK_WAIT_MS` (5 s) |
 
 Every pool uses TCP keepalive with the first probe after 10 s idle, so a half-open connection (peer gone without a
 FIN) is detected after the kernel's `tcp_keepalive_intvl × tcp_keepalive_probes` (Linux default 75 s × 9) instead of
@@ -109,12 +109,36 @@ One API process can open at most
 
     PGPOOL_MAX + PGJOBS_POOL_MAX + PGLOCKS_POOL_MAX + min(4, ceil(PGPOOL_MAX/4)) + 2 (tenant resolver) + 2 (webhook pass) + 1 (LISTEN)
 
-which is **30 at `PGPOOL_MAX=10`** and **41 at `PGPOOL_MAX=20`**. At boot the API logs this maximum (`db connection
-budget`) and warns when it exceeds `PG_CONNECTION_BUDGET`, the runtime role's connection limit, or
+which is **30 at `PGPOOL_MAX=10`** and **41 at `PGPOOL_MAX=20`** for a process that runs the scheduler (`JOBS_ENABLED=1`).
+A request-only process (`JOBS_ENABLED` unset or `0`) does not run the scheduler, so its jobs pool is capped at 2 (it is
+used only by stock-triggered manifest regeneration and the email waker, one pass at a time) unless `PGJOBS_POOL_MAX` is set
+explicitly: **24 at `PGPOOL_MAX=10`** (DB-M4). `PGADVISORY_POOL_MAX` replaces the advisory term when set (DB-M5; it caps
+concurrent in-flight gateway calls that hold a payment/refund lock, 3 at the default). At boot the API logs this maximum
+(`db connection budget`) and warns when it exceeds `PG_CONNECTION_BUDGET`, the runtime role's connection limit, or
 `max_connections` minus `superuser_reserved_connections`. The sum over every process sharing the cluster must stay
-under `max_connections` with room for operations: on the Hetzner cluster (`max_connections = 100`) the three API
-processes (rh, dd, rightsites) at the default 30 use 90; three at `PGPOOL_MAX=20` would use 123. Set
-`PG_CONNECTION_BUDGET=30` in each brand's API env so a raised pool is flagged at boot.
+under `max_connections` with room for operations. On the Hetzner cluster (`max_connections = 100`) five processes draw
+on it:
+
+| Process | Runs scheduler | Typical `PGPOOL_MAX` | Ceiling |
+|---|---|---|---|
+| Damned API | no | 10 | 24 |
+| Damned jobs | yes | 3 | 21 (3 + 8 + 4 + 1 + 2 + 2 + 1) |
+| Rotten API | no | 10 | 24 |
+| Rotten jobs | yes | 3 | 21 |
+| RightSites runtime (composed) | per its env | per its env | up to 30 at the defaults; pool settings of the composed runtime were not measured |
+
+The four brand processes sum to **90** (they were 102 before the request-only jobs pool was capped, over the limit of
+100), leaving 10 for the RightSites runtime, the demo and operations. That is a ceiling: live use was 17 connections in
+the 2026-11-09 audit. Set `PG_CONNECTION_BUDGET` in each process's env to its row above so a raised pool is flagged at
+boot (`PG_CONNECTION_BUDGET_ENFORCE=1` refuses to start instead of warning). Record any change to a pool size here, and
+re-add the table when a sixth process is introduced.
+
+**Pool errors (DB-L5):** an idle client that errors (network blip, server kill) is logged as a structured `pg pool error`
+line with the pool name and counted per pool (`poolErrorCounts()` in `db/client.ts`).
+
+**Store transactions (DB-L4):** outside a job pass every `withStore` transaction has a 35 s client-side deadline, just past
+the cluster's 30 s `statement_timeout`; a longer one is aborted and its connection discarded. A caller that legitimately
+needs longer passes `{ timeoutMs }` (0 disables). Webhook delivery keeps its own deadline.
 
 **Release note (#358):** Rotten's API env carries `PGPOOL_MAX=20` as the 2026-10-24 stopgap for the hourly job
 crowding. When the release with #358 deploys, reset it to 10 (delete the line): jobs no longer draw from the

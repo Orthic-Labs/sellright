@@ -255,7 +255,7 @@ checkout.openapi(
     path: '/v1/shop/checkout',
     summary: 'Create an order from a cart',
     request: {
-      headers: z.object({ 'idempotency-key': z.string().optional() }),
+      headers: z.object({ 'idempotency-key': z.string().min(1).max(200).optional() }),
       body: {
         content: {
           'application/json': {

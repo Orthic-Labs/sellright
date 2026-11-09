@@ -176,6 +176,9 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // the (typically single-digit) number of stores on this install.
   // G5: an address that keeps presenting well-formed but WRONG signatures is refused before the per-store fan-out.
   const peer = clientIp(c);
+  // A database error while reading a store's secret is an outage, not a signature verdict: remember it so a
+  // no-match afterwards answers 503 (retryable) and is not counted against the sender.
+  let secretLookupFailed = false;
   if (!event) {
     const blocked = await webhookSignatureRetryAfter('stripe', peer);
     if (blocked > 0) { c.header('Retry-After', String(blocked)); return c.json({ error: 'bad signature' }, 429); }
@@ -188,7 +191,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
             const r = await resolveField(tx, { storeId: sid, provider: 'stripe', mode, field: 'webhookSecret' }, undefined);
             return r.value || undefined;
           });
-        } catch { continue; }
+        } catch { secretLookupFailed = true; continue; }
         if (!secret) continue;
         try {
           event = verifyStripeWebhook(raw, sig, secret);
@@ -199,6 +202,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       }
     }
   }
+  if (!event && secretLookupFailed) return c.json({ error: 'secret lookup unavailable — retry' }, 503);
   if (!event || !verifiedMode) {
     await recordWebhookSignatureFailure('stripe', peer).catch(() => undefined);
     return c.json({ error: 'bad signature' }, 400);

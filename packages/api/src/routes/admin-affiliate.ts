@@ -9,37 +9,45 @@ import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requirePermission, guard, slugify } from './admin-helpers.js';
 import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from '../affiliate/onboarding.js';
 import { affiliateRangeStats, affiliateTopSellers } from '../affiliate/stats.js';
-import { AFFILIATE_MIN_TOKEN_LENGTH, AFFILIATE_ORDER_LIMIT, AFFILIATE_STATS_RATE, COMMISSION_PCT, COMMISSION_STATES, commissionBasis } from '../affiliate/constants.js';
+import { AFFILIATE_MIN_TOKEN_LENGTH, AFFILIATE_ORDER_LIMIT, AFFILIATE_STATS_RATE, COMMISSION_PCT, COMMISSION_STATES, commissionBasis, commissionOf } from '../affiliate/constants.js';
+import { commissionSql, orderBasisSql } from '../affiliate/commission-sql.js';
 import { dayRangeError } from '../lib/day-range.js';
 
 export const adminAffiliate = new OpenAPIHono();
 
-// Commission = 10% of the merchandise subtotal AFTER order discounts (the
-// affiliate's own coupon included), on paid orders attributed to the
-// affiliate's promotion — matches DD's affiliate plugin, which paid on the
-// discounted subtotal and never on fully refunded or cancelled orders.
+// Commission = 10% of each order's merchandise subtotal AFTER order discounts (the
+// affiliate's own coupon included) and after merchandise refunded, on paid orders
+// attributed to the affiliate's promotion, rounded per order and summed.
 // Rules live in affiliate/constants.ts (shared with the welcome mail).
 
 /** DD's coupon status chip (affiliate-stats.service.ts getCouponInfo). SellRight
  *  hard-deletes only unused promotions, so a bound coupon is never 'Deleted'. */
 const couponStatus = (enabled: boolean): 'Active' | 'Disabled' => (enabled ? 'Active' : 'Disabled');
 
-/** Earned (10% of discounted paid-order subtotals on this promo) and settled-to-date. */
+/** Earned (10% of each paid order's net basis, rounded per order) and settled-to-date. */
 async function affiliateAmounts(tx: { execute: Function }, promotionId: string) {
   const r = await (tx as any).execute(sql`
     select
-      coalesce((select sum(greatest(o.subtotal - o.discount_total, 0)) from "order" o
-                where o.promotion_id = ${promotionId}
-                  and o.state = any(array['Paid','PartiallyRefunded']::order_state[])),0)::int as subtotals,
-      coalesce((select sum(a.amount_cents) from affiliate_settle a where a.promotion_id = ${promotionId}),0)::int as settled,
+      (select coalesce(sum(b.basis), 0)::bigint from (
+         select ${orderBasisSql} as basis from "order" o
+         where o.promotion_id = ${promotionId} and o.state = any(array['Paid','PartiallyRefunded']::order_state[])) b) as subtotals,
+      (select coalesce(sum(b.commission), 0)::bigint from (
+         select ${commissionSql(orderBasisSql, COMMISSION_PCT)} as commission from "order" o
+         where o.promotion_id = ${promotionId} and o.state = any(array['Paid','PartiallyRefunded']::order_state[])) b) as earned,
+      coalesce((select sum(a.amount_cents) from affiliate_settle a where a.promotion_id = ${promotionId}),0)::bigint as settled,
       (select count(*) from "order" o where o.promotion_id = ${promotionId}
          and o.state = any(array['Paid','PartiallyRefunded']::order_state[]))::int as orders,
       (select max(a.settled_at) from affiliate_settle a where a.promotion_id = ${promotionId}) as last_settled_at`);
-  const row = (r as { rows: Array<{ subtotals: number; settled: number; orders: number; last_settled_at: Date | string | null }> }).rows[0]!;
-  const earned = Math.round(row.subtotals * (COMMISSION_PCT / 100));
+  const row = (r as { rows: Array<{ subtotals: string | number; earned: string | number; settled: string | number; orders: number; last_settled_at: Date | string | null }> }).rows[0]!;
+  const earned = Number(row.earned);
+  const settled = Number(row.settled);
   const lastSettledAt = row.last_settled_at ? new Date(row.last_settled_at).toISOString() : null;
-  return { earned, settled: row.settled, unsettled: earned - row.settled, orders: row.orders, subtotals: row.subtotals, lastSettledAt };
+  return { earned, settled, unsettled: earned - settled, orders: row.orders, subtotals: Number(row.subtotals), lastSettledAt };
 }
+
+/** Merchandise already refunded on an order (Settled refunds, order-edit refunds excluded), for the per-order rows. */
+const refundedMerchandiseCol = sql<string>`coalesce((select sum(r.items_amount) from refund r where r.order_id = ${s.order.id}
+  and r.store_id = ${s.order.storeId} and r.state = 'Settled' and coalesce(r.metadata->>'source', '') <> 'order_edit'), 0)::bigint`;
 
 // ── list ─────────────────────────────────────────────────────────────────────
 adminAffiliate.openapi(
@@ -66,7 +74,7 @@ adminAffiliate.openapi(
 adminAffiliate.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/affiliates', summary: 'Onboard an affiliate (creates their coupon)',
-    request: { body: { content: J(z.object({ email: z.string().email(), code: z.string().optional(), discountPct: z.number().int().min(0).max(100).default(10) })) } },
+    request: { body: { content: J(z.object({ email: z.string().email().max(320), code: z.string().min(1).max(64).optional(), discountPct: z.number().int().min(0).max(100).default(10) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), code: z.string(), accessToken: z.string() })) }, 409: { description: 'Exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -111,7 +119,7 @@ adminAffiliate.openapi(
       // Only commission-earning states, newest first, on the same net basis the
       // totals use (subtotal - discount): unpaid / cancelled / refunded orders
       // are not part of what is owed, so they are not listed here either.
-      const orders = await tx.select({ code: s.order.code, subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
+      const orders = await tx.select({ refunded: refundedMerchandiseCol, code: s.order.code, subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
         .from(s.order).where(and(eq(s.order.promotionId, a.promotionId), inArray(s.order.state, [...COMMISSION_STATES])))
         .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(AFFILIATE_ORDER_LIMIT);
       const settlements = await tx.select().from(s.affiliateSettle).where(eq(s.affiliateSettle.promotionId, a.promotionId)).orderBy(desc(s.affiliateSettle.settledAt));
@@ -121,7 +129,9 @@ adminAffiliate.openapi(
         topSellers,
         orders: orders.map((o) => ({
           code: o.code, state: o.state, subtotal: o.subtotal, discountTotal: o.discountTotal,
-          basis: commissionBasis(o), commission: Math.round(commissionBasis(o) * (COMMISSION_PCT / 100)),
+          refundedMerchandise: Number(o.refunded),
+          basis: commissionBasis({ ...o, refundedMerchandise: Number(o.refunded) }),
+          commission: commissionOf(commissionBasis({ ...o, refundedMerchandise: Number(o.refunded) }), COMMISSION_PCT),
           placedAt: o.placedAt?.toISOString() ?? null, createdAt: o.createdAt.toISOString(),
         })),
         settlements: settlements.map((sx) => ({ amountCents: sx.amountCents, periodStartAt: sx.periodStartAt?.toISOString() ?? null, periodEndAt: sx.periodEndAt.toISOString(), settledAt: sx.settledAt.toISOString(), txRef: sx.txRef, notes: sx.notes })),
@@ -179,7 +189,7 @@ adminAffiliate.openapi(
 adminAffiliate.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/affiliates/link', summary: 'Bind a promotion to an affiliate email (or clear with email:null)',
-    request: { body: { content: J(z.object({ promotionId: z.string().uuid(), email: z.string().email().nullable() })) } },
+    request: { body: { content: J(z.object({ promotionId: z.string().uuid(), email: z.string().email().max(320).nullable() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ result: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -201,7 +211,7 @@ adminAffiliate.openapi(
 adminAffiliate.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/affiliates/{id}', summary: 'Reassign affiliate recipient (rotates access token)',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ email: z.string().email() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ email: z.string().email().max(320) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), email: z.string(), code: z.string().nullable() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -222,7 +232,7 @@ adminAffiliate.openapi(
 adminAffiliate.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/affiliates/{id}/settle', summary: 'Record an affiliate payout',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ amountCents: money.optional(), txRef: z.string().optional(), notes: z.string().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ amountCents: money.min(1).max(1_000_000_000).optional(), txRef: z.string().max(255).optional(), notes: z.string().max(2000).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ settled: money })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Bad amount', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -281,7 +291,7 @@ adminAffiliate.openapi(
       if (!a) return null;
       const [promo] = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.id, a.promotionId)).limit(1);
       const amt = await affiliateAmounts(tx, a.promotionId);
-      const orderRows = await tx.select({ id: s.order.id, code: s.order.code, subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
+      const orderRows = await tx.select({ refunded: refundedMerchandiseCol, id: s.order.id, code: s.order.code, subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
         .from(s.order).where(and(eq(s.order.promotionId, a.promotionId), inArray(s.order.state, [...COMMISSION_STATES])))
         .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(AFFILIATE_ORDER_LIMIT);
       const orderIds = orderRows.map((o) => o.id);
@@ -312,8 +322,8 @@ adminAffiliate.openapi(
           redactedCode: o.code.slice(-4).toUpperCase(),
           placedAt: (o.placedAt ?? o.createdAt).toISOString(),
           itemCount: itemCounts.get(o.id) ?? 0,
-          subtotalUsd: commissionBasis(o) / 100,
-          commissionUsd: Math.round(commissionBasis(o) * (COMMISSION_PCT / 100)) / 100,
+          subtotalUsd: commissionBasis({ ...o, refundedMerchandise: Number(o.refunded) }) / 100,
+          commissionUsd: commissionOf(commissionBasis({ ...o, refundedMerchandise: Number(o.refunded) }), COMMISSION_PCT) / 100,
           state: o.state,
         })),
         // Top 3 SKUs by quantity (DD getStats topRows).

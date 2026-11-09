@@ -124,6 +124,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
     // #360 N7: with PG_CONNECTION_BUDGET_ENFORCE=1, pool maxima over this process's budget refuse to start.
     try { assertConnectionBudget(env); }
     catch (e) { throw new EngineSetupError((e as Error).message, 'CONNECTION_BUDGET'); }
+    // DB-M3: tenant resolution (webhook seam) prefers DATABASE_URL_NONOWNER; unset, it falls back to DATABASE_URL.
+    if (!env.DATABASE_URL_NONOWNER) {
+      log.warn('DATABASE_URL_NONOWNER is unset: tenant resolution connects with DATABASE_URL (acceptable for single-role dev; set the non-owner URL in production)',
+        { event: 'tenant_resolution_url_fallback', envVar: 'DATABASE_URL_NONOWNER', fallback: 'DATABASE_URL' });
+    }
     const pool = initPools(env);
     // P0: event-loop delay/utilization sampler for the private metrics endpoint (stopped at shutdown).
     startRuntimeSampler();

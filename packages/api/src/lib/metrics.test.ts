@@ -153,4 +153,15 @@ describe('renderPrometheus', () => {
     expect(text).toContain('sellright_jobs_active_passes 2');
     for (const line of text.trim().split('\n')) expect(line).toMatch(/^(# (HELP|TYPE) \S+ .+|[a-z_]+(\{[^}]*\})? \S+)$/);
   });
+
+  it('renders labelled caller families (pool errors, edge-purge queue depth)', () => {
+    const text = renderPrometheus({}, [
+      { name: 'sellright_db_pool_errors_total', type: 'counter', help: 'h', series: [{ labels: { pool: 'main' }, value: 2 }] },
+      { name: 'sellright_edge_purge_queue_rows', help: 'h', series: [{ labels: { status: 'pending' }, value: 3 }, { labels: { status: 'dead' }, value: 0 }] },
+    ]);
+    expect(text).toContain('# TYPE sellright_db_pool_errors_total counter');
+    expect(text).toContain('sellright_db_pool_errors_total{pool="main"} 2');
+    expect(text).toContain('sellright_edge_purge_queue_rows{status="pending"} 3');
+    expect(text).toContain('sellright_edge_purge_queue_rows{status="dead"} 0');
+  });
 });

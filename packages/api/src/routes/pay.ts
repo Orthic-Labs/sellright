@@ -51,7 +51,7 @@ pay.openapi(
     summary: 'Pay for an order (PendingPayment -> Paid)',
     request: {
       params: z.object({ code: z.string() }),
-      headers: z.object({ 'idempotency-key': z.string().optional(), 'x-receipt-token': z.string().optional() }),
+      headers: z.object({ 'idempotency-key': z.string().min(1).max(200).optional(), 'x-receipt-token': z.string().optional() }),
       body: { content: { 'application/json': { schema: z.object({ method: z.literal('stripe'), token: z.unknown().optional() }) } } },
     },
     responses: {
