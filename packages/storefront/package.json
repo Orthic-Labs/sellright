@@ -80,7 +80,7 @@
 		"vitest": "4.1.12"
 	},
 	"dependencies": {
-		"@qwik.dev/core": "2.0.0-rc.3",
+		"@qwik.dev/core": "2.0.0-rc.4",
 		"@qwik.dev/router": "2.0.0-rc.3",
 		"@sellright/storefront-client": "workspace:*",
 		"@simplewebauthn/browser": "14.0.0",
