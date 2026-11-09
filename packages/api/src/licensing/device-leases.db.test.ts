@@ -8,7 +8,7 @@
  *
  * Abuse/negative coverage:
  *   - a client claiming a companion platform to dodge a seat is rejected
- *   - a replayed (stale) leaseId on renew is rejected
+ *   - a stale (already-rotated) leaseId on renew recovers the device's one active seat; revoked/removed stay revoked
  *   - concurrent issuance races the pool cap correctly (no over-admission)
  *   - grandfathered seats<=0 licenses stay unlimited without the policy marker
  *   - cross-tenant isolation under FORCE RLS
@@ -191,25 +191,118 @@ describe('issueDeviceLease — pool enforcement from registered policy', () => {
   });
 });
 
-describe('renewDeviceLease — replay rejection', () => {
-  it('rejects a renew that presents a stale (already-rotated) leaseId', async () => {
+describe('renewDeviceLease — same-seat recovery', () => {
+  const renew = (dev: string, leaseId: string, storeId = STORE) =>
+    withStore(storeId, (tx) => renewDeviceLease(tx, { storeId, appKey: 'testapp', deviceIdHash: dev, leaseId }));
+  const issue = (licenseKey: string, dev: string, storeId = STORE) =>
+    withStore(storeId, (tx) => issueDeviceLease(tx, { storeId, appKey: 'testapp', licenseKey, deviceIdHash: dev, platform: 'macos' }));
+  const activationRows = (dev: string, storeId = STORE) => withStore(storeId, async (tx) =>
+    (await tx.execute(sql`SELECT id, state, lease_id, generation FROM license_activation WHERE device_id_hash = ${dev} ORDER BY id`)).rows as
+      Array<{ id: string; state: string; lease_id: string; generation: number }>);
+
+  it('a stale (already-rotated) leaseId renews the same seat: same activation, same generation, fresh leaseId', async () => {
     await seedLicense({ licenseKey: 'replay-1', seats: 2 });
     const dev = hashish('replay-dev');
-    const issued = await withStore(STORE, (tx) => issueDeviceLease(tx, { storeId: STORE, appKey: 'testapp', licenseKey: 'replay-1', deviceIdHash: dev, platform: 'macos' }));
+    const issued = await issue('replay-1', dev);
     expect(issued.kind).toBe('ok');
     if (issued.kind !== 'ok') throw new Error('unreachable');
     const staleLeaseId = issued.lease.leaseId;
 
-    const renewed = await withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: staleLeaseId }));
+    const renewed = await renew(dev, staleLeaseId);
     expect(renewed.kind).toBe('ok');
     if (renewed.kind !== 'ok') throw new Error('unreachable');
     expect(renewed.lease.leaseId).not.toBe(staleLeaseId);
 
-    const replay = await withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: staleLeaseId }));
-    expect(replay.kind).toBe('notfound');
+    // several rotations later the device still presents the first leaseId
+    const again = await renew(dev, renewed.lease.leaseId);
+    if (again.kind !== 'ok') throw new Error('unreachable');
+    const recovered = await renew(dev, staleLeaseId);
+    expect(recovered.kind).toBe('ok');
+    if (recovered.kind !== 'ok') throw new Error('unreachable');
+    expect([staleLeaseId, renewed.lease.leaseId, again.lease.leaseId]).not.toContain(recovered.lease.leaseId);
+    expect(recovered.lease.generation).toBe(issued.lease.generation);
 
-    const renewAgain = await withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: renewed.lease.leaseId }));
+    const rows = await activationRows(dev);
+    expect(rows).toHaveLength(1); // no new seat
+    expect(rows[0]).toMatchObject({ id: issued.activationId, state: 'active', lease_id: recovered.lease.leaseId });
+
+    const renewAgain = await renew(dev, recovered.lease.leaseId);
     expect(renewAgain.kind).toBe('ok');
+  });
+
+  it('a stale leaseId on a revoked-only device is revoked, not recovered', async () => {
+    const licenseId = await seedLicense({ licenseKey: 'rev-only', seats: 2 });
+    const dev = hashish('rev-only-dev');
+    const issued = await issue('rev-only', dev);
+    if (issued.kind !== 'ok') throw new Error('unreachable');
+    const renewed = await renew(dev, issued.lease.leaseId);
+    if (renewed.kind !== 'ok') throw new Error('unreachable');
+    await withStore(STORE, (tx) => revokeDeviceRemote(tx, { storeId: STORE, licenseId, activationId: issued.activationId }));
+    expect(await renew(dev, issued.lease.leaseId)).toEqual({ kind: 'revoked' }); // stale id
+    expect(await renew(dev, renewed.lease.leaseId)).toEqual({ kind: 'revoked' }); // current id
+  });
+
+  it('a stale leaseId on a removed-only device is revoked, not recovered', async () => {
+    await seedLicense({ licenseKey: 'rem-only', seats: 2 });
+    const dev = hashish('rem-only-dev');
+    const issued = await issue('rem-only', dev);
+    if (issued.kind !== 'ok') throw new Error('unreachable');
+    const renewed = await renew(dev, issued.lease.leaseId);
+    if (renewed.kind !== 'ok') throw new Error('unreachable');
+    await withStore(STORE, (tx) => removeDeviceOffline(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: renewed.lease.leaseId }));
+    expect(await renew(dev, issued.lease.leaseId)).toEqual({ kind: 'revoked' });
+  });
+
+  it('an unknown device is notfound', async () => {
+    await seedLicense({ licenseKey: 'unknown-dev-lic', seats: 2 });
+    expect(await renew(hashish('never-seen-dev'), '00000000-0000-4000-8000-000000000000')).toEqual({ kind: 'notfound' });
+  });
+
+  it('two active rows for one device (two licenses) with a stale id is notfound; exact ids still renew', async () => {
+    await seedLicense({ licenseKey: 'two-a', seats: 2 });
+    await seedLicense({ licenseKey: 'two-b', seats: 2 });
+    const dev = hashish('two-license-dev');
+    const a = await issue('two-a', dev);
+    const b = await issue('two-b', dev);
+    if (a.kind !== 'ok' || b.kind !== 'ok') throw new Error('fixture issuance failed');
+    const rows = await activationRows(dev);
+    expect(rows.filter((r) => r.state === 'active')).toHaveLength(2);
+    expect(await renew(dev, '00000000-0000-4000-8000-000000000001')).toEqual({ kind: 'notfound' });
+    expect((await renew(dev, a.lease.leaseId)).kind).toBe('ok');
+    expect((await renew(dev, b.lease.leaseId)).kind).toBe('ok');
+  });
+
+  it('a stale leaseId on an expired or non-active license is revoked', async () => {
+    const expiredId = await seedLicense({ licenseKey: 'lic-expired', seats: 2 });
+    const devE = hashish('expired-lic-dev');
+    const e = await issue('lic-expired', devE);
+    if (e.kind !== 'ok') throw new Error('unreachable');
+    const eRenewed = await renew(devE, e.lease.leaseId);
+    if (eRenewed.kind !== 'ok') throw new Error('unreachable');
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE license SET expires_at = now() - interval '1 day' WHERE id = ${expiredId}`));
+    expect(await renew(devE, e.lease.leaseId)).toEqual({ kind: 'revoked' });
+
+    const suspendedId = await seedLicense({ licenseKey: 'lic-suspended', seats: 2 });
+    const devS = hashish('suspended-lic-dev');
+    const sIssued = await issue('lic-suspended', devS);
+    if (sIssued.kind !== 'ok') throw new Error('unreachable');
+    const sRenewed = await renew(devS, sIssued.lease.leaseId);
+    if (sRenewed.kind !== 'ok') throw new Error('unreachable');
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE license SET status = 'revoked'::license_status WHERE id = ${suspendedId}`));
+    expect(await renew(devS, sIssued.lease.leaseId)).toEqual({ kind: 'revoked' });
+  });
+
+  it('recovery never crosses stores', async () => {
+    await seedLicense({ licenseKey: 'iso-a', seats: 2 });
+    await seedLicense({ licenseKey: 'iso-b', seats: 2, storeId: STORE_B });
+    const dev = hashish('iso-dev');
+    const a = await issue('iso-a', dev);
+    if (a.kind !== 'ok') throw new Error('unreachable');
+    // the same device hash has no row in store B: a stale (or any) id there is notfound, and store A's row is untouched
+    expect(await renew(dev, a.lease.leaseId, STORE_B)).toEqual({ kind: 'notfound' });
+    const rows = await activationRows(dev);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: 'active', lease_id: a.lease.leaseId });
   });
 
   it('renews the requested lease when the device has a tombstone on an older license', async () => {
@@ -244,19 +337,22 @@ describe('renewDeviceLease — replay rejection', () => {
     }))).toEqual({ kind: 'revoked' });
   });
 
-  it('concurrent renews of the same leaseId produce exactly one winner', async () => {
+  it('concurrent renews of the same leaseId both succeed on the same seat with distinct leaseIds', async () => {
     await seedLicense({ licenseKey: 'renew-race-1', seats: 2 });
     const dev = hashish('renew-race-dev');
-    const issued = await withStore(STORE, (tx) => issueDeviceLease(tx, { storeId: STORE, appKey: 'testapp', licenseKey: 'renew-race-1', deviceIdHash: dev, platform: 'macos' }));
+    const issued = await issue('renew-race-1', dev);
     if (issued.kind !== 'ok') throw new Error('unreachable');
-    const results = await Promise.all([
-      withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: issued.lease.leaseId })),
-      withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: issued.lease.leaseId })),
-    ]);
-    // Serialized on the activation row: exactly one wins; the loser sees the
-    // rotated leaseId and is rejected as a replay.
-    expect(results.filter((r) => r.kind === 'ok')).toHaveLength(1);
-    expect(results.filter((r) => r.kind !== 'ok')).toHaveLength(1);
+    const results = await Promise.all([renew(dev, issued.lease.leaseId), renew(dev, issued.lease.leaseId)]);
+    // Serialized on the device's rows: the first rotates; the second arrives with a now-stale id and renews the same
+    // (only active) row again. The row holds whichever leaseId was written last.
+    const ok = results.flatMap((r) => (r.kind === 'ok' ? [r.lease] : []));
+    expect(ok).toHaveLength(2);
+    expect(ok[0]!.leaseId).not.toBe(ok[1]!.leaseId);
+    expect(ok[0]!.generation).toBe(ok[1]!.generation);
+    const rows = await activationRows(dev);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(issued.activationId);
+    expect(ok.map((l) => l.leaseId)).toContain(rows[0]!.lease_id);
   });
 });
 

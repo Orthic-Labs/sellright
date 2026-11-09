@@ -12,7 +12,7 @@
 // platform→pool mapping — come from the registered per-app device policy
 // (device-policy.ts), populated from store config / product metadata.
 import { randomUUID, createHash } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newActivationToken, hashActivationToken } from './tokens.js';
@@ -273,13 +273,23 @@ export type RenewLeaseResult =
   | { kind: 'revoked' }
   | { kind: 'ok'; lease: LeaseEnvelope };
 
-/** Renew an existing lease. Token rotation + replay rejection: the caller must
- *  present the CURRENT leaseId — renewing mints a NEW leaseId, so a captured
- *  old leaseId is immediately unusable for a second renew.
+/** Renew a device's lease. Renewing rotates the leaseId.
  *
- *  The activation row is locked FOR UPDATE before the leaseId check so two
- *  concurrent renews of the same leaseId serialize (check-then-rotate is
- *  atomic): exactly one wins and the loser sees the rotated leaseId. */
+ *  Same-seat recovery: a device can end up holding an OLDER leaseId than the one stored (the renew reply was lost in
+ *  transit, or the device restored a keychain/backup). Shipped clients send only { deviceIdHash, leaseId }, and treat
+ *  "not found" as revocation, so the server resolves the seat from the device, not from the leaseId alone:
+ *    - a row whose leaseId equals the presented one is used as before (not active -> revoked);
+ *    - otherwise, if the device has exactly ONE active row, that row is renewed (same activation id, same generation,
+ *      new leaseId, same license / expiry / policy checks);
+ *    - no rows at all -> notfound; rows but none active -> revoked; more than one active row with no exact match ->
+ *      notfound (ambiguous: the request does not say which license it means).
+ *  No seat is added and no generation changes here; issue / revoke / remove are untouched, and removeDeviceOffline
+ *  still requires the exact leaseId. Trade-off, accepted: for an active device the deviceIdHash is the renew
+ *  credential; a previously issued leaseId no longer has to be the current one. Remote revoke and remove still end
+ *  access (they flip the row out of 'active').
+ *
+ *  All of the device's rows are locked FOR UPDATE in id order before the decision, so concurrent renews of one device
+ *  serialize: each renews the same row in turn and gets its own fresh leaseId; the row keeps the later one. */
 export async function renewDeviceLease(
   tx: Tx,
   input: {
@@ -297,15 +307,21 @@ export async function renewDeviceLease(
       eq(s.licenseActivation.storeId, input.storeId),
       eq(s.licenseActivation.appKey, input.appKey),
       eq(s.licenseActivation.deviceIdHash, input.deviceIdHash),
-      eq(s.licenseActivation.leaseId, input.leaseId),
     ))
-    .limit(1)
+    .orderBy(asc(s.licenseActivation.id))
     .for('update');
-  const row = rows[0];
-  if (!row) return { kind: 'notfound' };
-  if (row.state !== 'active') return { kind: 'revoked' };
-  // Replay rejection: the presented leaseId must match the currently-issued one.
-  if (row.leaseId !== input.leaseId) return { kind: 'notfound' };
+  if (!rows.length) return { kind: 'notfound' };
+  const exact = rows.find((r) => r.leaseId === input.leaseId);
+  let row: (typeof rows)[number];
+  if (exact) {
+    if (exact.state !== 'active') return { kind: 'revoked' };
+    row = exact;
+  } else {
+    const active = rows.filter((r) => r.state === 'active');
+    if (active.length === 0) return { kind: 'revoked' };
+    if (active.length > 1) return { kind: 'notfound' };
+    row = active[0]!;
+  }
 
   const lic = await tx.select({ status: s.license.status, seats: s.license.seats, expiresAt: s.license.expiresAt, appKey: s.license.appKey, metadata: s.license.metadata, id: s.license.id })
     .from(s.license).where(eq(s.license.id, row.licenseId)).limit(1);
