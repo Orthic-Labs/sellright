@@ -207,8 +207,21 @@ export default function Orders() {
     },
     onSuccess: onBulkDone('marked shipped'), onError: onBulkErr,
   });
-  const bulkCancel = useMutation({ mutationFn: () => bulkPost('bulk-cancel'), onSuccess: onBulkDone('cancelled'), onError: onBulkErr });
-  const bulkTrash = useMutation({ mutationFn: () => bulkPost('bulk-soft-delete'), onSuccess: onBulkDone('moved to trash'), onError: onBulkErr });
+  const plural = (n: number) => `${n} order${n === 1 ? '' : 's'}`;
+  const bulkCancel = useMutation({
+    mutationFn: async () => {
+      const ok = await confirm({ title: `Cancel ${plural(checked.size)}?`, description: 'The selected unpaid orders are cancelled.', tone: 'danger', confirmLabel: 'Cancel orders', cancelLabel: 'Keep orders' });
+      if (!ok) throw new Error('cancelled');
+      return bulkPost('bulk-cancel');
+    },
+    onSuccess: onBulkDone('cancelled'), onError: onBulkErr });
+  const bulkTrash = useMutation({
+    mutationFn: async () => {
+      const ok = await confirm({ title: `Move ${plural(checked.size)} to trash?`, description: 'They leave the order list and can be restored from the Archived tab.', confirmLabel: 'Move to trash' });
+      if (!ok) throw new Error('cancelled');
+      return bulkPost('bulk-soft-delete');
+    },
+    onSuccess: onBulkDone('moved to trash'), onError: onBulkErr });
   const bulkRestore = useMutation({ mutationFn: () => bulkPost('bulk-restore'), onSuccess: onBulkDone('restored'), onError: onBulkErr });
   const bulkPurge = useMutation({
     mutationFn: async () => {

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, useId, type ReactElement, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 export function KpiCard({ label, value, delta, hint, icon, to, onClick }: {
@@ -43,15 +43,34 @@ export function FormSection({ title, description, children, actions, id }: {
   );
 }
 
-export function Field({ label, htmlFor, error, hint, children }: {
-  label: string; htmlFor?: string; error?: string | null; hint?: ReactNode; children: ReactNode;
+export function Field({ label, htmlFor, error, hint, required, children }: {
+  label: string; htmlFor?: string; error?: string | null; hint?: ReactNode; required?: boolean; children: ReactNode;
 }) {
+  const autoId = useId();
+  const only = Children.count(children) === 1 && isValidElement(children) && typeof children.type === 'string' ? (children as ReactElement<Record<string, unknown>>) : null;
+  // A single native child gets wired up; anything else (custom components, several children) is left as the caller wrote it.
+  const inputId = htmlFor ?? (only ? (only.props.id as string | undefined) ?? autoId : undefined);
+  const hintId = hint && !error ? `${autoId}-hint` : undefined;
+  const errorId = error ? `${autoId}-error` : undefined;
+  let child: ReactNode = children;
+  if (only) {
+    const describedBy = [only.props['aria-describedby'] as string | undefined, errorId, hintId].filter(Boolean).join(' ') || undefined;
+    child = cloneElement(only, {
+      id: inputId,
+      ...(describedBy ? { 'aria-describedby': describedBy } : {}),
+      ...(error ? { 'aria-invalid': true } : {}),
+      ...(required ? { 'aria-required': true } : {}),
+    });
+  }
   return (
     <div>
-      <label className="label" htmlFor={htmlFor}>{label}</label>
-      {children}
-      {hint && !error && <p className="mt-1 text-xs text-gray-400">{hint}</p>}
-      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+      <label className="label" htmlFor={inputId}>
+        {label}
+        {required && <span className="text-danger" aria-hidden="true"> *</span>}
+      </label>
+      {child}
+      {hint && !error && <p id={hintId} className="mt-1 text-xs text-gray-400">{hint}</p>}
+      {error && <p id={errorId} role="alert" className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );
 }

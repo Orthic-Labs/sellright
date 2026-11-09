@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { ToastProvider } from '../components/Toast';
 
 // Keep the real API helper: assertions observe composed fetch URLs & auth.
 vi.mock('../qa-mocks.js', () => ({ maybeMock: () => null }));
@@ -39,14 +40,14 @@ describe('Webhook network paths', () => {
     const element = document.createElement('div'); document.body.appendChild(element);
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     root = createRoot(element);
-    await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><Webhooks /></MemoryRouter></QueryClientProvider>); }); await flush();
+    await act(async () => { root.render(<QueryClientProvider client={client}><ToastProvider><MemoryRouter><Webhooks /></MemoryRouter></ToastProvider></QueryClientProvider>); }); await flush();
     await act(async () => { button('Add endpoint').click(); });
     await fill('input[type="url"]', ' https://merchant.example/new ');
     await fill('input[placeholder="order.created, order.paid, *"]', 'order.paid, order.created');
     await act(async () => { document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }); await flush();
     await act(async () => { document.querySelector<HTMLButtonElement>('button[title="Click to disable"]')!.click(); }); await flush();
     await act(async () => { document.querySelector<HTMLButtonElement>('button[title="Delete endpoint"]')!.click(); });
-    await act(async () => { button('Yes').click(); }); await flush();
+    await act(async () => { button('Delete').click(); }); await flush();
 
     const calls = network.mock.calls.map(([url, init]) => ({ url, method: init?.method, init }));
     expect(calls.filter((call) => call.method === 'GET').length).toBeGreaterThan(0);

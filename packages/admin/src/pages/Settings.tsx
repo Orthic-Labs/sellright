@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Store, CreditCard, Truck, Receipt, Hash, LogIn, ShieldCheck, UsersRound, UserCircle, Plus, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Store, CreditCard, Truck, Receipt, Hash, LogIn, ShieldCheck, UsersRound, UserCircle } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
-import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
+import { PageHeader, Loading, ErrorState, Spinner, FormSection, Field, InlineAlert } from '../components/ui';
+import { parsePercentBps } from './page-parsers';
 import ShippingMethods from '../components/ShippingMethods';
 import { useToast } from '../components/Toast';
 import { TwoFactorEnroll } from '../components/TwoFactorEnroll';
@@ -12,13 +13,6 @@ import { PasskeysSection } from '../components/PasskeysSection';
 import { StepUpDialog } from '../components/StepUpDialog';
 import { isStepUpRequired } from '../lib/passkeys';
 import { OrderNumbering } from '../components/OrderNumbering';
-
-const NEEDS_KEYS = new Set(['stripe']);
-
-/** `payments.<method>` is either a legacy boolean or `{ enabled, mode, <mode>: { verifiedAt } }`. */
-function paymentEnabled(v: unknown): boolean {
-  return v === true || (!!v && typeof v === 'object' && (v as { enabled?: unknown }).enabled === true);
-}
 
 type SectionId = 'store' | 'payments' | 'shipping' | 'taxes' | 'orders' | 'signin' | 'security' | 'team' | 'account';
 const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof Store }[] }[] = [
@@ -43,8 +37,7 @@ export default function SettingsPage() {
   const toast = useToast();
   const [section, setSection] = useState<SectionId>('store');
   const sk = ['settings-store', store?.slug];
-  const { data: cfg, isLoading } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
-  const staff = useQuery({ queryKey: ['staff', store?.slug], queryFn: () => api.get<{ items: any[] }>('/staff') });
+  const { data: cfg, isLoading, error: cfgError, refetch: refetchCfg } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
 
   const [store2, setStore2] = useState<{ name: string; storefrontUrl: string } | null>(null);
   const saveStore = useMutation({
@@ -53,16 +46,18 @@ export default function SettingsPage() {
     onError: (e) => toast.error('Could not save store profile', (e as Error).message),
   });
   const [tax, setTax] = useState<string | null>(null);
-  const saveTax = useMutation({ mutationFn: () => api.patch('/settings/store', { taxRate: Math.round(parseFloat(tax || '0') * 100) }), onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); } });
-  const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
-  // The API refuses a flip to live (409) until live credentials exist — surface that instead of silently snapping back.
-  const setStripeMode = useMutation({
-    mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }),
-    onSuccess: (_r, mode) => { qc.invalidateQueries({ queryKey: sk }); toast.success(`Stripe is now in ${mode} mode`); },
-    onError: (e) => { qc.invalidateQueries({ queryKey: sk }); toast.error('Could not switch Stripe mode', (e as Error).message); },
+  const taxBps = tax === null ? null : parsePercentBps(tax);
+  const saveTax = useMutation({
+    mutationFn: () => {
+      const bps = parsePercentBps(tax ?? '');
+      if (bps === null) return Promise.reject(new Error('Enter the rate as a plain percent such as 8 or 8.25 (no commas or symbols).'));
+      return api.patch('/settings/store', { taxRate: bps });
+    },
+    onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); toast.success('Tax rate saved'); },
+    onError: (e) => toast.error('Could not save tax rate', (e as Error).message),
   });
   const [gid, setGid] = useState<string | null>(null);
-  const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
+  const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); toast.success('Google sign-in saved'); }, onError: (e) => toast.error('Could not save the Google client ID', (e as Error).message) });
   const [aid, setAid] = useState<string | null>(null);
   const saveApple = useMutation({
     mutationFn: () => api.patch('/settings/apple', { servicesId: aid?.trim() || null }),
@@ -75,10 +70,10 @@ export default function SettingsPage() {
   const [code, setCode] = useState('');
   const [tfaPassword, setTfaPassword] = useState('');
   const [newCodes, setNewCodes] = useState<string[] | null>(null);
-  const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code, password: tfaPassword }), onSuccess: () => { setCode(''); setTfaPassword(''); tfa.refetch(); void refresh(); } });
-  const regenCodes = useMutation({ mutationFn: () => api.post<{ recoveryCodes: string[] }>('/2fa/recovery-codes', { ...(code ? { code } : {}), password: tfaPassword }), onSuccess: (r) => { setCode(''); setTfaPassword(''); setNewCodes(r.recoveryCodes); tfa.refetch(); },
+  const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code, password: tfaPassword }), onSuccess: () => { setCode(''); setTfaPassword(''); tfa.refetch(); void refresh(); toast.success('Two-factor authentication turned off'); }, onError: (e) => toast.error('Could not turn off 2FA', (e as Error).message) });
+  const regenCodes = useMutation({ mutationFn: () => api.post<{ recoveryCodes: string[] }>('/2fa/recovery-codes', { ...(code ? { code } : {}), password: tfaPassword }), onSuccess: (r) => { setCode(''); setTfaPassword(''); setNewCodes(r.recoveryCodes); tfa.refetch(); toast.success('New recovery codes created'); },
     // #333 review: a passkey-only account without a recovery code proves its factor with a passkey step-up first.
-    onError: (e) => { if (isStepUpRequired(e)) setRegenStepUp(true); } });
+    onError: (e) => { if (isStepUpRequired(e)) setRegenStepUp(true); else toast.error('Could not create recovery codes', (e as Error).message); } });
   const [regenStepUp, setRegenStepUp] = useState(false);
   // Password change: the API wants a recent step-up AND the current password; one form does both.
   const [pw, setPw] = useState({ current: '', next: '', confirm: '', totp: '' });
@@ -90,7 +85,8 @@ export default function SettingsPage() {
       await api.post('/step-up', { password: pw.current, totp: pw.totp || undefined });
       return api.post<{ ok: boolean; revokedSessions: number }>('/password', { currentPassword: pw.current, newPassword: pw.next });
     },
-    onSuccess: (r) => { setPw({ current: '', next: '', confirm: '', totp: '' }); setPwDone(`Password changed. ${r.revokedSessions} other session(s) signed out.`); },
+    onSuccess: (r) => { setPw({ current: '', next: '', confirm: '', totp: '' }); setPwDone(`Password changed. ${r.revokedSessions} other session(s) signed out.`); toast.success('Password changed'); },
+    onError: (e) => toast.error('Could not change password', (e as Error).message),
   });
   const security = useQuery({ queryKey: ['settings-security', store?.slug], queryFn: () => api.get<{ requireTotp: boolean; installRequireTotp: string }>('/settings/security') });
   const [reqPw, setReqPw] = useState({ password: '', totp: '' });
@@ -99,14 +95,11 @@ export default function SettingsPage() {
       await api.post('/step-up', { password: reqPw.password, totp: reqPw.totp || undefined });
       return api.patch('/settings/security', { requireTotp });
     },
-    onSuccess: () => { setReqPw({ password: '', totp: '' }); security.refetch(); void refresh(); },
+    onSuccess: () => { setReqPw({ password: '', totp: '' }); security.refetch(); void refresh(); toast.success('2FA requirement updated'); },
+    onError: (e) => toast.error('Could not update the 2FA requirement', (e as Error).message),
   });
 
-  const [inv, setInv] = useState<{ email: string; role: string; password: string } | null>(null);
-  const addStaff = useMutation({ mutationFn: () => api.post('/staff', inv), onSuccess: () => { setInv(null); staff.refetch(); } });
-  const setRole = useMutation({ mutationFn: (p: { id: string; role: string }) => api.patch(`/staff/${p.id}`, { role: p.role }), onSuccess: () => staff.refetch() });
-  const delStaff = useMutation({ mutationFn: (id: string) => api.del(`/staff/${id}`), onSuccess: () => staff.refetch() });
-
+  if (cfgError) return <><PageHeader title="Settings" subtitle={store?.name} /><ErrorState title="Could not load settings" message={(cfgError as Error).message} onRetry={() => void refetchCfg()} /></>;
   if (isLoading || !cfg) return <Loading />;
   const canManage = store?.role === 'owner' || store?.role === 'manager';
 
@@ -157,39 +150,8 @@ export default function SettingsPage() {
           )}
 
           {section === 'payments' && (
-            <FormSection title="Payment providers" description="Enable the methods customers can pay with at checkout.">
-              <div className="rule-y rule-gray-100">
-                {ADMIN_PAYMENT_PROVIDERS.map((p) => {
-                  const on = paymentEnabled(cfg.payments?.[p]);
-                  return (
-                    <div key={p} className="flex items-center justify-between py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="capitalize text-sm font-medium">{p}</span>
-                        {on ? <Badge value="active" label="Enabled" /> : NEEDS_KEYS.has(p) ? <Badge tone="neutral" value="keys" label="Needs keys" /> : <Badge tone="neutral" value="off" label="Off" />}
-                      </div>
-                      <label className="inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="h-4 w-4 accent-brand" disabled={!canManage || togglePay.isPending} checked={on} onChange={(e) => togglePay.mutate({ k: p, v: e.target.checked })} />
-                      </label>
-                    </div>
-                  );
-                })}
-              </div>
-              {paymentEnabled(cfg.payments?.stripe) && (
-                <div className="pt-4 border-t border-gray-100 mt-4">
-                  <Field label="Stripe mode" hint="Choose which env key set Stripe uses for payment intents, refunds, and webhook verification.">
-                    <select
-                      className="input w-40"
-                      disabled={!canManage || setStripeMode.isPending}
-                      value={cfg.stripeMode ?? 'test'}
-                      onChange={(e) => setStripeMode.mutate(e.target.value as 'test' | 'live')}
-                    >
-                      <option value="test">test</option>
-                      <option value="live">live</option>
-                    </select>
-                  </Field>
-                </div>
-              )}
-              {!canManage && <InlineAlert tone="neutral">Only owners and managers can change payment settings.</InlineAlert>}
+            <FormSection title="Payments" description="Payment methods and Stripe test or live mode have their own page, which asks for confirmation before each change.">
+              <Link to="/settings/payments" className="btn-ghost btn-sm">Open payment settings</Link>
             </FormSection>
           )}
 
@@ -201,10 +163,10 @@ export default function SettingsPage() {
             <FormSection title="Taxes" description="A single base tax rate applied to orders."
               actions={tax !== null && <>
                 <button className="btn-ghost" onClick={() => setTax(null)}>Cancel</button>
-                <button className="btn-primary" disabled={saveTax.isPending} onClick={() => saveTax.mutate()}>{saveTax.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
+                <button className="btn-primary" disabled={saveTax.isPending || taxBps === null} onClick={() => saveTax.mutate()}>{saveTax.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
               {tax !== null ? (
-                <Field label="Tax rate %" htmlFor="s-tax" hint="Percentage applied to taxable order subtotals."><input id="s-tax" className="input max-w-[10rem] tnum" inputMode="decimal" value={tax} onChange={(e) => setTax(e.target.value)} /></Field>
+                <Field label="Tax rate %" htmlFor="s-tax" hint="Percentage applied to taxable order subtotals."><input id="s-tax" className="input max-w-[10rem] tnum" inputMode="decimal" value={tax} aria-invalid={taxBps === null} onChange={(e) => setTax(e.target.value)} /></Field>
               ) : (
                 <>
                   <dl className="stack-y-2.5 text-sm"><div className="flex justify-between max-w-md"><dt className="text-gray-500">Base tax rate</dt><dd className="font-medium tnum">{(cfg.taxRate / 100).toFixed(2)}%</dd></div></dl>
@@ -323,34 +285,8 @@ export default function SettingsPage() {
           )}
 
           {section === 'team' && (
-            <FormSection title="Team & permissions" description="People who can access this store's admin."
-              actions={canManage && !inv && <button className="btn-ghost btn-sm" onClick={() => setInv({ email: '', role: 'staff', password: '' })}><Plus size={14} /> Add staff</button>}>
-              {!canManage ? <InlineAlert tone="neutral">Only owners and managers can manage staff.</InlineAlert> : (
-                <>
-                  <div className="rule-y rule-gray-100">
-                    {staff.data?.items.map((u) => (
-                      <div key={u.adminUserId} className="flex items-center justify-between py-2.5 text-sm">
-                        <span className="font-medium">{u.email}{u.isYou && <span className="text-xs text-gray-400 font-normal"> (you)</span>}</span>
-                        <span className="flex items-center gap-2">
-                          <select className="input py-1 text-xs w-28" value={u.role} disabled={u.isYou} onChange={(e) => setRole.mutate({ id: u.adminUserId, role: e.target.value })}>
-                            {['owner', 'manager', 'staff', 'read_only'].map((r) => <option key={r} value={r}>{r}</option>)}
-                          </select>
-                          {!u.isYou && <button className="text-gray-300 hover:text-danger" aria-label="Remove staff" onClick={() => delStaff.mutate(u.adminUserId)}><Trash2 size={15} /></button>}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {inv && (
-                    <div className="stack-y-2 pt-1 max-w-lg">
-                      <div className="flex gap-2"><input className="input" placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><select className="input w-32" value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['staff', 'manager', 'owner', 'read_only'].map((r) => <option key={r}>{r}</option>)}</select></div>
-                      <input className="input" type="password" placeholder="initial password (min 10)" value={inv.password} onChange={(e) => setInv({ ...inv, password: e.target.value })} />
-                      <p className="text-xs text-gray-400">The invitee signs in with this email and password; they can change it later.</p>
-                      {addStaff.error && <InlineAlert tone="critical">{(addStaff.error as Error).message}</InlineAlert>}
-                      <div className="flex gap-2"><button className="btn-primary" disabled={addStaff.isPending || !inv.email || inv.password.length < 10} onClick={() => addStaff.mutate()}>{addStaff.isPending ? <Spinner className="text-white" /> : 'Add staff'}</button><button className="btn-ghost" onClick={() => setInv(null)}>Cancel</button></div>
-                    </div>
-                  )}
-                </>
-              )}
+            <FormSection title="Team & permissions" description="People who can access this store's admin are managed on the Staff page, which asks for confirmation before removing anyone or changing a role.">
+              {!canManage ? <InlineAlert tone="neutral">Only owners and managers can manage staff.</InlineAlert> : <Link to="/staff" className="btn-ghost btn-sm">Open staff</Link>}
             </FormSection>
           )}
 

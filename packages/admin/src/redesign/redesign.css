@@ -16,7 +16,8 @@
 .app{display:grid;grid-template-columns:224px minmax(0,1fr);height:100vh}
 .main{display:flex;flex-direction:column;min-width:0;min-height:0}
 /* Browser zoom on a desktop screen (200% of 1280 is 640 CSS px): narrower sidebar, single-column editors. */
-@media (max-width:760px){.app{grid-template-columns:176px minmax(0,1fr)}}
+/* AD-H7: below 760px the sidebar is an off-canvas drawer (menu button in the top bar), not a 176px column. */
+@media (max-width:760px){.app{grid-template-columns:minmax(0,1fr)}}
 .rd{font:13px/1.45 var(--sans);color:rgb(var(--text));
   --sans:'Hanken Grotesk',system-ui,sans-serif;--display:'Schibsted Grotesk',var(--sans);--mono:'JetBrains Mono',ui-monospace,monospace;
   --r:8px;--row:36px;--ctl:30px;
@@ -289,3 +290,20 @@
   @media (max-width:1100px){.grid2{grid-template-columns:minmax(0,1fr)}}
   @media (max-width:760px){.search{width:auto;flex:1;min-width:0}.savebar{flex-wrap:wrap;height:auto;min-height:52px;padding-top:8px;padding-bottom:8px}.ph{flex-wrap:wrap}}
 }
+
+/* AD-H7 mobile navigation. Menu button and backdrop exist only below 760px; at 760px and up nothing here applies. */
+.rd .menubtn{display:none}
+.navbackdrop{display:none}
+@media (max-width:759.98px){
+  .rd .menubtn{display:grid}
+  .rd .side{position:fixed;inset:0 auto 0 0;width:min(264px,85vw);z-index:60;visibility:hidden;transform:translateX(-100%);transition:transform .18s ease,visibility 0s linear .18s;box-shadow:0 0 30px rgb(0 0 0/.3)}
+  .rd .side[data-open=true]{visibility:visible;transform:none;transition:transform .18s ease,visibility 0s}
+  .navbackdrop[data-open=true]{display:block;position:fixed;inset:0;z-index:55;background:rgb(0 0 0/.4)}
+  .rd .top{padding:0 12px;gap:8px}
+  .rd .top .sp{display:none}
+  .rd .search{flex:1;min-width:0;width:auto;overflow:hidden}
+  .rd .search .stxt{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rd .search .kbd{display:none}
+}
+.skip-link{position:absolute;left:8px;top:-48px;z-index:100;padding:8px 12px;border-radius:8px;background:rgb(var(--surface));color:rgb(var(--text));border:2px solid rgb(var(--accent));font-weight:600;text-decoration:none}
+.skip-link:focus{top:8px}

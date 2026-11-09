@@ -67,7 +67,7 @@ export function EditHistory({ code, currency, payments, onChanged }: Props) {
                   {h.grandTotalBefore != null && h.grandTotalAfter != null ? `${money(h.grandTotalBefore, currency)} → ${money(h.grandTotalAfter, currency)}` : ''}
                 </span>
               </div>
-              {label && <div className={failed ? 'text-red-700 font-medium' : 'text-gray-500'}>{label}{failed && h.settlement?.message ? ` — ${h.settlement.message}` : ''}</div>}
+              {label && <div className={failed ? 'text-danger font-medium' : 'text-gray-500'}>{label}{failed && h.settlement?.message ? ` — ${h.settlement.message}` : ''}</div>}
               {failed && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {settled.length > 1 && (

@@ -4,6 +4,8 @@ import { Plus, Trash2, Copy, Check } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
+import { useToast } from '../components/Toast';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 
 interface WebhookEndpoint {
   id: string;
@@ -62,7 +64,8 @@ export default function WebhooksPage() {
   const [formUrl, setFormUrl] = useState('');
   const [formTopics, setFormTopics] = useState('');
   const [newSecret, setNewSecret] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const key = ['webhooks', store?.slug];
   const { data, isLoading, error } = useQuery({
@@ -92,16 +95,19 @@ export default function WebhooksPage() {
   const toggle = useMutation({
     mutationFn: (w: WebhookEndpoint) =>
       api.patch(`/webhooks/${w.id}`, { enabled: !w.enabled }),
-    onSuccess: invalidate,
+    onSuccess: (_d, w) => { invalidate(); toast.success(w.enabled ? 'Webhook disabled' : 'Webhook enabled', w.url); },
+    onError: (e) => toast.error('Could not update webhook', (e as Error).message),
   });
 
   const del = useMutation({
     mutationFn: (id: string) => api.del(`/webhooks/${id}`),
-    onSuccess: () => { setDeleteConfirm(null); invalidate(); },
+    onSuccess: () => { invalidate(); toast.success('Webhook endpoint deleted'); },
+    onError: (e) => toast.error('Could not delete webhook endpoint', (e as Error).message),
   });
 
   return (
     <>
+      {confirmDialog}
       <PageHeader
         title="Webhooks"
         subtitle="Receive HTTP POST notifications when events occur in your store."
@@ -232,37 +238,24 @@ export default function WebhooksPage() {
                       onClick={() => toggle.mutate(w)}
                       disabled={toggle.isPending}
                       title={w.enabled ? 'Click to disable' : 'Click to enable'}
+                      aria-label={`Webhook ${w.url}: ${w.enabled ? 'enabled' : 'disabled'}. Click to ${w.enabled ? 'disable' : 'enable'}`}
+                      aria-pressed={w.enabled}
                     >
                       <Badge value={w.enabled ? 'active' : 'draft'} />
                     </button>
                   </td>
                   <td className="td text-right">
-                    {deleteConfirm === w.id ? (
-                      <span className="flex items-center justify-end gap-2 text-sm">
-                        <span className="text-gray-500">Delete?</span>
-                        <button
-                          className="text-danger font-medium hover:underline"
-                          onClick={() => del.mutate(w.id)}
-                          disabled={del.isPending}
-                        >
-                          {del.isPending ? <Spinner /> : 'Yes'}
-                        </button>
-                        <button
-                          className="text-gray-400 hover:text-gray-600"
-                          onClick={() => setDeleteConfirm(null)}
-                        >
-                          No
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        className="text-gray-300 hover:text-danger"
-                        onClick={() => setDeleteConfirm(w.id)}
-                        title="Delete endpoint"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    )}
+                    <button
+                      className="text-gray-300 hover:text-danger"
+                      disabled={del.isPending}
+                      onClick={async () => {
+                        if (await confirm({ title: 'Delete this webhook endpoint?', description: w.url, tone: 'danger', confirmLabel: 'Delete' })) del.mutate(w.id);
+                      }}
+                      title="Delete endpoint"
+                      aria-label={`Delete webhook endpoint ${w.url}`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
                   </td>
                 </tr>
               ))}

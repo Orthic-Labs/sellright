@@ -52,3 +52,22 @@ describe('admin API with a saved account (#355)', () => {
     expect(hub.csrf).toBe('b'.repeat(32));
   });
 });
+
+describe('admin API failure messages (AD-H10)', () => {
+  it('turns an HTML 502 body into a plain message, not a parser error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html><body>Bad Gateway</body></html>', { status: 502, headers: { 'content-type': 'text/html' } })));
+    await expect(api.get('/orders')).rejects.toMatchObject({ status: 502, message: 'The server is unavailable. Try again in a moment.' });
+  });
+
+  it('turns a rejected fetch into a plain message', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(api.get('/orders')).rejects.toMatchObject({ status: 0, message: expect.stringMatching(/unavailable|offline/) });
+  });
+
+  it('says offline when the browser reports it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    await expect(api.get('/orders')).rejects.toMatchObject({ message: 'You appear to be offline.' });
+    vi.restoreAllMocks();
+  });
+});

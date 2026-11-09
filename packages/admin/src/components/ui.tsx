@@ -1,31 +1,30 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { MoreHorizontal, AlertCircle, CheckCircle2, Info, AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { SEARCH_DEBOUNCE_MS } from '../lib/debounce';
+import { useDialogFocus } from './useDialogFocus';
 export { Field, FormSection, KpiCard, Pagination } from './ui-forms';
 
 /* ------------------------------------------------------------------ *
  * Modal — generic dialog shell (see ConfirmDialog for the yes/no case)
  * ------------------------------------------------------------------ */
 
-export function Modal({ open, title, onClose, children, width = 'max-w-md' }: {
+export function Modal({ open, title, onClose, children, width = 'max-w-md', busy = false }: {
   open: boolean; title: string; onClose: () => void; children: ReactNode; width?: string;
+  /** While true (a save in flight), Escape and a backdrop click do not close the dialog. */
+  busy?: boolean;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialogRef, onClose, busy);
   if (!open) return null;
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={onClose} aria-hidden="true" />
-      <div className={`fixed inset-x-0 top-[8vh] z-50 mx-auto w-full ${width} px-3`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={busy ? undefined : onClose} aria-hidden="true" />
+      <div ref={dialogRef} tabIndex={-1} className={`fixed inset-x-0 top-[8vh] z-50 mx-auto w-full ${width} px-3 focus:outline-none`} role="dialog" aria-modal="true" aria-label={title} aria-busy={busy || undefined}>
         <div className="card shadow-lg max-h-[84vh] overflow-y-auto">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <h2 className="text-sm font-semibold">{title}</h2>
-            <button aria-label="Close dialog" className="text-gray-400 hover:text-ink" onClick={onClose}><X size={18} /></button>
+            <button type="button" data-dialog-close aria-label="Close dialog" className="text-gray-400 hover:text-ink" disabled={busy} onClick={onClose}><X size={18} /></button>
           </div>
           <div className="p-4">{children}</div>
         </div>
@@ -321,7 +320,7 @@ const alignCls = (a?: 'left' | 'center' | 'right') => (a === 'right' ? 'text-rig
 
 export function ResourceTable<T>({
   columns, rows, rowKey, onRowClick, loading, isFetching, error, onRetry, empty, skeletonRows = 8,
-  selection, toolbar, minWidth = '36rem',
+  selection, toolbar, minWidth = '36rem', rowLabel,
 }: {
   columns: Column<T>[];
   rows: T[] | undefined;
@@ -353,6 +352,8 @@ export function ResourceTable<T>({
     onToggleAllVisible: (keys: string[]) => void;
   };
   toolbar?: (selectedCount: number) => ReactNode;
+  /** Accessible name for a row's selection checkbox, e.g. `(o) => \`Select order ${o.code}\``. Default: "Select row". */
+  rowLabel?: (row: T) => string;
 }) {
   const allChecked = !!selection && !!rows && rows.length > 0 && rows.every((r) => selection.selectedKeys.has(rowKey(r)));
   const someChecked = !!selection && !!rows && rows.some((r) => selection.selectedKeys.has(rowKey(r)));
@@ -427,12 +428,22 @@ export function ResourceTable<T>({
               const key = rowKey(row);
               const isSelected = !!selection?.selectedKeys.has(key);
               return (
-                <tr key={key} className={`${onRowClick ? 'row-link hover:bg-surface-2' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+                <tr
+                  key={key}
+                  className={`${onRowClick ? 'row-link hover:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onKeyDown={onRowClick ? (e: ReactKeyboardEvent<HTMLTableRowElement>) => {
+                    // Only the row itself: Enter/Space on a link or button inside the row keeps its own meaning.
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row); }
+                  } : undefined}
+                >
                   {selection && (
                     <td className="td" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
-                        aria-label={`Select row ${key}`}
+                        aria-label={rowLabel ? rowLabel(row) : 'Select row'}
                         className="h-4 w-4 accent-brand align-middle"
                         checked={isSelected}
                         onChange={() => selection.onToggle(key)}

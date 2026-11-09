@@ -14,15 +14,15 @@ function DefaultFallback({ error, resetErrorBoundary, sectionLabel }: FallbackPr
     <div
       role="alert"
       aria-live="assertive"
-      className="p-6 m-4 border border-red-200 bg-red-50 rounded-lg max-w-2xl"
+      className="p-6 m-4 border border-danger/30 bg-danger-soft rounded-lg max-w-2xl"
       data-testid="error-boundary-fallback"
     >
-      <h2 className="text-lg font-semibold text-red-800 mb-2">{heading}</h2>
-      <p className="text-sm text-red-700 mb-4">
+      <h2 className="text-lg font-semibold text-danger mb-2">{heading}</h2>
+      <p className="text-sm text-danger mb-4">
         The rest of the admin is still available. Reload this section to retry.
       </p>
       {import.meta.env.DEV && error instanceof Error && (
-        <pre className="text-xs text-red-900 bg-red-100 p-2 rounded-sm mb-4 overflow-auto max-h-40">
+        <pre className="text-xs text-ink bg-surface-2 p-2 rounded-sm mb-4 overflow-auto max-h-40">
           {error.message}
           {error.stack ? `\n${error.stack.split('\n').slice(0, 5).join('\n')}` : ''}
         </pre>
@@ -30,7 +30,7 @@ function DefaultFallback({ error, resetErrorBoundary, sectionLabel }: FallbackPr
       <button
         type="button"
         onClick={resetErrorBoundary}
-        className="px-4 py-2 bg-red-600 text-white rounded-sm hover:bg-red-700 focus:outline-hidden focus:ring-2 focus:ring-red-500"
+        className="px-4 py-2 bg-danger text-surface rounded-sm hover:opacity-90 focus:outline-hidden focus:ring-2 focus:ring-danger"
       >
         Reload
       </button>

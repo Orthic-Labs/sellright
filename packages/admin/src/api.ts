@@ -52,6 +52,9 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
+const MSG_UNAVAILABLE = 'The server is unavailable. Try again in a moment.';
+const MSG_OFFLINE = 'You appear to be offline.';
+
 /** The API returns `{ error: { code, message } }` (older routes: `{ error: string }`). */
 function apiError(status: number, json: Record<string, unknown> | null | undefined, fallback: string): ApiError {
   const e = json?.error as unknown;
@@ -90,12 +93,24 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') addCsrf(headers);
-  const res = await fetch(`${adminBase()}${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
+  let res: Response;
+  try {
+    res = await fetch(`${adminBase()}${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body), signal });
+  } catch (e) {
+    // A deliberate abort (superseded query) keeps its own error; anything else is a network failure.
+    if ((e as { name?: string } | null)?.name === 'AbortError') throw e;
+    throw new ApiError(0, typeof navigator !== 'undefined' && navigator.onLine === false ? MSG_OFFLINE : MSG_UNAVAILABLE);
+  }
   // A relayed 401 means the saved account (or this browser's hub session) ended: back to this server's own sign-in.
   if (res.status === 401 && hub.slot) { hub.slot = null; location.assign(adminHref('/accounts?error=reauth')); }
   else if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  let text: string;
+  try { text = await res.text(); } catch { throw new ApiError(res.status || 0, MSG_UNAVAILABLE); }
+  let json: Record<string, unknown>;
+  try { json = text ? JSON.parse(text) : {}; } catch {
+    // An HTML 502/503 page from a proxy during a deploy, or any other non-JSON body: never surface the parser error.
+    throw new ApiError(res.status, MSG_UNAVAILABLE);
+  }
   if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
   return json as T;
 }
@@ -317,8 +332,13 @@ async function hubReq<T>(method: string, path: string, body?: unknown): Promise<
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (method !== 'GET') { const t = hub.csrf; if (t) headers['x-hub-csrf'] = t; }
   const res = await fetch(`/v1/hub${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  let text: string;
+  try { text = await res.text(); } catch { throw new ApiError(res.status || 0, MSG_UNAVAILABLE); }
+  let json: Record<string, unknown>;
+  try { json = text ? JSON.parse(text) : {}; } catch {
+    // An HTML 502/503 page from a proxy during a deploy, or any other non-JSON body: never surface the parser error.
+    throw new ApiError(res.status, MSG_UNAVAILABLE);
+  }
   if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
   return json as T;
 }

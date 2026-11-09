@@ -34,6 +34,7 @@ function RefundForm({ o, busy, setBusy, onClose, onDone }: {
   const qc = useQueryClient();
   const toast = useToast();
   const cur = o.currency;
+  const currencySymbol = (0).toLocaleString('en-US', { style: 'currency', currency: cur }).replace(/[\d.,\s]/g, '') || '$';
   const submitting = useRef(false);
   // One key per dialog open: a retry of the same submission replays instead of refunding twice.
   const [key, setKey] = useState(() => crypto.randomUUID());
@@ -141,7 +142,7 @@ function RefundForm({ o, busy, setBusy, onClose, onDone }: {
           <div className="fld">
             <label htmlFor="rShip">Refund shipping</label>
             <div className="fx">
-              <i>$</i>
+              <i>{currencySymbol}</i>
               <input id="rShip" className={`inp money${shipOk ? '' : ' bad'}`} inputMode="decimal" value={ship} disabled={busy || shipLeft === 0}
                 aria-invalid={!shipOk} aria-describedby="rShipH rShipE" onChange={(e) => setShip(e.target.value)} />
             </div>

@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner, Pagination } from '../components/ui';
-import { date } from '../lib/format';
+import { date, money } from '../lib/format';
+import { useToast } from '../components/Toast';
 
 interface ReturnRequest {
   id: string;
@@ -11,6 +12,8 @@ interface ReturnRequest {
   reason: string | null;
   orderCode: string;
   createdAt: string;
+  /** Not sent by the list endpoint today; shown in the confirm step only when present. */
+  refundAmount?: number | null;
 }
 
 interface ApproveState {
@@ -21,6 +24,8 @@ interface ApproveState {
 export default function ReturnsPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
+  const cur = store?.currency ?? 'USD';
 
   const [approving, setApproving] = useState<ApproveState | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
@@ -37,12 +42,13 @@ export default function ReturnsPage() {
   const approve = useMutation({
     mutationFn: (s: ApproveState) =>
       api.post<{ id: string; refunded: number; state: string }>(`/returns/${s.id}/approve`, { restock: s.restock }),
-    onSuccess: () => {
+    onSuccess: (d) => {
       setApproving(null);
       setApproveError(null);
       invalidate();
+      toast.success('Return approved', typeof d?.refunded === 'number' ? `Refund of ${money(d.refunded, cur)} reserved.` : undefined);
     },
-    onError: (e: Error) => setApproveError(e.message),
+    onError: (e: Error) => { setApproveError(e.message); toast.error('Could not approve return', e.message); },
   });
 
   const reject = useMutation({
@@ -51,8 +57,9 @@ export default function ReturnsPage() {
       setRejecting(null);
       setRejectError(null);
       invalidate();
+      toast.success('Return rejected');
     },
-    onError: (e: Error) => setRejectError(e.message),
+    onError: (e: Error) => { setRejectError(e.message); toast.error('Could not reject return', e.message); },
   });
 
   return (
@@ -105,6 +112,10 @@ export default function ReturnsPage() {
                       <div className="flex items-center gap-2 justify-end">
                         {approving?.id === r.id ? (
                           <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">
+                              Approve return for <span className="font-mono">{r.orderCode}</span>
+                              {typeof r.refundAmount === 'number' ? <> and refund {money(r.refundAmount, cur)}</> : null}?
+                            </span>
                             <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
                               <input
                                 type="checkbox"
@@ -132,6 +143,7 @@ export default function ReturnsPage() {
                           </div>
                         ) : rejecting === r.id ? (
                           <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">Reject return for <span className="font-mono">{r.orderCode}</span>?</span>
                             <button
                               className="btn-danger text-xs py-1 px-2"
                               disabled={reject.isPending}

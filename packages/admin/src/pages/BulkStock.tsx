@@ -5,6 +5,8 @@ import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
+import { useConfirmDialog } from '../components/ConfirmDialog';
+import { useLeaveGuard } from '../redesign/leave-guard';
 import { PageHeader, Spinner, InlineAlert, EmptyStateActionPanel } from '../components/ui';
 
 interface TreeVariant { id: string; name: string; sku: string; enabled: boolean; onHand: number; allocated: number }
@@ -27,6 +29,7 @@ export default function BulkStock() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [newStock, setNewStock] = useState<Record<string, string>>({}); // variantId -> typed value
   const [saved, setSaved] = useState<Record<string, number>>({}); // variantId -> confirmed value
   const [filter, setFilter] = useState('');
@@ -45,6 +48,7 @@ export default function BulkStock() {
   const changedCount = filled.length;
   const invalidCount = filled.filter(([, v]) => !isValid(v)).length;
   const tooMany = changedCount > MAX_ITEMS;
+  useLeaveGuard(changedCount > 0, 'Stock values you typed have not been saved.');
 
   const products = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -87,10 +91,22 @@ export default function BulkStock() {
     save.mutate(filled.map(([id, v]) => ({ id, onHand: parseInt(v, 10) })));
   };
 
-  const refresh = () => { setNewStock({}); setSaved({}); setResult(null); setExpanded({}); void refetch(); };
+  const refresh = async () => {
+    if (changedCount > 0) {
+      const ok = await confirm({
+        title: 'Refresh and discard typed values?',
+        description: `${changedCount} stock value${changedCount === 1 ? '' : 's'} you typed have not been saved and will be cleared.`,
+        confirmLabel: 'Refresh and discard',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
+    setNewStock({}); setSaved({}); setResult(null); setExpanded({}); void refetch();
+  };
 
   return (
     <>
+      {confirmDialog}
       <PageHeader
         title="Bulk stock update"
         subtitle="View and update stock levels across all products and variants. Only filled fields are submitted, and Save applies them all at once."
@@ -110,7 +126,7 @@ export default function BulkStock() {
               <label className="flex items-center gap-1.5 text-sm cursor-pointer"><input type="checkbox" checked={showDisabled} onChange={() => setShowDisabled((v) => !v)} /> Show disabled</label>
               <button className="btn-ghost btn-sm" onClick={() => setExpanded(Object.fromEntries(products.map((p) => [p.id, true])))}>Expand all</button>
               <button className="btn-ghost btn-sm" onClick={() => setExpanded({})}>Collapse all</button>
-              <button className="btn-ghost btn-sm" disabled={isFetching} onClick={refresh}>Refresh</button>
+              <button className="btn-ghost btn-sm" disabled={isFetching} onClick={() => void refresh()}>Refresh</button>
               <span className="ml-auto text-sm text-gray-500">{products.length} products — <strong className="tnum">{changedCount}</strong> changed</span>
             </div>
           </div>
@@ -155,7 +171,7 @@ export default function BulkStock() {
                       const bad = hasChange && !isValid(typed);
                       const savedVal = saved[v.id];
                       return (
-                        <tr key={`v-${v.id}`} className={hasChange ? 'bg-yellow-50' : savedVal !== undefined ? 'bg-green-50' : ''}>
+                        <tr key={`v-${v.id}`} className={hasChange ? 'bg-warning-soft' : savedVal !== undefined ? 'bg-success-soft' : ''}>
                           <td className="td pl-8 text-xs">{v.name || '—'}{!v.enabled && <span className="ml-2 text-[10px] text-gray-400">disabled</span>}</td>
                           <td className="td font-mono text-xs text-gray-500">{v.sku}</td>
                           <td className="td text-right tnum">{v.onHand}</td>

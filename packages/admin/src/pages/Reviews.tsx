@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, type Page } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 import { Badge, EmptyState, ErrorState, Field, FormSection, InlineAlert, Loading, PageHeader, Pagination, SearchInput, Spinner, Tabs } from '../components/ui';
 import { dateTime } from '../lib/format';
 
@@ -65,6 +66,7 @@ export default function ReviewsPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -87,6 +89,7 @@ export default function ReviewsPage() {
   const counts = data?.counts;
   return (
     <>
+      {confirmDialog}
       <PageHeader title="Reviews" subtitle="Moderate product reviews. Approving a review publishes it and awards the review bonus once." />
       <Tabs
         value={status}
@@ -120,7 +123,7 @@ export default function ReviewsPage() {
               <div className="flex flex-wrap gap-2 mt-3">
                 {r.status !== 'approved' && <button className="btn-primary text-xs" disabled={act.isPending} onClick={() => act.mutate({ id: r.id, action: 'approve' })}>Approve</button>}
                 {r.status !== 'rejected' && <button className="btn-ghost text-xs" disabled={act.isPending} onClick={() => act.mutate({ id: r.id, action: 'reject' })}>Reject</button>}
-                <button className="btn-ghost text-xs text-critical" disabled={act.isPending} onClick={() => { if (window.confirm('Delete this review permanently?')) act.mutate({ id: r.id, action: 'delete' }); }}>Delete</button>
+                <button className="btn-ghost text-xs text-critical" disabled={act.isPending} onClick={async () => { if (await confirm({ title: 'Delete this review permanently?', description: 'This cannot be undone.', tone: 'danger', confirmLabel: 'Delete review' })) act.mutate({ id: r.id, action: 'delete' }); }}>Delete</button>
               </div>
               <ReplyBox key={r.id + (r.reply ?? '')} row={r} onDone={refresh} />
             </div>

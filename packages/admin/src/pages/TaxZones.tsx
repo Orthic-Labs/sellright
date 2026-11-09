@@ -5,6 +5,8 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
+import { parsePercentBps } from './page-parsers';
 
 interface TaxZone {
   id: string;
@@ -32,15 +34,11 @@ function bpsToDisplay(bps: number): string {
   return `${(bps / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
 
-/** Submit: percent string → basis-points integer (e.g. "8.25" → 825) */
-function pctToBps(pct: string): number {
-  return Math.round(parseFloat(pct || '0') * 100);
-}
-
 export default function TaxZonesPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const toast = useToast();
   const [form, setForm] = useState<FormState | null>(null);
 
   const key = ['tax-zones', store?.slug];
@@ -53,27 +51,32 @@ export default function TaxZonesPage() {
   const create = useMutation({
     mutationFn: () => {
       const f = form!;
+      const rate = parsePercentBps(f.rate);
+      if (rate === null) return Promise.reject(new Error('Enter the rate as a plain percent such as 8 or 8.25 (no commas or symbols).'));
       const countries = f.countries.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       return api.post('/tax-zones', {
         name: f.name.trim(),
         countries,
         // rate: user enters a percent (e.g. "8.25") → stored as basis points (825)
-        rate: pctToBps(f.rate),
+        rate,
         priority: parseInt(f.priority || '0', 10),
         enabled: f.enabled,
       });
     },
-    onSuccess: () => { setForm(null); invalidate(); },
+    onSuccess: () => { setForm(null); invalidate(); toast.success('Tax rate added'); },
+    onError: (e) => toast.error('Could not add tax rate', (e as Error).message),
   });
 
   const del = useMutation({
     mutationFn: (id: string) => api.del(`/tax-zones/${id}`),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast.success('Tax zone deleted'); },
+    onError: (e) => toast.error('Could not delete tax zone', (e as Error).message),
   });
 
   const toggle = useMutation({
     mutationFn: (z: TaxZone) => api.patch(`/tax-zones/${z.id}`, { enabled: !z.enabled }),
-    onSuccess: invalidate,
+    onSuccess: (_d, z) => { invalidate(); toast.success(z.enabled ? 'Tax zone disabled' : 'Tax zone enabled', z.name); },
+    onError: (e) => toast.error('Could not update tax zone', (e as Error).message),
   });
 
   return (
@@ -150,7 +153,7 @@ export default function TaxZonesPage() {
           </div>
           <button
             className="btn-primary"
-            disabled={!form.name.trim() || !form.countries.trim() || create.isPending}
+            disabled={!form.name.trim() || !form.countries.trim() || parsePercentBps(form.rate) === null || create.isPending}
           >
             {create.isPending ? <Spinner className="text-white" /> : 'Create'}
           </button>
@@ -185,7 +188,7 @@ export default function TaxZonesPage() {
                   <td className="td tabular-nums">{bpsToDisplay(z.rate)}</td>
                   <td className="td text-gray-500">{z.priority}</td>
                   <td className="td">
-                    <button onClick={() => toggle.mutate(z)}>
+                    <button onClick={() => toggle.mutate(z)} disabled={toggle.isPending} aria-label={`Tax zone ${z.name}: ${z.enabled ? 'enabled' : 'disabled'}. Click to ${z.enabled ? 'disable' : 'enable'}`} aria-pressed={z.enabled}>
                       <Badge value={z.enabled ? 'active' : 'draft'} />
                     </button>
                   </td>

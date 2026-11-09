@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Check, Boxes, History } from 'lucide-react';
 import { api, type Page, type InventoryRow, type StockMovementRow, type StockLocationRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
+import { useConfirmDialog } from '../components/ConfirmDialog';
+import { parseOnHand } from './page-parsers';
 import {
   PageHeader, Pagination, Spinner, Tabs, ResourceToolbar, SearchInput, ResourceTable,
   Badge, EmptyStateActionPanel, Modal, Field, type Column, type TabDef,
@@ -34,6 +36,9 @@ export default function Inventory() {
   const [bulkValue, setBulkValue] = useState('');
   const [adjustFor, setAdjustFor] = useState<InventoryRow | null>(null);
   const low = view === 'low';
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  // A selection only means something for the rows it was made on: drop it when the page, view or search changes.
+  useEffect(() => { setSelected(new Set()); }, [page, view, q]);
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['inventory', store?.slug, q, low, page],
@@ -74,11 +79,14 @@ export default function Inventory() {
     { key: 'available', header: 'Available', align: 'center', width: '11%', render: (r) => <span className={`tnum ${r.available <= 3 ? 'text-warning font-medium' : 'text-gray-700'}`}>{r.available}</span> },
     { key: 'onhand', header: 'On hand', align: 'center', width: '16%', render: (r) => {
       const editing = edits[r.variantId];
-      const dirty = editing !== undefined && Number(editing) !== r.onHand;
+      const parsed = editing === undefined ? null : parseOnHand(editing);
+      // Empty text is "not edited"; Save only appears for a whole number of 0 or more that differs from the stored value.
+      const dirty = editing !== undefined && editing.trim() !== '' && parsed !== r.onHand;
+      const invalid = dirty && parsed === null;
       return (
         <div className="flex items-center justify-center gap-2">
-          <input className="input w-20 text-center tnum py-1.5" type="number" min={0} aria-label={`On hand for ${r.sku}`} value={editing ?? String(r.onHand)} onChange={(e) => setEdits((m) => ({ ...m, [r.variantId]: e.target.value }))} />
-          {dirty && <button className="btn-primary btn-sm" aria-label="Save stock" disabled={save.isPending} onClick={() => save.mutate({ variantId: r.variantId, onHand: Number(editing) })}>{save.isPending ? <Spinner className="text-white" /> : <Check size={15} />}</button>}
+          <input className="input w-20 text-center tnum py-1.5" type="number" min={0} aria-label={`On hand for ${r.sku}`} aria-invalid={invalid || undefined} value={editing ?? String(r.onHand)} onChange={(e) => setEdits((m) => ({ ...m, [r.variantId]: e.target.value }))} />
+          {dirty && <button className="btn-primary btn-sm" aria-label="Save stock" disabled={save.isPending || invalid} onClick={() => { if (parsed !== null) save.mutate({ variantId: r.variantId, onHand: parsed }); }}>{save.isPending ? <Spinner className="text-white" /> : <Check size={15} />}</button>}
         </div>
       );
     }},
@@ -91,6 +99,7 @@ export default function Inventory() {
 
   return (
     <>
+      {confirmDialog}
       <PageHeader title="Inventory" subtitle={data ? `${data.total} variants` : undefined} actions={<Link to="/bulk-stock" className="btn-ghost">Bulk stock update</Link>} />
       {adjustFor && (
         <StockAdjustModal
@@ -136,10 +145,17 @@ export default function Inventory() {
             />
             <button
               className="btn-primary btn-sm"
-              disabled={bulkSave.isPending || bulkValue === '' || Number(bulkValue) < 0}
-              onClick={() => {
-                const onHand = Number(bulkValue);
-                bulkSave.mutate([...selected].map((id) => ({ id, onHand })));
+              disabled={bulkSave.isPending || parseOnHand(bulkValue) === null}
+              onClick={async () => {
+                const onHand = parseOnHand(bulkValue);
+                if (onHand === null) return;
+                const n = selected.size;
+                const ok = await confirm({
+                  title: `Set ${n} variant${n === 1 ? '' : 's'} to ${onHand}?`,
+                  description: `On hand will be set to ${onHand} for ${n} selected variant${n === 1 ? '' : 's'}, replacing their current values.`,
+                  confirmLabel: 'Set stock',
+                });
+                if (ok) bulkSave.mutate([...selected].map((id) => ({ id, onHand })));
               }}
             >
               {bulkSave.isPending ? <Spinner className="text-white" /> : <Check size={15} />} Set stock for {count} selected

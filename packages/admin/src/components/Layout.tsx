@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText, FileUp, ListChecks, Download,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, CreditCard, Star, BellRing, Globe, MoreHorizontal, Check,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, CreditCard, Star, BellRing, Globe, MoreHorizontal, Check, Menu,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -16,7 +16,7 @@ import { confirmLeave, useLeaveGuardRoot } from '../redesign/leave-guard';
 import { OPEN_PALETTE_EVENT } from './palette-event';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
-interface NavItem { to: string; label: string; icon: IconType; end?: boolean; count?: 'tofulfil' }
+interface NavItem { to: string; label: string; icon: IconType; end?: boolean; count?: 'tofulfil'; manage?: boolean }
 interface NavGroup { id: string; label: string; items: NavItem[]; defaultOpen?: boolean }
 
 // Grouped IA — the navigation should teach the product model in one scan.
@@ -58,18 +58,21 @@ const GROUPS: NavGroup[] = [
   ]},
   { id: 'config', label: 'Configuration', items: [
     { to: '/settings', label: 'Settings', icon: Settings },
-    { to: '/settings/payments', label: 'Payments', icon: HandCoins },
+    { to: '/settings/payments', label: 'Payments', icon: HandCoins, manage: true },
     { to: '/settings/email', label: 'Email', icon: Mail },
     { to: '/settings/sheerid', label: 'SheerID', icon: Shield },
     { to: '/settings/seo', label: 'SEO', icon: Globe },
-    { to: '/staff', label: 'Staff', icon: Shield },
+    { to: '/staff', label: 'Staff', icon: Shield, manage: true },
     { to: '/tax-zones', label: 'Taxes', icon: Receipt },
     { to: '/currency-rates', label: 'Currencies', icon: Coins },
-    { to: '/webhooks', label: 'Webhooks', icon: Webhook },
+    { to: '/webhooks', label: 'Webhooks', icon: Webhook, manage: true },
   ]},
 ];
 
 const ALL_ITEMS = GROUPS.flatMap((g) => g.items);
+
+// AD-M13: same rule the pages use (`canManage`): owners and managers manage payments, staff and webhooks; plain staff do not see them.
+const canManageRole = (role: string | undefined) => role === 'owner' || role === 'manager';
 
 const groupContainsPath = (g: NavGroup, path: string) =>
   g.items.some((i) => (i.end ? path === i.to : path === i.to || path.startsWith(i.to + '/')));
@@ -186,13 +189,20 @@ function StoreSwitcher() {
 function AccountMenu() {
   const { me, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); } };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
   return (
     <div className="me">
       <span className="av">{me ? initials(me.email) : '··'}</span>
       <span className="truncate" title={hub.slot ? 'Saved account (via this admin)' : undefined}>{me?.email}{hub.slot ? ' · saved' : ''}</span>
       <span className="sp" />
       <div className="relative">
-        <button className="iconbtn" style={{ color: 'inherit', width: 24, height: 24 }} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
+        <button ref={btn} className="iconbtn" style={{ color: 'inherit', width: 24, height: 24 }} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
           <MoreHorizontal size={14} />
         </button>
         {open && (
@@ -214,6 +224,7 @@ const NAV_KEY = (id: string) => `sr_nav_${id}`;
 function NavItems() {
   const loc = useLocation();
   const { store } = useAuth();
+  const canManage = canManageRole(store?.role);
   // Group open/closed is remembered per browser profile (per user); the group holding the current page always opens.
   const [openIds, setOpenIds] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
@@ -245,6 +256,8 @@ function NavItems() {
   return (
     <nav ref={navRef} className="navscroll" aria-label="Primary">
       {GROUPS.map((g) => {
+        const items = g.items.filter((i) => !i.manage || canManage);
+        if (items.length === 0) return null;
         const open = openIds[g.id] || groupContainsPath(g, loc.pathname);
         return (
           <div key={g.id}>
@@ -252,7 +265,7 @@ function NavItems() {
               {g.label}<ChevronDown size={12} aria-hidden="true" />
             </button>
             <div className="gi">
-              {g.items.map(({ to, label, icon: Icon, count }) => {
+              {items.map(({ to, label, icon: Icon, count }) => {
                 const n = count ? counts?.[count] : undefined;
                 return (
                   <Link key={to} to={to} className="nav" aria-current={activeTo === to ? 'page' : undefined}>
@@ -273,26 +286,47 @@ export default function Layout() {
   const loc = useLocation();
   const navigate = useNavigate();
   useLeaveGuardRoot(navigate);
+  // AD-H7: below 760px the sidebar is an off-canvas drawer (CSS); this state only drives it there.
+  const [navOpen, setNavOpen] = useState(false);
+  const menuBtn = useRef<HTMLButtonElement>(null);
+  const drawer = useRef<HTMLElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => { setNavOpen(false); }, [loc.pathname]);
+  useEffect(() => {
+    if (navOpen) {
+      wasOpen.current = true;
+      drawer.current?.querySelector<HTMLElement>('button, a[href]')?.focus();
+      const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen(false); };
+      document.addEventListener('keydown', onKey);
+      return () => document.removeEventListener('keydown', onKey);
+    }
+    if (wasOpen.current) { wasOpen.current = false; menuBtn.current?.focus(); }
+  }, [navOpen]);
   return (
     <div className="app">
+      <a href="#main-content" className="skip-link" onClick={(e) => { e.preventDefault(); const m = document.getElementById('main-content'); m?.focus(); m?.scrollIntoView?.(); }}>Skip to content</a>
       <div className="rd contents">
-        <aside className="side" aria-label="Main navigation">
+        <aside ref={drawer} id="app-sidebar" className="side" aria-label="Main navigation" data-open={navOpen}>
           <StoreSwitcher />
           <NavItems />
           <AccountMenu />
         </aside>
+        <div className="navbackdrop" data-open={navOpen} onClick={() => setNavOpen(false)} aria-hidden="true" />
       </div>
       <section className="main">
         <div className="rd contents">
           <header className="top">
+            <button ref={menuBtn} type="button" className="iconbtn menubtn" aria-label="Open navigation" aria-expanded={navOpen} aria-controls="app-sidebar" onClick={() => setNavOpen((o) => !o)}>
+              <Menu size={18} aria-hidden="true" />
+            </button>
             <button className="search" onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))} aria-keyshortcuts="Control+K Meta+K">
-              <Search size={14} aria-hidden="true" />Search orders, products, customers<span className="kbd">Ctrl K</span>
+              <Search size={14} aria-hidden="true" /><span className="stxt">Search orders, products, customers</span><span className="kbd">Ctrl K</span>
             </button>
             <span className="sp" />
             <ThemeMenu />
           </header>
         </div>
-        <main key={loc.pathname} className="flex-1 overflow-auto min-h-0 flex flex-col">
+        <main id="main-content" tabIndex={-1} key={loc.pathname} className="flex-1 overflow-auto min-h-0 flex flex-col focus:outline-none">
           <SectionedOutlet>
             <LegacyFrame />
           </SectionedOutlet>

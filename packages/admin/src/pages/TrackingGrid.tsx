@@ -6,6 +6,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { date } from '../lib/format';
 import { PageHeader } from '../components/ui';
+import { useLeaveGuard } from '../redesign/leave-guard';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { ResultTable, StatusBadge } from '../components/FulfilmentResult';
 import { dryRunResult, importResult, inferProvider, openOrderStatus, type FulfilmentResult } from '../lib/fulfilment';
@@ -26,11 +27,24 @@ export default function TrackingGrid() {
   const [isDryRun, setIsDryRun] = useState(true);
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
 
   async function loadOrders() {
+    // Refresh replaces the list and drops every typed number: ask first when there is typed work.
+    if (orders && Object.values(tracking).some((v) => v.trim())) {
+      const n = Object.values(tracking).filter((v) => v.trim()).length;
+      const ok = await confirm({
+        title: 'Refresh and discard entered tracking numbers?',
+        description: `${n} tracking number${n !== 1 ? 's' : ''} you typed have not been submitted and will be cleared.`,
+        confirmLabel: 'Refresh and discard',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setLoading(true); setResult(null); setTracking({}); setError(null);
     try {
       const res = await api.get<{ items: OpenOrderRow[]; total: number }>('/fulfillment/open-orders?limit=2000');
+      setTotal(res.total);
       setOrders(res.items.map((o) => ({ orderCode: o.code, customerName: o.name ?? o.email ?? '', orderStatus: openOrderStatus(o), orderDate: date(o.placedAt) })));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load open orders.');
@@ -38,6 +52,7 @@ export default function TrackingGrid() {
   }
 
   const filledCount = Object.values(tracking).filter((v) => v.trim()).length;
+  useLeaveGuard(filledCount > 0, 'Tracking numbers you entered have not been submitted.');
 
   const buildEntries = () =>
     Object.entries(tracking)
@@ -98,6 +113,9 @@ export default function TrackingGrid() {
               </div>
             </div>
 
+            {total > orders.length && (
+              <p role="status" className="text-sm text-warning font-medium mb-3">{`Showing the first ${orders.length} of ${total} open orders. Submit these, then Refresh to load the rest.`}</p>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
