@@ -32,7 +32,7 @@
     "release:doctor": "right-release doctor"
   },
   "devDependencies": {
-    "@rightkit/release": "0.6.29",
+    "@rightkit/release": "0.6.52",
     "@typescript-eslint/parser": "8.72.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "10.14.0",
