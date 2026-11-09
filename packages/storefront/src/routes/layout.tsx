@@ -12,9 +12,8 @@ import {
 } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { RequestHandler, routeLoader$, useLocation } from '@qwik.dev/router';
-import { ImageTransformerProps, useImageProvider } from 'qwik-image';
 import Menu from '~/components/menu/Menu';
-import { APP_STATE, IMAGE_RESOLUTIONS, COUNTRY_COOKIE } from '~/constants';
+import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { ActiveCustomer, AppState } from '~/types';
 import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
@@ -26,7 +25,7 @@ import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/
 import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { CACHE_POLICY_VERSION, resolveRouteCacheProfile, vetoEdgeCache } from '~/config/route-cache-policy';
+import { CACHE_POLICY_VERSION, markMaintenanceResponse, resolveRouteCacheProfile, vetoEdgeCache } from '~/config/route-cache-policy';
 import { sellright } from '~/sellright/client';
 import { srShopIdentity, srErrorStatus, type SrMaintenanceStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
@@ -119,13 +118,13 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
  * for anything that gates whether a page is even servable) so a maintenance
  * window that ends mid-visit clears on the visitor's very next navigation.
  */
-export const useMaintenanceLoader = routeLoader$(async ({ headers }): Promise<SrMaintenanceStatus> => {
+export const useMaintenanceLoader = routeLoader$(async ({ headers, status: setStatus }): Promise<SrMaintenanceStatus> => {
 	// V39 / N10: rendering still fails OPEN on an unreachable API (an outage must not masquerade as maintenance), but a response
 	// whose gate state is unknown, or that shows the maintenance screen, is never edge-cached.
 	try {
 		const { data } = await sellright().GET('/v1/maintenance', {});
 		const status = data as SrMaintenanceStatus;
-		if (status.maintenance !== false) vetoEdgeCache(headers, 'maintenance');
+		if (status.maintenance !== false) markMaintenanceResponse({ headers, status: setStatus });
 		return status;
 	} catch {
 		vetoEdgeCache(headers, 'maintenance-unknown');
@@ -171,15 +170,6 @@ export default component$(() => {
 	// /affiliate is a single-purpose dashboard surface — render its own minimal
 	// chrome via routes/affiliate/layout.tsx instead of the global Header + Footer.
 	const isAffiliateSurface = location.url.pathname.startsWith('/affiliate');
-
-	const imageTransformer$ = $(({ src, width, height }: ImageTransformerProps): string => {
-		return `${src}?w=${width}&h=${height}&format=avif`;
-	});
-
-	useImageProvider({
-		imageTransformer$,
-		resolutions: IMAGE_RESOLUTIONS,
-	});
 
 	const identityData = useStoreIdentityLoader();
 	const maintenanceData = useMaintenanceLoader();

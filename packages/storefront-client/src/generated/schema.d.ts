@@ -4223,8 +4223,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
+                        "application/json": components["schemas"]["ApiError"] & {
                             skus: string[];
                         };
                     };
@@ -5175,7 +5174,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    lowStock?: boolean | null;
+                    lowStock?: "0" | "1" | "true" | "false";
                     page?: number;
                     pageSize?: number;
                     q?: string;
@@ -6562,14 +6561,14 @@ export interface paths {
                     page?: number;
                     pageSize?: number;
                     paymentStatus?: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed" | "balance_due";
-                    preOrder?: boolean | null;
+                    preOrder?: "0" | "1" | "true" | "false";
                     q?: string;
                     shippingMethod?: string;
                     state?: string;
                     status?: "open" | "completed" | "cancelled" | "archived" | "active";
                     tab?: "tofulfil" | "pre" | "partial" | "unpaid" | "shipped" | "refunded" | "cancelled";
                     to?: string;
-                    trashed?: boolean | null;
+                    trashed?: "0" | "1" | "true" | "false";
                 };
                 header?: never;
                 path?: never;
@@ -11114,7 +11113,14 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items: unknown[];
+                            items: {
+                                createdAt: string;
+                                id: string;
+                                orderCode: string;
+                                reason: string | null;
+                                refundAmount?: number | null;
+                                status: string;
+                            }[];
                             page: number;
                             pageSize: number;
                             total: number;
@@ -12855,8 +12861,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
+                        "application/json": components["schemas"]["ApiError"] & {
                             failing: string[];
                         };
                     };
@@ -15266,7 +15271,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Set a variant on-hand at a location (recomputes aggregate) */
+        /** Set a variant on-hand at a location (change applied to the aggregate as a delta) */
         patch: {
             parameters: {
                 query?: never;
@@ -16213,6 +16218,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Rate limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Downloads not configured (DOWNLOAD_URL_SECRET unset) */
                 503: {
                     headers: {
@@ -16371,6 +16385,15 @@ export interface paths {
                 };
                 /** @description Not found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -18323,7 +18346,9 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "idempotency-key"?: string;
+                };
                 path: {
                     code: string;
                 };
@@ -18352,6 +18377,15 @@ export interface paths {
                             /** @enum {string} */
                             status: "requested";
                         };
+                    };
+                };
+                /** @description Invalid Idempotency-Key header */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Unauthenticated */
@@ -18582,6 +18616,15 @@ export interface paths {
                 };
                 /** @description Password changed meanwhile (CREDENTIAL_CHANGED) */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -22526,6 +22569,15 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         put?: never;
@@ -23430,7 +23482,7 @@ export interface paths {
                         /** @enum {string} */
                         kind?: "newsletter" | "waitlist";
                         meta?: {
-                            [key: string]: unknown;
+                            [key: string]: string | number | boolean;
                         };
                         name?: string;
                         /** @enum {string} */
@@ -23515,6 +23567,15 @@ export interface paths {
                 };
                 /** @description Listmonk not configured for this store, or no such subscriber */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -24397,9 +24458,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24448,9 +24507,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24499,9 +24556,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description siteUrl not configured */
@@ -24510,9 +24565,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24557,9 +24610,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24604,9 +24655,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24651,9 +24700,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24698,9 +24745,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24745,9 +24790,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -24792,9 +24835,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            error: string;
-                        };
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
             };
@@ -25005,6 +25046,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Rate limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -25064,7 +25114,9 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "idempotency-key"?: string;
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -25106,8 +25158,17 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Stripe disabled */
+                /** @description Stripe disabled, or the Idempotency-Key was used for a different request */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -25139,7 +25200,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Confirm a subscriber (double opt-in) */
+        /** Confirm subscription landing page (HTML form; does not change state) */
         get: {
             parameters: {
                 query?: never;
@@ -25163,7 +25224,29 @@ export interface paths {
             };
         };
         put?: never;
-        post?: never;
+        /** Confirm a subscriber (double opt-in) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description HTML page */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -25316,7 +25399,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_ACCOUNT_MISMATCH" | "APPLE_ALREADY_LINKED" | "APPLE_EMAIL_REQUIRED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "BUSY" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CSRF_INVALID" | "AGENT_NOT_ALLOWED" | "DOWNLOAD_NOT_FOUND" | "EMAIL_UNVERIFIED" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "FEATURE_DISABLED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_ADDRESS" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LEGACY_MIGRATION_CONFLICT" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSWORD_INCORRECT" | "PAYMENT_IN_PROGRESS" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOO_MANY_PASSKEYS" | "TOKEN_INVALID" | "TOTP_ENROLLMENT_REQUIRED" | "PASSKEY_REVIEW_REQUIRED" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "AGENT_NOT_ALLOWED" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_ACCOUNT_MISMATCH" | "APPLE_ALREADY_LINKED" | "APPLE_EMAIL_REQUIRED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "BUSY" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CSRF_INVALID" | "DOWNLOADS_NOT_CONFIGURED" | "DOWNLOAD_LINK_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOAD_UNAVAILABLE" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "EMAIL_UNVERIFIED" | "FEATURE_DISABLED" | "FEED_BUSY" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INDEXNOW_NOT_CONFIGURED" | "INVALID_ADDRESS" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_EVENT" | "INVALID_IDEMPOTENCY_KEY" | "INVALID_PAYMENT_REQUEST" | "INVALID_SIGNATURE" | "INVITE_INVALID" | "LEGACY_MIGRATION_CONFLICT" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_FOUND" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSKEY_REVIEW_REQUIRED" | "PASSWORD_INCORRECT" | "PAYLOAD_TOO_LARGE" | "PAYMENT_IN_PROGRESS" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "READINESS_NOT_MET" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHEERID_NOT_CONFIGURED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "SITE_URL_NOT_CONFIGURED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOO_MANY_PASSKEYS" | "TOTP_ENROLLMENT_REQUIRED" | "UNKNOWN_ACCOUNT" | "UNKNOWN_STORE" | "VARIANT_NOT_RECURRING" | "VERIFICATION_ID_REQUIRED";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

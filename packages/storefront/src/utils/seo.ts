@@ -44,6 +44,21 @@ interface SEOConfig {
   productMeta?: { price?: string; currency?: string; brand?: string; condition?: string; availability?: string };
 }
 
+/** FC-8: the image URL with `preset` set, keeping any query string it already has. */
+export const withPreset = (url: string, preset: string): string => {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('preset', preset);
+    return u.toString();
+  } catch {
+    // A relative URL: split off the query by hand.
+    const [path, query = ''] = url.split('?');
+    const params = new URLSearchParams(query);
+    params.set('preset', preset);
+    return `${path}?${params.toString()}`;
+  }
+};
+
 export const createSEOHead = ({
   title,
   description,
@@ -64,7 +79,7 @@ export const createSEOHead = ({
     ? (image.startsWith('http') ? image : `${SITE_DOMAIN}${image}`)
     : undefined;
   const optimizedImage = absoluteImage
-    ? (absoluteImage.includes('/assets/') ? absoluteImage + '?preset=xl' : absoluteImage)
+    ? (absoluteImage.includes('/assets/') ? withPreset(absoluteImage, 'xl') : absoluteImage)
     : DEFAULT_IMAGE;
 
   const allLinks = [

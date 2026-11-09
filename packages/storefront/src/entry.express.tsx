@@ -12,6 +12,7 @@ import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
+import { resolvePreviewToken, sellrightPreviewToken } from"./utils/sellright-preview-token.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL, createErrorNoStoreMiddleware, createShellCacheMiddleware, createShellRequestMiddleware, isShellRender, shellCacheEnabled, shellExcludedPaths, shellRenderUrl, shellTtlSeconds } from"./config/route-cache-policy";
 import { shellRenderContext } from"./platform/shell-render-context.server";
@@ -232,6 +233,12 @@ app.use((req, _res, next) => {
 	// only when SELLRIGHT_TRUST_FORWARDED_HOST=1 (utils/trusted-request.server.ts). A forged header is never forwarded.
 	const host = validatedRequestHost(req.headers) || undefined;
 	sellrightRequestHost.run(host, next);
+});
+
+// Publish/preview gate: thread the request's preview token (query or cookie) to every sr()/client fetch as x-preview-token.
+// A shell request already lost Cookie (and carries no preview query) in createShellRequestMiddleware, so it gets none.
+app.use((req, _res, next) => {
+	sellrightPreviewToken.run(resolvePreviewToken({ url: req.originalUrl, cookie: req.headers.cookie }), next);
 });
 
 // Snapshot guard (utils/snapshot-guard.ts): a document-shaped path is a plain no-store 404, answered before the static

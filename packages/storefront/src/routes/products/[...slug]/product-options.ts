@@ -1,4 +1,5 @@
 import type { CatalogVariant } from '~/sellright/types/catalog';
+import { formatPrice } from '~/utils/price-format';
 import { effectiveVariantPrice } from '~/sellright/types/catalog';
 import { parseSpecBlock, renderSpecBlock } from '~/utils/product-specs';
 
@@ -133,7 +134,7 @@ export function optionPriceFor(
 }
 
 /** Price delta for a value in group 0 vs cheapest overall (effective prices). */
-export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName: string; values: string[] }[], value: string): string | null {
+export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName: string; values: string[] }[], value: string, currency?: string): string | null {
   if (groups.length < 2) return null;
   const matching = variants.filter(v => v.options?.find(o => o.group?.name === groups[0].groupName && o.name === value));
   if (!matching.length) return null;
@@ -141,7 +142,7 @@ export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName:
   const allMin = Math.min(...variants.map(effectiveVariantPrice));
   const delta = groupMin - allMin;
   if (delta === 0) return null;
-  return delta > 0 ? `+$${(delta / 100).toFixed(0)}` : `-$${(Math.abs(delta) / 100).toFixed(0)}`;
+  return delta > 0 ? `+${formatPrice(delta, currency)}` : `-${formatPrice(Math.abs(delta), currency)}`;
 }
 
 /** The unit price (cents) the PDP is currently quoting: the pre-order price

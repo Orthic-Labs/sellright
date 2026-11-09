@@ -17,11 +17,13 @@ export interface SocialSignInIds {
 }
 
 export const TTL_MS = 60_000;
+/** FC-7: a failed read is remembered this long only; the last good value (if any) keeps being served meanwhile. */
+export const FAIL_TTL_MS = 5_000;
 const TIMEOUT_MS = 1_500;
 const NONE: SocialSignInIds = { google: '', apple: '' };
 /** One host's public config facts: the sign-in ids and (#425) the enabled payment gateways (the head's dns-prefetch hints). */
 interface StoreConfigFacts { ids: SocialSignInIds; gateways: string[] }
-const cache = new Map<string, { at: number } & StoreConfigFacts>();
+const cache = new Map<string, { at: number; ok: boolean } & StoreConfigFacts>();
 /** Misses in flight per key: concurrent requests for one host (a document and its assets) share one config read. */
 const inflight = new Map<string, Promise<StoreConfigFacts>>();
 /** Hosts are validated upstream, but the map is still bounded: the oldest entry goes first. */
@@ -59,19 +61,24 @@ async function storeConfigFacts(
 	const key = pin ? `slug:${pin}` : `host:${h}`;
 	if (!pin && !h) return null;
 	const hit = cache.get(key);
-	if (hit && now - hit.at < TTL_MS) return hit;
+	if (hit && now - hit.at < (hit.ok ? TTL_MS : FAIL_TTL_MS)) return hit;
 	let pending = inflight.get(key);
 	if (!pending) {
 		pending = (async () => {
 			let read: StoreConfigFacts;
+			let ok = true;
 			try {
 				const body = await fetcher(pin ? { 'x-store-slug': pin } : { 'x-forwarded-host': h });
+				// No body (unreachable API, non-2xx, no API url) is a failed read, not an empty config.
+				if (body === null || body === undefined) throw new Error('no config body');
 				read = { ids: idsFromShopConfig(body), gateways: gatewaysFromShopConfig(body) };
 			} catch {
-				read = { ids: NONE, gateways: [] };
+				ok = false;
+				// Keep serving the last good value while the API is down; retry after FAIL_TTL_MS.
+				read = hit ? { ids: hit.ids, gateways: hit.gateways } : { ids: NONE, gateways: [] };
 			}
 			cache.delete(key);
-			cache.set(key, { at: now, ...read });
+			cache.set(key, { at: now, ok, ...read });
 			while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
 			return read;
 		})().finally(() => inflight.delete(key));

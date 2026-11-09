@@ -12,6 +12,7 @@
           "ACTIVE_SUBSCRIPTION_EXISTS",
           "ADDRESS_DRAFT_NOT_FOUND",
           "ADDRESS_NOT_FOUND",
+          "AGENT_NOT_ALLOWED",
           "ALREADY_REVIEWED",
           "AMOUNT_MISMATCH",
           "APPLE_ACCOUNT_MISMATCH",
@@ -29,34 +30,40 @@
           "CEREMONY_INVALID",
           "CHECKOUT_RETRY",
           "COLLECTION_NOT_FOUND",
+          "CREDENTIAL_CHANGED",
+          "CREDENTIAL_EXISTS",
           "CREDIT_ALLOCATION_INVALID",
           "CREDIT_AMOUNT_CHANGED",
           "CREDIT_PAYMENT_UNAVAILABLE",
-          "CREDENTIAL_CHANGED",
-          "CREDENTIAL_EXISTS",
           "CSRF_INVALID",
-          "AGENT_NOT_ALLOWED",
-          "DOWNLOAD_NOT_FOUND",
-          "EMAIL_UNVERIFIED",
           "DOWNLOADS_NOT_CONFIGURED",
+          "DOWNLOAD_LINK_INVALID",
+          "DOWNLOAD_NOT_FOUND",
+          "DOWNLOAD_UNAVAILABLE",
           "EMAIL_NOT_VERIFIED",
           "EMAIL_SAME",
           "EMAIL_TAKEN",
           "EMAIL_TAKEN_UNVERIFIED",
+          "EMAIL_UNVERIFIED",
           "FEATURE_DISABLED",
+          "FEED_BUSY",
           "GIFT_CARD_NOT_FOUND",
           "GOOGLE_SIGNIN_NOT_CONFIGURED",
           "GOOGLE_TOKEN_INVALID",
           "IDEMPOTENCY_KEY_REQUIRED",
           "IDEMPOTENCY_PAYLOAD_MISMATCH",
+          "INDEXNOW_NOT_CONFIGURED",
           "INVALID_ADDRESS",
           "INVALID_BIRTHDAY",
           "INVALID_CHECKOUT_REQUEST",
           "INVALID_CREDENTIALS",
+          "INVALID_EVENT",
+          "INVALID_IDEMPOTENCY_KEY",
           "INVALID_PAYMENT_REQUEST",
+          "INVALID_SIGNATURE",
           "INVITE_INVALID",
-          "LEGAL_ACCEPTANCE_REQUIRED",
           "LEGACY_MIGRATION_CONFLICT",
+          "LEGAL_ACCEPTANCE_REQUIRED",
           "LICENSE_KEY_MISSING",
           "LICENSE_NOT_ACTIVE",
           "LICENSE_NOT_FOUND",
@@ -64,6 +71,7 @@
           "MAGIC_LINK_DISABLED",
           "MAGIC_LINK_INVALID",
           "NOT_AUTHENTICATED",
+          "NOT_FOUND",
           "NOT_RETURNABLE",
           "NO_RECOVERY_PATH",
           "ORDER_ALREADY_PAID",
@@ -72,7 +80,9 @@
           "ORDER_NOT_PAYABLE",
           "OUT_OF_STOCK",
           "PASSKEY_INVALID",
+          "PASSKEY_REVIEW_REQUIRED",
           "PASSWORD_INCORRECT",
+          "PAYLOAD_TOO_LARGE",
           "PAYMENT_IN_PROGRESS",
           "PAYMENT_METHOD_DISABLED",
           "PAYMENT_METHOD_UNKNOWN",
@@ -85,20 +95,25 @@
           "PURCHASE_REQUIRED",
           "QUOTE_CHANGED",
           "RATE_LIMITED",
+          "READINESS_NOT_MET",
           "REJECTED_PLATFORM",
           "RESERVATION_CONFLICT",
           "REVIEWS_DISABLED",
           "SEAT_LIMIT_REACHED",
           "SECURITY_CHECK_FAILED",
+          "SHEERID_NOT_CONFIGURED",
           "SHIPPING_UNAVAILABLE",
           "SIGN_IN_REQUIRED",
+          "SITE_URL_NOT_CONFIGURED",
           "STRIPE_NOT_CONFIGURED",
           "SUBSCRIPTION_NOT_FOUND",
-          "TOO_MANY_PASSKEYS",
           "TOKEN_INVALID",
+          "TOO_MANY_PASSKEYS",
           "TOTP_ENROLLMENT_REQUIRED",
-          "PASSKEY_REVIEW_REQUIRED",
-          "VARIANT_NOT_RECURRING"
+          "UNKNOWN_ACCOUNT",
+          "UNKNOWN_STORE",
+          "VARIANT_NOT_RECURRING",
+          "VERIFICATION_ID_REQUIRED"
         ]
       },
       "ApiError": {
@@ -418,6 +433,7 @@
               "type": "integer",
               "nullable": true,
               "minimum": 0,
+              "maximum": 10000,
               "default": 0
             },
             "required": false,
@@ -1097,6 +1113,7 @@
               "type": "integer",
               "nullable": true,
               "minimum": 0,
+              "maximum": 10000,
               "default": 0
             },
             "required": false,
@@ -1220,6 +1237,16 @@
                     "items",
                     "total"
                   ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -5057,7 +5084,9 @@
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
             },
             "required": false,
             "name": "idempotency-key",
@@ -5872,7 +5901,9 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
             },
             "required": false,
             "name": "idempotency-key",
@@ -11159,6 +11190,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -11864,6 +11905,14 @@
             "required": true,
             "name": "code",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "idempotency-key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -11932,6 +11981,16 @@
                     "id",
                     "status"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Idempotency-Key header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14202,6 +14261,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -14284,6 +14353,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -14484,6 +14563,18 @@
     "/v1/shop/subscribe": {
       "post": {
         "summary": "Subscribe to a recurring plan",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -14542,7 +14633,17 @@
             }
           },
           "409": {
-            "description": "Stripe disabled",
+            "description": "Stripe disabled, or the Idempotency-Key was used for a different request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -14728,15 +14829,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14763,15 +14856,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14798,15 +14883,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14833,15 +14910,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14868,15 +14937,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14903,15 +14964,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -14952,15 +15005,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -15000,15 +15045,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -15018,15 +15055,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -15053,15 +15082,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -15905,8 +15926,13 @@
           },
           {
             "schema": {
-              "type": "boolean",
-              "nullable": true
+              "type": "string",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false"
+              ]
             },
             "required": false,
             "name": "preOrder",
@@ -15925,9 +15951,13 @@
           },
           {
             "schema": {
-              "type": "boolean",
-              "nullable": true,
-              "default": false
+              "type": "string",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false"
+              ]
             },
             "required": false,
             "name": "trashed",
@@ -18298,13 +18328,16 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "slug": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255
                   },
                   "description": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 50000
                   },
                   "status": {
                     "type": "string",
@@ -18423,11 +18456,14 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
                   },
                   "description": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 100000
                   },
                   "status": {
                     "type": "string",
@@ -18448,8 +18484,10 @@
                     "type": "array",
                     "nullable": true,
                     "items": {
-                      "type": "string"
-                    }
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "maxItems": 100
                   },
                   "seoTitle": {
                     "type": "string",
@@ -18647,7 +18685,8 @@
                   },
                   "weightG": {
                     "type": "integer",
-                    "nullable": true
+                    "nullable": true,
+                    "minimum": 0
                   },
                   "dimensions": {
                     "type": "object",
@@ -19510,11 +19549,13 @@
                 "properties": {
                   "sku": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "price": {
                     "type": "integer"
@@ -19545,6 +19586,7 @@
                   "onHand": {
                     "type": "integer",
                     "minimum": 0,
+                    "maximum": 100000000,
                     "default": 0
                   },
                   "fulfillmentType": {
@@ -19559,11 +19601,13 @@
                   },
                   "appKey": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 255
                   },
                   "artifactKey": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 1024
                   },
                   "licenseSeats": {
                     "type": "integer",
@@ -20101,8 +20145,13 @@
           },
           {
             "schema": {
-              "type": "boolean",
-              "nullable": true
+              "type": "string",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false"
+              ]
             },
             "required": false,
             "name": "lowStock",
@@ -20272,11 +20321,13 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "code": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 64
                   },
                   "isDefault": {
                     "type": "boolean",
@@ -20331,7 +20382,7 @@
     },
     "/v1/admin/variants/{id}/location-stock": {
       "patch": {
-        "summary": "Set a variant on-hand at a location (recomputes aggregate)",
+        "summary": "Set a variant on-hand at a location (change applied to the aggregate as a delta)",
         "parameters": [
           {
             "schema": {
@@ -20349,11 +20400,13 @@
                 "type": "object",
                 "properties": {
                   "locationId": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "onHand": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "maximum": 100000000
                   }
                 },
                 "required": [
@@ -20420,14 +20473,17 @@
                 "type": "object",
                 "properties": {
                   "fromLocationId": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "toLocationId": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                   },
                   "quantity": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 100000000
                   }
                 },
                 "required": [
@@ -20550,13 +20606,17 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "values": {
                     "type": "array",
                     "items": {
-                      "type": "string"
-                    }
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "maxItems": 200
                   }
                 },
                 "required": [
@@ -20619,7 +20679,8 @@
                 "properties": {
                   "value": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   }
                 },
                 "required": [
@@ -20683,9 +20744,11 @@
                   "order": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "maxLength": 64
                     },
-                    "minItems": 1
+                    "minItems": 1,
+                    "maxItems": 500
                   }
                 },
                 "required": [
@@ -20759,9 +20822,11 @@
                   "order": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "maxLength": 64
                     },
-                    "minItems": 1
+                    "minItems": 1,
+                    "maxItems": 500
                   }
                 },
                 "required": [
@@ -20835,8 +20900,10 @@
                   "optionIds": {
                     "type": "array",
                     "items": {
-                      "type": "string"
-                    }
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "maxItems": 200
                   }
                 },
                 "required": [
@@ -21360,7 +21427,36 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "nullable": true
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "orderCode": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "refundAmount": {
+                            "type": "integer",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status",
+                          "reason",
+                          "orderCode",
+                          "createdAt"
+                        ]
                       }
                     },
                     "total": {
@@ -22974,21 +23070,24 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiError"
                     },
-                    "skus": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
+                    {
+                      "type": "object",
+                      "properties": {
+                        "skus": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "skus"
+                      ]
                     }
-                  },
-                  "required": [
-                    "error",
-                    "skus"
                   ]
                 }
               }
@@ -25517,7 +25616,8 @@
                   "code": {
                     "type": "string",
                     "nullable": true,
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "type": {
                     "type": "string",
@@ -25540,7 +25640,8 @@
                     "nullable": true,
                     "items": {
                       "nullable": true
-                    }
+                    },
+                    "maxItems": 100
                   },
                   "usageLimit": {
                     "type": "integer",
@@ -25555,15 +25656,18 @@
                   },
                   "exclusionGroup": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 100
                   },
                   "startsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "endsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "enabled": {
                     "type": "boolean",
@@ -25572,6 +25676,7 @@
                   "affiliateEmail": {
                     "type": "string",
                     "nullable": true,
+                    "maxLength": 320,
                     "format": "email"
                   }
                 },
@@ -25691,7 +25796,8 @@
                   "code": {
                     "type": "string",
                     "nullable": true,
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "type": {
                     "type": "string",
@@ -25712,7 +25818,8 @@
                     "nullable": true,
                     "items": {
                       "nullable": true
-                    }
+                    },
+                    "maxItems": 100
                   },
                   "usageLimit": {
                     "type": "integer",
@@ -25727,15 +25834,18 @@
                   },
                   "exclusionGroup": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 100
                   },
                   "startsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "endsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "enabled": {
                     "type": "boolean"
@@ -25743,6 +25853,7 @@
                   "affiliateEmail": {
                     "type": "string",
                     "nullable": true,
+                    "maxLength": 320,
                     "format": "email"
                   }
                 }
@@ -25917,7 +26028,8 @@
                   "code": {
                     "type": "string",
                     "nullable": true,
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "type": {
                     "type": "string",
@@ -25940,7 +26052,8 @@
                     "nullable": true,
                     "items": {
                       "nullable": true
-                    }
+                    },
+                    "maxItems": 100
                   },
                   "usageLimit": {
                     "type": "integer",
@@ -25955,15 +26068,18 @@
                   },
                   "exclusionGroup": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 100
                   },
                   "startsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "endsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "enabled": {
                     "type": "boolean",
@@ -25972,6 +26088,7 @@
                   "affiliateEmail": {
                     "type": "string",
                     "nullable": true,
+                    "maxLength": 320,
                     "format": "email"
                   }
                 },
@@ -26095,7 +26212,8 @@
                   "code": {
                     "type": "string",
                     "nullable": true,
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "type": {
                     "type": "string",
@@ -26116,7 +26234,8 @@
                     "nullable": true,
                     "items": {
                       "nullable": true
-                    }
+                    },
+                    "maxItems": 100
                   },
                   "usageLimit": {
                     "type": "integer",
@@ -26131,15 +26250,18 @@
                   },
                   "exclusionGroup": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 100
                   },
                   "startsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "endsAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   },
                   "enabled": {
                     "type": "boolean"
@@ -26147,6 +26269,7 @@
                   "affiliateEmail": {
                     "type": "string",
                     "nullable": true,
+                    "maxLength": 320,
                     "format": "email"
                   }
                 }
@@ -26331,11 +26454,13 @@
                   },
                   "apiUser": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "apiToken": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "listId": {
                     "type": "integer",
@@ -26512,17 +26637,20 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "subject": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 998
                   },
                   "listId": {
                     "type": "integer"
                   },
                   "body": {
                     "type": "string",
+                    "maxLength": 500000,
                     "default": ""
                   }
                 },
@@ -26848,11 +26976,14 @@
                     "type": "integer"
                   },
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "expiresAt": {
                     "type": "string",
-                    "nullable": true
+                    "nullable": true,
+                    "maxLength": 64
                   }
                 },
                 "required": [
@@ -26931,7 +27062,9 @@
                     "type": "boolean"
                   },
                   "adjust": {
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": -100000000,
+                    "maximum": 100000000
                   }
                 }
               }
@@ -27019,14 +27152,18 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "currency": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16
                   },
                   "taxRate": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "maximum": 10000
                   },
                   "taxInclusive": {
                     "type": "boolean"
@@ -27581,11 +27718,13 @@
                 "properties": {
                   "code": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 64
                   },
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "calculator": {
                     "type": "object",
@@ -27708,7 +27847,8 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "code": {
                     "type": "string",
@@ -27917,18 +28057,23 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "countries": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 2
                     },
-                    "minItems": 1
+                    "minItems": 1,
+                    "maxItems": 300
                   },
                   "rate": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "maximum": 10000
                   },
                   "priority": {
                     "type": "integer",
@@ -28000,17 +28145,24 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
                   },
                   "countries": {
                     "type": "array",
                     "items": {
-                      "type": "string"
-                    }
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 2
+                    },
+                    "minItems": 1,
+                    "maxItems": 300
                   },
                   "rate": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "maximum": 10000
                   },
                   "priority": {
                     "type": "integer"
@@ -28425,21 +28577,24 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiError"
                     },
-                    "failing": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
+                    {
+                      "type": "object",
+                      "properties": {
+                        "failing": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "failing"
+                      ]
                     }
-                  },
-                  "required": [
-                    "error",
-                    "failing"
                   ]
                 }
               }
@@ -34022,10 +34177,13 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 320,
                     "format": "email"
                   },
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
                   },
                   "discountPct": {
                     "type": "integer",
@@ -34157,6 +34315,7 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 320,
                     "format": "email"
                   }
                 },
@@ -34393,6 +34552,7 @@
                   "email": {
                     "type": "string",
                     "nullable": true,
+                    "maxLength": 320,
                     "format": "email"
                   }
                 },
@@ -34466,13 +34626,17 @@
                 "type": "object",
                 "properties": {
                   "amountCents": {
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000
                   },
                   "txRef": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255
                   },
                   "notes": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 2000
                   }
                 }
               }
@@ -36261,7 +36425,7 @@
                       ]
                     },
                     "minItems": 1,
-                    "maxItems": 500
+                    "maxItems": 200
                   },
                   "couponCode": {
                     "type": "string"
@@ -36356,6 +36520,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -36442,7 +36616,8 @@
                     "type": "string"
                   },
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 200
                   },
                   "kind": {
                     "type": "string",
@@ -36452,7 +36627,9 @@
                     ]
                   },
                   "topic": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9:_.-]*$|^$"
                   },
                   "source": {
                     "type": "string",
@@ -36466,7 +36643,18 @@
                   "meta": {
                     "type": "object",
                     "additionalProperties": {
-                      "nullable": true
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
                     }
                   },
                   "turnstileToken": {
@@ -36919,6 +37107,32 @@
     },
     "/v1/shop/subscriber/confirm/{token}": {
       "get": {
+        "summary": "Confirm subscription landing page (HTML form; does not change state)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "token",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
         "summary": "Confirm a subscriber (double opt-in)",
         "parameters": [
           {
@@ -37052,6 +37266,16 @@
           },
           "404": {
             "description": "Listmonk not configured for this store, or no such subscriber",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {

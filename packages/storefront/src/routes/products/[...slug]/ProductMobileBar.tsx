@@ -1,6 +1,7 @@
 import { $, component$, useOnWindow, useSignal, useOnDocument, useTask$ } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { PRICE_PLACEHOLDER } from '~/platform/live-values';
+import { formatPrice } from '~/utils/price-format';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
 export const ProductMobileBar = component$((props: Record<string, any>) => {
@@ -49,7 +50,7 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
             const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
             const live = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
-            return <>{showFromPrefix.value && 'From '}${(live / 100).toFixed(0)}</>;
+            return <>{showFromPrefix.value && 'From '}{formatPrice(live, product.currency || undefined)}</>;
           })()}
         </div>
       </div>

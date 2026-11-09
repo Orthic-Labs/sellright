@@ -156,6 +156,15 @@ export const resolveRouteCacheProfile = (pathname: string, sharedMap: { has(key:
 export const EDGE_VETO_HEADER = 'x-sr-edge-veto';
 export const vetoEdgeCache = (headers: { set(name: string, value: string): void }, reason: string): void => headers.set(EDGE_VETO_HEADER, reason);
 
+/** FC-2: the maintenance screen is a temporary outage: 503, Retry-After 300 and noindex, on top of the edge-cache veto. */
+export const MAINTENANCE_RETRY_AFTER_SECONDS = 300;
+export const markMaintenanceResponse = (res: { headers: { set(name: string, value: string): void }; status(code: number): number }): void => {
+	vetoEdgeCache(res.headers, 'maintenance');
+	res.status(503);
+	res.headers.set('Retry-After', String(MAINTENANCE_RETRY_AFTER_SECONDS));
+	res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+};
+
 /** Diagnostic header (only when SHELL_CACHE=1): `cacheable` or `bypass:<reason>`. */
 export const SHELL_DIAG_HEADER = 'x-sr-edge';
 

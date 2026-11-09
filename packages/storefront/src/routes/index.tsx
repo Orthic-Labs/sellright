@@ -1,5 +1,6 @@
 // Homepage - Refined editorial design
 import { component$, useStyles$, useSignal, useContext, useComputed$, $ } from '@qwik.dev/core';
+import { ASSET_VARIANT_REV } from '~/components/ui/LazyImage';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead, readHomeValues } from '~/platform/home';
 import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
@@ -153,7 +154,7 @@ const BaseHomePage = component$(() => {
               <div class="preorder-img-cell">
                 <div class="po-img-wrap">
                   {preorderProduct.value.featuredAsset?.preview ? (
-                    <img src={`${preorderProduct.value.featuredAsset.preview}?preset=large`} alt={`${preorderProduct.value.name} — featured product`}
+                    <img src={`${preorderProduct.value.featuredAsset.preview}?preset=large&r=${ASSET_VARIANT_REV}`} alt={`${preorderProduct.value.name} — featured product`}
                       loading="lazy" decoding="async" width={1024} height={1280} class="po-img" />
                   ) : (
                     <picture>

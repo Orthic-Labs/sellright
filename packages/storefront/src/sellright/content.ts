@@ -136,6 +136,23 @@ export async function fetchSubscriberConfirmPage(token: string): Promise<{ statu
 	}
 }
 
+/** POST /v1/shop/subscriber/confirm/{token} — the landing page's explicit Confirm button: the API flips the subscriber to
+ *  confirmed and renders the result page (GET only shows the landing page, no state change). `null` on a network failure.
+ */
+export async function confirmSubscriberPage(token: string): Promise<{ status: number; html: string } | null> {
+	// Loose cast until the generated client lists this POST: drop it after `pnpm --filter @sellright/storefront-client generate` (run once the API schema is final).
+	const client = sellright() as unknown as { POST(path: string, init: unknown): Promise<{ data?: unknown; response: Response }> };
+	try {
+		const { data, response } = await client.POST('/v1/shop/subscriber/confirm/{token}', {
+			params: { path: { token } },
+			parseAs: 'text',
+		});
+		return { status: response.status, html: (data as string | undefined) ?? '' };
+	} catch {
+		return null;
+	}
+}
+
 /** GET /v1/shop/subscriber/unsubscribe/{token} — same proxy pattern as
  *  confirm above (the landing page is a backend-rendered HTML form). */
 export async function fetchSubscriberUnsubscribePage(token: string): Promise<{ status: number; html: string } | null> {

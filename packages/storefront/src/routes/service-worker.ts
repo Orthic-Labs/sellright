@@ -24,6 +24,12 @@ export {};
 // v4: earlier versions matched any path containing /assets/ or /media/ and could store a document or loader data
 // (for example a collection whose handle is "assets"). Bumping the name makes activation delete those entries.
 const IMAGE_CACHE = 'storefront-images-v4';
+// FC-6: the image cache holds at most this many entries; the oldest are deleted on insert.
+const MAX_IMAGE_ENTRIES = 60;
+const trimImageCache = async (cache: Cache): Promise<void> => {
+	const keys = await cache.keys(); // insertion order: oldest first
+	for (let i = 0; i < keys.length - MAX_IMAGE_ENTRIES; i++) await cache.delete(keys[i]!);
+};
 
 // Cache-first for image assets only (safe to cache indefinitely — URLs change when images update). Cache Storage
 // does not honour HTTP no-store, so this worker must never touch a document or data response: only requests the
@@ -64,7 +70,7 @@ addEventListener('fetch', (event: any) => {
 				if (!fetchPromise) {
 					fetchPromise = fetch(event.request).then((response) => {
 						if (isStorableImage(response)) {
-							cache.put(event.request, response.clone());
+							cache.put(event.request, response.clone()).then(() => trimImageCache(cache)).catch(() => {});
 						}
 						return response;
 					}).finally(() => {

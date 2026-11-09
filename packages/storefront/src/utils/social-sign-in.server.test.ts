@@ -54,3 +54,31 @@ describe('socialSignInIdsForHost', () => {
 		expect(fetcher).toHaveBeenCalledTimes(MAX_ENTRIES + 2);
 	});
 });
+
+describe('failed config reads (FC-7)', () => {
+	beforeEach(() => clearSocialSignInCache());
+	const opts = (fetcher: any, now: number) => ({ storePin: '', fetcher, now });
+
+	it('caches a failure for 5 s only, not 60 s', async () => {
+		const fetcher = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce({ auth: { googleClientId: 'g' } });
+		expect((await socialSignInIdsForHost('h', opts(fetcher, 0))).google).toBe('');
+		expect((await socialSignInIdsForHost('h', opts(fetcher, 4_999))).google).toBe('');
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect((await socialSignInIdsForHost('h', opts(fetcher, 5_000))).google).toBe('g');
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps serving the last good value while the read fails', async () => {
+		const fetcher = vi.fn().mockResolvedValueOnce({ auth: { googleClientId: 'good' } }).mockRejectedValue(new Error('down'));
+		expect((await socialSignInIdsForHost('h', opts(fetcher, 0))).google).toBe('good');
+		expect((await socialSignInIdsForHost('h', opts(fetcher, TTL_MS))).google).toBe('good'); // refresh failed
+		expect((await socialSignInIdsForHost('h', opts(fetcher, TTL_MS + 5_000))).google).toBe('good'); // retry failed too
+		expect(fetcher).toHaveBeenCalledTimes(3);
+	});
+
+	it('treats a null body as a failed read', async () => {
+		const fetcher = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ auth: { googleClientId: 'g' } });
+		await socialSignInIdsForHost('h', opts(fetcher, 0));
+		expect((await socialSignInIdsForHost('h', opts(fetcher, 5_000))).google).toBe('g');
+	});
+});

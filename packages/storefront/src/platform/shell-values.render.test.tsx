@@ -173,7 +173,7 @@ describe('product pages (base /products/:slug/ and brand productPath /shop/:slug
 		expect(pending).toContain('data-price-pending');
 		expect(pending).not.toContain('$0');
 		const ready = (await ssrRenderToDom(<ProductMobileBar {...props} pricesPending={{ value: false }} />, {})).document.body.innerHTML;
-		expect(ready).toContain('$46');
+		expect(ready).toContain('$45.67');
 	});
 });
 

@@ -71,25 +71,6 @@ export const Head = component$<HeadProps>(({ nonce, country }) => {
 					padding: 0;
 					font-family: var(--font-body);
 				}
-				/* Critical hero styles for LCP optimization */
-				.hero-section {
-					position: relative;
-					overflow: hidden;
-					height: 70vh;
-					min-height: 500px;
-				}
-				@media (min-width: 1024px) {
-					.hero-section {
-						height: 100vh;
-					}
-				}
-				.hero-image {
-					width: 100%;
-					height: 100%;
-					object-fit: cover;
-					image-rendering: -webkit-optimize-contrast;
-					image-rendering: crisp-edges;
-				}
 				/* Prevent layout shift */
 				.btn-link {
 					display: inline-block;

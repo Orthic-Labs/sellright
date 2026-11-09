@@ -208,9 +208,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                   <span class="sr-price-from">From</span>
                 )}
                 {strike !== null && (
-                  <span class="sr-price-original">{`$${(strike / 100).toFixed(0)}`}</span>
+                  <span class="sr-price-original">{formatPrice(strike, product.currency || undefined)}</span>
                 )}
-                <span class="sr-price">{`$${(live / 100).toFixed(0)}`}</span>
+                <span class="sr-price">{formatPrice(live, product.currency || undefined)}</span>
               </div>
             );
           })()}
@@ -279,7 +279,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                     <div class="sr-blade-grid" style={`grid-template-columns: repeat(${group.values.length}, 1fr)`}>
                       {group.values.map((val: string) => {
                         const isAvail = available.has(val);
-                        const delta = priceDeltaLabel(product.variants, groups.value, val);
+                        const delta = priceDeltaLabel(product.variants, groups.value, val, product.currency || undefined);
                         return (
                           <button key={val}
                             class={`sr-blade-card${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}
@@ -333,7 +333,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                       {group.values.map((val: string) => {
                         const isAvail = available.has(val);
                         const optionPrice = pricesVary ? optionPriceFor(product.variants, groups.value, groupIdx, val, selectedValues.value) : null;
-                        const pillPrice = optionPrice !== null ? `$${(optionPrice / 100).toFixed(0)}` : null;
+                        const pillPrice = optionPrice !== null ? formatPrice(optionPrice, product.currency || undefined) : null;
                         return (
                           <button key={val}
                             class={`sr-pill${chosenVal === val ? ' active' : ''}${!purchasable.has(val) ? ' oos' : ''}`}

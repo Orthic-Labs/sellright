@@ -30,6 +30,7 @@
 import { isServer } from '@qwik.dev/core/build';
 import { sellrightRequestCookie } from './sellright-request-context.server';
 import { sellrightRequestHost } from './sellright-request-host.server';
+import { previewTokenHeaders } from './sellright-preview-token.server';
 import { sellrightVisitorIp } from './sellright-visitor-ip.server';
 import { VISITOR_IP_HEADER } from './visitor-ip-header';
 
@@ -73,6 +74,8 @@ export function storeResolutionHeaders(): Record<string, string> {
 		const forwardedHost = sellrightRequestHost.getStore();
 		if (forwardedHost) headers['x-forwarded-host'] = forwardedHost;
 	}
+	// Publish/preview gate: the incoming request's preview token (query or cookie), only when it carries one.
+	Object.assign(headers, previewTokenHeaders());
 	return headers;
 }
 

@@ -13,6 +13,7 @@ import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShipping } from './cart-shipping';
+import { drawerTotal } from './cart-total';
 import { CartExpress } from './CartExpress';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -519,18 +520,18 @@ export default component$(() => {
 										)}
 									</div>
 
-									{/* Total with shipping */}
-									{shippingState.selectedMethod && (cartState.pendingAdds ?? 0) === 0 && (
-										<div class="flex justify-between items-baseline pt-1.5 border-t border-[#E5E0D8]">
-											<span class="text-[11px] tracking-[0.05em] text-[#1A1A1A] uppercase font-semibold">Total</span>
-											<span class="text-[15px] font-semibold text-[#1A1A1A] tabular-nums">
-												{formatPrice(
-													cartState.cart.subtotal + shippingState.selectedMethod.priceWithTax,
-													cartState.cart.currency
-												)}
-											</span>
-										</div>
-									)}
+									{/* Total with shipping: the server quote's grand total when the cart carries one, else an estimate (M-L2). */}
+									{shippingState.selectedMethod && (cartState.pendingAdds ?? 0) === 0 && (() => {
+										const total = drawerTotal(cartState.cart, shippingState.selectedMethod.priceWithTax);
+										return (
+											<div class="flex justify-between items-baseline pt-1.5 border-t border-[#E5E0D8]">
+												<span class="text-[11px] tracking-[0.05em] text-[#1A1A1A] uppercase font-semibold">{total.label}</span>
+												<span class="text-[15px] font-semibold text-[#1A1A1A] tabular-nums">
+													{formatPrice(total.cents, cartState.cart.currency)}
+												</span>
+											</div>
+										);
+									})()}
 								</div>
 
 								{/* Express wallets above CHECKOUT: the shopper's own cart, server-quoted (components/cart/CartExpress.tsx). */}

@@ -1,7 +1,7 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { Link } from '@qwik.dev/router';
-import { createSEOHead } from '~/utils/seo';
+import { createSEOHead, withPreset } from '~/utils/seo';
 import type { BlogPostFull } from '~/providers/shop/blog/blog';
 import { theme, siteUrl } from '~/theme/theme.config';
 import { useBlogPost, useRelatedPosts } from '~/platform/blog';
@@ -219,7 +219,7 @@ export const head = ({ resolveValue }: any) => {
             url: postUrl,
             datePublished: post.publishDate || post.createdAt,
             dateModified: post.updatedAt,
-            image: { '@type': 'ImageObject', url: image + (post.featuredImage ? '?preset=xl' : ''), width: 1200, height: 630 },
+            image: { '@type': 'ImageObject', url: post.featuredImage ? withPreset(image, 'xl') : image, width: 1200, height: 630 },
             author: authorSchema,
             publisher: { '@type': 'Organization', '@id': `${siteUrl}/#organization`, name: theme.storeName, url: siteUrl, logo: { '@type': 'ImageObject', url: `${siteUrl}/logo.png` } },
             mainEntityOfPage: { '@type': 'WebPage', '@id': postUrl },

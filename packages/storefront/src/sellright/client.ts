@@ -25,6 +25,7 @@ import {
 	type components,
 } from '@sellright/storefront-client';
 import { apiBase, storeResolutionHeaders } from '~/utils/sellright';
+import { previewTokenHeaders } from '~/utils/sellright-preview-token.server';
 import { sellrightRequestCookie } from '~/utils/sellright-request-context.server';
 import { activationGate } from '~/utils/prerender';
 
@@ -55,6 +56,15 @@ configureSellRightClient({
 	forwardedHost: () => storeResolutionHeaders()['x-forwarded-host'],
 	getCsrfToken: readCsrfCookie,
 	timeoutMs: 8000,
+	// Publish/preview gate: forward the incoming request's preview token (query or cookie) as x-preview-token on SSR calls. With no
+	// token the request goes through untouched (same object, no new header).
+	fetch: (input, init) => {
+		const extra = isServer ? previewTokenHeaders() : {};
+		if (!extra['x-preview-token'] || !(input instanceof Request)) return fetch(input, init);
+		const headers = new Headers(input.headers);
+		headers.set('x-preview-token', extra['x-preview-token']);
+		return fetch(new Request(input, { headers }), init);
+	},
 	// #425: a prerendered page sends no API request until it is activated (utils/prerender.ts); every other document: no wait.
 	ready: () => (isServer ? undefined : activationGate()),
 });

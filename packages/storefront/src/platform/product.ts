@@ -211,9 +211,12 @@ export const readProductOffers = server$(async function (slug: string): Promise<
 // ─────────────────────────────────────────────────────────────────
 // Head — identical to original (preserves generateImagePreloadLinks for LCP)
 // ─────────────────────────────────────────────────────────────────
+const PRODUCT_NOT_FOUND_HEAD = { title: 'Product not found', description: 'This product could not be found.', noindex: true } as const;
 export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL }) => {
   const loaderResult = resolveValue(useProductLoader);
-  const product = loaderResult?.product || loaderResult;
+  // FC-1: a failed / not-found / null loader result gets a noindex head: no canonical, no og:type product, no JSON-LD.
+  if (!loaderResult || loaderResult.failed || !loaderResult.product) return createSEOHead(PRODUCT_NOT_FOUND_HEAD);
+  const product = loaderResult.product;
   const productJsonLd = resolveValue(useProductJsonLd) as JsonLdSchema | null;
 
   // the previous platform's meta logic (platform/product-meta.ts): plain text, never the raw SPECS dump.

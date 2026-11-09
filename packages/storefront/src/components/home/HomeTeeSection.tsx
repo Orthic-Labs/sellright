@@ -8,6 +8,7 @@ import TeeImageWebP_480 from '~/media/homelast.png?format=webp&w=480&quality=70&
 import TeeImageWebP_768 from '~/media/homelast.png?format=webp&w=768&quality=70&url';
 import TeeImageWebP_1024 from '~/media/homelast.png?format=webp&w=1024&quality=70&url';
 import TeeImageJPEG_1024 from '~/media/homelast.png?format=jpeg&w=1024&quality=80&url';
+import { ASSET_VARIANT_REV } from '~/components/ui/LazyImage';
 import Price from '~/components/products/Price';
 
 interface FeaturedProduct {
@@ -47,7 +48,7 @@ export const HomeTeeSection = component$<HomeTeeSectionProps>(({ product, varian
               <span class="tee-tag">New Arrival</span>
               <picture>
                 {product?.featuredAsset?.preview ? (
-                  <img src={`${product.featuredAsset.preview}?preset=large`} alt={product.name}
+                  <img src={`${product.featuredAsset.preview}?preset=large&r=${ASSET_VARIANT_REV}`} alt={product.name}
                     loading="lazy" decoding="async" width={1024} height={1024} class="tee-img" />
                 ) : (
                   <>
