@@ -169,6 +169,46 @@ describe('purchase', () => {
 	});
 });
 
+describe('backorder (#446): live read only', () => {
+	const base = { model, quantity: 1, consent: false, adding: false, last: null, inCart: {} };
+	const labelled = buildModelProduct({ ...PRODUCT, variants: PRODUCT.variants.map((v) => ({ ...v, backorderLabel: ' Ships in 3 weeks ' })) } as unknown as CatalogProduct, { key: 'b', href: '/shop/b/', rating: null, productId: 'p1' });
+	const sel = ['medium', 'midnight-black'];
+	it('stockFromResponse carries backorder and shipsNowQuantity; absent fields are not backorder; malformed ships-now is null', () => {
+		const s = stockFromResponse({ variants: [
+			{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0 },
+			{ sku: 'B', inStock: true, availableQuantity: 4 },
+			{ sku: 'C', inStock: true, availableQuantity: 4, backorder: false, shipsNowQuantity: -1 },
+		] });
+		expect(s.bySku.A).toEqual({ inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0 });
+		expect(s.bySku.B).toEqual({ inStock: true, availableQuantity: 4 });
+		expect(s.bySku.C).toEqual({ inStock: true, availableQuantity: 4 });
+	});
+	it('a backorder variant stays purchasable; maxQuantity is the total sellable; the label comes from the catalog, "Ships later" without one', () => {
+		const stock = ready({ 'RH-M-BLK': { inStock: true, availableQuantity: 5, backorder: true, shipsNowQuantity: 0 } });
+		const p = computePurchase({ ...base, model: labelled, stock, selected: sel, quantity: 4 });
+		expect(p.purchase).toMatchObject({ eligible: true, reason: null, maxQuantity: 5, backorder: true, shipLabel: 'Ships in 3 weeks', shipsNowQuantity: 0 });
+		expect(p.selection.quantity).toBe(4);
+		expect(computePurchase({ ...base, stock, selected: sel }).purchase).toMatchObject({ backorder: true, shipLabel: 'Ships later' });
+	});
+	it('#446: the live read label wins over the catalog label; the catalog label is the fallback', () => {
+		const live = ready({ 'RH-M-BLK': { inStock: true, availableQuantity: 5, backorder: true, shipsNowQuantity: 0, backorderLabel: 'Ships Friday' } });
+		expect(computePurchase({ ...base, model: labelled, stock: live, selected: sel }).purchase).toMatchObject({ shipLabel: 'Ships Friday' });
+		expect(computePurchase({ ...base, stock: live, selected: sel }).purchase).toMatchObject({ shipLabel: 'Ships Friday' });
+		const noLive = ready({ 'RH-M-BLK': { inStock: true, availableQuantity: 5, backorder: true, shipsNowQuantity: 0 } });
+		expect(computePurchase({ ...base, model: labelled, stock: noLive, selected: sel }).purchase).toMatchObject({ shipLabel: 'Ships in 3 weeks' });
+		expect(stockFromResponse({ variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0, backorderLabel: ' Soon ' }] }).bySku.A).toMatchObject({ backorderLabel: 'Soon' });
+	});
+	it('partly in stock: not backorder, the label is offered for the ship-together notice; nothing without live stock', () => {
+		const stock = ready({ 'RH-M-BLK': { inStock: true, availableQuantity: 5, backorder: false, shipsNowQuantity: 2 } });
+		expect(computePurchase({ ...base, model: labelled, stock, selected: sel }).purchase).toMatchObject({ backorder: false, shipLabel: 'Ships in 3 weeks', shipsNowQuantity: 2 });
+		const fully = ready({ 'RH-M-BLK': { inStock: true, availableQuantity: 5, backorder: false, shipsNowQuantity: 5 } });
+		expect(computePurchase({ ...base, model: labelled, stock: fully, selected: sel }).purchase).toMatchObject({ backorder: false, shipLabel: 'Ships in 3 weeks' });
+		for (const stock of [undefined, { status: 'loading', bySku: {} } as ProductStock, { status: 'error', bySku: {} } as ProductStock, ready({ 'RH-M-BLK': { inStock: false, availableQuantity: 0, backorder: true, shipsNowQuantity: 0 } })]) {
+			expect(computePurchase({ ...base, model: labelled, stock, selected: sel }).purchase).toMatchObject({ backorder: false, shipLabel: null, shipsNowQuantity: null });
+		}
+	});
+});
+
 describe('add outcome (only the add\'s own response)', () => {
 	it('maps every server outcome', () => {
 		expect(addResultFrom({ kind: 'applied', line: { quantity: 3, available: true, availableQuantity: 9 } }, 'A', 1)).toEqual({ status: 'added', sku: 'A', quantity: 1, lineQuantity: 3 });

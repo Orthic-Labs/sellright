@@ -76,7 +76,12 @@ export default function Inventory() {
     { key: 'sku', header: 'SKU', width: '16%', render: (r) => <span className="font-mono text-xs text-gray-500">{r.sku}</span> },
     { key: 'status', header: 'Status', align: 'center', width: '12%', render: (r) => <Badge value={stockState(r.available)} /> },
     { key: 'allocated', header: 'Committed', align: 'center', width: '11%', render: (r) => <span className="tnum text-gray-500">{r.allocated}</span> },
-    { key: 'available', header: 'Available', align: 'center', width: '11%', render: (r) => <span className={`tnum ${r.available <= 3 ? 'text-warning font-medium' : 'text-gray-700'}`}>{r.available}</span> },
+    { key: 'incoming', header: 'Incoming', align: 'center', width: '10%', render: (r) => (r.incoming ?? 0) > 0
+      ? <span className="tnum text-gray-700" title={r.backorderLabel ?? undefined}>{r.incoming}{r.backorderLabel && <span className="block text-xs text-gray-400 truncate">{r.backorderLabel}</span>}</span>
+      : <span className="tnum text-gray-300">{'—'}</span> },
+    { key: 'available', header: 'Sellable', align: 'center', width: '11%', render: (r) => (
+      <span className={`tnum ${r.available <= 3 ? 'text-warning font-medium' : 'text-gray-700'}`} title="On hand plus incoming, minus committed">{r.available}{(r.incoming ?? 0) > 0 && r.shipsNow !== undefined && <span className="block text-xs text-gray-400 font-normal">{r.shipsNow} ships now</span>}</span>
+    )},
     { key: 'onhand', header: 'On hand', align: 'center', width: '16%', render: (r) => {
       const editing = edits[r.variantId];
       const parsed = editing === undefined ? null : parseOnHand(editing);
@@ -216,7 +221,7 @@ function StockAdjustModal({ row, onClose, onAdjusted }: { row: InventoryRow; onC
     <Modal open title={`Adjust stock — ${row.sku}`} onClose={onClose} width="max-w-lg">
       <div className="stack-y-4">
         <div className="text-sm text-gray-500">
-          {row.name} · On hand <span className="font-medium text-ink tnum">{row.onHand}</span> · Committed <span className="font-medium text-ink tnum">{row.allocated}</span> · Available <span className="font-medium text-ink tnum">{row.available}</span>
+          {row.name} · On hand <span className="font-medium text-ink tnum">{row.onHand}</span> · Committed <span className="font-medium text-ink tnum">{row.allocated}</span> · {(row.incoming ?? 0) > 0 && <>Incoming <span className="font-medium text-ink tnum">{row.incoming}</span> · </>}Sellable <span className="font-medium text-ink tnum">{row.available}</span>
         </div>
 
         <form className="grid grid-cols-[7rem_1fr_auto] gap-2 items-end" onSubmit={(e) => { e.preventDefault(); if (canSubmit) adjust.mutate(); }}>

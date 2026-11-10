@@ -5,6 +5,9 @@ import { paymentDef } from '../lib/order-status';
 export type PillTone = 'ok' | 'warn' | 'bad' | 'info' | 'neu';
 export interface Pill { tone: PillTone; label: string }
 
+/** #446: the "Ships later" pill for an order with a backorder line; null otherwise. */
+export const shipsLaterPill = (o: Pick<OrderRow, 'hasBackorder'>): Pill | null => (o.hasBackorder ? { tone: 'info', label: 'Ships later' } : null);
+
 /** `tab` values the API accepts, plus the client-only `all` and `archived` (trash). */
 export const TABS = [
   { key: 'tofulfil', label: 'To fulfil' },

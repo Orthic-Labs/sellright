@@ -16,7 +16,7 @@ import { RefundDialog } from '../redesign/RefundDialog';
 import { CancelDialog } from '../redesign/CancelDialog';
 import { LoadError, LoadingRows } from '../redesign/states';
 import {
-  canShip, canShipState, doneCopy, eventCopy, fulfilmentPill, isPre, openQty, paidTotal, paymentPill, plural, refundable, refundedTotal,
+  canShip, canShipState, hasBackorder, isBackorder, shipsLaterCopy, doneCopy, eventCopy, fulfilmentPill, isPre, openQty, paidTotal, paymentPill, plural, refundable, refundedTotal,
   type OrderLine, type OrderView,
 } from '../redesign/order-model';
 
@@ -106,6 +106,7 @@ export default function OrderDetailPage() {
       <td>
         <div style={{ fontWeight: 500 }}>{l.name}</div>
         <div className="muted" style={{ fontSize: 12 }}><span className="mono">{l.sku}</span></div>
+        {isBackorder(l) && <div><span className="pill info">{shipsLaterCopy(l)}</span></div>}
       </td>
       <td className="num muted" style={{ whiteSpace: 'nowrap' }}>{money(l.unitPrice, cur)} × {q}</td>
       <td className="num" style={{ padding: '0 16px', fontWeight: 500 }}>{money(l.unitPrice * q, cur)}</td>
@@ -122,6 +123,7 @@ export default function OrderDetailPage() {
         <h1 tabIndex={-1} style={{ font: '600 18px var(--mono)', outlineOffset: 4 }}>{o.code}</h1>
         <span className={`pill ${pTone}`}>{pLabel}</span>
         <span className={`pill ${fTone}`}>{fLabel}</span>
+        {hasBackorder(o) && !cancelled && <span className="pill info">Ships later</span>}
         {amountDue != null && amountDue > 0 && <span className="pill warn">Balance due</span>}
         <span className="meta">{dateTime(o.placedAt ?? o.createdAt)}</span>
         <span className="sp" />

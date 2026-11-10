@@ -14,6 +14,7 @@ import { applyVariantPrices, useLiveRead } from '~/platform/live-values';
 import { readProductValues, type ProductLiveValues } from '~/platform/product';
 import { earlyJsonOr, liveReadUrl } from '~/platform/early-reads';
 import { fillLiveOffers } from '~/platform/controllers/jsonld-offers';
+import { pdpBackorderNotice } from '~/utils/backorder';
 import { findVariant, getOptionGroups, isPaintedSoldOut, paintStockHint, isPreOrderPresented, isSelectionOutOfStock, isStockHintPending, isVariantPurchasable, selectOptionValue } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -304,6 +305,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
   const isOutOfStock = useComputed$(() => {
     return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value, isStockHintPending(stockHint, liveStockLoaded.value));
   });
+  // #446: from the same live read as availability (never the manifest or the shell): null until a read says the selected variant is a backorder.
+  const backorderNotice = useComputed$(() => (isOutOfStock.value ? null : pdpBackorderNotice(selectedVariant.value, 1)));
   const showCtaTooltip = useSignal(false);
   const ctaTooltipFading = useSignal(false);
   const addItemToOrderErrorSignal = useSignal('');
@@ -392,6 +395,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isEnhancing={isEnhancing}
       refreshLiveStock={refreshLiveStock}
       allVariantsSoldOut={allVariantsSoldOut}
+      backorderNotice={backorderNotice}
       changeImage={changeImage}
       closeImageModal={closeImageModal}
       ctaClass={ctaClass}

@@ -9,7 +9,7 @@ import { useConfirmDialog } from '../components/ConfirmDialog';
 import { useLeaveGuard } from '../redesign/leave-guard';
 import { PageHeader, Spinner, InlineAlert, EmptyStateActionPanel } from '../components/ui';
 
-interface TreeVariant { id: string; name: string; sku: string; enabled: boolean; onHand: number; allocated: number }
+interface TreeVariant { id: string; name: string; sku: string; enabled: boolean; onHand: number; allocated: number; incoming?: number }
 interface TreeProduct { id: string; name: string; enabled: boolean; variants: TreeVariant[] }
 interface Tree { items: TreeProduct[]; total: number; truncated: boolean }
 
@@ -149,7 +149,7 @@ export default function BulkStock() {
                     <th className="th text-left">SKU</th>
                     <th className="th text-right">On hand</th>
                     <th className="th text-right">Allocated</th>
-                    <th className="th text-right">Available</th>
+                    <th className="th text-right" title="On hand minus committed">Ships now</th>
                     <th className="th text-left">New stock</th>
                   </tr>
                 </thead>
@@ -174,7 +174,7 @@ export default function BulkStock() {
                         <tr key={`v-${v.id}`} className={hasChange ? 'bg-warning-soft' : savedVal !== undefined ? 'bg-success-soft' : ''}>
                           <td className="td pl-8 text-xs">{v.name || '—'}{!v.enabled && <span className="ml-2 text-[10px] text-gray-400">disabled</span>}</td>
                           <td className="td font-mono text-xs text-gray-500">{v.sku}</td>
-                          <td className="td text-right tnum">{v.onHand}</td>
+                          <td className="td text-right tnum">{v.onHand}{(v.incoming ?? 0) > 0 && <span className="block text-xs text-gray-400 font-normal">+{v.incoming} incoming</span>}</td>
                           <td className={`td text-right tnum ${v.allocated > 0 ? 'text-warning' : 'text-gray-400'}`}>{v.allocated || '—'}</td>
                           <td className={`td text-right tnum font-medium ${available(v) > 0 ? 'text-success' : 'text-danger'}`}>{available(v)}</td>
                           <td className="td">

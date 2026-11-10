@@ -15,7 +15,7 @@ import { FulfilDialog } from '../redesign/FulfilDialog';
 import OrderInspector from '../redesign/OrderInspector';
 import { FilterChip, PillView, Popover } from '../redesign/orders-ui';
 import {
-  COL_LABELS, DEFAULT_TAB, TABS, UNCOUNTED, fulfilmentPill, isTabKey, itemsCopy, loadCols, loadViews, paymentPill, storeCols, storeViews,
+  COL_LABELS, DEFAULT_TAB, TABS, UNCOUNTED, fulfilmentPill, isTabKey, itemsCopy, loadCols, loadViews, paymentPill, shipsLaterPill, storeCols, storeViews,
   validateViewName, type ColKey, type Cols, type SavedView, type TabKey,
 } from '../redesign/orders-helpers';
 
@@ -458,7 +458,7 @@ export default function Orders() {
                         <td>{c.name ?? c.email ?? '—'}</td>
                         <td className="muted hide-open" data-col="items">{itemsCopy(o)}</td>
                         <td data-col="payment"><PillView pill={paymentPill(o.paymentStatus)} /></td>
-                        <td><PillView pill={fulfilmentPill(o)} /></td>
+                        <td><PillView pill={fulfilmentPill(o)} />{shipsLaterPill(o) && <> <PillView pill={shipsLaterPill(o)!} /></>}</td>
                         <td className="muted" data-col="shipping">{o.shippingMethodName ?? '—'}</td>
                         <td className="num">{money(o.grandTotal, o.currency)}</td>
                       </tr>

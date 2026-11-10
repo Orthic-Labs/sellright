@@ -81,6 +81,18 @@ export const isOutOfStockConflict = (error: unknown): boolean => {
 	return false;
 };
 
+/** The notice for 409 BACKORDER_CHANGED: a line now ships later than the shopper was shown. */
+export const BACKORDER_CHANGED_MESSAGE = 'Shipping time changed for an item in your cart. Review your order and place it again.';
+
+/** True when POST /checkout was refused because a line now ships later than shown (409 BACKORDER_CHANGED). The caller must
+ *  re-read the live cart so the line shows its notice. */
+export const isBackorderChangedConflict = (error: unknown): boolean => {
+	for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
+		if (candidate instanceof SellRightError && candidate.status === 409 && candidate.code === 'BACKORDER_CHANGED') return true;
+	}
+	return false;
+};
+
 /** True for the 409 shapes the cart itself produced (stale/converted/merged/
  *  revision_required) — as opposed to an unrelated 409 (e.g. out-of-stock or
  *  shipping-unavailable) that also carries a `cart` snapshot for display but
@@ -143,6 +155,8 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
 		cartToken: snapshot.token,
 		expectedRevision: snapshot.revision,
+		// #446: acknowledgement of what the shopper was shown as shipping later (from the pre-submit live read, no extra request).
+		...(Array.isArray(snapshot.backorderSkus) ? { backorderSkus: snapshot.backorderSkus } : {}),
 		...(attribution ? { attribution } : {}),
 		...(tracking ? { tracking } : {}),
 	};
@@ -163,6 +177,7 @@ export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot,
 				resetAttemptKey();
 				throw new QuoteChangedError(changed.quote, changed.quoteHash);
 			}
+			if (error.code === 'BACKORDER_CHANGED') throw Object.assign(new Error(BACKORDER_CHANGED_MESSAGE), { cause: error });
 			const conflict = error.body as CheckoutConflictBody | undefined;
 			if (isCartConflict(conflict)) {
 				if (conflict.code === 'stale' || conflict.code === 'revision_required') {

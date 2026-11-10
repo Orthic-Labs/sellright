@@ -97,6 +97,7 @@ const HAND_WRITTEN = [
   '0120_session_indexes.sql',
   '0121_outbox_poll_partial_indexes.sql',
   '0123_edge_purge_pending.sql',
+  '0124_backorder_incoming_stock.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

@@ -172,6 +172,8 @@ export interface RawManifestProductDetail {
     shipDate?: string | null;
     shipDateLabel?: string | null;
     isPreOrder?: boolean | null;
+    /** #446: display copy only (a manifest generation that carries it); absent = the "Ships later" fallback on a live backorder. */
+    backorderLabel?: string | null;
   }>;
 }
 
@@ -258,6 +260,7 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
       salePrice: v.salePrice ?? null,
       preOrderPrice: v.preOrderPrice ?? null,
       shipDate: v.shipDate ?? null, shipDateLabel: v.shipDateLabel ?? null,
+      backorderLabel: typeof v.backorderLabel === 'string' && v.backorderLabel.trim() ? v.backorderLabel.trim() : null,
       compareAtPrice: null,
       isPreOrder: v.isPreOrder ?? false,
       enabled: true,
@@ -276,6 +279,8 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
       appKey: null,
       inStock: UNCHECKED_STOCK.inStock,
       availableQuantity: UNCHECKED_STOCK.availableQuantity,
+      backorder: false,
+      shipsNowQuantity: null,
     })),
   };
 }
@@ -293,6 +298,11 @@ export function mergeProductStock(product: CatalogProduct, stock: CatalogStockRe
         ...v,
         inStock: s?.inStock === true,
         availableQuantity: s ? s.availableQuantity : UNCHECKED_STOCK.availableQuantity,
+        // #446: live backorder state of this read only; absent on an older API = not backorder. A SKU the read omits is unchecked.
+        backorder: s?.backorder === true,
+        shipsNowQuantity: typeof s?.shipsNowQuantity === 'number' ? s.shipsNowQuantity : null,
+        // #446: the live read's label wins (same read as the quantity); else the catalog/manifest label; else the display layer's "Ships later".
+        backorderLabel: (typeof s?.backorderLabel === 'string' && s.backorderLabel.trim() ? s.backorderLabel.trim() : null) ?? v.backorderLabel ?? null,
       };
     }),
   };
@@ -308,6 +318,8 @@ export function withUncheckedStock(product: CatalogProduct): CatalogProduct {
       ...v,
       inStock: UNCHECKED_STOCK.inStock,
       availableQuantity: UNCHECKED_STOCK.availableQuantity,
+      backorder: false,
+      shipsNowQuantity: null,
     })),
   };
 }

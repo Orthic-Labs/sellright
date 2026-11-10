@@ -10500,11 +10500,14 @@ export interface paths {
                     "application/json": {
                         appKey?: string | null;
                         artifactKey?: string | null;
+                        backorderLabel?: string | null;
                         /**
                          * @default physical
                          * @enum {string}
                          */
                         fulfillmentType?: "physical" | "digital_download" | "license" | "update_pass";
+                        /** @default 0 */
+                        incoming?: number;
                         /** @default false */
                         isPreOrder?: boolean;
                         licenseDurationDays?: number | null;
@@ -14282,6 +14285,7 @@ export interface paths {
                                     allocated: number;
                                     enabled: boolean;
                                     id: string;
+                                    incoming?: number;
                                     name: string;
                                     onHand: number;
                                     sku: string;
@@ -15186,6 +15190,7 @@ export interface paths {
                     "application/json": {
                         appKey?: string | null;
                         artifactKey?: string | null;
+                        backorderLabel?: string | null;
                         barcode?: string | null;
                         compareAtPrice?: number | null;
                         cost?: number | null;
@@ -15258,6 +15263,93 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/admin/variants/{id}/incoming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set variant incoming (backorder) quantity and ship label */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        backorderLabel?: string | null;
+                        expectedIncoming?: number;
+                        incoming: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            backorderLabel: string | null;
+                            id: string;
+                            incoming: number;
+                            minIncoming: number;
+                        };
+                    };
+                };
+                /** @description Label missing, or incoming below the quantity already sold on backorder */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Incoming changed since loaded */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/admin/variants/{id}/location-stock": {
         parameters: {
             query?: never;
@@ -15299,6 +15391,7 @@ export interface paths {
                         "application/json": {
                             id: string;
                             onHand: number;
+                            warning?: string;
                         };
                     };
                 };
@@ -15460,6 +15553,7 @@ export interface paths {
                         "application/json": {
                             id: string;
                             onHand: number;
+                            warning?: string;
                         };
                     };
                 };
@@ -15531,6 +15625,7 @@ export interface paths {
                         "application/json": {
                             id: string;
                             onHand: number;
+                            warning?: string;
                         };
                     };
                 };
@@ -15678,6 +15773,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/variants/{id}/stock/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive incoming stock into the warehouse (on-hand += n, incoming -= n) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        quantity: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            incoming: number;
+                            onHand: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description More than is incoming */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/variants/{id}/transfer": {
         parameters: {
             query?: never;
@@ -15786,6 +15956,7 @@ export interface paths {
                             updated: {
                                 id: string;
                                 onHand: number;
+                                warning?: string;
                             }[];
                         };
                     };
@@ -18121,8 +18292,10 @@ export interface paths {
                                 /** @enum {string} */
                                 fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                                 grandTotal: number;
+                                hasBackorder?: boolean;
                                 isPreOrder: boolean;
                                 items: {
+                                    backorder?: boolean;
                                     image: string | null;
                                     isPreOrder: boolean;
                                     lineTotal: number;
@@ -18133,6 +18306,7 @@ export interface paths {
                                     reviewed: boolean;
                                     shipDate: string | null;
                                     shipDateLabel: string | null;
+                                    shipLabel?: string | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -18216,7 +18390,9 @@ export interface paths {
                             /** @enum {string} */
                             fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                             grandTotal: number;
+                            hasBackorder?: boolean;
                             lines: {
+                                backorder?: boolean;
                                 image: string | null;
                                 isPreOrder: boolean;
                                 lineTotal: number;
@@ -18227,6 +18403,7 @@ export interface paths {
                                 reviewed: boolean;
                                 shipDate: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -20847,6 +21024,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -20858,6 +21036,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -20951,6 +21131,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -20962,6 +21143,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -21074,6 +21257,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -21085,6 +21269,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -21144,6 +21330,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -21155,6 +21342,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -21311,6 +21500,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -21322,6 +21512,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -21450,6 +21642,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -21461,6 +21654,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -21520,6 +21715,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -21531,6 +21727,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -21621,6 +21819,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -21632,6 +21831,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -21700,6 +21901,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -21711,6 +21913,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -21803,6 +22007,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -21814,6 +22019,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -21924,6 +22131,7 @@ export interface paths {
                             lines: {
                                 available: boolean;
                                 availableQuantity: number | null;
+                                backorder?: boolean;
                                 image?: string | null;
                                 isPreOrder?: boolean;
                                 lineDiscount: number;
@@ -21935,6 +22143,8 @@ export interface paths {
                                 quantity: number;
                                 shipDate?: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -22023,6 +22233,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -22034,6 +22245,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -22237,6 +22450,7 @@ export interface paths {
                                     preview: string;
                                 }[];
                                 availableQuantity: number | null;
+                                backorderLabel?: string | null;
                                 /** @description integer minor units (cents) */
                                 compareAtPrice: number | null;
                                 enabled: boolean;
@@ -22488,7 +22702,10 @@ export interface paths {
                         "application/json": {
                             variants: {
                                 availableQuantity: number | null;
+                                backorder?: boolean;
+                                backorderLabel?: string | null;
                                 inStock: boolean;
+                                shipsNowQuantity?: number | null;
                                 sku: string;
                             }[];
                         };
@@ -22620,6 +22837,7 @@ export interface paths {
                             utm_source?: string;
                             utm_term?: string;
                         };
+                        backorderSkus?: string[];
                         billingAddress?: {
                             [key: string]: unknown;
                         };
@@ -22720,6 +22938,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -22731,6 +22950,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -22771,6 +22992,7 @@ export interface paths {
                                 lines: {
                                     available: boolean;
                                     availableQuantity: number | null;
+                                    backorder?: boolean;
                                     image?: string | null;
                                     isPreOrder?: boolean;
                                     lineDiscount: number;
@@ -22782,6 +23004,8 @@ export interface paths {
                                     quantity: number;
                                     shipDate?: string | null;
                                     shipDateLabel?: string | null;
+                                    shipLabel?: string | null;
+                                    shipsNowQuantity?: number | null;
                                     sku: string;
                                     unitPrice: number;
                                 }[];
@@ -23650,7 +23874,9 @@ export interface paths {
                             /** @enum {string} */
                             fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                             grandTotal: number;
+                            hasBackorder?: boolean;
                             lines: {
+                                backorder?: boolean;
                                 image: string | null;
                                 isPreOrder: boolean;
                                 lineTotal: number;
@@ -23659,6 +23885,7 @@ export interface paths {
                                 quantity: number;
                                 shipDate: string | null;
                                 shipDateLabel?: string | null;
+                                shipLabel?: string | null;
                                 sku: string;
                                 unitPrice: number;
                             }[];
@@ -25346,7 +25573,17 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": unknown;
+                        "application/json": {
+                            hasBackorder?: boolean;
+                            lines?: ({
+                                backorder?: boolean;
+                                shipLabel?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            })[];
+                        } & {
+                            [key: string]: unknown;
+                        };
                     };
                 };
                 /** @description Bot check failed */
@@ -25399,7 +25636,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "AGENT_NOT_ALLOWED" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_ACCOUNT_MISMATCH" | "APPLE_ALREADY_LINKED" | "APPLE_EMAIL_REQUIRED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "BUSY" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CSRF_INVALID" | "DOWNLOADS_NOT_CONFIGURED" | "DOWNLOAD_LINK_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOAD_UNAVAILABLE" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "EMAIL_UNVERIFIED" | "FEATURE_DISABLED" | "FEED_BUSY" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INDEXNOW_NOT_CONFIGURED" | "INVALID_ADDRESS" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_EVENT" | "INVALID_IDEMPOTENCY_KEY" | "INVALID_PAYMENT_REQUEST" | "INVALID_SIGNATURE" | "INVITE_INVALID" | "LEGACY_MIGRATION_CONFLICT" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_FOUND" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSKEY_REVIEW_REQUIRED" | "PASSWORD_INCORRECT" | "PAYLOAD_TOO_LARGE" | "PAYMENT_IN_PROGRESS" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "READINESS_NOT_MET" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHEERID_NOT_CONFIGURED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "SITE_URL_NOT_CONFIGURED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOO_MANY_PASSKEYS" | "TOTP_ENROLLMENT_REQUIRED" | "UNKNOWN_ACCOUNT" | "UNKNOWN_STORE" | "VARIANT_NOT_RECURRING" | "VERIFICATION_ID_REQUIRED";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_DRAFT_NOT_FOUND" | "ADDRESS_NOT_FOUND" | "AGENT_NOT_ALLOWED" | "ALREADY_REVIEWED" | "AMOUNT_MISMATCH" | "APPLE_ACCOUNT_MISMATCH" | "APPLE_ALREADY_LINKED" | "APPLE_EMAIL_REQUIRED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BACKORDER_CHANGED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "BUSY" | "CART_INVALID" | "CART_NOT_FOUND" | "CART_TOO_LARGE" | "CEREMONY_INVALID" | "CHECKOUT_RETRY" | "COLLECTION_NOT_FOUND" | "CREDENTIAL_CHANGED" | "CREDENTIAL_EXISTS" | "CREDIT_ALLOCATION_INVALID" | "CREDIT_AMOUNT_CHANGED" | "CREDIT_PAYMENT_UNAVAILABLE" | "CSRF_INVALID" | "DOWNLOADS_NOT_CONFIGURED" | "DOWNLOAD_LINK_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOAD_UNAVAILABLE" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "EMAIL_UNVERIFIED" | "FEATURE_DISABLED" | "FEED_BUSY" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INDEXNOW_NOT_CONFIGURED" | "INVALID_ADDRESS" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_EVENT" | "INVALID_IDEMPOTENCY_KEY" | "INVALID_PAYMENT_REQUEST" | "INVALID_SIGNATURE" | "INVITE_INVALID" | "LEGACY_MIGRATION_CONFLICT" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_FOUND" | "NOT_RETURNABLE" | "NO_RECOVERY_PATH" | "ORDER_ALREADY_PAID" | "ORDER_EDIT_PENDING" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSKEY_INVALID" | "PASSKEY_REVIEW_REQUIRED" | "PASSWORD_INCORRECT" | "PAYLOAD_TOO_LARGE" | "PAYMENT_IN_PROGRESS" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "PAYMENT_POLICY_UNAVAILABLE" | "PAYMENT_POLICY_VETO" | "PAYMENT_RETRY" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "QUOTE_CHANGED" | "RATE_LIMITED" | "READINESS_NOT_MET" | "REJECTED_PLATFORM" | "RESERVATION_CONFLICT" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHEERID_NOT_CONFIGURED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "SITE_URL_NOT_CONFIGURED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "TOO_MANY_PASSKEYS" | "TOTP_ENROLLMENT_REQUIRED" | "UNKNOWN_ACCOUNT" | "UNKNOWN_STORE" | "VARIANT_NOT_RECURRING" | "VERIFICATION_ID_REQUIRED";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

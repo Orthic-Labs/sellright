@@ -262,7 +262,14 @@ export interface PurchaseState {
 	last: AddResult | null;
 	/** Units of the resolved variant already in the cart (display only). */
 	inCartQuantity: number;
+	/** Total sellable units of the resolved variant (ships now + incoming), less what the cart holds, 0..10. */
 	maxQuantity: number;
+	/** #446, live read only (absent on an older build = false / null): nothing of the resolved variant ships now and incoming units are sellable. */
+	backorder?: boolean;
+	/** #446: the API's ship label for the variant ("Ships later" fallback on a backorder without one); null when not applicable. */
+	shipLabel?: string | null;
+	/** #446: units that ship now; when the chosen `quantity` exceeds a positive value, every unit ships together with `shipLabel`. */
+	shipsNowQuantity?: number | null;
 }
 export interface ShopListingItem {
 	slug: string;

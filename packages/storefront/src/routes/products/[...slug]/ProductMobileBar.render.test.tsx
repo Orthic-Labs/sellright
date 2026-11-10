@@ -25,3 +25,24 @@ describe('sold-out mobile waitlist affordance', () => {
     expect(document.querySelector('button')?.disabled).toBe(false);
   });
 });
+
+describe('backorder notice (#446)', () => {
+  const bar = async (notice: string | null) => (await ssrRenderToDom(
+    <ProductMobileBar
+      product={{ name: 'Anzu' }} selectedVariant={{ value: undefined }} displayPrice={{ value: 7500 }}
+      allVariantsSoldOut={{ value: false }} waitlistAvailable={false} backorderNotice={{ value: notice }}
+      isPreOrder={{ value: false }} showFromPrefix={{ value: false }} isAddingToCart={{ value: false }}
+      isOutOfStock={{ value: false }} ctaClass={{ value: 'sr-cta-btn ready' }} ctaDisabled={{ value: false }}
+      showCtaTooltip={{ value: false }} ctaTooltipFading={{ value: false }}
+    />, {})).document;
+  it('shows the label as polite text and keeps a plain add-to-cart button', async () => {
+    const d = await bar('Ships in 3 weeks');
+    const note = d.querySelector('.sr-mobile-bar-note');
+    expect(note?.textContent).toBe('Ships in 3 weeks');
+    expect(note?.getAttribute('aria-live')).toBe('polite');
+    expect(d.querySelector('button')?.textContent).toBe('Add to cart');
+  });
+  it('shows nothing without a notice', async () => {
+    expect((await bar(null)).querySelector('.sr-mobile-bar-note')).toBeFalsy();
+  });
+});

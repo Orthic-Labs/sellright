@@ -27,6 +27,7 @@ import { consumeCartAttempt } from './apps.limit.js';
 import { MAX_CART_LINES, CartTooLargeError, boundedCartItems, cartTooLargeFields, normalizeCartLines, type CartBoundReason } from '../cart/bounds.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { reopenConvertedCart } from '../cart/reopen.js';
+import { sellableQuantity, shipsNowQuantity, normalizeBackorderLabel } from '../orders/availability.js';
 
 /** Per-store effective-price rule (see money/pricing.ts) — resolved from
  *  store.config.pricing.variantRule so cart and checkout price identically. */
@@ -44,7 +45,7 @@ export type PricedCart = {
   pricingIntent: 'preview' | 'checkout'; couponCodes: string[]; quoteHash: string; shippingMethodCode: string | null; pointsDiscount: number;
   coupons: Array<{ code: string; kind?: string; applied: boolean; reason?: string; appliedAmount: number; availableAmount?: number; remainingAmount?: number }>;
   currency: string;
-  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null; image: string | null; productName: string | null; productSlug: string | null }>;
+  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null; isPreOrder: boolean; shipDate: string | null; shipDateLabel: string | null; image: string | null; productName: string | null; productSlug: string | null; backorder: boolean; shipLabel: string | null; shipsNowQuantity: number | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
@@ -87,7 +88,7 @@ export async function priceCart(
           // The product a line belongs to, for display ("Product · variant") and the link back to it.
           productName: sql<string | null>`(select p.name from product p where p.id = ${s.productVariant.productId})`,
           productSlug: sql<string | null>`(select p.slug from product p where p.id = ${s.productVariant.productId})`,
-          onHand: s.stock.onHand, allocated: s.stock.allocated,
+          onHand: s.stock.onHand, incoming: s.stock.incoming, allocated: s.stock.allocated, backorderLabel: s.productVariant.backorderLabel,
           // Display image: first variant asset by position, else the product's featured asset.
           image: sql<string | null>`coalesce(
             (select a.path from variant_asset va join asset a on a.id = va.asset_id where va.variant_id = ${s.productVariant.id} order by va.position asc, a.id asc limit 1),
@@ -106,10 +107,14 @@ export async function priceCart(
     // license, update_pass, pre-order) — those are never quantity-capped by
     // `stock`. For a stock-limited variant, missing stock row => 0 (fail
     // closed), never "in stock by default".
-    const availableQuantity = v && isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
+    // #446: availableQuantity is SELLABLE (on_hand + incoming - allocated), so a backorder line that fits stays `available`.
+    const stockLimited = !!v && isStockLimited(v);
+    const availableQuantity = stockLimited ? sellableQuantity(v) : null;
     const available = !!v && v.enabled && (availableQuantity === null || availableQuantity >= i.quantity);
+    const shipsNow = stockLimited ? shipsNowQuantity(v) : null;
+    const backorder = available && shipsNow !== null && i.quantity > shipsNow;
     if (!available) unavailable.push(i.sku);
-    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null, image: v?.image ?? null, productName: v?.productName ?? null, productSlug: v?.productSlug ?? null };
+    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity, isPreOrder: v?.isPreOrder ?? false, shipDate: v?.shipDate?.toISOString() ?? null, shipDateLabel: v?.shipDateLabel ?? null, image: v?.image ?? null, productName: v?.productName ?? null, productSlug: v?.productSlug ?? null, backorder, shipLabel: backorder ? normalizeBackorderLabel(v?.backorderLabel) : null, shipsNowQuantity: shipsNow };
   });
 
   const couponCodes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : []));
@@ -194,9 +199,15 @@ const LineOut = z.object({
   image: z.string().nullable().optional(),
   productName: z.string().nullable().optional(), productSlug: z.string().nullable().optional(),
   available: z.boolean(),
-  // Live (on_hand - allocated), never cached. null = not stock-limited
+  // Live sellable (on_hand + incoming - allocated), never cached. null = not stock-limited
   // (digital/license/update_pass/pre-order) rather than "unlimited stock".
   availableQuantity: z.number().int().nullable(),
+  /** #446: true when this line needs any incoming (not-yet-in-warehouse) unit; the whole line then ships later. Optional for older clients. */
+  backorder: z.boolean().optional(),
+  /** #446: the variant's ship copy ("Ships in 3 weeks") for a backorder line, else null. */
+  shipLabel: z.string().nullable().optional(),
+  /** #446: units of this variant that ship now (on_hand - allocated, floored at 0); null = not stock-limited. */
+  shipsNowQuantity: z.number().int().nullable().optional(),
 });
 export const CouponCodes = z.array(z.string().min(1).max(255)).max(100);
 /** G4: request input may name at most this many coupon codes. A refinement, so the published OpenAPI shape (maxItems

@@ -117,6 +117,7 @@ function returnPolicy(config: SeoConfig): Record<string, unknown> | null {
 /** In stock with a pre-order variant is PreOrder (the previous platform's store's rule: an in-stock product with any pre-order variant is reported PreOrder). */
 function availabilityUrl(product: ProductAvailability): string {
   if (!product.inStock) return `${SCHEMA}/OutOfStock`;
+  if (product.backOrder) return `${SCHEMA}/BackOrder`; // #446: only incoming units remain
   return product.preOrder ? `${SCHEMA}/PreOrder` : `${SCHEMA}/InStock`;
 }
 

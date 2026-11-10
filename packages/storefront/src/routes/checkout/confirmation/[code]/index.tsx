@@ -12,6 +12,7 @@ import { PaymentProcessing } from '~/components/checkout/PaymentProcessing';
 import { APP_STATE } from '~/constants';
 import { displayOrderCode } from '~/utils/order-code';
 import { orderLineLabel } from '~/utils/line-label';
+import { BACKORDER_ORDER_NOTE, lineBackorderNotice, orderHasBackorder } from '~/utils/backorder';
 
 export { confirmationHead as head } from '~/platform/checkout';
 
@@ -280,6 +281,9 @@ const ConfirmationPage = component$(() => {
 												<p class="text-[11px] text-[#7a7873] mt-0.5">{variantLabel}</p>
 											)}
 											<p class="text-[11px] text-[#7a7873] mt-0.5">Qty {line.quantity}</p>
+											{lineBackorderNotice(line) && (
+												<p class="text-[12px] text-[var(--color-ink)] mt-1" data-backorder-line>{lineBackorderNotice(line)}</p>
+											)}
 										</div>
 										<span class="text-sm font-medium text-[var(--color-ink)] tabular-nums">
 											{formatPrice(line.lineTotal)}
@@ -288,6 +292,9 @@ const ConfirmationPage = component$(() => {
 								);
 							})}
 						</ul>
+						{orderHasBackorder(order) && (
+							<p class="text-[12px] text-[var(--color-ink)] mt-4" role="status" data-backorder-order-note>{BACKORDER_ORDER_NOTE}</p>
+						)}
 
 						{/* Totals */}
 						<div class="border-t border-[#E5E0D8] pt-4 mt-4 space-y-2 max-w-xs ml-auto">

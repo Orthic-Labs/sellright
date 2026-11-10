@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventCopy, stateCopy } from './order-model';
+import { eventCopy, hasBackorder, isBackorder, shipsLaterCopy, stateCopy } from './order-model';
 
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 const ev = (action: string, fromState: string | null, toState: string | null, data?: Record<string, unknown>, actor: string | null = 'staff@shop.test') =>
@@ -24,5 +24,19 @@ describe('#406 timeline copy: no raw state names', () => {
   it('never shows a CamelCase state, even an unknown one', () => {
     expect(stateCopy('AwaitingReview')).toBe('awaiting review');
     expect(ev('state_correction', 'PartiallyRefunded', 'Refunded')).not.toMatch(/[a-z][A-Z]|→/);
+  });
+});
+
+describe('#446 ships later', () => {
+  it('copy carries the label when there is one', () => {
+    expect(shipsLaterCopy({ shipLabel: 'Ships in 3 weeks' })).toBe('Ships later · Ships in 3 weeks');
+    expect(shipsLaterCopy({ shipLabel: null })).toBe('Ships later');
+    expect(shipsLaterCopy({ shipLabel: '  ' })).toBe('Ships later');
+  });
+  it('an order has a backorder from the API flag or any marked line', () => {
+    expect(hasBackorder({ lines: [{ backorder: false }, {}] })).toBe(false);
+    expect(hasBackorder({ lines: [{ backorder: true }] })).toBe(true);
+    expect(hasBackorder({ hasBackorder: true, lines: [] })).toBe(true);
+    expect(isBackorder({ backorder: true })).toBe(true);
   });
 });

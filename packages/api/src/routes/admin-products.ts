@@ -7,6 +7,7 @@ import { lockStockRowsInOrder } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { sellableRaw, shipsNowQuantity, minIncoming, normalizeBackorderLabel, oversoldBackorderWarning } from '../orders/availability.js';
 
 export const adminProducts = new OpenAPIHono();
 
@@ -32,7 +33,7 @@ adminProducts.openapi(
           assetPath: s.asset.path,
           variants: sql<number>`(select count(*) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)::int`,
           minPrice: sql<number | null>`(select min(coalesce(pv.sale_price, pv.price)) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)::int`,
-          stock: sql<number>`coalesce((select sum(st.on_hand - st.allocated) from product_variant pv join stock st on st.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null),0)::int`,
+          stock: sql<number>`coalesce((select sum(st.on_hand + st.incoming - st.allocated) from product_variant pv join stock st on st.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null),0)::int`,
         })
         .from(s.product)
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
@@ -84,7 +85,9 @@ adminProducts.openapi(
           updatesDurationDays: s.productVariant.updatesDurationDays,
           updatedAt: s.productVariant.updatedAt,
           onHand: s.stock.onHand,
+          incoming: s.stock.incoming,
           allocated: s.stock.allocated,
+          backorderLabel: s.productVariant.backorderLabel,
         })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
@@ -104,7 +107,7 @@ adminProducts.openapi(
       return {
         id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId, updatedAt: p.updatedAt.toISOString(), seoTitle: p.seoTitle, seoDescription: p.seoDescription,
         images: gallery.map((g) => ({ assetId: g.assetId, path: g.path, url: `/assets/${g.path}`, position: g.position })),
-        variants: variants.map((v) => ({ ...v, updatedAt: v.updatedAt.toISOString(), onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
+        variants: variants.map((v) => ({ ...v, updatedAt: v.updatedAt.toISOString(), onHand: v.onHand ?? 0, incoming: v.incoming ?? 0, allocated: v.allocated ?? 0, available: sellableRaw(v), shipsNow: shipsNowQuantity(v), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
       };
     });
     if (!out) throw new HttpError(404, 'product not found');
@@ -151,6 +154,8 @@ adminProducts.openapi(
       preOrderPrice: money.min(0).nullable().optional(),
       shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
       shipDateLabel: z.string().max(255).nullable().optional(),
+      /** #446: ship copy for backordered units; cannot be cleared while stock.incoming > 0. */
+      backorderLabel: z.string().max(255).nullable().optional(),
       compareAtPrice: money.nullable().optional(),
       cost: money.nullable().optional(),
       barcode: z.string().nullable().optional(),
@@ -173,18 +178,27 @@ adminProducts.openapi(
     const st = requireStore(admin, c);
     requireWrite(st);
     const { id } = c.req.valid('param');
-    const { shipDateLabel, expectedUpdatedAt, ...patch } = c.req.valid('json');
+    const { shipDateLabel, expectedUpdatedAt, backorderLabel: rawBackorderLabel, ...patch } = c.req.valid('json');
+    const backorderLabel = rawBackorderLabel === undefined ? undefined : normalizeBackorderLabel(rawBackorderLabel);
     // #406: like the product PATCH, a newer variant row than the editor loaded is a 409 (Use theirs / Keep mine).
     const res = await withStore(st.storeId, async (tx) => {
+      // #446: stock row first, then the variant row (the same order the incoming route takes), so a label write cannot
+      // deadlock against an incoming write; the label check reads the locked incoming.
+      const [lockedStock] = backorderLabel !== undefined ? await lockStockRowsInOrder(tx, st.storeId, [id]) : [];
+      if (backorderLabel === null && lockedStock) {
+        const [inc] = await tx.select({ incoming: s.stock.incoming }).from(s.stock).where(eq(s.stock.variantId, id)).limit(1);
+        if ((inc?.incoming ?? 0) > 0) return { kind: 'label_required' as const };
+      }
       const [v] = await tx.select({ id: s.productVariant.id, updatedAt: s.productVariant.updatedAt }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1).for('update');
       if (!v) return { kind: 'notfound' as const };
       if (expectedUpdatedAt && v.updatedAt.getTime() > new Date(expectedUpdatedAt).getTime()) return { kind: 'conflict' as const };
       const updatedAt = new Date();
-      await tx.update(s.productVariant).set({ ...patch, ...(shipDateLabel === undefined ? {} : { metafields: sql`coalesce(${patch.metafields === undefined ? s.productVariant.metafields : sql`${JSON.stringify(patch.metafields ?? {})}::jsonb`}, '{}'::jsonb) || ${JSON.stringify({ shipDateLabel })}::jsonb` }), shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt }).where(eq(s.productVariant.id, id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: { ...patch, ...(shipDateLabel === undefined ? {} : { shipDateLabel }) } });
+      await tx.update(s.productVariant).set({ ...patch, ...(shipDateLabel === undefined ? {} : { metafields: sql`coalesce(${patch.metafields === undefined ? s.productVariant.metafields : sql`${JSON.stringify(patch.metafields ?? {})}::jsonb`}, '{}'::jsonb) || ${JSON.stringify({ shipDateLabel })}::jsonb` }), shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), ...(backorderLabel === undefined ? {} : { backorderLabel }), updatedAt }).where(eq(s.productVariant.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: { ...patch, ...(shipDateLabel === undefined ? {} : { shipDateLabel }), ...(backorderLabel === undefined ? {} : { backorderLabel }) } });
       await emitVariantProductChanged(tx, st.storeId, id);
       return { kind: 'ok' as const, updatedAt };
     });
+    if (res.kind === 'label_required') throw new HttpError(400, 'backorderLabel cannot be cleared while incoming stock is above zero', 'BACKORDER_LABEL_REQUIRED', 'backorderLabel');
     if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
     if (res.kind === 'conflict') throw new HttpError(409, 'Variant changed since you opened it');
     return c.json({ id, updatedAt: res.updatedAt.toISOString() }, 200);
@@ -195,7 +209,7 @@ adminProducts.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/variants/{id}/stock', summary: 'Set variant on-hand stock',
     request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ onHand: z.number().int().min(0), expectedOnHand: z.number().int().min(0).optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Stock changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int(), warning: z.string().optional() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Stock changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -205,6 +219,7 @@ adminProducts.openapi(
     const { onHand, expectedOnHand } = c.req.valid('json');
     // #406: onHand is absolute, so a fulfilment or another admin's change since the editor loaded would be silently
     // overwritten. With expectedOnHand the write only lands if on-hand is still what the editor showed.
+    let warning: string | null = null;
     const ok = await withStore(st.storeId, async (tx) => {
       // Locked read: the movement delta must be computed from the row this write replaces.
       const [cur] = await lockStockRowsInOrder(tx, st.storeId, [id]);
@@ -212,6 +227,7 @@ adminProducts.openapi(
       if (cur) {
         const delta = onHand - cur.onHand;
         await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
+        warning = oversoldBackorderWarning({ onHand, incoming: cur.incoming, allocated: cur.allocated });
         if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_adjust', actor: admin.email });
       } else {
         const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
@@ -231,7 +247,7 @@ adminProducts.openapi(
     // never actually landed).
     // Single variant known precisely — scope the manifest regen to just its product.
     onStockChanged(st.slug, [id]);
-    return c.json({ id, onHand }, 200);
+    return c.json({ id, onHand, ...(warning ? { warning } : {}) }, 200);
   }),
 );
 
@@ -242,7 +258,7 @@ adminProducts.openapi(
       items: z.array(z.object({ id: z.string(), onHand: z.number().int().min(0) })).min(1).max(500),
     })) } },
     responses: {
-      200: { description: 'OK', content: J(z.object({ updated: z.array(z.object({ id: z.string(), onHand: z.number().int() })) })) },
+      200: { description: 'OK', content: J(z.object({ updated: z.array(z.object({ id: z.string(), onHand: z.number().int(), warning: z.string().optional() })) })) },
       404: { description: 'One or more variants not found (nothing written — atomic)', content: J(z.object({ error: z.string(), missing: z.array(z.string()) })) },
       401: { description: 'Unauthorized', ...errBody },
     },
@@ -274,13 +290,15 @@ adminProducts.openapi(
       const existingStock = await lockStockRowsInOrder(tx, st.storeId, ids);
       const stockByVariant = new Map(existingStock.map((row) => [row.variantId, row]));
 
-      const out: { id: string; onHand: number }[] = [];
+      const out: { id: string; onHand: number; warning?: string }[] = [];
       for (const id of [...ids].sort((x, y) => (x.toLowerCase() < y.toLowerCase() ? -1 : x.toLowerCase() > y.toLowerCase() ? 1 : 0))) {
         const onHand = byId.get(id)!;
         const cur = stockByVariant.get(id);
+        let bulkWarning: string | null = null;
         if (cur) {
           const delta = onHand - cur.onHand;
           await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
+          bulkWarning = oversoldBackorderWarning({ onHand, incoming: cur.incoming, allocated: cur.allocated });
           if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_bulk_adjust', actor: admin.email });
         } else {
           await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand, allocated: 0 });
@@ -288,7 +306,7 @@ adminProducts.openapi(
         }
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock', data: { onHand, bulk: true } });
         await emitVariantProductChanged(tx, st.storeId, id);
-        out.push({ id, onHand });
+        out.push({ id, onHand, ...(bulkWarning ? { warning: bulkWarning } : {}) });
       }
       // Response keeps payload order (writes above ran in canonical order).
       return ids.map((id) => out.find((row) => row.id === id)!);
@@ -321,7 +339,7 @@ adminProducts.openapi(
       200: { description: 'OK', content: J(z.object({
         items: z.array(z.object({
           id: z.string(), name: z.string(), enabled: z.boolean(),
-          variants: z.array(z.object({ id: z.string(), name: z.string(), sku: z.string(), enabled: z.boolean(), onHand: z.number().int(), allocated: z.number().int() })),
+          variants: z.array(z.object({ id: z.string(), name: z.string(), sku: z.string(), enabled: z.boolean(), onHand: z.number().int(), allocated: z.number().int(), incoming: z.number().int().optional() })),
         })),
         total: z.number().int(), truncated: z.boolean(),
       })) },
@@ -344,7 +362,7 @@ adminProducts.openapi(
         ? await tx
           .select({
             id: s.productVariant.id, productId: s.productVariant.productId, name: s.productVariant.name, sku: s.productVariant.sku,
-            enabled: s.productVariant.enabled, onHand: s.stock.onHand, allocated: s.stock.allocated,
+            enabled: s.productVariant.enabled, onHand: s.stock.onHand, allocated: s.stock.allocated, incoming: s.stock.incoming,
           })
           .from(s.productVariant)
           .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
@@ -359,7 +377,7 @@ adminProducts.openapi(
       const items = page
         .map((p) => ({
           id: p.id, name: p.name, enabled: p.status === 'active',
-          variants: (byProduct.get(p.id) ?? []).map((v) => ({ id: v.id, name: v.name, sku: v.sku, enabled: v.enabled, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0 })),
+          variants: (byProduct.get(p.id) ?? []).map((v) => ({ id: v.id, name: v.name, sku: v.sku, enabled: v.enabled, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, incoming: v.incoming ?? 0 })),
         }))
         .filter((p) => p.variants.length > 0);
       return { items, total: items.length, truncated };
@@ -390,7 +408,7 @@ adminProducts.openapi(
       })) },
     },
     responses: {
-      200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) },
+      200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int(), warning: z.string().optional() })) },
       404: { description: 'Not found', ...errBody },
       409: { description: 'Conflict (would go negative)', ...errBody },
       401: { description: 'Unauthorized', ...errBody },
@@ -402,7 +420,7 @@ adminProducts.openapi(
     requireWrite(st);
     const { id } = c.req.valid('param');
     const { delta, reason } = c.req.valid('json');
-    const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok'; onHand: number } | { kind: 'notfound' } | { kind: 'negative' }> => {
+    const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok'; onHand: number; warning?: string } | { kind: 'notfound' } | { kind: 'negative' }> => {
       const [cur] = await tx.select().from(s.stock).where(eq(s.stock.variantId, id)).limit(1).for('update');
       if (!cur) {
         const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
@@ -418,12 +436,113 @@ adminProducts.openapi(
       await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
       await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason, actor: admin.email });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock_adjust', data: { delta, reason, onHand } });
-      return { kind: 'ok', onHand };
+      const w = oversoldBackorderWarning({ onHand, incoming: cur.incoming, allocated: cur.allocated });
+      return { kind: 'ok', onHand, ...(w ? { warning: w } : {}) };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
     if (res.kind === 'negative') throw new HttpError(409, 'adjustment would take on-hand stock negative');
     onStockChanged(st.slug, [id]);
-    return c.json({ id, onHand: res.onHand }, 200);
+    return c.json({ id, onHand: res.onHand, ...(res.warning ? { warning: res.warning } : {}) }, 200);
+  }),
+);
+
+// ── #446 backorder: incoming stock + ship label, and the receive action ──────────────────────────────────────────────
+// `incoming` = units not in the warehouse yet that may be sold ahead of arrival. Setting it needs a non-empty ship label
+// whenever it is > 0, and may not drop below the backorder quantity already sold, greatest(allocated - on_hand, 0). The
+// row is locked first (lockStockRowsInOrder, the repo-wide stock lock order) so the floor is checked against the same
+// allocated/on_hand the write lands on; a checkout reserving concurrently serialises behind this lock.
+adminProducts.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/variants/{id}/incoming', summary: 'Set variant incoming (backorder) quantity and ship label',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
+      incoming: z.number().int().min(0).max(100_000_000),
+      backorderLabel: z.string().max(255).nullable().optional(),
+      expectedIncoming: z.number().int().min(0).optional(),
+    })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ id: z.string(), incoming: z.number().int(), backorderLabel: z.string().nullable(), minIncoming: z.number().int() })) },
+      400: { description: 'Label missing, or incoming below the quantity already sold on backorder', ...errBody },
+      404: { description: 'Not found', ...errBody }, 409: { description: 'Incoming changed since loaded', ...errBody }, 401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { id } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      const [cur] = await lockStockRowsInOrder(tx, st.storeId, [id]);
+      const [v] = await tx.select({ id: s.productVariant.id, fulfillmentType: s.productVariant.fulfillmentType, isPreOrder: s.productVariant.isPreOrder, label: s.productVariant.backorderLabel })
+        .from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1).for('update');
+      if (!v) return { kind: 'notfound' as const };
+      const label = body.backorderLabel === undefined ? normalizeBackorderLabel(v.label) : normalizeBackorderLabel(body.backorderLabel);
+      if (body.incoming > 0 && !label) return { kind: 'label' as const };
+      if (body.incoming > 0 && (v.fulfillmentType !== 'physical' || v.isPreOrder)) return { kind: 'unsupported' as const };
+      const onHand = cur?.onHand ?? 0, allocated = cur?.allocated ?? 0;
+      const floor = minIncoming({ onHand, allocated });
+      if (body.incoming < floor) return { kind: 'floor' as const, floor };
+      let prev = 0;
+      if (cur) {
+        const [r] = await tx.select({ incoming: s.stock.incoming }).from(s.stock).where(eq(s.stock.variantId, id)).limit(1);
+        prev = r?.incoming ?? 0;
+        if (body.expectedIncoming !== undefined && prev !== body.expectedIncoming) return { kind: 'conflict' as const };
+        await tx.update(s.stock).set({ incoming: body.incoming }).where(eq(s.stock.variantId, id));
+      } else {
+        if (body.expectedIncoming !== undefined && body.expectedIncoming !== 0) return { kind: 'conflict' as const };
+        await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand: 0, allocated: 0, incoming: body.incoming });
+      }
+      await tx.update(s.productVariant).set({ backorderLabel: label, updatedAt: new Date() }).where(eq(s.productVariant.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock_incoming', data: { incoming: body.incoming, previousIncoming: prev, backorderLabel: label } });
+      await emitVariantProductChanged(tx, st.storeId, id);
+      return { kind: 'ok' as const, incoming: body.incoming, label, floor };
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
+    if (res.kind === 'conflict') throw new HttpError(409, 'Incoming stock changed since you opened it', 'INCOMING_CHANGED');
+    if (res.kind === 'label') throw new HttpError(400, 'a non-empty backorderLabel is required when incoming is above zero', 'BACKORDER_LABEL_REQUIRED', 'backorderLabel');
+    if (res.kind === 'unsupported') throw new HttpError(400, 'only physical, non-pre-order variants can have incoming stock', 'BACKORDER_UNSUPPORTED', 'incoming');
+    if (res.kind === 'floor') throw new HttpError(400, `incoming cannot be below ${res.floor}: that many units are already sold on backorder`, 'INCOMING_BELOW_SOLD', 'incoming', { minIncoming: res.floor });
+    // Zero-cache stock rule: sellable changed; regenerate the manifest after commit, scoped to this variant's product.
+    onStockChanged(st.slug, [id]);
+    return c.json({ id, incoming: res.incoming, backorderLabel: res.label, minIncoming: res.floor }, 200);
+  }),
+);
+
+// Receive: the warehouse took delivery of N incoming units. on_hand += n, incoming -= n in ONE statement (sellable is
+// unchanged, so nothing oversells), with a stock_movement row; backordered orders can then be fulfilled.
+adminProducts.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/variants/{id}/stock/receive', summary: 'Receive incoming stock into the warehouse (on-hand += n, incoming -= n)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ quantity: z.number().int().min(1).max(100_000_000) })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int(), incoming: z.number().int() })) },
+      404: { description: 'Not found', ...errBody }, 409: { description: 'More than is incoming', ...errBody }, 401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { id } = c.req.valid('param');
+    const { quantity } = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      await lockStockRowsInOrder(tx, st.storeId, [id]);
+      const r = await tx.execute(sql`UPDATE "stock" SET on_hand = on_hand + ${quantity}, incoming = incoming - ${quantity}
+        WHERE variant_id = ${id} AND store_id = ${st.storeId} AND incoming >= ${quantity} RETURNING on_hand, incoming`);
+      const row = r.rows[0] as { on_hand: number; incoming: number } | undefined;
+      if (!row) {
+        const [exists] = await tx.select({ variantId: s.stock.variantId }).from(s.stock).where(and(eq(s.stock.variantId, id), eq(s.stock.storeId, st.storeId))).limit(1);
+        return { kind: exists ? 'toomany' as const : 'notfound' as const };
+      }
+      await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: quantity, reason: 'receive_incoming', actor: admin.email });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock_receive', data: { quantity, onHand: Number(row.on_hand), incoming: Number(row.incoming) } });
+      await emitVariantProductChanged(tx, st.storeId, id);
+      return { kind: 'ok' as const, onHand: Number(row.on_hand), incoming: Number(row.incoming) };
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
+    if (res.kind !== 'ok') throw new HttpError(409, `cannot receive ${quantity}: fewer units are incoming`, 'RECEIVE_EXCEEDS_INCOMING');
+    onStockChanged(st.slug, [id]);
+    return c.json({ id, onHand: res.onHand, incoming: res.incoming }, 200);
   }),
 );
 

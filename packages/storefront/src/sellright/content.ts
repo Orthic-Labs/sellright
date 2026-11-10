@@ -91,8 +91,11 @@ function normalizeTrackedOrder(raw: Record<string, unknown>): TrackedOrder {
 				shipDate: (line.shipDate as string | null) ?? null,
 				shipDateLabel: typeof line.shipDateLabel === 'string' ? line.shipDateLabel : null,
 				image: typeof line.image === 'string' && line.image ? line.image : null,
+				backorder: line.backorder === true,
+				shipLabel: typeof line.shipLabel === 'string' && line.shipLabel.trim() ? line.shipLabel.trim() : null,
 			};
 		}) as TrackedOrderLine[],
+		hasBackorder: raw.hasBackorder === true,
 	};
 }
 

@@ -21,6 +21,8 @@
 // Nothing here reads or writes a stock value into storage, and nothing visitor-specific is in the script text: it is identical for every
 // visitor (the cached shell's I-2). The cart is read from the in-memory response in the browser only.
 
+import { BACKORDER_FALLBACK_LABEL, BACKORDER_ORDER_NOTE } from '~/utils/backorder';
+
 export interface CheckoutPaintParams {
 	/** The request key of the summary read this script paints from (early-reads.ts CHECKOUT_SUMMARY_URL). */
 	k: string;
@@ -51,11 +53,14 @@ const PAINT_CSS =
 	".e{display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;min-width:84px}" +
 	".p{text-align:right;font-size:14px;font-weight:500;color:#FDFAF6;font-variant-numeric:tabular-nums;flex-shrink:0}" +
 	"dl{border-top:1px solid rgba(var(--color-accent-rgb),.25);margin-top:.5rem;padding-top:1rem;padding-bottom:.5rem}dl>div+div{margin-top:.75rem}" +
-	".t{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:rgba(253,250,246,.4)}.t dd{font-weight:500;color:rgba(253,250,246,.6)}";
+	".t{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:rgba(253,250,246,.4)}.t dd{font-weight:500;color:rgba(253,250,246,.6)}" +
+	// #446: a backorder line's ship label and the order-level sentence (CartContents' same notices)
+	".bo{font-size:12px;line-height:1.375;margin-top:.25rem;color:rgba(253,250,246,.7)}" +
+	".n{font-size:12px;line-height:1.375;padding-top:.75rem;border-top:1px solid rgba(var(--color-accent-rgb),.25);color:rgba(253,250,246,.7)}";
 
 const CHECKOUT_BODY =
 	"(function(w,d,P){try{var S=w.__srEarly,p=S&&S.r&&S.r[P.k];if(!p||!S.ct)return;" +
-	"var CSS='" + PAINT_CSS.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "',st=0,mo=null,cart=null;" +
+	"var CSS='" + PAINT_CSS.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "',st=0,mo=null,cart=null,FB=" + JSON.stringify(BACKORDER_FALLBACK_LABEL) + ",NOTE=" + JSON.stringify(BACKORDER_ORDER_NOTE) + ";" +
 	// escaping, formatting (Intl as utils/price-format.ts; '$' + grouped cents as hooks/checkout-total.ts formatCents)
 	"function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}" +
 	"function money(v,c){var a=(v||0)/100,h=a%1!==0;return new Intl.NumberFormat('en-US',{style:'currency',currency:c||'USD',minimumFractionDigits:h?2:0,maximumFractionDigits:h?2:0}).format(a);}" +
@@ -79,18 +84,18 @@ const CHECKOUT_BODY =
 	"vn=String(vn||'').split(/\\s+-\\s+/).join(' / ');" +
 	"var rem=l.availableQuantity===null?null:(typeof l.availableQuantity==='number'&&isFinite(l.availableQuantity)?l.availableQuantity:0);" +
 	"var alt=l.productName?l.productName+', '+l.name:'Image of: '+l.name;" +
-	"return '<li class=\"r\"><div class=\"th\">'+img(l,alt)+'</div><div class=\"mid\"><div><h3>'+esc(pn)+'</h3>'+(vn?'<p class=\"v\">'+esc(vn)+'</p>':'')+'</div>'+" +
+	"return '<li class=\"r\"><div class=\"th\">'+img(l,alt)+'</div><div class=\"mid\"><div><h3>'+esc(pn)+'</h3>'+(vn?'<p class=\"v\">'+esc(vn)+'</p>':'')+(l.backorder===true?'<p class=\"bo\">'+esc(typeof l.shipLabel==='string'&&l.shipLabel.trim()?l.shipLabel.trim():FB)+'</p>':'')+'</div>'+" +
 	"(rem!==null&&rem<=5?'<div class=\"w\"><span>Only '+rem+' left</span></div>':'')+'<div class=\"q\">Qty '+esc(l.quantity)+'</div></div>'+" +
 	"'<div class=\"e\"><span class=\"p\">'+money(l.lineSubtotal,cur)+'</span></div></li>';}" +
 	// the cart this script can mirror exactly; anything else is left to Qwik (the skeleton stays)
 	"function mirrorable(c){if(!c||c.status!=='active'||c.pricingIntent!=='checkout'||!c.lines||!c.lines.length)return 0;" +
 	"if(c.coupons&&c.coupons.length)return 0;for(var i=0;i<c.lines.length;i++){var l=c.lines[i];if(!l||l.available!==true||l.isPreOrder)return 0;}return 1;}" +
 	"function real(){if(st===2||!cart)return;var c=cart,cur=c.currency||'USD',sub=c.subtotal||0,dis=c.discountTotal||0,i,r='';" +
-	"for(i=0;i<c.lines.length;i++)r+=line(c.lines[i],cur);" +
+	"var bo=0;for(i=0;i<c.lines.length;i++){r+=line(c.lines[i],cur);if(c.lines[i].backorder===true)bo=1;}" +
 	"var ship=c.quoteHash?c.shippingTotal:null,tot=c.quoteHash?c.grandTotal:sub-dis+(ship||0);" +
 	"var t='<div class=\"t\"><dt>Subtotal</dt><dd>'+money(sub,cur)+'</dd></div>'+(dis>0?'<div class=\"t\"><dt>Discount</dt><dd>-'+money(dis,cur)+'</dd></div>':'')+" +
 	"'<div class=\"t\"><dt>Shipping</dt><dd>'+(ship===null?'Calculated at next step':ship===0?'Free':money(ship,cur))+'</dd></div><div class=\"t\"><dt>Total</dt><dd>'+money(tot,cur)+'</dd></div>';" +
-	"if(put('lines','<ul>'+r+'</ul>')&&put('totals','<dl>'+t+'</dl>')){put('total',c.grandTotal>0?cents(c.grandTotal):'');st=2;if(mo)mo.disconnect();}}" +
+	"if(put('lines','<ul>'+r+'</ul>'+(bo?'<p class=\"n\">'+esc(NOTE)+'</p>':''))&&put('totals','<dl>'+t+'</dl>')){put('total',c.grandTotal>0?cents(c.grandTotal):'');st=2;if(mo)mo.disconnect();}}" +
 	"function go(){if(st<2&&cart)real();}" +
 	"p.then(function(r){return r.ok?r.json():null;}).then(function(j){j=j&&j.cart;if(mirrorable(j)){cart=j;go();}},function(){});" +
 	"try{mo=new MutationObserver(go);mo.observe(d.documentElement,{childList:true,subtree:true});}catch(e){}" +

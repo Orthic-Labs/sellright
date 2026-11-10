@@ -9,6 +9,7 @@ import { formatPrice, formatShippingPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { productPath } from '~/platform/product-path';
 import { reviewEntryPath } from '~/utils/rewards';
+import { BACKORDER_ORDER_NOTE, lineBackorderNotice, orderHasBackorder } from '~/utils/backorder';
 import { canReviewLine, formatDate, getStatusDisplay, getStatusIcon, getTrackingInfo, isPreOrder, preOrderFactsOfLines } from '../order-display';
 import { orderLineLabel } from '~/utils/line-label';
 
@@ -77,6 +78,9 @@ export default component$(() => {
 						This order includes a pre-order item.
 					</p>
 				)}
+				{o && orderHasBackorder(o) && (
+					<p class="text-sm text-[#645541] font-medium mb-4" data-backorder-order-note>{BACKORDER_ORDER_NOTE}</p>
+				)}
 				{tracking.hasTracking && (
 					<p class="text-sm text-[#645541] font-mono mb-4">
 						Tracking:{' '}
@@ -113,6 +117,9 @@ export default component$(() => {
 										<p class="text-xs text-[#645541] font-medium mt-1">
 											{shippingDateText(line) ? `Ships: ${shippingDateText(line)}` : 'Ship date TBA'}
 										</p>
+									)}
+									{lineBackorderNotice(line) && (
+										<p class="text-xs text-[#645541] font-medium mt-1" data-backorder-line>{lineBackorderNotice(line)}</p>
 									)}
 									{canReviewLine(o, line) && line.productSlug && (
 										<a href={reviewEntryPath(productPath(line.productSlug))} class="mt-2 text-sm underline text-[var(--color-accent)]" data-testid="write-review-link">Write a review</a>

@@ -26,6 +26,7 @@ import { CatalogReuseError, publishGeneration, readCurrentCatalogReuseSnapshot, 
 import { aggregatesForProducts } from '../reviews/reviews.js';
 import { purgeAfterPublish } from '../cache/purge-hook.js';
 import { collectionSlugsForProducts } from '../catalog/product-collections.js';
+import { sellableRaw, normalizeBackorderLabel } from '../orders/availability.js';
 import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 /**
@@ -95,6 +96,8 @@ export interface NativeVariantV2 {
   isPreOrder: boolean;
   shipDate: string | null;
   shipDateLabel?: string | null;
+  /** #446: display copy for backordered units ("Ships in 3 weeks"); never a stock value. Whether a unit is backorder comes from the live stock read. */
+  backorderLabel?: string | null;
   // position: merchant-controlled order (migration 0080) — groupPosition
   // orders the groups, position orders values within that group. This array
   // arrives pre-sorted by both (see buildEntries' `vo` query); position is
@@ -178,7 +181,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
   const enabledVariantIds = variants.map((v) => v.id);
   const stockByVariant = new Map(
     enabledVariantIds.length
-      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, enabledVariantIds)))).map((st) => [st.variantId, st.onHand - st.allocated])
+      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, enabledVariantIds)))).map((st) => [st.variantId, sellableRaw(st)])
       : [],
   );
   const vo = variantIds.length
@@ -244,7 +247,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         assets: (assetsByVariant.get(v.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-        salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, shipDateLabel: variantShippingLabel(v.metafields), isPreOrder: v.isPreOrder,
+        salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, shipDateLabel: variantShippingLabel(v.metafields), backorderLabel: normalizeBackorderLabel(v.backorderLabel), isPreOrder: v.isPreOrder,
       })),
     });
 
@@ -266,6 +269,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         isPreOrder: v.isPreOrder,
         shipDate: v.shipDate ? v.shipDate.toISOString() : null,
         shipDateLabel: variantShippingLabel(v.metafields),
+        backorderLabel: normalizeBackorderLabel(v.backorderLabel),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         images: (assetsByVariant.get(v.id) ?? [])
           .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })

@@ -48,7 +48,8 @@ import { decodeCreditPricingOrigin, isImportedCreditOrigin, type CreditPricingOr
 import { planEditCreditFunding, type EditFundingPosting } from '../account-credit/edit-funding.js';
 import { prepareEditCreditFunding, postEditCreditFunding, readCurrentCreditEvidence } from '../account-credit/service.js';
 import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
-import { reserveStockOrThrow, StockReservationError } from './stock-reservation.js';
+import { reserveStock, StockReservationError } from './stock-reservation.js';
+import { sellableRaw, normalizeBackorderLabel } from './availability.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { orderLineLabel } from './line-label.js';
@@ -682,7 +683,7 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   for (const [id, delta] of stockDeltas) {
     const v = variantsById.get(id)!;
     const row = stockRows.find((r) => r.variantId === id);
-    const available = row ? row.onHand - row.allocated : null;
+    const available = row ? sellableRaw(row) : null; // #446: on_hand + incoming - allocated
     stock.push({ sku: v.sku, name: v.name, variantId: id, delta, available, ok: delta <= 0 || (available != null && available >= delta) });
   }
 
@@ -795,7 +796,17 @@ export interface SettlementOutcome {
   phase?: EditStageSettlement['phase']; paymentAttemptId?: string; amendmentDigest?: string; activationReceipt?: EditStageSettlement['activationReceipt'];
 }
 
+/** #446: line metadata after an edit that added units needing incoming stock. Only ever sets the snapshot (merging into
+ *  any existing metadata); removing units never clears it. */
+function backorderLineMetadata(current: unknown, label: string | null | undefined): Record<string, unknown> {
+  const base = current && typeof current === 'object' && !Array.isArray(current) ? current as Record<string, unknown> : {};
+  const prior = typeof base.shipLabel === 'string' && base.backorder === true ? base.shipLabel : null;
+  return { ...base, backorder: true, shipLabel: normalizeBackorderLabel(label) ?? prior };
+}
+
 interface CreditActivation {
+  /** #446: variants whose ADDED units needed incoming stock when reserved (decided under the stock row lock). */
+  backorderVariantIds?: string[];
   pricingOptions: Required<EditPricingOptions>;
   beforeOrder: OrderRow; variants: VariantRow[]; working: WorkingOrder; perLine: EditPlan['priced']['perLine'];
   origin: CreditPricingOrigin; ordinary: OrderPricingSnapshotV1; indexes: OriginalUnitIndexes; ordinaryUnitFacts: OrdinaryUnitFacts;
@@ -880,12 +891,16 @@ async function prepareCreditedOrderEdit(tx: Tx, input: CommitInput, plan: EditPl
       if (error instanceof PaymentPolicyUnavailableError) throw new OrderEditError(503, 'PAYMENT_POLICY_UNAVAILABLE', 'Payment is temporarily unavailable.'); throw error; }
   }
   const positiveDeltas = [...plan.stockDeltas].filter(([, delta]) => delta > 0).map(([variantId, quantity]) => ({ variantId, quantity }));
+  let backorderVariantIds: string[] = [];
   if (positiveDeltas.length) {
     const reserveMap = new Map(positiveDeltas.map(({ variantId }) => { const variant = plan.variantsById.get(variantId)!; return [variant.sku, variant]; }));
-    try { await reserveStockOrThrow(tx, input.storeId, positiveDeltas.map(({ variantId, quantity }) => ({ sku: plan.variantsById.get(variantId)!.sku, quantity })), reserveMap); }
+    try {
+      const reservation = await reserveStock(tx, input.storeId, positiveDeltas.map(({ variantId, quantity }) => ({ sku: plan.variantsById.get(variantId)!.sku, quantity })), reserveMap);
+      backorderVariantIds = positiveDeltas.filter((_, i) => reservation.backorder[i]).map(({ variantId }) => variantId);
+    }
     catch (error) { if (error instanceof StockReservationError) throw new OrderEditError(409, 'OUT_OF_STOCK', 'Insufficient stock for added quantity.', { skus: error.skus }); throw error; }
   }
-  const activation: CreditActivation = { pricingOptions: plan.pricingOptions, beforeOrder: plan.order, variants: [...plan.variantsById.values()], working: plan.working, perLine: plan.priced.perLine,
+  const activation: CreditActivation = { backorderVariantIds, pricingOptions: plan.pricingOptions, beforeOrder: plan.order, variants: [...plan.variantsById.values()], working: plan.working, perLine: plan.priced.perLine,
     origin: credit.origin, ordinary: material.ordinary, indexes: material.indexes, ordinaryUnitFacts: material.ordinaryUnitFacts, targets: material.targets,
     predecessor: credit.current, unitIds: material.unitIds, lineage: material.pricing.lineage,
     stockDeltas: [...plan.stockDeltas], shipping: plan.shipping, isPreOrder: plan.isPreOrder, taxRate: plan.taxRate, taxInclusive: plan.taxInclusive,
@@ -1005,8 +1020,11 @@ export async function activatePreparedOrderEdit(tx: Tx, input: { storeId: string
       const values = { variantId: line.variantId, variantSku: line.sku, variantName: line.name, quantity: qty ? qty.quantity : line.quantity,
         ...(qty ? { cancelledQty: qty.cancelledQty, editRemovedQty: qty.editRemovedQty } : {}), unitPrice: ordinary.unitPrice,
         lineSubtotal: ordinary.lineSubtotal, lineDiscount: ordinary.lineSubtotal - final.lineNet, lineTax: final.lineGross - final.lineNet, lineTotal: final.lineGross };
-      if (line.id) await tx.update(s.orderLine).set(values).where(eq(s.orderLine.id, id));
-      else await tx.insert(s.orderLine).values({ id, storeId: input.storeId, orderId: input.orderId, ...values });
+      const grew = !storedRow || line.quantity > billedQty(storedRow) || storedRow.variantId !== line.variantId;
+      const boVariant = line.variantId && grew && (a.backorderVariantIds ?? []).includes(line.variantId) ? a.variants.find(v => v.id === line.variantId) : undefined;
+      const metaPatch = boVariant ? { metadata: backorderLineMetadata(storedRow?.metadata, boVariant.backorderLabel) } : {};
+      if (line.id) await tx.update(s.orderLine).set({ ...values, ...metaPatch }).where(eq(s.orderLine.id, id));
+      else await tx.insert(s.orderLine).values({ id, storeId: input.storeId, orderId: input.orderId, ...values, ...metaPatch });
     }
     const keep = a.working.adjustments.flatMap(item => item.id ? [item.id] : []);
     const drop = adjustments.filter(item => !keep.includes(item.id)).map(item => item.id);
@@ -1258,17 +1276,23 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       // ── stock (live; only the unfulfilled delta) ──────────────────────────
       const reserve: Array<{ sku: string; quantity: number }> = [];
       const reserveMap = new Map<string, VariantFacts>();
+      const reserveVariantIds: string[] = [];
+      const backorderVariantIds = new Set<string>();
       for (const [variantId, delta] of plan.stockDeltas) {
         const v = plan.variantsById.get(variantId)!;
         if (delta < 0) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${-delta}, 0)` }).where(and(eq(s.stock.variantId, variantId), eq(s.stock.storeId, storeId)));
           stockChanged = true;
         } else {
-          reserve.push({ sku: v.sku, quantity: delta }); reserveMap.set(v.sku, v);
+          reserve.push({ sku: v.sku, quantity: delta }); reserveMap.set(v.sku, v); reserveVariantIds.push(variantId);
         }
       }
       if (reserve.length) {
-        try { stockChanged = (await reserveStockOrThrow(tx, storeId, reserve, reserveMap)) || stockChanged; }
+        try {
+          const reservation = await reserveStock(tx, storeId, reserve, reserveMap);
+          stockChanged = reservation.changed || stockChanged;
+          reserveVariantIds.forEach((id, i) => { if (reservation.backorder[i]) backorderVariantIds.add(id); });
+        }
         catch (e) {
           if (e instanceof StockReservationError) { stockChanged = false; throw new OrderEditError(409, 'OUT_OF_STOCK', 'insufficient stock for the added quantity', { skus: e.skus }); }
           throw e;
@@ -1284,6 +1308,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
           await tx.insert(s.orderLine).values({
             id: lineIds.get(l.key)!, storeId, orderId: o.id, variantId: l.variantId, variantSku: l.sku, variantName: l.name, quantity: l.quantity, unitPrice: l.unitPrice,
             lineSubtotal: p.lineSubtotal, lineDiscount: p.lineDiscount, lineTax: plan.stack.result.lineSnapshots.find(line => line.lineKey === l.key)!.lineGross - plan.stack.result.lineSnapshots.find(line => line.lineKey === l.key)!.lineNet, lineTotal: p.lineTotal,
+            ...(l.variantId && backorderVariantIds.has(l.variantId) ? { metadata: backorderLineMetadata(null, (plan.variantsById.get(l.variantId) as { backorderLabel?: string | null } | undefined)?.backorderLabel) } : {}),
           });
           continue;
         }
@@ -1296,6 +1321,9 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         await tx.update(s.orderLine).set({
           quantity: qty.quantity, cancelledQty: qty.cancelledQty, editRemovedQty: qty.editRemovedQty, unitPrice: l.unitPrice, variantId: l.variantId, variantSku: l.sku, variantName: l.name,
           lineSubtotal: p.lineSubtotal, lineDiscount: p.lineDiscount, lineTax, lineTotal: p.lineTotal,
+          // #446: units added by this edit that needed incoming stock set the snapshot; removals never clear it.
+          ...(l.variantId && backorderVariantIds.has(l.variantId) && (l.quantity > billedQty(cur) || cur.variantId !== l.variantId)
+            ? { metadata: backorderLineMetadata(cur.metadata, (plan.variantsById.get(l.variantId) as { backorderLabel?: string | null } | undefined)?.backorderLabel) } : {}),
         }).where(eq(s.orderLine.id, l.id));
       }
 
@@ -1687,13 +1715,13 @@ export async function loadEditContext(storeId: string, code: string) {
 export async function searchEditVariants(storeId: string, q: string, limit = 20) {
   const term = `%${q.replace(/[%_\\]/g, '\\$&')}%`;
   return withStore(storeId, async (tx) => {
-    const rows = await tx.select({ id: s.productVariant.id, sku: s.productVariant.sku, name: s.productVariant.name, productName: s.product.name, price: s.productVariant.price, salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder, preOrderPrice: s.productVariant.preOrderPrice, onHand: s.stock.onHand, allocated: s.stock.allocated })
+    const rows = await tx.select({ id: s.productVariant.id, sku: s.productVariant.sku, name: s.productVariant.name, productName: s.product.name, price: s.productVariant.price, salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder, preOrderPrice: s.productVariant.preOrderPrice, onHand: s.stock.onHand, incoming: s.stock.incoming, allocated: s.stock.allocated })
       .from(s.productVariant).innerJoin(s.product, eq(s.product.id, s.productVariant.productId))
       .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
       .where(and(eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt), or(ilike(s.productVariant.sku, term), ilike(s.productVariant.name, term), ilike(s.product.name, term))))
       .orderBy(asc(s.productVariant.sku)).limit(Math.min(50, Math.max(1, limit)));
     const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
     const rule = variantPriceRuleFromConfig(storeRow?.config);
-    return rows.map((r) => ({ sku: r.sku, name: r.name, productName: r.productName, unitPrice: selectUnitPrice(r, rule), available: r.onHand == null ? null : r.onHand - (r.allocated ?? 0) }));
+    return rows.map((r) => ({ sku: r.sku, name: r.name, productName: r.productName, unitPrice: selectUnitPrice(r, rule), available: r.onHand == null ? null : sellableRaw(r) }));
   });
 }

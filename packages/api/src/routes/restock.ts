@@ -125,7 +125,7 @@ restockRoutes.openapi(
       if (body.variantId) {
         const v = await tx.execute(
           sql`SELECT pv.id, pv.name AS variant_name, p.name AS product_name, p.slug AS product_slug,
-                     coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS available
+                     greatest(coalesce(stk.on_hand, 0) + coalesce(stk.incoming, 0) - coalesce(stk.allocated, 0), 0) AS available
               FROM product_variant pv
               JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
               LEFT JOIN stock stk ON stk.variant_id = pv.id
@@ -139,7 +139,7 @@ restockRoutes.openapi(
         // the shopper hasn't picked a specific variant.
         const v = await tx.execute(
           sql`SELECT pv.id, pv.name AS variant_name, p.name AS product_name, p.slug AS product_slug,
-                     coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS available
+                     greatest(coalesce(stk.on_hand, 0) + coalesce(stk.incoming, 0) - coalesce(stk.allocated, 0), 0) AS available
               FROM product_variant pv
               JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
               LEFT JOIN stock stk ON stk.variant_id = pv.id
@@ -243,7 +243,7 @@ async function processRestockTx(
   // storefront/sender — the same per-app resolution dispatch.ts::emailCtx
   // applies, not the global STOREFRONT_URL for every brand.
   const avail = await tx.execute(
-    sql`SELECT coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS n,
+    sql`SELECT greatest(coalesce(stk.on_hand, 0) + coalesce(stk.incoming, 0) - coalesce(stk.allocated, 0), 0) AS n,
                pv.name AS variant_name, pv.app_key, p.name AS product_name, p.slug AS product_slug
         FROM product_variant pv
         JOIN product p ON p.id = pv.product_id

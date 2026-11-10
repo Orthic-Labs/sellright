@@ -21,6 +21,7 @@
           "APPLE_SIGNIN_NOT_CONFIGURED",
           "APPLE_TOKEN_INVALID",
           "AUTH_REQUIRED",
+          "BACKORDER_CHANGED",
           "BIRTHDAY_ALREADY_SET",
           "BOT_CHECK_FAILED",
           "BUSY",
@@ -760,6 +761,10 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "backorderLabel": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -1289,6 +1294,17 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "shipsNowQuantity": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "backorderLabel": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -1515,6 +1531,17 @@
                             "type": "boolean"
                           },
                           "availableQuantity": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
                             "type": "integer",
                             "nullable": true
                           }
@@ -1796,6 +1823,17 @@
                                 "type": "boolean"
                               },
                               "availableQuantity": {
+                                "type": "integer",
+                                "nullable": true
+                              },
+                              "backorder": {
+                                "type": "boolean"
+                              },
+                              "shipLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipsNowQuantity": {
                                 "type": "integer",
                                 "nullable": true
                               }
@@ -2151,6 +2189,17 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
+                            "type": "integer",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -2468,6 +2517,17 @@
                             "type": "boolean"
                           },
                           "availableQuantity": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
                             "type": "integer",
                             "nullable": true
                           }
@@ -2836,6 +2896,17 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
+                            "type": "integer",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -3106,6 +3177,17 @@
                                     "type": "boolean"
                                   },
                                   "availableQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
+                                  },
+                                  "backorder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipsNowQuantity": {
                                     "type": "integer",
                                     "nullable": true
                                   }
@@ -3461,6 +3543,17 @@
                                 "type": "boolean"
                               },
                               "availableQuantity": {
+                                "type": "integer",
+                                "nullable": true
+                              },
+                              "backorder": {
+                                "type": "boolean"
+                              },
+                              "shipLabel": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "shipsNowQuantity": {
                                 "type": "integer",
                                 "nullable": true
                               }
@@ -3819,6 +3912,17 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
+                            "type": "integer",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -4089,6 +4193,17 @@
                                     "type": "boolean"
                                   },
                                   "availableQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
+                                  },
+                                  "backorder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipsNowQuantity": {
                                     "type": "integer",
                                     "nullable": true
                                   }
@@ -4377,6 +4492,17 @@
                           "availableQuantity": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
+                            "type": "integer",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -4648,6 +4774,17 @@
                             "type": "boolean"
                           },
                           "availableQuantity": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shipsNowQuantity": {
                             "type": "integer",
                             "nullable": true
                           }
@@ -4930,6 +5067,17 @@
                                     "type": "boolean"
                                   },
                                   "availableQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
+                                  },
+                                  "backorder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipsNowQuantity": {
                                     "type": "integer",
                                     "nullable": true
                                   }
@@ -5223,6 +5371,13 @@
                     "additionalProperties": false,
                     "description": "Landing-URL attribution (UTM parameters and oppref) to store on the order. Allowlisted keys only; each value at most 256 printable characters."
                   },
+                  "backorderSkus": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 200
+                  },
                   "tracking": {
                     "type": "object",
                     "properties": {
@@ -5475,6 +5630,17 @@
                                   "availableQuantity": {
                                     "type": "integer",
                                     "nullable": true
+                                  },
+                                  "backorder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipsNowQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
                                   }
                                 },
                                 "required": [
@@ -5693,6 +5859,17 @@
                                     "type": "boolean"
                                   },
                                   "availableQuantity": {
+                                    "type": "integer",
+                                    "nullable": true
+                                  },
+                                  "backorder": {
+                                    "type": "boolean"
+                                  },
+                                  "shipLabel": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "shipsNowQuantity": {
                                     "type": "integer",
                                     "nullable": true
                                   }
@@ -10416,6 +10593,13 @@
                                 },
                                 "reviewed": {
                                   "type": "boolean"
+                                },
+                                "backorder": {
+                                  "type": "boolean"
+                                },
+                                "shipLabel": {
+                                  "type": "string",
+                                  "nullable": true
                                 }
                               },
                               "required": [
@@ -10433,6 +10617,9 @@
                                 "reviewed"
                               ]
                             }
+                          },
+                          "hasBackorder": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -10795,6 +10982,13 @@
                           },
                           "reviewed": {
                             "type": "boolean"
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -10810,6 +11004,9 @@
                           "reviewed"
                         ]
                       }
+                    },
+                    "hasBackorder": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -12878,6 +13075,13 @@
                           "shipDate": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -12942,6 +13146,9 @@
                       ]
                     },
                     "testMode": {
+                      "type": "boolean"
+                    },
+                    "hasBackorder": {
                       "type": "boolean"
                     }
                   },
@@ -18671,6 +18878,11 @@
                     "nullable": true,
                     "maxLength": 255
                   },
+                  "backorderLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
                   "compareAtPrice": {
                     "type": "integer",
                     "nullable": true
@@ -18907,6 +19119,9 @@
                     },
                     "onHand": {
                       "type": "integer"
+                    },
+                    "warning": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -19006,6 +19221,9 @@
                           },
                           "onHand": {
                             "type": "integer"
+                          },
+                          "warning": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -19107,6 +19325,9 @@
                                 },
                                 "allocated": {
                                   "type": "integer"
+                                },
+                                "incoming": {
+                                  "type": "integer"
                                 }
                               },
                               "required": [
@@ -19206,6 +19427,9 @@
                     },
                     "onHand": {
                       "type": "integer"
+                    },
+                    "warning": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -19238,6 +19462,214 @@
           },
           "409": {
             "description": "Conflict (would go negative)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/variants/{id}/incoming": {
+      "patch": {
+        "summary": "Set variant incoming (backorder) quantity and ship label",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "incoming": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000000
+                  },
+                  "backorderLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
+                  "expectedIncoming": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "incoming"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "incoming": {
+                      "type": "integer"
+                    },
+                    "backorderLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "minIncoming": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "incoming",
+                    "backorderLabel",
+                    "minIncoming"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Label missing, or incoming below the quantity already sold on backorder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Incoming changed since loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/variants/{id}/stock/receive": {
+      "post": {
+        "summary": "Receive incoming stock into the warehouse (on-hand += n, incoming -= n)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000000
+                  }
+                },
+                "required": [
+                  "quantity"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "onHand": {
+                      "type": "integer"
+                    },
+                    "incoming": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "onHand",
+                    "incoming"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "More than is incoming",
             "content": {
               "application/json": {
                 "schema": {
@@ -19588,6 +20020,17 @@
                     "minimum": 0,
                     "maximum": 100000000,
                     "default": 0
+                  },
+                  "incoming": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000000,
+                    "default": 0
+                  },
+                  "backorderLabel": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
                   },
                   "fulfillmentType": {
                     "type": "string",
@@ -20430,6 +20873,9 @@
                     },
                     "onHand": {
                       "type": "integer"
+                    },
+                    "warning": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -36202,7 +36648,33 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "nullable": true
+                  "type": "object",
+                  "properties": {
+                    "hasBackorder": {
+                      "type": "boolean"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "backorder": {
+                            "type": "boolean"
+                          },
+                          "shipLabel": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "additionalProperties": {
+                    "nullable": true
+                  }
                 }
               }
             }

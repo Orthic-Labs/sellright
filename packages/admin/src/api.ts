@@ -194,13 +194,17 @@ export interface Page<T> { items: T[]; total: number; page: number; pageSize: nu
 
 export interface OrderRow { code: string; state: string; status?: string; paymentStatus?: string; fulfillmentStatus?: string; shippingMethodName?: string | null; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; customerName?: string | null; firstName?: string | null; lastName?: string | null;
   /** #406: units still to ship, of those on pre-order, and units shipped. Removed (refunded before shipping) units are in none. */
-  openQty?: number; openPreOrderQty?: number; shippedQty?: number; removedQty?: number; }
+  openQty?: number; openPreOrderQty?: number; shippedQty?: number; removedQty?: number;
+  /** #446: the order has a line that ships later. Not sent by the admin order routes yet. */
+  hasBackorder?: boolean; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
   recentOrders: OrderRow[];
 }
 export interface OrderDetail {
+  /** #446: any line ships later. Not sent by the admin order route yet. */
+  hasBackorder?: boolean;
   code: string; state: string; currency: string; shippingMethodCode?: string | null; shippingMethodName?: string | null;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   placedAt: string | null; createdAt: string;
@@ -209,7 +213,7 @@ export interface OrderDetail {
   /** #374: the order's own checkout contact (shown when no customer is linked). */
   contact?: { name: string | null; email: string | null; phone: string | null } | null;
   hasPostedCredit?: boolean;
-  lines: { id: string; sku: string; name: string; quantity: number; orderedQty?: number; editRemovedQty?: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
+  lines: { backorder?: boolean; shipLabel?: string | null; id: string; sku: string; name: string; quantity: number; orderedQty?: number; editRemovedQty?: number; refundQuantity?: number; refundAvailableQuantity?: number; refundCashAmounts?: number[] | null; refundUnitPrice?: number | null; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
   payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
   fulfillments: {
     id: string; state: string; trackingCode: string | null; carrier: string | null;
@@ -276,7 +280,9 @@ export function refundCashForRemainingLines(lines: readonly RefundLineBasis[]): 
   return total;
 }
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
-export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; updatedAt?: string; onHand: number; allocated: number; available: number; optionIds?: string[]; }
+export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; shipDateLabel?: string | null; enabled: boolean; updatedAt?: string; onHand: number; allocated: number;
+  /** #446: `available` is total sellable (on hand + incoming - held); `shipsNow` is what leaves the warehouse now. Absent on older API builds. */
+  available: number; incoming?: number; backorderLabel?: string | null; shipsNow?: number; optionIds?: string[]; }
 export interface ProductImage { assetId: string; path: string; url: string; position: number; }
 export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; featuredAssetId: string | null; images: ProductImage[]; variants: VariantRow[];
   /** #406: sent back as expectedUpdatedAt on save; a newer row is a 409 conflict. */
@@ -293,7 +299,9 @@ export interface CustomerDetail {
 
 export interface CollectionRow { id: string; slug: string; name: string; parentId: string | null; products: number; }
 export interface CollectionDetail { id: string; slug: string; name: string; description: string | null; parentId: string | null; products: { id: string; name: string; status: string; position: number }[]; }
-export interface InventoryRow { variantId: string; sku: string; name: string; productName: string; onHand: number; allocated: number; available: number; }
+export interface InventoryRow { variantId: string; sku: string; name: string; productName: string; onHand: number; allocated: number; available: number;
+  /** #446: units not in the warehouse yet, their ship label, and what ships now. */
+  incoming?: number; backorderLabel?: string | null; shipsNow?: number; }
 export interface StockMovementRow { id: string; delta: number; reason: string; actor: string | null; refOrderId: string | null; createdAt: string; }
 export interface StockLocationRow { locationId: string; name: string; code: string; onHand: number; }
 

@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { normalizeBackorderLabel, oversoldBackorderWarning } from '../orders/availability.js';
 import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -117,6 +118,9 @@ adminCatalog.openapi(
       shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
       shipDateLabel: z.string().max(255).nullable().optional(),
       onHand: z.number().int().min(0).max(100_000_000).default(0),
+      /** #446: units not in the warehouse yet, sellable ahead of arrival; needs a non-empty backorderLabel when > 0. */
+      incoming: z.number().int().min(0).max(100_000_000).default(0),
+      backorderLabel: z.string().max(255).nullable().optional(),
       fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).default('physical'),
       appKey: z.string().max(255).nullable().optional(),
       artifactKey: z.string().max(1024).nullable().optional(),
@@ -133,6 +137,9 @@ adminCatalog.openapi(
     const { id } = c.req.valid('param');
     const body = c.req.valid('json');
     let stockChanged = false;
+    const backorderLabel = normalizeBackorderLabel(body.backorderLabel);
+    if (body.incoming > 0 && !backorderLabel) throw new HttpError(400, 'a non-empty backorderLabel is required when incoming is above zero', 'BACKORDER_LABEL_REQUIRED', 'backorderLabel');
+    if (body.incoming > 0 && (body.fulfillmentType !== 'physical' || body.isPreOrder)) throw new HttpError(400, 'only physical, non-pre-order variants can have incoming stock', 'BACKORDER_UNSUPPORTED', 'incoming');
     const res = await withStore(st.storeId, async (tx) => {
       const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.id, id), isNull(s.product.deletedAt))).limit(1);
       if (!p) return { kind: 'notfound' as const };
@@ -154,10 +161,11 @@ adminCatalog.openapi(
         licenseSeats: body.licenseSeats,
         licenseDurationDays: body.licenseDurationDays ?? null,
         updatesDurationDays: body.updatesDurationDays ?? null,
+        backorderLabel,
         metafields: body.shipDateLabel === undefined ? body.metafields ?? null : { ...body.metafields, shipDateLabel: body.shipDateLabel },
       }).returning({ id: s.productVariant.id });
       if (body.fulfillmentType === 'physical') {
-        await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, allocated: 0 });
+        await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, incoming: body.incoming, allocated: 0 });
         if (body.onHand > 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: v!.id, delta: body.onHand, reason: 'admin_create' });
         stockChanged = true;
       }
@@ -211,14 +219,16 @@ adminCatalog.openapi(
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [isNull(s.productVariant.deletedAt)] as never[];
       if (q) conds.push(sql`(${s.productVariant.sku} ilike ${'%' + q + '%'} or ${s.productVariant.name} ilike ${'%' + q + '%'})` as never);
-      if (lowStock) conds.push(sql`(${s.stock.onHand} - ${s.stock.allocated}) <= 3` as never);
+      if (lowStock) conds.push(sql`(${s.stock.onHand} - ${s.stock.allocated}) <= 3` as never) // warehouse-low (ships-now), unchanged by #446;
       const where = and(...conds);
       const base = tx
         .select({
           variantId: s.productVariant.id, sku: s.productVariant.sku, name: s.productVariant.name,
           productName: s.product.name,
-          onHand: s.stock.onHand, allocated: s.stock.allocated,
-          available: sql<number>`coalesce(${s.stock.onHand},0) - coalesce(${s.stock.allocated},0)`,
+          onHand: s.stock.onHand, allocated: s.stock.allocated, incoming: s.stock.incoming, backorderLabel: s.productVariant.backorderLabel,
+          // #446: available = sellable (on_hand + incoming - allocated); shipsNow = what leaves the warehouse now.
+          available: sql<number>`coalesce(${s.stock.onHand},0) + coalesce(${s.stock.incoming},0) - coalesce(${s.stock.allocated},0)`,
+          shipsNow: sql<number>`greatest(coalesce(${s.stock.onHand},0) - coalesce(${s.stock.allocated},0), 0)`,
         })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
@@ -287,13 +297,14 @@ adminCatalog.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/variants/{id}/location-stock', summary: 'Set a variant on-hand at a location (change applied to the aggregate as a delta)',
     request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ locationId: z.string().max(64), onHand: z.number().int().min(0).max(100_000_000) })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int(), warning: z.string().optional() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    let warning: string | null = null;
     // Location figures are per-location counts applied to sellable stock as deltas (see
     // admin-catalog-location-stock.ts); the aggregate is never recomputed from the location sum.
     const total = await withStore(st.storeId, async (tx) => {
@@ -310,11 +321,12 @@ adminCatalog.openapi(
         await tx.update(s.stock).set({ onHand: r.onHand }).where(eq(s.stock.variantId, id));
         await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: r.appliedDelta, reason: 'admin_adjust', actor: admin.email });
       }
+      warning = oversoldBackorderWarning({ onHand: r.onHand, incoming: cur.incoming, allocated: cur.allocated });
       await emitVariantProductChanged(tx, st.storeId, id);
       return r.onHand;
     });
     onStockChanged(st.slug);
-    return c.json({ id, onHand: total }, 200);
+    return c.json({ id, onHand: total, ...(warning ? { warning } : {}) }, 200);
   }),
 );
 

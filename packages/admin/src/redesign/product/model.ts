@@ -1,7 +1,8 @@
 /**
  * #406 product editor model: staged edits, validation, save plan, option grid. Pure functions, no React.
  * Edit keys: `_title` | `_desc` | `_status` for the product, `<variantId>.<field>` for variants where field is
- * price | sale | oh | active | pre | pre_price | pre_label | pre_date. Money fields are decimal strings.
+ * price | sale | oh | inc | bo | active | pre | pre_price | pre_label | pre_date.
+ * `inc` is the incoming quantity and `bo` the ship label (#446). Money fields are decimal strings.
  */
 import type { ProductDetail, VariantRow } from '../../api';
 
@@ -39,6 +40,8 @@ export function baseValue(p: ProductDetail, key: string): EditVal | undefined {
     case 'price': return fmt2(v.price);
     case 'sale': return v.salePrice != null ? fmt2(v.salePrice) : '';
     case 'oh': return String(v.onHand);
+    case 'inc': return String(v.incoming ?? 0);
+    case 'bo': return v.backorderLabel ?? '';
     case 'active': return v.enabled;
     case 'pre': return basePre(v);
     case 'pre_price': return basePre(v)?.price ?? '';
@@ -72,7 +75,7 @@ export function curPre(v: VariantRow, edits: Edits): PreDraft | null {
   return r;
 }
 
-export function curField(p: ProductDetail, edits: Edits, vid: string, f: 'price' | 'sale' | 'oh'): string;
+export function curField(p: ProductDetail, edits: Edits, vid: string, f: 'price' | 'sale' | 'oh' | 'inc' | 'bo'): string;
 export function curField(p: ProductDetail, edits: Edits, vid: string, f: 'active'): boolean;
 export function curField(p: ProductDetail, edits: Edits, vid: string, f: string): EditVal {
   const k = `${vid}.${f}`;
@@ -83,9 +86,16 @@ export const curStock = (p: ProductDetail, edits: Edits, v: VariantRow): number 
   const oh = curField(p, edits, v.id, 'oh');
   return isInt(oh) ? Number(oh) : 0;
 };
-export const availableOf = (p: ProductDetail, edits: Edits, v: VariantRow) => curStock(p, edits, v) - v.allocated;
+export const curIncoming = (p: ProductDetail, edits: Edits, v: VariantRow): number => {
+  const inc = curField(p, edits, v.id, 'inc');
+  return isInt(inc) ? Number(inc) : 0;
+};
+/** Total sellable: on hand + incoming - held. */
+export const availableOf = (p: ProductDetail, edits: Edits, v: VariantRow) => curStock(p, edits, v) + curIncoming(p, edits, v) - v.allocated;
+/** What leaves the warehouse now: on hand - held, never below 0. */
+export const shipsNowOf = (p: ProductDetail, edits: Edits, v: VariantRow) => Math.max(curStock(p, edits, v) - v.allocated, 0);
 
-export type VariantErrors = Partial<Record<'price' | 'sale' | 'oh' | 'pre_price' | 'pre_label' | 'pre_date', string>>;
+export type VariantErrors = Partial<Record<'price' | 'sale' | 'oh' | 'inc' | 'bo' | 'pre_price' | 'pre_label' | 'pre_date', string>>;
 
 /** Validates only what the person touched, so a legacy value never blocks an unrelated save. `edits` must be effective. */
 export function variantErrors(p: ProductDetail, edits: Edits, v: VariantRow, now = Date.now()): VariantErrors {
@@ -100,6 +110,10 @@ export function variantErrors(p: ProductDetail, edits: Edits, v: VariantRow, now
     else if (sale !== '' && !e.price && isMoney(price) && Number(sale) >= Number(price)) e.sale = 'Must be lower than the price.';
   }
   if (edited('oh') && !isInt(oh)) e.oh = 'Whole number, 0 or more.';
+  if (edited('inc') && !isInt(curField(p, edits, v.id, 'inc'))) e.inc = 'Whole number, 0 or more.';
+  const label = curField(p, edits, v.id, 'bo');
+  if (!e.inc && curIncoming(p, edits, v) > 0 && (edited('inc') || edited('bo')) && !label.trim()) e.bo = 'Add what customers see, like "Ships in 3 weeks".';
+  else if (label.length > 255) e.bo = 'Keep it under 255 characters.';
   const touchedPre = ['pre', 'pre_price', 'pre_label', 'pre_date'].some(edited);
   const pr = curPre(v, edits);
   if (touchedPre && pr) {
@@ -115,7 +129,12 @@ export function variantErrors(p: ProductDetail, edits: Edits, v: VariantRow, now
   return e;
 }
 
-export type VariantPlan = { id: string; sku: string; patch: Record<string, unknown>; onHand?: number; keys: string[] };
+export type VariantPlan = {
+  id: string; sku: string; patch: Record<string, unknown>; onHand?: number;
+  /** #446: set when incoming changed (PATCH /variants/{id}/incoming, with the label). A label-only edit goes in `patch.backorderLabel`. */
+  incoming?: { incoming: number; backorderLabel: string | null };
+  keys: string[];
+};
 export type ProductPlan = { body: Record<string, unknown>; keys: string[] };
 
 /** What to send for a set of (already validated, effective) edits. */
@@ -146,6 +165,9 @@ export function buildPlan(p: ProductDetail, edits: Edits): { product: ProductPla
     }
     const plan: VariantPlan = { id: v.id, sku: v.sku, patch, keys };
     if (edited('oh')) plan.onHand = Number(curField(p, edits, v.id, 'oh'));
+    const label = curField(p, edits, v.id, 'bo').trim() || null;
+    if (edited('inc')) plan.incoming = { incoming: Number(curField(p, edits, v.id, 'inc')), backorderLabel: label };
+    else if (edited('bo')) patch.backorderLabel = label;
     variants.push(plan);
   }
   return { product: pkeys.length ? { body, keys: pkeys } : null, variants };
@@ -186,4 +208,23 @@ export function missingCombos(grid: Grid, variants: VariantRow[], onlyFirstId?: 
     for (const b of grid.second.options) if (!have.has(`${a.id}|${b.id}`)) out.push({ a, b });
   }
   return out;
+}
+
+// ── #446 backorder: plain-language copy for the API's error codes ────────────
+type CodedError = { code?: string; message?: string; body?: Record<string, unknown> };
+
+/** Message for a failed incoming / label / receive / ship call. Unknown errors keep the server message. */
+export function backorderError(e: unknown): string {
+  const x = (e ?? {}) as CodedError;
+  switch (x.code) {
+    case 'BACKORDER_LABEL_REQUIRED': return 'Add what customers see, like "Ships in 3 weeks". It is needed while units are incoming.';
+    case 'INCOMING_BELOW_SOLD': {
+      const min = x.body?.minIncoming;
+      return typeof min === 'number' ? `Incoming can't be below ${min}. That many units are already sold and waiting.` : "Incoming can't be below the units already sold and waiting.";
+    }
+    case 'BACKORDER_UNSUPPORTED': return 'Only physical products that are not pre-orders can have incoming stock.';
+    case 'INCOMING_CHANGED': return 'Incoming stock changed since you opened this page. Reload and try again.';
+    case 'RECEIVE_EXCEEDS_INCOMING': return "You can't receive more than is incoming.";
+    default: return x.message || 'Something went wrong.';
+  }
 }

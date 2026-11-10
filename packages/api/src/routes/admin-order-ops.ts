@@ -1,3 +1,4 @@
+import { consumeStockForShipment } from '../orders/stock-fulfilment.js';
 import { importedFinancialReconciliationRequired, ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { PassThrough, Readable } from 'node:stream';
@@ -16,7 +17,8 @@ import { apiErrorSchema, errJson, errorEnvelope } from '../lib/api-error.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
-import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { normalizeBackorderLabel } from '../orders/availability.js';
+import { reserveStock, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { checkPlacement } from '../payments/policy/host.js';
 import { PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import { release } from '../payments/reservation.js';
@@ -92,13 +94,14 @@ adminOrderOps.openapi(
       const bySku = new Map(variants.map((v) => [v.sku, v]));
       const blocked = validateReservableItems(items, bySku);
       if (blocked.length) return { kind: 'blocked' as const, skus: blocked };
-      stockChanged = await reserveStockOrThrow(tx, st.storeId, items, bySku);
+      const reservation = await reserveStock(tx, st.storeId, items, bySku);
+      stockChanged = reservation.changed;
       // Mirror the edit-lines path: resolve the destination tax zone and honour the
       // store's tax-inclusive flag. Omitting taxInclusive here mispriced every
       // tax-inclusive store's manual/phone orders.
       const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       if (!storeRow) throw new HttpError(404, 'store not found');
-      const priced = items.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow.config)) }; });
+      const priced = items.map((i, idx) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow.config)), backorder: reservation.backorder[idx] === true }; });
       const shipCountry = (body.shippingAddress as { country?: string } | null | undefined)?.country ?? null;
       const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(zones, shipCountry, storeRow.taxRate);
@@ -142,7 +145,7 @@ adminOrderOps.openapi(
           ? await recordSettlementOperation(tx, { ...draft, kind: 'order_paid_transition' })
           : await recordSettlementOperation(tx, { ...draft, kind: 'admin_draft_create' });
       });
-      await tx.insert(s.orderLine).values(priced.map((p, idx) => ({ storeId: st.storeId, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name, quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal })));
+      await tx.insert(s.orderLine).values(priced.map((p, idx) => ({ storeId: st.storeId, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name, quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal, ...(p.backorder ? { metadata: { backorder: true, shipLabel: normalizeBackorderLabel(p.v.backorderLabel) } } : {}) })));
       await executeEffectsNow(tx, settled.effectIds);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: orderId, action: 'draft_create', toState: paid ? 'Paid' : 'PendingPayment' });
       return { kind: 'ok' as const, code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal };
@@ -429,7 +432,7 @@ adminOrderOps.openapi(
           for (const { l, ship } of shipNow) {
             await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
-              await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+              await consumeStockForShipment(tx, st.storeId, { variantId: l.variantId, sku: l.variantSku, quantity: ship });
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id, actor: admin.email });
               cStock = true;
             }

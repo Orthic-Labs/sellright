@@ -1,5 +1,5 @@
 {
-  "count": 409,
+  "count": 411,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -215,6 +215,7 @@
     "PATCH /v1/admin/tax-zones/{id}",
     "PATCH /v1/admin/variants/{id}",
     "PATCH /v1/admin/variants/{id}/location-stock",
+    "PATCH /v1/admin/variants/{id}/incoming",
     "PATCH /v1/admin/variants/{id}/stock",
     "PATCH /v1/admin/variants/stock/bulk",
     "PATCH /v1/admin/webhooks/{id}",
@@ -326,6 +327,7 @@
     "POST /v1/admin/system/canary",
     "POST /v1/admin/tax-zones",
     "POST /v1/admin/variants/{id}/stock/adjust",
+    "POST /v1/admin/variants/{id}/stock/receive",
     "POST /v1/admin/variants/{id}/transfer",
     "POST /v1/admin/webhooks",
     "POST /v1/apps/{appKey}/licenses/activate",

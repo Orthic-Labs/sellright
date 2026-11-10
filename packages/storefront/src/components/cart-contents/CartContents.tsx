@@ -1,4 +1,5 @@
 import { shippingDateText } from '~/utils/shipping-label';
+import { BACKORDER_ORDER_NOTE, hasBackorderLine, lineBackorderNotice } from '~/utils/backorder';
 import { component$, useContext, useSignal, useTask$, $ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
 import { OptimizedImage } from '~/components/ui/LazyImage';
@@ -217,6 +218,12 @@ export default component$<{
 											)}
 										</span>
 									)}
+									{/* #446: a backorder line (live cart read: `backorder === true`) says when it ships; the label is the API's. */}
+									{lineBackorderNotice(line) && (
+										<p data-backorder-line class={`text-[12px] mt-1 leading-snug ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>
+											{lineBackorderNotice(line)}
+										</p>
+									)}
 								</div>
 
 								{/* Stock warning */}
@@ -268,6 +275,11 @@ export default component$<{
 				})}
 
 			</ul>
+			{hasBackorderLine(shown.lines) && (
+				<p data-backorder-order-note role="status" aria-live="polite" class={`text-[12px] leading-snug pt-3 border-t ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)] border-[rgba(var(--color-accent-rgb),0.25)]' : 'text-[rgba(26,26,26,0.7)] border-[rgba(17,17,17,0.08)]'}`}>
+					{BACKORDER_ORDER_NOTE}
+				</p>
+			)}
 			{/* A17 mount point: a free-shipping progress hint under the line list. A brand's slot wins; without one the drawer (not the
 			    checkout summary) shows the base bar, fed by the server's tier. */}
 			{(hasView('cart.free-shipping-progress') || !isCheckoutView) && (

@@ -10,7 +10,7 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { addressLines } from '../components/order-edit/AddressCard';
 import { ModalDialog, DialogError } from './order-dialog';
-import { CARRIERS, canShipState, detectCarrier, isInt, isPre, openQty, plural, trackErr, type OrderLine, type OrderView } from './order-model';
+import { CARRIERS, canShipState, detectCarrier, isInt, isBackorder, isPre, openQty, shipsLaterCopy, plural, trackErr, type OrderLine, type OrderView } from './order-model';
 
 export interface FulfilDialogProps {
   /** Order code to fulfil. */
@@ -71,6 +71,7 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
   const [carrier, setCarrier] = useState<string>(() => (/usps/i.test(o.shippingMethodName ?? '') ? 'USPS' : ''));
   const [locationId, setLocationId] = useState('');
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | undefined>();
 
   const pick = (l: OrderLine): Pick => picks[l.id] ?? { checked: true, qty: String(openQty(l)) };
   const setPick = (l: OrderLine, p: Partial<Pick>) => setPicks((m) => ({ ...m, [l.id]: { ...pick(l), ...p } }));
@@ -97,7 +98,7 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
 
   const submit = async () => {
     if (submitting.current || !canGo) return;
-    submitting.current = true; setBusy(true); setError('');
+    submitting.current = true; setBusy(true); setError(''); setErrorCode(undefined);
     try {
       const raw = tracking.trim();
       const hasTracking = !!raw.replace(/[\s-]/g, '');
@@ -115,6 +116,7 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setErrorCode(e instanceof ApiError ? e.code : undefined);
       if (e instanceof ApiError && e.status === 409) void qc.invalidateQueries({ queryKey: ['order', store?.slug, o.code] });
     } finally {
       submitting.current = false; setBusy(false);
@@ -134,7 +136,7 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
   return (
     <form onSubmit={(e) => { e.preventDefault(); void submit(); }} noValidate>
       <div className="db">
-        {error && <DialogError title="Nothing was shipped.">{error}</DialogError>}
+        {error && <DialogError title="Nothing was shipped.">{error}{errorCode === 'INSUFFICIENT_ON_HAND' ? ' Receive the incoming stock on the product page, then try again.' : ''}</DialogError>}
         <div>
           <div className="lbl">Items in this parcel</div>
           <div className="fls">
@@ -157,6 +159,7 @@ function FulfilForm({ o, busy, setBusy, onClose, onDone }: {
                     <label className="fn" htmlFor={`fl${i}`}>
                       <b>{l.name}</b>
                       <span className="muted"><span className="mono">{l.sku}</span>{l.fulfilledQty > 0 ? ` · ${l.fulfilledQty} already shipped` : ''}</span>
+                      {isBackorder(l) && <span><span className="pill info">{shipsLaterCopy(l)}</span></span>}
                     </label>
                     <div className="qty">
                       <input className={`inp${ok ? '' : ' bad'}`} type="number" min={1} max={max} step={1} value={p.qty}

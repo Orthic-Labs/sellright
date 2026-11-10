@@ -23,7 +23,8 @@ import { emitEvent } from '../webhooks/emit.js';
 import { paidOrderEffects, recordSettlementOperation, type PaymentInsert } from '../payments/settlement/record.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
-import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { normalizeBackorderLabel } from '../orders/availability.js';
+import { reserveStock, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
 import { checkoutIpRetryAfter, clientIp, loginRetryAfter } from '../auth/rate-limit.js';
@@ -65,6 +66,10 @@ function normalizeAddress(a: Record<string, unknown> | null | undefined): Record
 
 /** A points redemption the server refuses; thrown so the checkout txn (and
  *  its stock reservation) rolls back. */
+/** #446: the reservation marked a line backorder that the shopper was not shown as shipping later. */
+class BackorderChangedError extends Error {
+  constructor(public skus: string[]) { super(`shipping time changed: ${skus.join(', ')}`); }
+}
 class LoyaltyRedeemError extends Error {
   constructor(readonly reason: RedeemRejection) { super(reason); }
 }
@@ -297,6 +302,9 @@ checkout.openapi(
               // Landing attribution (UTM + oppref) captured by the storefront; stored as metadata.attribution and never part
               // of the idempotency fingerprint. See orders/attribution.ts.
               attribution: OrderAttributionIn.optional(),
+              // #446: SKUs the shopper was shown as shipping later (from the pre-submit live cart read). Absent = older storefront,
+              // no acknowledgement check. Never part of the idempotency fingerprint.
+              backorderSkus: z.array(z.string()).max(200).optional(),
               // #375: ad match keys (pixel __obref, first-party visitor id), stored as metadata.adMatch with the client IP
               // address and user agent; never part of the idempotency fingerprint. See orders/ad-match.ts.
               tracking: OrderTrackingIn.optional(),
@@ -349,7 +357,7 @@ checkout.openapi(
     // The request's discount/tender intent as sent, for policies (applied or not).
     const intent = { couponCode: body.couponCode, giftCardCode: body.giftCardCode, redeemPoints: body.redeemPoints };
 
-    type Result = { cartTooLarge: CartTooLargeError } | { pricingError: PromotionStackError } | { creditPaymentUnavailable: PricedCart } | { quoteChanged: PricedCart; revision?: number } | { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { cartTooLarge: CartTooLargeError } | { pricingError: PromotionStackError } | { creditPaymentUnavailable: PricedCart } | { quoteChanged: PricedCart; revision?: number } | { blocked: string[] } | { backorderChanged: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // A replay is decided under the STORED order's own lock set (order, licences, reservations — L2/L3/L4), never
     // under the attempt's set, which covers only the rolled-back attempt's new order id. The set is taken in a fresh
     // transaction, so the global lock order holds; the order is reread under the locks before the policy hook runs.
@@ -507,12 +515,21 @@ checkout.openapi(
         token, shipCountry: (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country,
         shippingMethodCode: body.shippingMethodCode, redeemPoints: body.redeemPoints, pricingIntent: 'checkout' });
       if (checkoutQuote.grandTotal <= 0 && checkoutQuote.coupons.some(coupon => coupon.kind === 'account_credit' && coupon.appliedAmount > 0)) throw new CreditPaymentUnavailableError(checkoutQuote);
-      stockChanged = await reserveStockOrThrow(tx, st.id, items, bySku);
+      const reservation = await reserveStock(tx, st.id, items, bySku);
+      // #446 acknowledgement: a line the reservation (under the stock row lock) marks backorder must have been shown as such.
+      // Throwing rolls the whole transaction back: no order, no allocation, no payment attempt. A listed SKU that is not
+      // backorder now ships sooner, which is fine.
+      if (body.backorderSkus) {
+        const acknowledged = new Set(body.backorderSkus);
+        const changedSkus = [...new Set(items.filter((i, idx) => reservation.backorder[idx] === true && !acknowledged.has(i.sku)).map((i) => i.sku))];
+        if (changedSkus.length) throw new BackorderChangedError(changedSkus);
+      }
+      stockChanged = reservation.changed;
 
       const priceRule = variantPriceRuleFromConfig(st.config);
-      const priced = items.map((i) => {
+      const priced = items.map((i, idx) => {
         const v = bySku.get(i.sku)!;
-        return { v, qty: i.quantity, unitPrice: selectUnitPrice(v, priceRule) };
+        return { v, qty: i.quantity, unitPrice: selectUnitPrice(v, priceRule), backorder: reservation.backorder[idx] === true };
       });
       const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
       const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
@@ -710,6 +727,9 @@ checkout.openapi(
           quantity: p.qty, unitPrice: p.unitPrice,
           lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount,
           lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal,
+          // #446: what the shopper was told, snapshotted so a later variant edit cannot change it. Decided under the stock row
+          // lock in reserveStock. Plain lines keep metadata NULL, as before.
+          ...(p.backorder ? { metadata: { backorder: true, shipLabel: normalizeBackorderLabel(p.v.backorderLabel) } } : {}),
         })),
       );
 
@@ -933,6 +953,7 @@ checkout.openapi(
       if (e instanceof QuoteChangedError) return { quoteChanged: e.quote, revision: e.revision };
       if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
+      if (e instanceof BackorderChangedError) return { backorderChanged: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
       // PAYMENT-TIMING §3.6: a placement veto rolled the whole checkout back; the request is refused, statelessly.
@@ -967,6 +988,7 @@ checkout.openapi(
     if ('policyVeto' in out) return errJson(c, 409, out.policyVeto.code, out.policyVeto.message, { extra: { state: out.policyVeto.extra?.state ?? out.policyVeto.code } });
     if ('policyUnavailable' in out) return errJson(c, 409, 'PAYMENT_POLICY_UNAVAILABLE', 'payment is temporarily unavailable, retry shortly');
     if ('reservationConflict' in out) return errJson(c, 409, 'RESERVATION_CONFLICT', 'an item in this order is reserved by another order');
+    if ('backorderChanged' in out) return errJson(c, 409, 'BACKORDER_CHANGED', 'shipping time changed for an item in the cart', { extra: { skus: out.backorderChanged } });
     if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
     if ('lockRetry' in out) return errJson(c, 409, 'CHECKOUT_RETRY', 'checkout is busy, retry shortly');
     if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });

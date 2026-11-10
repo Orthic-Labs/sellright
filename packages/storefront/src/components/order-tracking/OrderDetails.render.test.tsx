@@ -32,3 +32,21 @@ describe('order summary', () => {
     expect(text).toContain('$18.10');
   });
 });
+
+describe('backorder (#446)', () => {
+  const plain: TrackedOrder = { ...order, lines: [{ ...order.lines[0], isPreOrder: false, shipDate: null, shipDateLabel: null }] };
+  it('a backorder line shows its label and the order shows the one sentence', async () => {
+    const o: TrackedOrder = { ...plain, hasBackorder: true, lines: [{ ...plain.lines[0], backorder: true, shipLabel: 'Ships in 3 weeks' }] };
+    const { document } = await ssrRenderToDom(<OrderDetails order={o} />, {});
+    expect(document.querySelector('[data-backorder-line]')?.textContent).toBe('Ships in 3 weeks');
+    expect(document.querySelectorAll('[data-backorder-order-note]')).toHaveLength(1);
+    expect(document.body.textContent).toContain('Your whole order ships together when these items arrive.');
+  });
+  it('a backorder line without a label says "Ships later"; no backorder shows nothing', async () => {
+    const o: TrackedOrder = { ...plain, lines: [{ ...plain.lines[0], backorder: true, shipLabel: null }] };
+    expect((await ssrRenderToDom(<OrderDetails order={o} />, {})).document.querySelector('[data-backorder-line]')?.textContent).toBe('Ships later');
+    const none = (await ssrRenderToDom(<OrderDetails order={plain} />, {})).document;
+    expect(none.querySelector('[data-backorder-line]')).toBeFalsy();
+    expect(none.querySelector('[data-backorder-order-note]')).toBeFalsy();
+  });
+});

@@ -67,6 +67,9 @@ export interface TrackedOrderLine {
 	shipDate: string | null; shipDateLabel?: string | null;
 	/** #393: the product image (asset path or URL) the tracking page shows beside the line, or null. */
 	image?: string | null;
+	/** #446: a snapshot of the line at purchase (absent on an older API = false / null). */
+	backorder?: boolean;
+	shipLabel?: string | null;
 }
 
 /** packages/api `src/routes/order-facts.ts` `OrderPaymentFact` — the guest
@@ -96,6 +99,8 @@ export interface TrackedOrder {
 	fulfillments: TrackedFulfillment[];
 	payments: TrackedPayment[];
 	lines: TrackedOrderLine[];
+	/** #446: any line is a backorder line (absent on an older API = false). */
+	hasBackorder?: boolean;
 }
 
 export type TrackOrderResult =

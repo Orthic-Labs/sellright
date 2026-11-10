@@ -193,6 +193,22 @@ export interface OrderLineFact {
   shipDateLabel: string | null;
   /** Storefront slug of the line's product (null once the variant is gone) — lets an order page link to the product's review form. */
   productSlug: string | null;
+  /** #446: snapshot from checkout (order_line.metadata.backorder): this line needed incoming stock and ships later as a whole. */
+  backorder?: boolean;
+  /** #446: the ship label the shopper was shown at checkout (order_line.metadata.shipLabel); null for non-backorder lines. */
+  shipLabel?: string | null;
+}
+
+/** #446: order-level flag, true when any line is a backorder line. */
+export function orderHasBackorder(lines: ReadonlyArray<{ backorder?: boolean }>): boolean {
+  return lines.some((l) => l.backorder === true);
+}
+
+/** Reads the #446 snapshot off an order line's metadata (never the live variant). */
+export function backorderSnapshot(metadata: unknown): { backorder: boolean; shipLabel: string | null } {
+  const m = metadata && typeof metadata === 'object' ? (metadata as { backorder?: unknown; shipLabel?: unknown }) : null;
+  const backorder = m?.backorder === true;
+  return { backorder, shipLabel: backorder && typeof m?.shipLabel === 'string' && m.shipLabel.trim() ? m.shipLabel : null };
 }
 
 /** Line snapshot (sku/name/price survive the variant being edited/deleted)
@@ -220,7 +236,7 @@ export async function loadOrderLinesBatch(tx: Tx, orderIds: string[]): Promise<M
 async function selectOrderLines(tx: Tx, where: SQL): Promise<Array<OrderLineFact & { orderId: string }>> {
   const rows = await tx
     .select({
-      orderId: s.orderLine.orderId,
+      orderId: s.orderLine.orderId, metadata: s.orderLine.metadata,
       sku: s.orderLine.variantSku, name: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql,
       unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
       isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
@@ -235,7 +251,7 @@ async function selectOrderLines(tx: Tx, where: SQL): Promise<Array<OrderLineFact
     .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
     .leftJoin(s.product, eq(s.productVariant.productId, s.product.id))
     .where(where);
-  return rows.map((l) => ({ ...l, isPreOrder: l.isPreOrder ?? false, shipDate: l.shipDate?.toISOString() ?? null }));
+  return rows.map(({ metadata, ...l }) => ({ ...l, ...backorderSnapshot(metadata), isPreOrder: l.isPreOrder ?? false, shipDate: l.shipDate?.toISOString() ?? null }));
 }
 
 /** What an order LIST row needs beyond the status triple (the previous platform's account history showed all of it): the tracking

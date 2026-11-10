@@ -7,7 +7,7 @@ import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { addressLines } from '../components/order-edit/AddressCard';
 import { LoadError, LoadingRows } from './states';
-import { eventCopy } from './order-model';
+import { eventCopy, hasBackorder, isBackorder, shipsLaterCopy } from './order-model';
 import { fulfilmentPill, paymentPill, shippableQty } from './orders-helpers';
 import { PillView } from './orders-ui';
 
@@ -50,6 +50,7 @@ export default function OrderInspector({ row, onClose, onFulfil }: { row: OrderR
         <Link to={`/orders/${encodeURIComponent(row.code)}`} className="lnk mono" style={{ fontSize: 14 }}>{row.code}</Link>
         <PillView pill={paymentPill(row.paymentStatus)} />
         <PillView pill={fp} />
+        {(row.hasBackorder || (o && hasBackorder(o))) && <span className="pill info">Ships later</span>}
         <span className="sp" />
         <Link to={`/orders/${encodeURIComponent(row.code)}`} className="iconbtn" aria-label={`Open ${row.code}`}><ExternalLink size={15} aria-hidden="true" /></Link>
         <button className="iconbtn" aria-label="Close quick view" onClick={onClose}><X size={15} aria-hidden="true" /></button>
@@ -74,7 +75,7 @@ export default function OrderInspector({ row, onClose, onFulfil }: { row: OrderR
               const st = lineState(l);
               return (
                 <div className="kv" key={l.id}>
-                  <div>{l.name} <span className="muted">· <span className="mono">{l.sku}</span> × {l.quantity}</span>{st && <div className="hint">{st}</div>}</div>
+                  <div>{l.name} <span className="muted">· <span className="mono">{l.sku}</span> × {l.quantity}</span>{isBackorder(l) && <div><span className="pill info">{shipsLaterCopy(l)}</span></div>}{st && <div className="hint">{st}</div>}</div>
                   <span className="num">{money(l.lineTotal, o.currency)}</span>
                 </div>
               );

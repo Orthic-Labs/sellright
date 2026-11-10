@@ -23,7 +23,7 @@ const hasWaitlist = hasView('pdp.waitlist');
 const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { pricesPending, relatedPrices, addItemToOrderErrorSignal, catalogInStock, enhancementError, isEnhancing, refreshLiveStock, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { backorderNotice, pricesPending, relatedPrices, addItemToOrderErrorSignal, catalogInStock, enhancementError, isEnhancing, refreshLiveStock, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleNamedVariantSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, liveStockReady, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
   // ADR-0001 DP-1: while the shell's prices are pending nothing shows a price (placeholders hold their space).
   const pricePending = pricesPending?.value === true;
@@ -421,6 +421,10 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                   Ships {shippingDateText(selectedVariant.value) || 'when ready'}
                 </div>
               )}
+              {/* #446: the live region is in the markup (empty) for a product with a backorder label, so the notice lands in reserved space. */}
+              {(backorderNotice.value || product.variants.some((v: CatalogVariant) => !!v.backorderLabel)) && (
+                <div class="sr-bo-note" role="status" aria-live="polite" data-backorder-note>{backorderNotice.value}</div>
+              )}
               </div>
             )}
             {!!addItemToOrderErrorSignal.value && (
@@ -497,6 +501,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
       {product?.slug && <ProductReviews slug={product.slug} productName={product.name || 'this product'} />}
       <ProductMobileBar
         allVariantsSoldOut={allVariantsSoldOut}
+        backorderNotice={backorderNotice}
         ctaClass={ctaClass}
         ctaDisabled={ctaDisabled}
         ctaTooltipFading={ctaTooltipFading}

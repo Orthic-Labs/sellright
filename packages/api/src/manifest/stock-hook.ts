@@ -3,7 +3,7 @@
  *
  * LOCKED invariant (see the storefront stock-architecture spec this mirrors):
  * no debounce, no TTL, no polling for stock. The manifest's `inStock` must
- * reflect the `stock` table the instant an `on_hand`/`allocated` write
+ * reflect the `stock` table the instant an `on_hand`/`incoming`/`allocated` write
  * COMMITS. jobs/scheduler.ts no longer polls the catalog manifest on an
  * interval — every code path that mutates stock calls `onStockChanged`
  * exactly once, right after its own transaction commits (NEVER from inside
@@ -103,8 +103,8 @@ function mergeScope(a: RegenScope | null, b: RegenScope): RegenScope {
 }
 
 /**
- * Call this AFTER a transaction that changed `stock.on_hand` or
- * `stock.allocated` for `storeSlug` has committed. Fire-and-forget: never
+ * Call this AFTER a transaction that changed `stock.on_hand`,
+ * `stock.incoming` or `stock.allocated` for `storeSlug` has committed. Fire-and-forget: never
  * await this from a request handler — it must not add latency to the
  * caller's response, and its own failures are logged, not thrown.
  *

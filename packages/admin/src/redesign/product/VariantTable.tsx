@@ -4,7 +4,7 @@ import type { ProductDetail, VariantRow } from '../../api';
 import { date as fmtDate } from '../../lib/format';
 import { RowMenu } from './RowMenu';
 import {
-  availableOf, curField, curPre, curStock, dateToIso, fmt2, hasEdit, isInt, isMoney, missingCombos, orderedVariants, plural,
+  availableOf, backorderError, curField, curIncoming, curPre, curStock, shipsNowOf, dateToIso, fmt2, hasEdit, isInt, isMoney, missingCombos, orderedVariants, plural,
   type EditVal, type Edits, type Grid, type VariantErrors,
 } from './model';
 
@@ -20,17 +20,20 @@ type Props = {
   setExpanded: (next: Set<string>) => void;
   onDelete: (v: VariantRow) => void;
   onOffer: (aId: string, bId: string) => void;
+  /** #446: move `quantity` incoming units into on-hand now. Rejects with the API error. */
+  onReceive: (v: VariantRow, quantity: number) => Promise<void>;
   headerExtra?: ReactNode;
   footer?: ReactNode;
 };
 
 type Bulk = null | 'price' | 'sale' | 'stock';
 
-export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit, expanded, setExpanded, onDelete, onOffer, headerExtra, footer }: Props) {
+export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit, expanded, setExpanded, onDelete, onOffer, onReceive, headerExtra, footer }: Props) {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<Bulk>(null);
   const [bulkVal, setBulkVal] = useState('');
   const [bulkErr, setBulkErr] = useState('');
+  const [recv, setRecv] = useState<{ id: string; qty: string; err: string; busy: boolean } | null>(null);
 
   const vars = orderedVariants(p, grid);
   const grouped = !!grid?.grouped;
@@ -42,6 +45,16 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
 
   const totOnHand = vars.reduce((s, v) => s + curStock(p, edits, v), 0);
   const totHeld = vars.reduce((s, v) => s + v.allocated, 0);
+  const totIncoming = vars.reduce((s, v) => s + curIncoming(p, edits, v), 0);
+
+  const doReceive = async (v: VariantRow) => {
+    if (!recv || recv.busy) return;
+    const max = v.incoming ?? 0;
+    if (!isInt(recv.qty) || Number(recv.qty) < 1 || Number(recv.qty) > max) { setRecv({ ...recv, err: `Enter a whole number from 1 to ${max}.` }); return; }
+    setRecv({ ...recv, err: '', busy: true });
+    try { await onReceive(v, Number(recv.qty)); setRecv(null); }
+    catch (e) { setRecv((r) => (r ? { ...r, busy: false, err: backorderError(e) } : r)); }
+  };
 
   const applyBulk = () => {
     const v = bulkVal.trim();
@@ -73,6 +86,12 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
     const active = curField(p, edits, v.id, 'active');
     const pr = curPre(v, edits);
     const av = availableOf(p, edits, v);
+    const now = shipsNowOf(p, edits, v);
+    const inc = curIncoming(p, edits, v);
+    const boLabel = curField(p, edits, v.id, 'bo');
+    const showBo = !pr && (inc > 0 || (v.incoming ?? 0) > 0 || boLabel !== '' || hasEdit(edits, `${v.id}.inc`));
+    const unsaved = hasEdit(edits, `${v.id}.oh`) || hasEdit(edits, `${v.id}.inc`) || hasEdit(edits, `${v.id}.bo`);
+    const rv = recv?.id === v.id ? recv : null;
     const full = nameOf(v);
     const shipLabel = pr?.date ? fmtDate(dateToIso(pr.date)) : null;
     const showPre = !!pr && (!grouped || expanded.has(grid!.cells.get(v.id)!.a));
@@ -86,6 +105,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
               <span className="mono muted">{v.sku}</span>
               {pr && <span className="pill info">Pre-order{shipLabel ? ` · ships ${shipLabel}` : ''}</span>}
               {av <= 0 && !pr && <span className="pill bad">Out of stock</span>}
+              {inc > 0 && !pr && now <= 0 && av > 0 && <span className="pill info">Ships later</span>}
               {!active && <span className="pill neu">Hidden</span>}
             </span>
           </td>
@@ -98,7 +118,14 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
               <div className="err" id={`e-${v.id}-oh`}>{e.oh}</div>
             </div>
           </td>
-          <td className="num"><span className="avc"><b>{av}</b>{v.allocated > 0 && <small>{v.allocated} held</small>}</span></td>
+          <td>
+            <div className={hasEdit(edits, `${v.id}.inc`) ? 'chg' : undefined}>
+              <input className={`inp num${e.inc ? ' bad' : ''}`} style={{ width: 62 }} value={curField(p, edits, v.id, 'inc')} inputMode="numeric" disabled={!!pr}
+                aria-label={`Incoming, ${full}`} aria-invalid={!!e.inc} aria-describedby={`e-${v.id}-inc`} onChange={(ev) => set(v, 'inc', ev.target.value)} />
+              <div className="err" id={`e-${v.id}-inc`}>{e.inc}</div>
+            </div>
+          </td>
+          <td className="num"><span className="avc"><b>{av}</b>{inc > 0 && <small>{now} ships now</small>}{v.allocated > 0 && <small>{v.allocated} held</small>}</span></td>
           <td>
             <div className={hasEdit(edits, `${v.id}.active`) ? 'chg' : undefined}>
               <button type="button" role="switch" className={`stt${active ? ' on' : ''}`} aria-checked={active} onClick={() => set(v, 'active', !active)}><span className="sr-only">For sale, {full}: </span>{active ? 'Active' : 'Inactive'}</button>
@@ -114,10 +141,46 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
             ]} />
           </td>
         </tr>
+        {showBo && (
+          <tr className="exp" data-bo={v.id}>
+            <td />
+            <td colSpan={8}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,320px) auto', gap: 10, alignItems: 'start' }}>
+                <div className="fld">
+                  <label htmlFor={`bo-${v.id}`}>Ships label</label>
+                  <div className={hasEdit(edits, `${v.id}.bo`) ? 'chg' : undefined}>
+                    <input id={`bo-${v.id}`} className={`inp${e.bo ? ' bad' : ''}`} maxLength={255} value={boLabel} placeholder="Ships in 3 weeks" aria-invalid={!!e.bo} aria-describedby={`e-${v.id}-bo`} onChange={(ev) => set(v, 'bo', ev.target.value)} />
+                    <div className="err" id={`e-${v.id}-bo`}>{e.bo}</div>
+                  </div>
+                </div>
+                {(v.incoming ?? 0) > 0 && (
+                  <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'flex-start', gap: 6, flexWrap: 'wrap' }}>
+                    {rv ? (
+                      <>
+                        <label htmlFor={`rc-${v.id}`} style={{ fontWeight: 500, lineHeight: '26px' }}>Receive</label>
+                        <input id={`rc-${v.id}`} className={`inp num${rv.err ? ' bad' : ''}`} style={{ width: 70, height: 26 }} value={rv.qty} autoFocus inputMode="numeric" disabled={rv.busy} aria-invalid={!!rv.err} aria-describedby={`rce-${v.id}`}
+                          onChange={(ev) => setRecv({ ...rv, qty: ev.target.value, err: '' })}
+                          onKeyDown={(ev) => { if (ev.key === 'Enter') void doReceive(v); if (ev.key === 'Escape') setRecv(null); }} />
+                        <button type="button" className="btn sm pri" disabled={rv.busy} onClick={() => void doReceive(v)}>{rv.busy ? 'Receiving…' : 'Receive'}</button>
+                        <button type="button" className="btn ghost sm" disabled={rv.busy} onClick={() => setRecv(null)}>Cancel</button>
+                        <span className="err" id={`rce-${v.id}`} role="alert" style={{ flexBasis: '100%' }}>{rv.err}</span>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" className="btn sm" disabled={unsaved} aria-label={`Receive incoming stock, ${full}`} onClick={() => setRecv({ id: v.id, qty: String(v.incoming ?? 0), err: '', busy: false })}>Receive…</button>
+                        {unsaved && <span className="hint" style={{ lineHeight: '26px' }}>Save changes first.</span>}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </td>
+          </tr>
+        )}
         {showPre && pr && (
           <tr className="exp" data-pre={v.id}>
             <td />
-            <td colSpan={7}>
+            <td colSpan={8}>
               <div style={{ display: 'grid', gridTemplateColumns: '110px minmax(120px,1fr) 190px auto', gap: 10, alignItems: 'start' }}>
                 <div className="fld">
                   <label htmlFor={`pp-${v.id}`}>Pre-order price</label>
@@ -155,7 +218,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
     return missingCombos(grid, vars, onlyFirstId).map(({ a, b }) => (
       <tr key={`off-${a.id}-${b.id}`} className="off">
         <td />
-        <td colSpan={7}>
+        <td colSpan={8}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {grouped ? b.value : `${a.value} · ${b.value}`} <span className="muted">· not offered</span>
             <button type="button" className="btn ghost sm" aria-label={`Offer ${a.value} · ${b.value}`} onClick={() => onOffer(a.id, b.id)}><Plus aria-hidden="true" />Offer</button>
@@ -171,6 +234,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
     const prices = [...new Set(vs.map((v) => curField(p, edits, v.id, 'price')))];
     const oh = vs.reduce((s, v) => s + curStock(p, edits, v), 0);
     const held = vs.reduce((s, v) => s + v.allocated, 0);
+    const incG = vs.reduce((s, v) => s + curIncoming(p, edits, v), 0);
     const act = vs.filter((v) => curField(p, edits, v.id, 'active')).length;
     const dirtyG = vs.some((v) => Object.keys(edits).some((k) => k.startsWith(`${v.id}.`)));
     const err = vs.some((v) => Object.keys(errorsOf(v)).length > 0);
@@ -189,7 +253,8 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
         <td className="muted">{prices.length > 1 ? 'Mixed' : prices[0] && isMoney(prices[0]) ? `${currencySymbol}${fmt2(Math.round(Number(prices[0]) * 100))}` : ''}</td>
         <td />
         <td className="num">{oh}</td>
-        <td className="num"><span className="avc"><b>{oh - held}</b>{held > 0 && <small>{held} held</small>}</span></td>
+        <td className="num">{incG > 0 ? incG : ''}</td>
+        <td className="num"><span className="avc"><b>{oh + incG - held}</b>{held > 0 && <small>{held} held</small>}</span></td>
         <td className="muted" style={{ fontSize: 12 }}>{act === vs.length ? 'All active' : `${act} of ${vs.length} active`}</td>
         <td />
       </tr>
@@ -210,7 +275,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
       <div className="ch">
         <h2>Variants</h2>
         <span className="muted" style={{ fontSize: 12 }} role="status">
-          {plural(vars.length, 'variant')} · {totOnHand} on hand · {totHeld} held · <b style={{ color: 'rgb(var(--text))' }}>{totOnHand - totHeld} available</b>
+          {plural(vars.length, 'variant')} · {totOnHand} on hand{totIncoming > 0 ? ` · ${totIncoming} incoming` : ''} · {totHeld} held · <b style={{ color: 'rgb(var(--text))' }}>{totOnHand + totIncoming - totHeld} sellable</b>
         </span>
         <span className="sp" />
         {headerExtra}
@@ -248,7 +313,8 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
               <th style={{ width: 96 }}>Price</th>
               <th style={{ width: 96 }}>Sale price</th>
               <th style={{ width: 78 }}>On hand</th>
-              <th className="num" style={{ width: 76 }} title="On hand minus units held for paid orders not yet shipped">Available</th>
+              <th style={{ width: 78 }} title="Units not in the warehouse yet. They can be sold before they arrive.">Incoming</th>
+              <th className="num" style={{ width: 96 }} title="On hand plus incoming, minus units held for paid orders not yet shipped">Sellable</th>
               <th style={{ width: 84 }}>Status</th>
               <th style={{ width: 34 }}><span hidden>Actions</span></th>
             </tr>
@@ -257,7 +323,7 @@ export function VariantTable({ p, edits, grid, currencySymbol, errorsOf, onEdit,
         </table>
       </div>
       {footer}
-      <div className="cfoot"><span className="muted">Available = on hand − units held for paid orders not yet shipped. Edited fields are tinted until you save; pre-order changes too. Variant SKUs cannot be changed after creation.</span></div>
+      <div className="cfoot"><span className="muted">Sellable = on hand + incoming − units held for paid orders not yet shipped. Ships now = on hand − held, never below 0. Edited fields are tinted until you save; pre-order changes too. Variant SKUs cannot be changed after creation.</span></div>
     </div>
   );
 }

@@ -9,7 +9,8 @@ import { errJson } from '../lib/api-error.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
-import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { normalizeBackorderLabel } from '../orders/availability.js';
+import { reserveStock, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 import { evaluateCoupon } from '../money/coupon.js';
@@ -143,11 +144,11 @@ adminOrders.openapi(
       const bySku = new Map(variants.map((v) => [v.sku, v]));
       const blocked = validateReservableItems(reqLines, bySku);
       if (blocked.length) throw new StockReservationError(blocked);
-      const reserved = await reserveStockOrThrow(tx, st.storeId, reqLines, bySku);
-      stockChanged = stockChanged || reserved;
+      const reservation = await reserveStock(tx, st.storeId, reqLines, bySku);
+      stockChanged = stockChanged || reservation.changed;
 
       const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-      const priced = reqLines.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow?.config)) }; });
+      const priced = reqLines.map((i, idx) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow?.config)), backorder: reservation.backorder[idx] === true }; });
       const subtotalCents = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
       const shipCountry = (o.shippingAddress as { country?: string } | null)?.country ?? null;
       const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
@@ -170,6 +171,7 @@ adminOrders.openapi(
       await tx.insert(s.orderLine).values(priced.map((p, idx) => ({
         storeId: st.storeId, orderId: o.id, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name,
         quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal,
+        ...(p.backorder ? { metadata: { backorder: true, shipLabel: normalizeBackorderLabel(p.v.backorderLabel) } } : {}),
       })));
       await tx.update(s.order).set({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'edit_lines', data: { grandTotal: totals.grandTotal, lines: priced.length } });

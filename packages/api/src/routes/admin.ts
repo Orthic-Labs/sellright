@@ -1,3 +1,5 @@
+import { backorderSnapshot, orderHasBackorder } from './order-facts.js';
+import { consumeStockForShipment } from '../orders/stock-fulfilment.js';
 import { assertImportedFinancialReconciliationAllowed, importedFinancialReconciliationRequired, ImportedFinancialReconciliationError } from '../orders/imported-financial-reconciliation.js';
 import { billedLines } from '../orders/line-quantity.js';
 import { isEditRefund } from '../payments/edit-refund.js';
@@ -397,6 +399,8 @@ admin.openapi(
           code: s.order.code, state: s.order.state, status: s.order.status,
           paymentStatus: paymentStatusWithBalanceSql(), shippingMethodName: s.order.shippingMethodName, fulfillmentStatus: fulfillmentStatusSql(),
           isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt,
+          // #446: any line carries the backorder snapshot; one correlated exists() inside this statement (no extra round trip).
+          hasBackorder: sql<boolean>`exists (select 1 from order_line ol where ol.order_id = ${s.order.id} and ol.metadata->>'backorder' = 'true')`,
           // #374: a guest order (no linked customer) shows its own checkout contact.
           email: contactSql.email, customerName: contactSql.name,
           firstName: s.customer.firstName, lastName: s.customer.lastName,
@@ -535,7 +539,9 @@ admin.openapi(
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.
         hasPostedCredit: postedCredit.length === 1,
-        lines: lines.map((l) => ({ refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
+        // #446: checkout snapshot of the lines that need incoming stock; the order is flagged when any line is.
+        hasBackorder: orderHasBackorder(lines.map((l) => backorderSnapshot(l.metadata))),
+        lines: lines.map((l) => ({ ...backorderSnapshot(l.metadata), refundQuantity: refundQuotes.get(l.id)?.totalQuantity ?? refundQuantity(l),
           refundUnitPrice: refundQuotes.get(l.id)?.unitPrice ?? null, refundCashAmounts: refundQuotes.get(l.id)?.cashAmounts ?? null,
           refundAvailableQuantity: refundQuotes.get(l.id)?.quantity ?? 0,
           id: l.id, sku: l.variantSku, name: orderLineLabel(l), quantity: l.quantity, orderedQty: l.quantity + l.editRemovedQty, editRemovedQty: l.editRemovedQty, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty, refundedQty: l.refundedQty,
@@ -646,10 +652,7 @@ admin.openapi(
           if (ship <= 0) continue;
           await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
           if (l.variantId) {
-            await tx.update(s.stock).set({
-              onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
-              allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
-            }).where(eq(s.stock.variantId, l.variantId));
+            await consumeStockForShipment(tx, st.storeId, { variantId: l.variantId, sku: l.variantSku, quantity: ship });
             await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id, actor: admin.email });
             stockChanged = true;
           }
@@ -771,10 +774,7 @@ admin.openapi(
         const row = byId.get(line.orderLineId)!;
         await tx.update(s.orderLine).set({ fulfilledQty: sql`${s.orderLine.fulfilledQty} + ${line.quantity}` }).where(eq(s.orderLine.id, row.id));
         if (row.variantId) {
-          await tx.update(s.stock).set({
-            onHand: sql`greatest(${s.stock.onHand} - ${line.quantity}, 0)`,
-            allocated: sql`greatest(${s.stock.allocated} - ${line.quantity}, 0)`,
-          }).where(eq(s.stock.variantId, row.variantId));
+          await consumeStockForShipment(tx, st.storeId, { variantId: row.variantId, sku: row.variantSku, quantity: line.quantity });
           await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: row.variantId, delta: -line.quantity, reason: 'fulfillment', refOrderId: o.id, actor: admin.email });
           if (body.locationId) {
             await tx.update(s.stockLocation).set({ onHand: sql`greatest(${s.stockLocation.onHand} - ${line.quantity}, 0)` })
@@ -883,10 +883,7 @@ admin.openapi(
             if (ship <= 0) continue;
             await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
-              await tx.update(s.stock).set({
-                onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
-                allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
-              }).where(eq(s.stock.variantId, l.variantId));
+              await consumeStockForShipment(tx, st.storeId, { variantId: l.variantId, sku: l.variantSku, quantity: ship });
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: order.id, actor: admin.email });
               stockChanged = true;
             }

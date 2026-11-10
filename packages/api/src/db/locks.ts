@@ -174,12 +174,12 @@ async function lockRows(
  * upgrade) and leaves FK key-share checks unblocked. Returns the locked rows (current values) in lock order; ids with
  * no stock row in this store are skipped.
  */
-export async function lockStockRowsInOrder(tx: Tx, storeId: string, variantIds: readonly string[]): Promise<Array<{ variantId: string; onHand: number; allocated: number }>> {
-  const out: Array<{ variantId: string; onHand: number; allocated: number }> = [];
+export async function lockStockRowsInOrder(tx: Tx, storeId: string, variantIds: readonly string[]): Promise<Array<{ variantId: string; onHand: number; allocated: number; incoming: number }>> {
+  const out: Array<{ variantId: string; onHand: number; allocated: number; incoming: number }> = [];
   for (const id of [...new Set(variantIds.map(canonical))].sort()) {
-    const r = await tx.execute(sql`SELECT variant_id, on_hand, allocated FROM ${s.stock} WHERE variant_id = ${id} AND store_id = ${storeId} FOR NO KEY UPDATE`);
-    const row = r.rows[0] as { variant_id: string; on_hand: number; allocated: number } | undefined;
-    if (row) out.push({ variantId: row.variant_id, onHand: Number(row.on_hand), allocated: Number(row.allocated) });
+    const r = await tx.execute(sql`SELECT variant_id, on_hand, allocated, incoming FROM ${s.stock} WHERE variant_id = ${id} AND store_id = ${storeId} FOR NO KEY UPDATE`);
+    const row = r.rows[0] as { variant_id: string; on_hand: number; allocated: number; incoming?: number } | undefined;
+    if (row) out.push({ variantId: row.variant_id, onHand: Number(row.on_hand), allocated: Number(row.allocated), incoming: Number(row.incoming ?? 0) });
   }
   return out;
 }

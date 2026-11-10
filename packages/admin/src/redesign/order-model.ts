@@ -6,8 +6,9 @@ import { refundAvailableUnits, refundCashForQuantity } from '../api';
 import type { OrderDetailX } from '../components/order-edit/types';
 
 /** Line as the detail API returns it. `isPreOrder` / `shipDateLabel` are read when the API sends them (it does not yet). */
-export type OrderLine = OrderDetailX['lines'][number] & { isPreOrder?: boolean; shipDateLabel?: string | null };
-export type OrderView = Omit<OrderDetailX, 'lines'> & { lines: OrderLine[]; isPreOrder?: boolean };
+/** #446: `backorder` / `shipLabel` are the snapshot taken when the order was placed, read when the API sends them. */
+export type OrderLine = OrderDetailX['lines'][number] & { isPreOrder?: boolean; shipDateLabel?: string | null; backorder?: boolean; shipLabel?: string | null };
+export type OrderView = Omit<OrderDetailX, 'lines'> & { lines: OrderLine[]; isPreOrder?: boolean; hasBackorder?: boolean };
 
 export const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`;
 export const isInt = (v: string, min = 0): boolean => /^\d{1,9}$/.test(v.trim()) && Number(v) >= min;
@@ -15,6 +16,12 @@ export const isInt = (v: string, min = 0): boolean => /^\d{1,9}$/.test(v.trim())
 /** Units still to ship: ordered less shipped less removed. */
 export const openQty = (l: OrderLine): number => Math.max(0, l.quantity - l.fulfilledQty - l.cancelledQty);
 export const isPre = (l: OrderLine): boolean => l.isPreOrder === true;
+/** #446: the line needs units that are still incoming; it ships later, as a whole. */
+export const isBackorder = (l: Pick<OrderLine, 'backorder'>): boolean => l.backorder === true;
+/** The order has a line that ships later (the API flag, else any marked line). */
+export const hasBackorder = (o: { hasBackorder?: boolean; lines: ReadonlyArray<Pick<OrderLine, 'backorder'>> }): boolean => o.hasBackorder === true || o.lines.some(isBackorder);
+/** Short marker text for a backorder line: "Ships later", plus the label when there is one. */
+export const shipsLaterCopy = (l: Pick<OrderLine, 'shipLabel'>): string => (l.shipLabel?.trim() ? `Ships later · ${l.shipLabel.trim()}` : 'Ships later');
 /** Units that can still be refunded (server availability when sent, else quantity less refunded). */
 export const refundable = (l: OrderLine): number => refundAvailableUnits(l) ?? 0;
 

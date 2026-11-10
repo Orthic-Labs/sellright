@@ -17,6 +17,8 @@ export interface CheckoutSnapshot {
 	quoteHash?: string;
 	/** Exact stock-validated response, used to display a changed quote. */
 	quote?: ServerCart;
+	/** #446: SKUs this live read shows as shipping later (backorder === true). Sent as the shopper's acknowledgement; no new request. */
+	backorderSkus?: string[];
 }
 
 /**
@@ -45,7 +47,8 @@ export const refreshStockBeforeSubmit = async (scope?: CartLockScope): Promise<C
 	// wait on itself); an independent caller passes none and takes the lock for this one read.
 	const fresh = scope ? await scope.readFresh() : await CartService.readFresh();
 	const snapshot: CheckoutSnapshot = { token: fresh.token, revision: fresh.revision, status: fresh.status,
-		quoteHash: fresh.quoteHash, quote: fresh };
+		quoteHash: fresh.quoteHash, quote: fresh,
+		backorderSkus: [...new Set((fresh.lines ?? []).filter((line) => line.backorder === true).map((line) => line.sku))] };
 	if (fresh.status === 'converted') return snapshot;
 	const lines = fresh.lines ?? [];
 	if (lines.length === 0) throw new PreSubmitStockError('Your cart is empty. Please add items before placing an order.');

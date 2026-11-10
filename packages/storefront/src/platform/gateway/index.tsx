@@ -351,6 +351,9 @@ export const PURCHASE = obj({
 	last: nul(ADD_RESULT),
 	inCartQuantity: num,
 	maxQuantity: num,
+	backorder: opt(bool),
+	shipLabel: opt(nul(str)),
+	shipsNowQuantity: opt(nul(num)),
 });
 const LISTING_ITEM = obj({ slug: str, name: str, href: str, image: nul(str), priceCents: num, currencyCode: str, availability: lit('in-stock', 'out-of-stock') });
 

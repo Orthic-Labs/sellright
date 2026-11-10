@@ -19,6 +19,12 @@ describe('pre-submit live stock read', () => {
 		expect(CartService.readFresh).toHaveBeenCalledTimes(2);
 	});
 
+	it('#446: the snapshot carries the SKUs the fresh read shows as shipping later (no extra request)', async () => {
+		vi.mocked(CartService.readFresh).mockResolvedValue(fresh('active', [{ ...line(true), sku: 'A', backorder: true }, { ...line(true), sku: 'B', backorder: false }, { ...line(true), sku: 'C' }]));
+		expect((await refreshStockBeforeSubmit()).backorderSkus).toEqual(['A']);
+		expect(CartService.readFresh).toHaveBeenCalledTimes(1);
+	});
+
 	it('refuses with PreSubmitStockError when a line is unavailable in the fresh response', async () => {
 		vi.mocked(CartService.readFresh).mockResolvedValue(fresh('active', [line(false)]));
 		await expect(refreshStockBeforeSubmit()).rejects.toBeInstanceOf(PreSubmitStockError);
@@ -79,7 +85,7 @@ describe('pre-submit read is the submission snapshot', () => {
 		const response = { token: 'tok_x', revision: 7, status: 'active', quoteHash: 'accepted-stock-quote', lines: [line(true)] };
 		vi.mocked(CartService.readFresh).mockResolvedValue(response as never);
 		const snapshot = await refreshStockBeforeSubmit();
-		expect(snapshot).toEqual({ token: 'tok_x', revision: 7, status: 'active', quoteHash: response.quoteHash, quote: response });
+		expect(snapshot).toEqual({ token: 'tok_x', revision: 7, status: 'active', quoteHash: response.quoteHash, quote: response, backorderSkus: [] });
 		expect(snapshot.quote).toBe(response);
 		expect(CartService.readFresh).toHaveBeenCalledTimes(1);
 	});

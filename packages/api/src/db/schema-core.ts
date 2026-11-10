@@ -388,6 +388,8 @@ export const productVariant = pgTable(
     cost: integer(), // cents — unit cost (margin reporting; never shown to shoppers)
     preOrderPrice: integer(), // cents, nullable
     isPreOrder: boolean().notNull().default(false),
+    // #446: per-variant ship copy for backordered units ("Ships in 3 weeks"); required by the admin API when stock.incoming > 0.
+    backorderLabel: text(),
     shipDate: timestamp({ withTimezone: true }), // pre-order fulfillment hold
     fulfillmentType: fulfillmentType().notNull().default('physical'),
     appKey: text(), // e.g. viewright; set for software licenses/downloads/update passes

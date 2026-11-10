@@ -91,7 +91,7 @@ export async function loadVariantDemand(tx: Tx, storeId: string, range: DayRange
            coalesce(max(p.slug), max(l.product_slug)) as product_slug,
            coalesce(max(pv.name), max(l.variant_name), 'Unknown variant') as variant_name,
            max(pv.sku) as sku,
-           (case when max(stk.variant_id::text) is null then null else max(stk.on_hand) - max(stk.allocated) end)::int as available,
+           (case when max(stk.variant_id::text) is null then null else max(stk.on_hand) + max(stk.incoming) - max(stk.allocated) end)::int as available,
            (count(*) filter (where l.bucket = 'pending'))::int as pending,
            (count(*) filter (where l.bucket = 'notified'))::int as notified,
            (count(*) filter (where l.bucket = 'canceled'))::int as canceled,

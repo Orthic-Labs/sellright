@@ -10,7 +10,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
-import { loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, loadOrderLinesBatch, summarizeOrderForList, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { orderHasBackorder, loadOrderFulfillments, loadOrderFulfillmentsBatch, loadOrderLines, loadOrderLinesBatch, summarizeOrderForList, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
 import { reviewedProductSlugs } from '../reviews/reviews.js';
 import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
@@ -149,7 +149,11 @@ account.openapi(
             image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(), shipDateLabel: z.string().nullable(),
             // #315: lets the order history link each line to its product's write-review entry.
             productSlug: z.string().nullable(), reviewed: z.boolean(),
+            /** #446: checkout snapshot. */
+            backorder: z.boolean().optional(), shipLabel: z.string().nullable().optional(),
           })),
+          /** #446: true when any line is a backorder line. */
+          hasBackorder: z.boolean().optional(),
         })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
       }) } } },
@@ -201,7 +205,8 @@ account.openapi(
             code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null,
             subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, shippingMethodName: o.shippingMethodName,
             ...list,
-            items: lines.map((l) => ({ sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel, productSlug: l.productSlug, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) })),
+            hasBackorder: orderHasBackorder(lines),
+            items: lines.map((l) => ({ backorder: l.backorder, shipLabel: l.shipLabel, sku: l.sku, name: l.name, productName: l.productName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, image: l.image, isPreOrder: l.isPreOrder, shipDate: l.shipDate, shipDateLabel: l.shipDateLabel, productSlug: l.productSlug, reviewed: !!l.productSlug && reviewedSlugs.has(l.productSlug) })),
           };
         }),
       };
@@ -302,7 +307,11 @@ account.openapi(
           sku: z.string(), name: z.string(), productName: z.string().nullable().optional(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
           image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
           productSlug: z.string().nullable(), reviewed: z.boolean(),
+          /** #446: checkout snapshot. Optional so a storefront tolerates an older API. */
+          backorder: z.boolean().optional(), shipLabel: z.string().nullable().optional(),
         })),
+        /** #446: true when any line is a backorder line. */
+        hasBackorder: z.boolean().optional(),
       }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
@@ -340,7 +349,7 @@ account.openapi(
       placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,
       shippingAddress: out.order.shippingAddress ?? null, billingAddress: out.order.billingAddress ?? null,
       promotionCode: out.promotionCode, couponCodes: out.couponCodes,
-      payments: out.payments, fulfillments: out.fulfillments, lines: out.lines,
+      payments: out.payments, fulfillments: out.fulfillments, lines: out.lines, hasBackorder: orderHasBackorder(out.lines),
     }, 200);
   },
 );

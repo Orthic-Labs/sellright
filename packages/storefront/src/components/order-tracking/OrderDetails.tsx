@@ -12,6 +12,7 @@ import {
   hasPreOrderItems,
   lineImageSrc,
 } from './order-details-utils';
+import { BACKORDER_ORDER_NOTE, lineBackorderNotice, orderHasBackorder } from '~/utils/backorder';
 import { displayOrderCode } from '~/utils/order-code';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 
@@ -132,6 +133,10 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
         </div>
       )}
 
+      {orderHasBackorder(order) && (
+        <p class="text-sm text-[#645541] font-medium" data-backorder-order-note>{BACKORDER_ORDER_NOTE}</p>
+      )}
+
       {/* Order Items */}
       <div class="bg-white border border-[#E5E0D8] rounded-[3px] overflow-hidden">
         <div class="bg-[var(--color-parchment)] px-6 py-4 border-b border-[#E5E0D8]">
@@ -156,6 +161,10 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
                 <div>
                   <h4 class="font-semibold text-[#141210]">{line.name}</h4>
                   <p class="text-sm text-[#7A7166] mt-1">SKU: {line.sku}</p>
+                  {/* #446: a backorder line says when it ships (the order read's snapshot; the label is the API's). */}
+                  {lineBackorderNotice(line) && (
+                    <p class="text-sm text-[#645541] font-medium mt-2" data-backorder-line>{lineBackorderNotice(line)}</p>
+                  )}
                   {/* Show ship date for pre-order items */}
                   {line.isPreOrder && (
                     <div class="mt-2">

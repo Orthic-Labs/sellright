@@ -6,6 +6,7 @@
 // LOCKED stock rule: only a live response of the current view can make a variant `in-stock`. A SKU absent from that response, a
 // product the stock endpoint does not know (404), anything not read yet and anything that failed is not purchasable. `isPreOrder` is
 // catalog metadata: it shows the pre-order label and asks for consent, it never makes an out-of-stock variant purchasable.
+import { BACKORDER_FALLBACK_LABEL } from '~/utils/backorder';
 import { effectiveVariantPrice, type CatalogProduct, type CatalogStockResponse, type CatalogVariant } from '~/sellright/types/catalog';
 import type { CartLineEnrichment } from '~/sellright/types/cart';
 import { toSanitizedHtml, type SanitizedHtml } from '~/platform/sanitized';
@@ -116,6 +117,8 @@ export interface ModelVariant {
   preOrderPriceCents: number | null;
   isPreOrder: boolean;
   shipDate: string | null; shipDateLabel?: string | null;
+  /** #446: the API's ship copy for backordered units. Display only: backorder state comes from the live stock read. */
+  backorderLabel?: string | null;
   images: ViewImage[];
   /** The enrichment's option label (`S / Black`), from the catalog names. */
   optionLabel: string;
@@ -151,7 +154,8 @@ export function redactModel(model: ModelProduct): ModelProduct {
   };
 }
 
-export interface SkuStock { inStock: boolean; availableQuantity: number | null }
+/** `availableQuantity` is the total sellable (ships now + incoming); `backorder`/`shipsNowQuantity` are #446 and absent on an older API (= false / null). */
+export interface SkuStock { inStock: boolean; availableQuantity: number | null; backorder?: boolean; shipsNowQuantity?: number | null; backorderLabel?: string | null }
 /** One product's live stock in the CURRENT view: `bySku` is filled only from a response of the current read. */
 export interface ProductStock { status: 'unchecked' | 'loading' | 'ready' | 'error'; bySku: Record<string, SkuStock> }
 export const UNCHECKED: ProductStock = { status: 'unchecked', bySku: {} };
@@ -198,6 +202,7 @@ export function buildModelProduct(product: CatalogProduct, meta: { key: string; 
       preOrderPriceCents: typeof v.preOrderPrice === 'number' ? v.preOrderPrice : null,
       isPreOrder: v.isPreOrder === true,
       shipDate: v.shipDate ?? null, shipDateLabel: v.shipDateLabel ?? null,
+      backorderLabel: typeof v.backorderLabel === 'string' && v.backorderLabel.trim() ? v.backorderLabel.trim() : null,
       images: (v.assets || []).filter((a) => !!a?.preview).map((a) => ({ url: String(a.preview), alt: null })),
       optionLabel: (v.options || []).map((o) => o.name).join(' / '),
     };
@@ -231,7 +236,7 @@ export function stockFromResponse(response: CatalogStockResponse | null): Produc
     if (!v || typeof v.sku !== 'string') continue;
     // A malformed quantity (missing, negative, fractional, non-numeric) fails the SKU closed: not in stock, nothing to add.
     bySku[v.sku] = validQuantity(v.availableQuantity)
-      ? { inStock: v.inStock === true, availableQuantity: v.availableQuantity }
+      ? { inStock: v.inStock === true, availableQuantity: v.availableQuantity, ...(v.backorder === true ? { backorder: true } : {}), ...(typeof v.backorderLabel === 'string' && v.backorderLabel.trim() ? { backorderLabel: v.backorderLabel.trim() } : {}), ...(typeof v.shipsNowQuantity === 'number' && validQuantity(v.shipsNowQuantity) ? { shipsNowQuantity: v.shipsNowQuantity } : {}) }
       : { inStock: false, availableQuantity: 0 };
   }
   return { status: 'ready', bySku };
@@ -377,6 +382,18 @@ export const normaliseQuantity = (requested: number, maxQuantity: number): numbe
   return Math.max(1, Math.min(q, Math.max(1, maxQuantity)));
 };
 
+/** #446: the focused variant's live backorder facts (only from a ready read that has it in stock). `shipsNowQuantity` null = not known. */
+function backorderOf(variant: ModelVariant | null, skuStock: SkuStock | undefined): { backorder: boolean; shipLabel: string | null; shipsNowQuantity: number | null } {
+  if (!variant || skuStock?.inStock !== true) return { backorder: false, shipLabel: null, shipsNowQuantity: null };
+  // The live read's label (same response as the quantity) first, then the catalog/manifest label.
+  const clean = (l: unknown) => (typeof l === 'string' && l.trim() ? l.trim() : null);
+  const label = clean(skuStock.backorderLabel) ?? clean(variant.backorderLabel);
+  const backorder = skuStock.backorder === true;
+  const now = typeof skuStock.shipsNowQuantity === 'number' ? skuStock.shipsNowQuantity : null;
+  // The label is shown when the whole line waits (backorder) or when the chosen quantity may exceed what ships now (shipsNow > 0).
+  return { backorder, shipLabel: backorder || (now !== null && now > 0) ? (label ?? (backorder ? BACKORDER_FALLBACK_LABEL : null)) : null, shipsNowQuantity: now };
+}
+
 /** The purchase state of the focused selection, in the order of §5: the first reason that applies, or eligible. */
 export function computePurchase(input: PurchaseInput): PurchaseView {
   const { model, stock, selected } = input;
@@ -408,6 +425,7 @@ export function computePurchase(input: PurchaseInput): PurchaseView {
       last: input.last,
       inCartQuantity,
       maxQuantity,
+      ...backorderOf(variant, skuStock),
     },
     selection: {
       options: model ? model.groups.map((g, i) => ({ group: g.code, value: selected[i] ?? null })) : [],

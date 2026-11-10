@@ -625,6 +625,9 @@ export const stock = pgTable('stock', {
   storeId: uuid().notNull().references(() => store.id),
   onHand: integer().notNull().default(0),
   allocated: integer().notNull().default(0),
+  // #446 backorder: units not in the warehouse yet, sellable ahead of arrival (migration 0124, check incoming >= 0).
+  // sellable = onHand + incoming - allocated; ships-now = greatest(onHand - allocated, 0). See orders/availability.ts.
+  incoming: integer().notNull().default(0),
   // SEO-1: cache-version needs a live "did anything change" signal that
   // includes availability, not just catalog content — a store's shop page is
   // stale the instant a variant sells out even if no product/collection/blog

@@ -28,7 +28,7 @@ export interface FeedItem {
   price: string;
   /** Same format; only populated when a genuine markdown exists. */
   salePrice: string;
-  availability: 'in stock' | 'out of stock' | 'preorder';
+  availability: 'in stock' | 'out of stock' | 'preorder' | 'backorder';
   condition: 'new';
   brand: string;
   itemGroupId: string; // product id — groups a product's variants
@@ -164,7 +164,9 @@ export interface FeedRow {
   additionalImagePath?: string | null;
   /** product.metafields.feeds.title — optional per-product feed title. */
   feedTitle?: string | null;
-  stockAvailable: number | null; // onHand - allocated; null = no stock row
+  stockAvailable: number | null; // sellable = onHand + incoming - allocated (#446); null = no stock row
+  /** #446: greatest(onHand - allocated, 0); null = no stock row. Absent (older callers) means "unknown": never reported as backorder. */
+  stockShipsNow?: number | null;
   options: Record<string, string>; // lowercased group name -> value
 }
 
@@ -179,10 +181,12 @@ export function effectivePrice(
 }
 
 /** Availability — mirrors catalog.ts: non-physical stock is always sellable. */
-export function availabilityOf(v: Pick<FeedRow, 'fulfillmentType' | 'isPreOrder' | 'stockAvailable'>): FeedItem['availability'] {
+export function availabilityOf(v: Pick<FeedRow, 'fulfillmentType' | 'isPreOrder' | 'stockAvailable' | 'stockShipsNow'>): FeedItem['availability'] {
   if (v.isPreOrder) return 'preorder';
   if (v.fulfillmentType !== 'physical') return 'in stock';
-  return (v.stockAvailable ?? 0) > 0 ? 'in stock' : 'out of stock';
+  if ((v.stockAvailable ?? 0) <= 0) return 'out of stock';
+  // #446: sellable but nothing ships now means only incoming units remain.
+  return v.stockShipsNow === 0 ? 'backorder' : 'in stock';
 }
 
 function absoluteUrl(path: string | null | undefined, base: string): string {

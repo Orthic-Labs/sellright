@@ -19,7 +19,7 @@ import { MediaCard } from '../redesign/product/MediaCard';
 import { OptionsCard, useProductOptions } from '../redesign/product/OptionsCard';
 import { VariantTable } from '../redesign/product/VariantTable';
 import {
-  buildGrid, buildPlan, effective, hasEdit, plural, variantErrors,
+  backorderError, buildGrid, buildPlan, effective, hasEdit, plural, variantErrors,
   type EditVal, type Edits,
 } from '../redesign/product/model';
 
@@ -65,9 +65,9 @@ function ProductDetailEditor({ id }: { id: string }) {
   const loadedAt = useRef<string | null>(null);
   useEffect(() => { if (p && loadedAt.current === null) loadedAt.current = stamp(p); }, [p]);
   // The same for each variant: its updatedAt and on-hand as first seen, sent with its PATCHes so a newer row is a 409.
-  const loadedVariants = useRef(new Map<string, { updatedAt?: string; onHand: number }>());
-  useEffect(() => { p?.variants.forEach((v) => { if (!loadedVariants.current.has(v.id)) loadedVariants.current.set(v.id, { updatedAt: v.updatedAt, onHand: v.onHand }); }); }, [p]);
-  const rebase = (fresh: ProductDetail) => { loadedAt.current = stamp(fresh); loadedVariants.current = new Map(fresh.variants.map((v) => [v.id, { updatedAt: v.updatedAt, onHand: v.onHand }])); };
+  const loadedVariants = useRef(new Map<string, { updatedAt?: string; onHand: number; incoming: number }>());
+  useEffect(() => { p?.variants.forEach((v) => { if (!loadedVariants.current.has(v.id)) loadedVariants.current.set(v.id, { updatedAt: v.updatedAt, onHand: v.onHand, incoming: v.incoming ?? 0 }); }); }, [p]);
+  const rebase = (fresh: ProductDetail) => { loadedAt.current = stamp(fresh); loadedVariants.current = new Map(fresh.variants.map((v) => [v.id, { updatedAt: v.updatedAt, onHand: v.onHand, incoming: v.incoming ?? 0 }])); };
 
   const active = useRef(true);
   const transportStore = useRef(auth.store).current;
@@ -151,9 +151,14 @@ function ProductDetailEditor({ id }: { id: string }) {
               await api.patch(`/variants/${vp.id}/stock`, { onHand: vp.onHand, expectedOnHand: base?.onHand });
               if (base) base.onHand = vp.onHand;
             }
+            if (vp.incoming) {
+              // #446: after the on-hand write (the floor on incoming reads on-hand); expectedIncoming makes a newer value a 409.
+              await api.patch(`/variants/${vp.id}/incoming`, { ...vp.incoming, expectedIncoming: base?.incoming });
+              if (base) base.incoming = vp.incoming.incoming;
+            }
           } catch (e) {
             if (e instanceof ApiError && e.status === 409) { conflicted = true; continue; }
-            firstError ??= new Error(`${vp.sku}: ${(e as Error).message}`); continue;
+            firstError ??= new Error(`${vp.sku}: ${backorderError(e)}`); continue;
           }
           commit(vp.keys, snap);
         }
@@ -205,6 +210,19 @@ function ProductDetailEditor({ id }: { id: string }) {
     } catch (e) { toast.error("Couldn't load the latest copy", (e as Error).message); setConflictBusy(false); return; }
     setConflictBusy(false);
     await save();
+  };
+
+  // #446: receiving is its own action (not a staged edit): incoming -> on hand now, then the copy is refreshed.
+  const receive = async (v: ProductDetail['variants'][number], quantity: number) => {
+    await api.post(`/variants/${v.id}/stock/receive`, { quantity });
+    const fresh = await api.get<ProductDetail>(`/products/${id}`);
+    if (!isCurrent()) { void qc.invalidateQueries({ queryKey: key, refetchType: 'none' }); return; }
+    await qc.cancelQueries({ queryKey: key, exact: true });
+    qc.setQueryData(key, fresh);
+    const f = fresh.variants.find((x) => x.id === v.id);
+    const base = loadedVariants.current.get(v.id);
+    if (f && base) { base.onHand = f.onHand; base.incoming = f.incoming ?? 0; }
+    toast.success(`Received ${plural(quantity, 'unit')} of ${v.sku}.`);
   };
 
   const deleteVariant = async (v: ProductDetail['variants'][number]) => {
@@ -282,7 +300,7 @@ function ProductDetailEditor({ id }: { id: string }) {
 
             <VariantTable
               p={p} edits={eff} grid={grid} currencySymbol={currencySymbol} errorsOf={errorsOf} onEdit={onEdit}
-              expanded={expanded} setExpanded={setExpanded} onDelete={(v) => void deleteVariant(v)} onOffer={offer}
+              expanded={expanded} setExpanded={setExpanded} onDelete={(v) => void deleteVariant(v)} onOffer={offer} onReceive={receive}
               headerExtra={<button type="button" className="btn sm" onClick={() => setAdding({ name: '' })}><Plus aria-hidden="true" />Add variant</button>}
               footer={adding && (
                 <AddVariant key={adding.optionIds?.join('|') ?? 'new'} productId={id} storeSlug={store?.slug} ownVariants={p.variants} seed={adding}

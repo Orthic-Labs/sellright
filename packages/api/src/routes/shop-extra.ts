@@ -20,7 +20,7 @@ import {
   trackingEmailKey, trackingIpKey, trackingIpRetryAfter, trackingKey, trackingRetryAfter,
 } from './shop-extra.tracking-limit.js';
 import { tokensMatch } from './orders.js';
-import { loadOrderLines, loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
+import { orderHasBackorder, loadOrderLines, loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
 import { orderCodeCandidates } from '../orders/order-number.js';
 import { MAX_CART_LINES } from '../cart/bounds.js';
 import { consumeShippingQuote } from './shop-extra.public-limits.js';
@@ -35,7 +35,11 @@ shopExtra.openapi(
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
     request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254), turnstileToken: z.string().max(2048).optional(), rt: z.string().max(256).optional() }) },
     responses: {
-      200: { description: 'OK', content: J(z.any()) },
+      200: { description: 'OK', content: J(z.object({
+        /** #446: true when any line is a backorder line (checkout snapshot). */
+        hasBackorder: z.boolean().optional(),
+        lines: z.array(z.object({ backorder: z.boolean().optional(), shipLabel: z.string().nullable().optional() }).passthrough()).optional(),
+      }).passthrough()) },
       403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
       404: { description: 'Not found', content: J(apiErrorSchema()) },
       429: { description: 'Rate limited', content: J(apiErrorSchema()) },
@@ -93,6 +97,7 @@ shopExtra.openapi(
           updatedAt: f.updatedAt?.toISOString() ?? null,
         })),
         lines: lines.map(({ productSlug: _productSlug, ...l }) => l),
+        hasBackorder: orderHasBackorder(lines),
       };
     });
     if (!out) {

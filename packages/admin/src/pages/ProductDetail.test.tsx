@@ -76,7 +76,7 @@ async function mount() {
 }
 let revision = 0;
 function persist(path: string, body: Record<string, unknown>) {
-  const { expectedUpdatedAt: _expected, expectedOnHand: _expectedOnHand, ...fields } = body;
+  const { expectedUpdatedAt: _expected, expectedOnHand: _expectedOnHand, expectedIncoming: _expectedIncoming, ...fields } = body;
   if (path.startsWith('/products/')) {
     Object.assign(server(), fields);
     if (fields.featuredAssetId === null) server().assetPath = null;
@@ -86,6 +86,7 @@ function persist(path: string, body: Record<string, unknown>) {
   }
   const variant = server().variants.find((row) => row.id === path.split('/')[2])!;
   if (path.endsWith('/stock')) { variant.onHand = fields.onHand as number; return {}; }
+  if (path.endsWith('/incoming')) { Object.assign(variant, { incoming: fields.incoming, backorderLabel: fields.backorderLabel ?? null, available: variant.onHand + (fields.incoming as number) - variant.allocated }); return { id: variant.id }; }
   const updatedAt = `2026-03-01T00:00:0${++revision}.000Z`;
   Object.assign(variant, fields, { updatedAt });
   return { id: variant.id, updatedAt };
@@ -353,5 +354,90 @@ describe('Product draft hydration', () => {
     mocks.id = 'p1'; localStorage.setItem('sr_admin_store', 'second'); mocks.store = { slug: 'second', currency: 'USD' };
     await act(async () => { render(); }); await flush();
     expect(title().value).toBe('Second store'); expect(button('Save changes').disabled).toBe(true);
+  });
+});
+
+describe('#446 incoming stock and ship label', () => {
+  const incoming = (id = 'SKU-1') => row(id).querySelector<HTMLInputElement>('input[aria-label^="Incoming,"]')!;
+  const label = () => document.querySelector<HTMLInputElement>('input[id^="bo-"]')!;
+  const sellable = (id = 'SKU-1') => row(id).querySelector('.avc')!.textContent;
+
+  it('shows sellable and ships now apart from on hand', async () => {
+    server().variants[0]!.incoming = 6; server().variants[0]!.backorderLabel = 'Ships in 3 weeks'; server().variants[0]!.allocated = 1;
+    await mount();
+    expect(incoming().value).toBe('6');
+    expect(label().value).toBe('Ships in 3 weeks');
+    expect(sellable()).toContain('9');
+    expect(sellable()).toContain('3 ships now');
+  });
+
+  it('needs a label before saving incoming, then saves both with expectedIncoming', async () => {
+    await mount();
+    expect(document.querySelector('[data-bo]')).toBeNull();
+    await fill(incoming(), '5');
+    expect(label().placeholder).toBe('Ships in 3 weeks');
+    expect(sellable()).toContain('9');
+    await clickText('Save changes');
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(document.querySelector('#e-v1-bo')!.textContent).toContain('Add what customers see');
+    await fill(label(), 'Ships in 3 weeks');
+    await clickText('Save changes'); await flush();
+    expect(mocks.patch).toHaveBeenCalledWith('/variants/v1/incoming', { incoming: 5, backorderLabel: 'Ships in 3 weeks', expectedIncoming: 0 });
+    expect(server().variants[0]!.incoming).toBe(5);
+  });
+
+  it('a label-only edit goes through the variant PATCH', async () => {
+    server().variants[0]!.incoming = 2; server().variants[0]!.backorderLabel = 'Soon';
+    await mount();
+    await fill(label(), 'Ships in 2 weeks');
+    await clickText('Save changes'); await flush();
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+    expect(mocks.patch).toHaveBeenCalledWith('/variants/v1', expect.objectContaining({ backorderLabel: 'Ships in 2 weeks' }));
+  });
+
+  it('says in plain words when incoming is below what is already sold', async () => {
+    mocks.patch.mockImplementation(async (path: string) => {
+      if (path.endsWith('/incoming')) throw Object.assign(new ApiError(400, 'incoming cannot be below 3: that many units are already sold on backorder'), { code: 'INCOMING_BELOW_SOLD', body: { minIncoming: 3 } });
+      return {};
+    });
+    server().variants[0]!.incoming = 5; server().variants[0]!.backorderLabel = 'Soon';
+    await mount();
+    await fill(incoming(), '1');
+    await clickText('Save changes'); await flush();
+    expect(document.body.textContent).toContain("Incoming can't be below 3. That many units are already sold and waiting.");
+  });
+
+  it('receive defaults to all incoming and moves it into on hand', async () => {
+    server().variants[0]!.incoming = 6; server().variants[0]!.backorderLabel = 'Soon';
+    mocks.post.mockImplementation(async (_path: string, body: { quantity: number }) => {
+      const v = server().variants[0]!;
+      v.onHand += body.quantity; v.incoming! -= body.quantity;
+      return { id: 'v1', onHand: v.onHand, incoming: v.incoming };
+    });
+    await mount();
+    await act(async () => { button('Receive…').click(); });
+    expect(document.querySelector<HTMLInputElement>('#rc-v1')!.value).toBe('6');
+    await fill(document.querySelector<HTMLInputElement>('#rc-v1')!, '4');
+    await clickText('Receive'); await flush();
+    expect(mocks.post).toHaveBeenCalledWith('/variants/v1/stock/receive', { quantity: 4 });
+    expect(onHand().value).toBe('8');
+    expect(incoming().value).toBe('2');
+  });
+
+  it('shows the receive error inline and keeps the form open', async () => {
+    server().variants[0]!.incoming = 2; server().variants[0]!.backorderLabel = 'Soon';
+    mocks.post.mockRejectedValue(Object.assign(new ApiError(409, 'cannot receive'), { code: 'RECEIVE_EXCEEDS_INCOMING' }));
+    await mount();
+    await act(async () => { button('Receive…').click(); });
+    await clickText('Receive'); await flush();
+    expect(document.querySelector('#rce-v1')!.textContent).toBe("You can't receive more than is incoming.");
+    expect(document.querySelector('#rc-v1')).not.toBeNull();
+  });
+
+  it('Receive waits for unsaved stock edits', async () => {
+    server().variants[0]!.incoming = 2; server().variants[0]!.backorderLabel = 'Soon';
+    await mount();
+    await fill(onHand(), '9');
+    expect(button('Receive…').disabled).toBe(true);
   });
 });

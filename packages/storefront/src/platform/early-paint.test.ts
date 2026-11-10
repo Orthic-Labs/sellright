@@ -128,6 +128,24 @@ describe('DP-5 checkout summary paint: before hydration, into shadow-DOM hosts',
 		expect(lines.querySelector('source[type="image/avif"]')!.getAttribute('srcset')).toBe('/assets/a/oni.jpg?preset=thumb&format=avif&q=75&r=3 160w, /assets/a/oni.jpg?preset=card&format=avif&q=75&r=3 320w');
 		expect([...host('totals').shadowRoot!.querySelectorAll('.t')].map((r) => r.textContent)).toEqual(['Subtotal$90', 'Shipping$5', 'Total$95']);
 	});
+	it('#446: a backorder line paints its ship label (fallback without one) and the order sentence once; no backorder paints neither', async () => {
+		await startCheckout(() => Promise.resolve(sum(cart({ lines: [line({ backorder: true, shipLabel: 'Ships in 3 weeks' }), line({ sku: 'S2', backorder: true, shipLabel: null }), line({ sku: 'S3' })] }))));
+		const lines = host('lines').shadowRoot!;
+		expect([...lines.querySelectorAll('.bo')].map((n) => n.textContent)).toEqual(['Ships in 3 weeks', 'Ships later']);
+		expect([...lines.querySelectorAll('.n')].map((n) => n.textContent)).toEqual(['Your whole order ships together when these items arrive.']);
+	});
+	it('#446: a backorder label is text, never markup', async () => {
+		await startCheckout(() => Promise.resolve(sum(cart({ lines: [line({ backorder: true, shipLabel: '<img src=x onerror=1>' })] }))));
+		const lines = host('lines').shadowRoot!;
+		expect(lines.querySelector('.bo img')).toBeNull();
+		expect(lines.querySelector('.bo')!.textContent).toBe('<img src=x onerror=1>');
+	});
+	it('#446: without backorder lines the painted summary has no notice', async () => {
+		await startCheckout(() => Promise.resolve(sum(cart())));
+		const lines = host('lines').shadowRoot!;
+		expect(lines.querySelector('.bo')).toBeNull();
+		expect(lines.querySelector('.n')).toBeNull();
+	});
 	it('a painted host hides the Qwik skeleton beside it (CSS), and an unpainted host is hidden', () => {
 		expect(CHECKOUT_STYLES).toContain('[data-sr-host]:not([data-painted]){display:none}');
 		expect(CHECKOUT_STYLES).toContain('[data-sr-host][data-painted]+[data-sr-skel]{display:none}');

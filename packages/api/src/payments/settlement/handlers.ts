@@ -22,6 +22,7 @@ import { postPaidOrderRewards } from '../../loyalty/bonus.js';
 import { settleDeferredEditEarnForOrder } from '../../loyalty/ledger.js';
 import { emitEvent } from '../../webhooks/emit.js';
 import { pickEmailAppKey } from '../../email/dispatch.js';
+import { backorderSnapshot } from '../../routes/order-facts.js';
 import { orderConfirmation as orderConfirmationTpl } from '../../email/templates.js';
 import { enqueueEmail } from '../../email/outbox.js';
 import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../../push/outbox.js';
@@ -408,7 +409,7 @@ async function checkoutNotifications(tx: Tx, e: EffectRow, p: NotificationPayloa
   const recipient = normalizeEmail(cust?.email ?? p.guestEmail ?? '');
   if (!recipient) return;
   const lines = await tx
-    .select({ variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey })
+    .select({ variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql, lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey, metadata: s.orderLine.metadata })
     .from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));
   const appKey = pickEmailAppKey(lines.map((line) => line.appKey));
@@ -416,7 +417,7 @@ async function checkoutNotifications(tx: Tx, e: EffectRow, p: NotificationPayloa
   const storefrontUrl = env.STOREFRONT_URL_BY_APP ? parseAppFromMap(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL : env.STOREFRONT_URL;
   const rendered = orderConfirmationTpl(
     { name: store.name, currency: store.currency, storefrontUrl, fromEmail },
-    { code: order.code, grandTotal: order.grandTotal, currency: order.currency, lines: lines.map((line) => ({ name: orderLineLabel(line), quantity: line.quantity, lineTotal: line.lineTotal })) },
+    { code: order.code, grandTotal: order.grandTotal, currency: order.currency, lines: lines.map((line) => ({ name: orderLineLabel(line), quantity: line.quantity, lineTotal: line.lineTotal, ...backorderSnapshot(line.metadata) })) },
   );
   await enqueueEmail(tx, e.storeId, {
     kind: 'order_confirmation', recipient,

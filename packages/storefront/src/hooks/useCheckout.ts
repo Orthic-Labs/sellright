@@ -2,6 +2,7 @@ import { $, useStore } from '@qwik.dev/core';
 import {
 	getOrder as srGetOrder,
 	isOutOfStockConflict,
+	isBackorderChangedConflict,
 	placeOrder as srPlaceOrder,
 	createPaymentIntent as srCreatePI,
 	settleZeroDueOrder as srSettleZeroDue,
@@ -152,7 +153,7 @@ export const useCheckout = () => {
 			}
 			const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
 			state.error = msg;
-			state.stockConflict = isOutOfStockConflict(error) || error instanceof PreSubmitStockError;
+			state.stockConflict = isOutOfStockConflict(error) || isBackorderChangedConflict(error) || error instanceof PreSubmitStockError;
 			checkoutState.error = msg;
 			state.phase = 'error';
 			return 'error';

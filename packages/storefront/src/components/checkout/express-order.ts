@@ -31,6 +31,7 @@ const isStockConflict = (error: unknown): boolean => {
 		if (!e || typeof e !== 'object') continue;
 		if ((e as Error).name === 'PreSubmitStockError') return true;
 		if ((e as { status?: number }).status === 409 && (e as { code?: string }).code === 'OUT_OF_STOCK') return true;
+		if ((e as { status?: number }).status === 409 && (e as { code?: string }).code === 'BACKORDER_CHANGED') return true;
 	}
 	return false;
 };

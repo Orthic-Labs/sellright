@@ -8,7 +8,7 @@ import { customerOwnsOrder } from '../auth/order-access.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts } from './order-facts.js';
+import { orderHasBackorder, loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderCouponCodes, loadOrderStatusFacts } from './order-facts.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { claimReconcileSlot, reconcileStripeOrder } from '../payments/stripe-reconcile.js';
 import { log } from '../lib/logger.js';
@@ -77,6 +77,8 @@ orders.openapi(
               lines: z.array(z.object({
                 sku: z.string(), name: z.string(), productName: z.string().nullable().optional(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
                 image: z.string().nullable(), isPreOrder: z.boolean(), shipDateLabel: z.string().nullable().optional(), shipDate: z.string().nullable(),
+                /** #446: checkout snapshot. Optional so a storefront tolerates an older API. */
+                backorder: z.boolean().optional(), shipLabel: z.string().nullable().optional(),
               })),
               /** Points snapshot taken at checkout (REWARDS-1); null when the program was off. Earned points post when the order is paid. */
               /** Order editing: amount still owed on a Paid / PartiallyRefunded order after an edit raised the total (0 otherwise; null when imported finances require reconciliation), plus a customer-safe summary of the latest edit. Same receipt-token / owner scope as the rest of this read. */
@@ -85,6 +87,8 @@ orders.openapi(
               loyalty: z.object({ earnPoints: z.number().int(), redeemPoints: z.number().int(), pointsDiscount: z.number().int() }).nullable(),
               /** True when every settled gateway payment on the order ran in test mode (a test purchase): the storefront then reports no purchase conversion. False with no settled gateway payment. */
               testMode: z.boolean(),
+              /** #446: true when any line is a backorder line; the order then ships together once the backordered items arrive. Optional for older storefronts. */
+              hasBackorder: z.boolean().optional(),
             }),
           },
         },
@@ -171,7 +175,7 @@ orders.openapi(
         shippingMethodName: o.shippingMethodName, subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
         shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null, customerEmail, contactEmail, promotionCode, couponCodes,
-        payments, fulfillments, lines, amountDue: due, balanceChange, testMode,
+        payments, fulfillments, lines, amountDue: due, balanceChange, testMode, hasBackorder: orderHasBackorder(lines),
         loyalty: (() => { const l = orderLoyaltySnapshot(o.metadata); return l ? { earnPoints: l.earnPoints, redeemPoints: l.redeemPoints, pointsDiscount: l.pointsDiscount } : null; })(),
       };
     });

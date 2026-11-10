@@ -18,6 +18,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
+import { sellableQuantity, shipsNowQuantity } from '../orders/availability.js';
 
 export interface SitemapEntry {
   slug: string;
@@ -123,6 +124,8 @@ export interface ProductAvailability {
   inStock: boolean;
   /** Any enabled variant is a pre-order (with `inStock`, the offer is PreOrder rather than InStock). */
   preOrder: boolean;
+  /** #446: in stock, but no variant ships now (only incoming units remain), so the offer is BackOrder. Optional for older callers. */
+  backOrder?: boolean;
   updatedAt: string | null;
 }
 
@@ -154,6 +157,7 @@ export async function productAvailability(
       preOrderPrice: s.productVariant.preOrderPrice,
       fulfillmentType: s.productVariant.fulfillmentType,
       onHand: s.stock.onHand,
+      incoming: s.stock.incoming,
       allocated: s.stock.allocated,
     })
     .from(s.productVariant)
@@ -162,8 +166,11 @@ export async function productAvailability(
 
   const rule: VariantPriceRule = variantPriceRuleFromConfig(storeConfig);
   const available = (v: (typeof variants)[number]) =>
-    v.fulfillmentType !== 'physical' || v.isPreOrder || ((v.onHand ?? 0) - (v.allocated ?? 0)) > 0;
+    v.fulfillmentType !== 'physical' || v.isPreOrder || sellableQuantity(v) > 0;
   const inStock = variants.some(available);
+  // #446: a variant that ships now (or is not stock-limited) keeps the offer InStock/PreOrder; BackOrder only when every sellable variant is incoming-only.
+  const shipsNow = (v: (typeof variants)[number]) => v.fulfillmentType !== 'physical' || v.isPreOrder || shipsNowQuantity(v) > 0;
+  const backOrder = inStock && !variants.some((v) => available(v) && shipsNow(v));
 
   let cheapest: (typeof variants)[number] | null = null;
   let cheapestPrice = Number.POSITIVE_INFINITY;
@@ -192,6 +199,7 @@ export async function productAvailability(
     sku: cheapest?.sku ?? null,
     inStock,
     preOrder: variants.some((v) => v.isPreOrder),
+    backOrder,
     updatedAt: toIso(p.updatedAt),
   };
 }

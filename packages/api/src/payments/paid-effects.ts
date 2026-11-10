@@ -3,6 +3,7 @@ import { billedQuantitySql } from '../orders/line-quantity-sql.js';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { backorderSnapshot } from '../routes/order-facts.js';
 import { pickEmailAppKey, enqueueOrderConfirmation } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
 import { orderLineLabel } from '../orders/line-label.js';
@@ -38,7 +39,7 @@ export async function sendOrderConfirmationAndEnrol(tx: Tx, storeId: string, ord
   const subscriberName = customerName || recipient.split('@')[0];
   const lines = await tx.select({
     variantName: s.orderLine.variantName, productName: s.orderLine.productName, quantity: billedQuantitySql,
-    lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey,
+    lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey, metadata: s.orderLine.metadata,
   }).from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));
   const appKey = pickEmailAppKey(lines.map(line => line.appKey));
@@ -51,7 +52,7 @@ export async function sendOrderConfirmationAndEnrol(tx: Tx, storeId: string, ord
     { name: store.name, currency: order.currency, appKey, config: store.config },
     recipient,
     { code: order.code, grandTotal: order.grandTotal, currency: order.currency,
-      lines: lines.map((line) => ({ name: orderLineLabel(line), quantity: line.quantity, lineTotal: line.lineTotal })),
+      lines: lines.map((line) => ({ name: orderLineLabel(line), quantity: line.quantity, lineTotal: line.lineTotal, ...backorderSnapshot(line.metadata) })),
       dedupeKey: `order_confirmation:${order.id}` });
 
   // Listmonk parity: a paid order enrolls the customer as a confirmed 'order'

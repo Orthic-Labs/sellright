@@ -66,6 +66,21 @@ describe('trackOrder', () => {
 		expect(String(lastCall().url)).toContain('code=SR1');
 	});
 
+	it('#446: carries backorder, the ship label and the order flag; an older API reads as not backorder', async () => {
+		const base = { state: 'Paid', placedAt: null, currency: 'USD', subtotal: 0, shippingTotal: 0, taxTotal: 0, discountTotal: 0, grandTotal: 0, shippingAddress: null, fulfillments: [], payments: [] };
+		const line = { sku: 'S', name: 'W', quantity: 1, unitPrice: 1, lineTotal: 1, isPreOrder: false, shipDate: null };
+		enqueue(jsonResponse(200, { ...base, code: 'B1', hasBackorder: true, lines: [{ ...line, backorder: true, shipLabel: ' Ships in 3 weeks ' }, line] }));
+		const result = await trackOrder('B1', 'x@y.z');
+		if (!result.success) throw new Error('expected success');
+		expect(result.order.hasBackorder).toBe(true);
+		expect(result.order.lines[0]).toMatchObject({ backorder: true, shipLabel: 'Ships in 3 weeks' });
+		expect(result.order.lines[1]).toMatchObject({ backorder: false, shipLabel: null });
+		enqueue(jsonResponse(200, { ...base, code: 'B2', lines: [line] }));
+		const old = await trackOrder('B2', 'x@y.z');
+		if (!old.success) throw new Error('expected success');
+		expect(old.order.hasBackorder).toBe(false);
+	});
+
 	it('derives PartiallyShipped when some but not all fulfillments have shipped', async () => {
 		enqueue(
 			jsonResponse(200, {

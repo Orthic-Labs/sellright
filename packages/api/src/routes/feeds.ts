@@ -77,7 +77,8 @@ async function loadFeedRows(storeId: string): Promise<FeedRow[]> {
         productType: s.product.productType,
         productMetafields: s.product.metafields,
         imagePath: s.asset.path,
-        stockAvailable: sql<number | null>`${s.stock.onHand} - ${s.stock.allocated}`,
+        stockAvailable: sql<number | null>`${s.stock.onHand} + ${s.stock.incoming} - ${s.stock.allocated}`,
+        stockShipsNow: sql<number | null>`greatest(${s.stock.onHand} - ${s.stock.allocated}, 0)`,
       })
       .from(s.productVariant)
       .innerJoin(s.product, eq(s.product.id, s.productVariant.productId))

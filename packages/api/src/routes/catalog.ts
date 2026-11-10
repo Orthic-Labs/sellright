@@ -7,6 +7,7 @@ import * as s from '../db/schema.js';
 import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { isStockLimited } from './cart.js';
+import { sellableQuantity, shipsNowQuantity, isBackorder, normalizeBackorderLabel } from '../orders/availability.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { consumeCatalogSearch } from './shop-extra.public-limits.js';
@@ -18,8 +19,13 @@ import { consumeCatalogSearch } from './shop-extra.public-limits.js';
 // "N available" here and then has checkout's reservation reject it).
 // A stock-limited variant with no `stock` row at all reads as 0 (fail
 // closed), never "unlimited".
-function availableQuantityFor(v: { isPreOrder: boolean; fulfillmentType: string | null; onHand: number | null; allocated: number | null }): number | null {
-  return isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
+// #446: availableQuantity is SELLABLE = on_hand + incoming - allocated (orders/availability.ts, the one shared helper).
+function availableQuantityFor(v: { isPreOrder: boolean; fulfillmentType: string | null; onHand: number | null; incoming?: number | null; allocated: number | null }): number | null {
+  return isStockLimited(v) ? sellableQuantity(v) : null;
+}
+// #446: units that ship now / whether only incoming units remain; null/false for anything not stock-limited.
+function shipsNowFor(v: { isPreOrder: boolean; fulfillmentType: string | null; onHand: number | null; incoming?: number | null; allocated: number | null }): { shipsNowQuantity: number | null; backorder: boolean } {
+  return isStockLimited(v) ? { shipsNowQuantity: shipsNowQuantity(v), backorder: isBackorder(v) } : { shipsNowQuantity: null, backorder: false };
 }
 
 // Aggregate display price follows the same positive-override rule as checkout.
@@ -51,7 +57,7 @@ function listingVariant(config: unknown) {
 function productInStock() {
   return sql<boolean>`exists (select 1 from product_variant pv left join stock stk on stk.variant_id = pv.id
     where pv.product_id = ${s.product.id} and pv.deleted_at is null and pv.enabled = true
-    and (pv.fulfillment_type <> 'physical' or pv.is_pre_order or (stk.on_hand - stk.allocated) > 0))`;
+    and (pv.fulfillment_type <> 'physical' or pv.is_pre_order or (stk.on_hand + stk.incoming - stk.allocated) > 0))`;
 }
 
 // Featured-asset path as a scalar subquery (mirrors productInStock/minimumPrice
@@ -105,6 +111,8 @@ const Variant = z.object({
   // count a qty selector should cap against (null = uncapped).
   inStock: z.boolean(),
   availableQuantity: z.number().int().nullable(),
+  /** #446: per-variant ship copy for backordered units ("Ships in 3 weeks"); null when none set. Optional so a storefront tolerates an older API. */
+  backorderLabel: z.string().nullable().optional(),
 });
 
 const ProductDetail = z.object({
@@ -250,7 +258,9 @@ catalog.openapi(
           fulfillmentType: s.productVariant.fulfillmentType,
           appKey: s.productVariant.appKey,
           onHand: s.stock.onHand,
+          incoming: s.stock.incoming,
           allocated: s.stock.allocated,
+          backorderLabel: s.productVariant.backorderLabel,
         })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
@@ -267,15 +277,17 @@ catalog.openapi(
           sql`case when ${s.productVariant.salePrice} is not null and ${s.productVariant.salePrice} > 0 then ${s.productVariant.salePrice} else ${s.productVariant.price} end`,
           asc(s.productVariant.sku),
         ))
-        .map(({ onHand, allocated, ...v }) => ({
+        .map(({ onHand, incoming, allocated, backorderLabel, ...v }) => ({
           ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice),
           options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, position: o.position, group: { id: o.groupId, code: o.groupId, name: o.groupName, position: o.groupPosition } })),
           assets: variantAssetRows.filter(a => a.variantId === v.id).map(a => ({ preview: a.path })),
           // Live, uncached (locked stock-architecture rule) — computed fresh
           // on every request straight from the stock join above, never
           // persisted/TTL'd.
-          inStock: v.fulfillmentType !== 'physical' || v.isPreOrder || ((onHand ?? 0) - (allocated ?? 0)) > 0,
-          availableQuantity: availableQuantityFor({ isPreOrder: v.isPreOrder, fulfillmentType: v.fulfillmentType, onHand, allocated }),
+          inStock: v.fulfillmentType !== 'physical' || v.isPreOrder || sellableQuantity({ onHand, incoming, allocated }) > 0,
+          availableQuantity: availableQuantityFor({ isPreOrder: v.isPreOrder, fulfillmentType: v.fulfillmentType, onHand, incoming, allocated }),
+          // #446: display copy only; whether a unit is a backorder unit comes from the live stock read, never from this.
+          backorderLabel: normalizeBackorderLabel(backorderLabel),
         }));
       const imgs = await tx
         .select({ path: s.asset.path })
@@ -502,6 +514,12 @@ catalog.openapi(
         // inventing a number from the boolean. `inStock` stays for backward
         // compatibility with callers that only need the toggle.
         availableQuantity: z.number().int().nullable(),
+        // #446: units that ship now (on_hand - allocated, floored at 0); null = not stock-limited.
+        shipsNowQuantity: z.number().int().nullable().optional(),
+        // #446: true when nothing ships now but incoming units are still sellable.
+        backorder: z.boolean().optional(),
+        // #446: normalized ship copy from the same live read; null unless the variant has one.
+        backorderLabel: z.string().nullable().optional(),
       })) }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
@@ -513,14 +531,16 @@ catalog.openapi(
       const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.slug, slug), eq(s.product.status, 'active'), isNull(s.product.deletedAt))).limit(1);
       if (!p) return null;
       const rows = await tx
-        .select({ sku: s.productVariant.sku, isPreOrder: s.productVariant.isPreOrder, fulfillmentType: s.productVariant.fulfillmentType, onHand: s.stock.onHand, allocated: s.stock.allocated })
+        .select({ sku: s.productVariant.sku, isPreOrder: s.productVariant.isPreOrder, fulfillmentType: s.productVariant.fulfillmentType, onHand: s.stock.onHand, incoming: s.stock.incoming, allocated: s.stock.allocated, backorderLabel: s.productVariant.backorderLabel })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)));
       return rows.map((r) => ({
         sku: r.sku,
-        inStock: r.fulfillmentType !== 'physical' || r.isPreOrder || ((r.onHand ?? 0) - (r.allocated ?? 0)) > 0,
+        inStock: r.fulfillmentType !== 'physical' || r.isPreOrder || sellableQuantity(r) > 0,
         availableQuantity: availableQuantityFor(r),
+        ...shipsNowFor(r),
+        backorderLabel: normalizeBackorderLabel(r.backorderLabel),
       }));
     });
     if (out === null) return errJson(c, 404, 'PRODUCT_NOT_FOUND', 'not found');

@@ -9,12 +9,21 @@ export type { StoreCtx } from './layout.js';
 
 const wrap = (store: StoreCtx, title: string, body: string) => renderEmailShell(store, title, body);
 
-export const orderConfirmation = (store: StoreCtx, data: { code: string; grandTotal: number; currency: string; lines: Array<{ name: string; quantity: number; lineTotal: number }> }) =>
-  wrap(store, `Order confirmed — ${data.code}`,
+export const BACKORDER_ORDER_NOTICE = 'Your whole order ships together when these items arrive.';
+const BACKORDER_LINE_FALLBACK = 'Ships later';
+
+// #446: a backordered line gets a notice under its name with the ship label the shopper was shown at checkout
+// (snapshot, order_line.metadata.shipLabel); the order gets ONE sentence that it ships together. Orders with no
+// backorder line render exactly as before.
+export const orderConfirmation = (store: StoreCtx, data: { code: string; grandTotal: number; currency: string; lines: Array<{ name: string; quantity: number; lineTotal: number; backorder?: boolean; shipLabel?: string | null }> }) => {
+  const anyBackorder = data.lines.some((l) => l.backorder === true);
+  const lineNotice = (l: { backorder?: boolean; shipLabel?: string | null }) => (l.backorder ? (l.shipLabel?.trim() || BACKORDER_LINE_FALLBACK) : null);
+  return wrap(store, `Order confirmed — ${data.code}`,
     `<p>Thanks for your order. Here's the summary:</p>
-     <table style="width:100%;border-collapse:collapse;margin:12px 0">${data.lines.map((l) => `<tr><td>${escape(l.name)} × ${l.quantity}</td><td style="text-align:right">${(l.lineTotal / 100).toFixed(2)} ${escape(data.currency)}</td></tr>`).join('')}</table>
-     <p><strong>Total: ${(data.grandTotal / 100).toFixed(2)} ${escape(data.currency)}</strong></p>
+     <table style="width:100%;border-collapse:collapse;margin:12px 0">${data.lines.map((l) => { const n = lineNotice(l); return `<tr><td>${escape(l.name)} × ${l.quantity}${n ? `<br><span style="font-size:13px">${escape(n)}</span>` : ''}</td><td style="text-align:right">${(l.lineTotal / 100).toFixed(2)} ${escape(data.currency)}</td></tr>`; }).join('')}</table>
+     ${anyBackorder ? `<p>${escape(BACKORDER_ORDER_NOTICE)}</p>\n     ` : ''}<p><strong>Total: ${(data.grandTotal / 100).toFixed(2)} ${escape(data.currency)}</strong></p>
      <p>Track your order at <a href="${escape(store.storefrontUrl)}/orders/${escape(data.code)}">${escape(store.storefrontUrl)}/orders/${escape(data.code)}</a></p>`);
+};
 
 export const shippingNotification = (store: StoreCtx, data: { code: string; trackingCode: string | null; carrier: string | null }) =>
   wrap(store, `Your order ${data.code} is on the way`,

@@ -7,6 +7,7 @@ import type { CatalogVariant } from '~/sellright/types/catalog';
 export const ProductMobileBar = component$((props: Record<string, any>) => {
   const {
     allVariantsSoldOut,
+    backorderNotice,
     ctaClass,
     ctaDisabled,
     ctaTooltipFading,
@@ -53,6 +54,7 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
             return <>{showFromPrefix.value && 'From '}{formatPrice(live, product.currency || undefined)}</>;
           })()}
         </div>
+        {backorderNotice?.value && <div class="sr-mobile-bar-note" role="status" aria-live="polite">{backorderNotice.value}</div>}
       </div>
       {allVariantsSoldOut.value ? (
         waitlistAvailable ? (

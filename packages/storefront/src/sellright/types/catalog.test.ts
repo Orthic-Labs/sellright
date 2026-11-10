@@ -236,3 +236,34 @@ describe('normalizeManifestProductDetail productId', () => {
     expect('productId' in normalizeManifestProductDetail(raw)).toBe(false);
   });
 });
+
+describe('backorder fields (#446)', () => {
+  const product = normalizeManifestProductDetail({
+    slug: 'p1', name: 'P1', description: null, assets: [],
+    variants: [
+      { id: 'A', sku: 'A', name: 'A', price: 100, options: [], assets: [], backorderLabel: ' Ships in 3 weeks ' },
+      { id: 'B', sku: 'B', name: 'B', price: 200, options: [], assets: [] },
+    ],
+  });
+  it('the manifest label passes through (display copy); a variant without one has null', () => {
+    expect(product.variants.map((v) => v.backorderLabel)).toEqual(['Ships in 3 weeks', null]);
+  });
+  it('the live read sets backorder and ships-now; an omitted SKU or an older API is not backorder', () => {
+    const merged = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0 }] });
+    expect(merged.variants[0]).toMatchObject({ backorder: true, shipsNowQuantity: 0, availableQuantity: 4 });
+    expect(merged.variants[1]).toMatchObject({ inStock: false, backorder: false, shipsNowQuantity: null });
+    const old = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4 }] });
+    expect(old.variants[0]).toMatchObject({ backorder: false, shipsNowQuantity: null });
+  });
+  it('the live read label wins over the manifest label; no live label falls back to the manifest label, then null', () => {
+    const live = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0, backorderLabel: ' Ships Friday ' }, { sku: 'B', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0, backorderLabel: null }] });
+    expect(live.variants.map((v) => v.backorderLabel)).toEqual(['Ships Friday', null]);
+    const fallback = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0, backorderLabel: null }] });
+    expect(fallback.variants[0]!.backorderLabel).toBe('Ships in 3 weeks');
+    expect(mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0 }] }).variants[0]!.backorderLabel).toBe('Ships in 3 weeks');
+  });
+  it('the unchecked shell carries no backorder state', () => {
+    const live = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 4, backorder: true, shipsNowQuantity: 0 }] });
+    expect(withUncheckedStock(live).variants[0]).toMatchObject({ inStock: false, backorder: false, shipsNowQuantity: null });
+  });
+});

@@ -160,7 +160,7 @@ function emailCtx(store: StoreEmailCtx) {
 
 export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   code: string; grandTotal: number; currency: string;
-  lines: Array<{ name: string; quantity: number; lineTotal: number }>;
+  lines: Array<{ name: string; quantity: number; lineTotal: number; backorder?: boolean; shipLabel?: string | null }>;
   dedupeKey?: string;
 }, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
@@ -418,7 +418,7 @@ export async function enqueueTrialLicenseKey(tx: Tx, storeId: string, store: Sto
 
 export async function sendOrderConfirmation(store: StoreEmailCtx, to: string, data: {
   code: string; grandTotal: number; currency: string;
-  lines: Array<{ name: string; quantity: number; lineTotal: number }>;
+  lines: Array<{ name: string; quantity: number; lineTotal: number; backorder?: boolean; shipLabel?: string | null }>;
 }): Promise<void> {
   const ctx = emailCtx(store);
   await sendEmail({ to, from: ctx.fromEmail, ...orderConfirmation(ctx, data) }, ctx.storeId);

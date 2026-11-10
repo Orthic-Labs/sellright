@@ -25,7 +25,7 @@ vi.mock('~/services/CartService', async (importOriginal) => ({
 import { ConvertedCartError, type CartLockScope } from '~/services/CartService';
 import { __resetAnalyticsForTests, setAnalyticsConsent } from '~/sellright/analytics';
 import { captureAttribution } from '~/sellright/attribution';
-import { isOutOfStockConflict, placeOrder, settleZeroDueOrder, getOrder, getShopConfig, getEligibleShippingMethods, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
+import { isOutOfStockConflict, isBackorderChangedConflict, BACKORDER_CHANGED_MESSAGE, placeOrder, settleZeroDueOrder, getOrder, getShopConfig, getEligibleShippingMethods, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
 
 // `sellright()` (openapi-fetch + the transport middleware in
 // src/sellright/client.ts) invokes the platform `fetch` as `fetch(request)`
@@ -199,6 +199,24 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 		expect(isOutOfStockConflict(other)).toBe(false);
 		expect(isOutOfStockConflict(new Error('SKU1 is out of stock'))).toBe(false);
 		expect(isOutOfStockConflict(undefined)).toBe(false);
+	});
+
+	it('#446: sends the acknowledged backorderSkus from the snapshot; omits the field for a snapshot without it', async () => {
+		enqueue(respond(200, { code: 'O9', state: 'PendingPayment', grandTotal: 1, receiptToken: 'r' }), respond(200, { code: 'O10', state: 'PendingPayment', grandTotal: 1, receiptToken: 'r' }));
+		await placeOrder(form, { ...snap, backorderSkus: ['SKU1'] }, scope);
+		expect(lastBody().backorderSkus).toEqual(['SKU1']);
+		await placeOrder(form, snap, scope);
+		expect('backorderSkus' in lastBody()).toBe(false);
+	});
+
+	it('#446: 409 BACKORDER_CHANGED throws the fixed notice and is marked so the caller refreshes the cart live', async () => {
+		enqueue(respond(409, { error: { code: 'BACKORDER_CHANGED', message: 'x' }, skus: ['SKU1'] }));
+		const err = await placeOrder(form, { ...snap, backorderSkus: [] }, scope).catch((e) => e);
+		expect(err.message).toBe('Shipping time changed for an item in your cart. Review your order and place it again.');
+		expect(err.message).toBe(BACKORDER_CHANGED_MESSAGE);
+		expect(isBackorderChangedConflict(err)).toBe(true);
+		expect(isOutOfStockConflict(err)).toBe(false);
+		expect(isBackorderChangedConflict(new Error('x'))).toBe(false);
 	});
 
 	it('stale-cart conflict adopts the server snapshot and tells the shopper to review', async () => {
