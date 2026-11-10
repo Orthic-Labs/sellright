@@ -55,8 +55,8 @@ const PAINT_CSS =
 	"dl{border-top:1px solid rgba(var(--color-accent-rgb),.25);margin-top:.5rem;padding-top:1rem;padding-bottom:.5rem}dl>div+div{margin-top:.75rem}" +
 	".t{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:rgba(253,250,246,.4)}.t dd{font-weight:500;color:rgba(253,250,246,.6)}" +
 	// #446: a backorder line's ship label and the order-level sentence (CartContents' same notices)
-	".bo{font-size:12px;line-height:1.375;margin-top:.25rem;color:rgba(253,250,246,.7)}" +
-	".n{font-size:12px;line-height:1.375;padding-top:.75rem;border-top:1px solid rgba(var(--color-accent-rgb),.25);color:rgba(253,250,246,.7)}";
+	".bo{font-size:13px;font-weight:600;line-height:1.375;margin-top:.25rem;color:rgb(253,250,246)}" +
+	".n{font-size:13px;font-weight:500;line-height:1.375;padding-top:.75rem;border-top:1px solid rgba(var(--color-accent-rgb),.25);color:rgb(253,250,246)}";
 
 const CHECKOUT_BODY =
 	"(function(w,d,P){try{var S=w.__srEarly,p=S&&S.r&&S.r[P.k];if(!p||!S.ct)return;" +

@@ -38,6 +38,8 @@ export function interactiveRequest(method, path) {
   }
   if (method === 'POST') return ['/v1/shop/cart', '/v1/shop/cart/estimate', '/v1/shop/shipping-methods', '/v1/shop/checkout', '/v1/admin/promotions', '/v1/admin/products'].includes(path) ||
     new RegExp(`^/v1/admin/products/${id}/variants$`).test(path) ||
+    // #446: receive incoming stock into on-hand (bounded quantity, the visitor's own store).
+    new RegExp(`^/v1/admin/variants/${id}/stock/receive$`).test(path) ||
     new RegExp(`^/v1/admin/orders/${id}/(refund|fulfill|cancel)$`).test(path) ||
     // Owner features. NOT allowed here: /v1/admin/reviews/{id} DELETE, loyalty
     // adjust/reverse, SEO config PATCH / indexnow submit / sitemaps refresh.
@@ -48,7 +50,7 @@ export function interactiveRequest(method, path) {
     new RegExp(`^/v1/admin/reviews/${uuid}/reply$`).test(path) ||
     new RegExp(`^/v1/admin/orders/${id}/address$`).test(path);
   if (method === 'PATCH') return /^\/v1\/shop\/cart\/[a-f0-9-]{36}\/lines$/.test(path) ||
-    new RegExp(`^/v1/admin/(products|variants|promotions)/${id}(/stock)?$`).test(path) ||
+    new RegExp(`^/v1/admin/(products|variants|promotions)/${id}(/stock|/incoming)?$`).test(path) ||
     new RegExp(`^/v1/admin/blog/${uuid}$`).test(path);
   return method === 'DELETE' && (new RegExp(`^/v1/admin/(promotions|products|variants)/${id}$`).test(path) || new RegExp(`^/v1/admin/blog/${uuid}$`).test(path));
 }
@@ -151,7 +153,8 @@ export function interactiveBody(path, body) {
   // the request ever reaches the real app (see settle()/execute() there);
   // nothing accepted in this branch is ever trusted as the source of truth.
   // Every field stays individually bounded so this can't become a blank check.
-  if (path === '/v1/shop/checkout') return only(body, ['cartToken', 'expectedRevision', 'shippingMethodCode', 'couponCode', 'couponCodes', 'acceptedQuoteHash', 'redeemPoints', 'shipping', 'email', 'shippingAddress', 'billingAddress', 'giftCardCode', 'items']) &&
+  if (path === '/v1/shop/checkout') return only(body, ['cartToken', 'expectedRevision', 'shippingMethodCode', 'couponCode', 'couponCodes', 'acceptedQuoteHash', 'redeemPoints', 'shipping', 'email', 'shippingAddress', 'billingAddress', 'giftCardCode', 'items', 'backorderSkus']) &&
+    (body.backorderSkus === undefined || (Array.isArray(body.backorderSkus) && body.backorderSkus.length <= 12 && body.backorderSkus.every(k => typeof k === 'string' && /^DEMO-[A-Z-]+$/.test(k)))) &&
     optionalCouponCodes(body.couponCodes) && optionalRedeemPoints(body.redeemPoints) &&
     (body.acceptedQuoteHash === undefined || (typeof body.acceptedQuoteHash === 'string' && /^[0-9a-f]{64}$/.test(body.acceptedQuoteHash))) &&
     /^[a-f0-9-]{36}$/.test(body.cartToken) && Number.isInteger(body.expectedRevision) && body.expectedRevision>=0 && ['standard', 'express'].includes(body.shippingMethodCode) && text(body.couponCode, 32) &&
@@ -166,8 +169,12 @@ export function interactiveBody(path, body) {
     (body.tags == null || (Array.isArray(body.tags) && body.tags.length <= 12 && body.tags.every(t => text(t, 32)))) &&
     (body.status == null || ['active', 'draft'].includes(body.status)) && body.featuredAssetId == null &&
     (body.metafields == null || JSON.stringify(body.metafields).length <= 1000);
-  if (path.endsWith('/stock')) return only(body, ['onHand']) && Number.isInteger(body.onHand) && body.onHand >= 0 && body.onHand <= 1000;
-  if (path.includes('/variants/')) return only(body, ['price', 'compareAtPrice', 'salePrice', 'preOrderPrice', 'isPreOrder', 'shipDate', 'archived', 'enabled', 'name', 'sku', 'fulfillmentType', 'weightG']) &&
+  // #446 backorder: incoming quantity + ship label, and receiving incoming units into on-hand. Same bounds as on-hand.
+  if (path.endsWith('/incoming')) return only(body, ['incoming', 'backorderLabel', 'expectedIncoming']) && int(body.incoming, 0, 1000) && text(body.backorderLabel, 120) && optInt(body.expectedIncoming, 0, 1000);
+  if (path.endsWith('/stock/receive')) return only(body, ['quantity']) && int(body.quantity, 1, 1000);
+  // expectedOnHand: the admin's optimistic-concurrency guard (a newer value is a 409), sent with every on-hand save.
+  if (path.endsWith('/stock')) return only(body, ['onHand', 'expectedOnHand']) && Number.isInteger(body.onHand) && body.onHand >= 0 && body.onHand <= 1000 && optInt(body.expectedOnHand, 0, 100000);
+  if (path.includes('/variants/')) return only(body, ['price', 'compareAtPrice', 'salePrice', 'preOrderPrice', 'isPreOrder', 'shipDate', 'archived', 'enabled', 'name', 'sku', 'fulfillmentType', 'weightG', 'backorderLabel']) && text(body.backorderLabel, 120) &&
     ['price', 'compareAtPrice', 'salePrice', 'preOrderPrice', 'weightG'].every(k => body[k] == null || (Number.isInteger(body[k]) && body[k] >= 0 && body[k] <= 100000)) &&
     text(body.name) && (body.sku == null || /^DEMO-[A-Z-]+$/.test(body.sku)) &&
     (body.fulfillmentType == null || body.fulfillmentType === 'physical');

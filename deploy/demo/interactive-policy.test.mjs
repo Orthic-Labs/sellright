@@ -140,6 +140,16 @@ test('non-API routing sends everything except /admin to the generic storefront',
 });
 test('stock and catalog mutations are bounded; external-service variant metadata is denied',()=>{
   assert.equal(interactiveBody('/v1/admin/variants/x/stock',{onHand:1001}),false);
+  assert.equal(interactiveBody('/v1/admin/variants/x/stock',{onHand:3,expectedOnHand:24}),true);
+  // #446 backorder routes
+  assert.equal(interactiveRequest('PATCH','/v1/admin/variants/abc/incoming'),true);
+  assert.equal(interactiveRequest('POST','/v1/admin/variants/abc/stock/receive'),true);
+  assert.equal(interactiveBody('/v1/admin/variants/x/incoming',{incoming:5,backorderLabel:'Ships in 3 weeks',expectedIncoming:0}),true);
+  assert.equal(interactiveBody('/v1/admin/variants/x/incoming',{incoming:1001}),false);
+  assert.equal(interactiveBody('/v1/admin/variants/x/incoming',{incoming:5,backorderLabel:'<b>x</b>'}),false);
+  assert.equal(interactiveBody('/v1/admin/variants/x/stock/receive',{quantity:5}),true);
+  assert.equal(interactiveBody('/v1/admin/variants/x/stock/receive',{quantity:0}),false);
+  assert.equal(interactiveBody('/v1/admin/variants/x/stock/receive',{quantity:5,onHand:9}),false);
   assert.equal(interactiveBody('/v1/admin/variants/x',{fulfillmentType:'digital_download',downloadUrl:'https://example.com'}),false);
   assert.equal(interactiveBody('/v1/admin/products/x',{name:'<script>'}),false);
   assert.equal(interactiveBody('/v1/admin/products/x',{name:'New notebook'}),true);

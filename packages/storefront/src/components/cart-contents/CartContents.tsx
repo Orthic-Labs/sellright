@@ -220,7 +220,7 @@ export default component$<{
 									)}
 									{/* #446: a backorder line (live cart read: `backorder === true`) says when it ships; the label is the API's. */}
 									{lineBackorderNotice(line) && (
-										<p data-backorder-line class={`text-[12px] mt-1 leading-snug ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>
+										<p data-backorder-line class={`text-[13px] font-semibold mt-1 leading-snug ${isCheckoutView ? 'text-[rgb(253,250,246)]' : 'text-[#1A1A1A]'}`}>
 											{lineBackorderNotice(line)}
 										</p>
 									)}
@@ -276,7 +276,7 @@ export default component$<{
 
 			</ul>
 			{hasBackorderLine(shown.lines) && (
-				<p data-backorder-order-note role="status" aria-live="polite" class={`text-[12px] leading-snug pt-3 border-t ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)] border-[rgba(var(--color-accent-rgb),0.25)]' : 'text-[rgba(26,26,26,0.7)] border-[rgba(17,17,17,0.08)]'}`}>
+				<p data-backorder-order-note role="status" aria-live="polite" class={`text-[13px] font-medium leading-snug pt-3 border-t ${isCheckoutView ? 'text-[rgb(253,250,246)] border-[rgba(var(--color-accent-rgb),0.25)]' : 'text-[#1A1A1A] border-[rgba(17,17,17,0.08)]'}`}>
 					{BACKORDER_ORDER_NOTE}
 				</p>
 			)}
