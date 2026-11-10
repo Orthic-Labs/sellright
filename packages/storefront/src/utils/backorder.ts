@@ -52,3 +52,14 @@ export function pdpBackorderNotice(v: VariantBackorderFacts | null | undefined, 
 /** Whether an order has a backorder line: the order's own flag, or any line's (either one is enough; absent = false). */
 export const orderHasBackorder = (order: { hasBackorder?: boolean | null; lines?: ReadonlyArray<BackorderLineFacts> | null } | null | undefined): boolean =>
   !!order && (order.hasBackorder === true || hasBackorderLine(order.lines));
+
+/** A trust-strip item that promises a shipping speed ("Ships in 1-2 business days", "Ships within 24 hours"). */
+const SHIPS_FAST_CLAIM = /\bships?\b[^.]*\b(?:hours?|days?|today|tomorrow)\b/i;
+
+/**
+ * The cart trust strip for this cart: a shipping-speed promise is dropped while any line ships later, so the strip never
+ * says "Ships in 1-2 business days" above a line that says "Ships in 3 weeks". Every other item (returns, payment) stays.
+ */
+export const trustStripFor = (items: ReadonlyArray<string>, lines: ReadonlyArray<BackorderLineFacts> | null | undefined): string[] =>
+  hasBackorderLine(lines) ? items.filter((t) => !SHIPS_FAST_CLAIM.test(t)) : [...items];
+

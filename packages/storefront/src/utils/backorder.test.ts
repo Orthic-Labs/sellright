@@ -52,3 +52,17 @@ describe('product page notice (live fields only)', () => {
 		expect(shipTogetherNote({ ...some, inStock: false }, 3)).toBeNull();
 	});
 });
+
+describe('trustStripFor', () => {
+  const strip = ['Free Shipping $100+', 'Ships in 1-2 business days', 'Secure Checkout'];
+  it('keeps every item when no line ships later', async () => {
+    const { trustStripFor } = await import('./backorder');
+    expect(trustStripFor(strip, [{ backorder: false }])).toEqual(strip);
+    expect(trustStripFor(strip, [])).toEqual(strip);
+  });
+  it('drops the shipping-speed promise when a line ships later, and nothing else', async () => {
+    const { trustStripFor } = await import('./backorder');
+    expect(trustStripFor(strip, [{ backorder: false }, { backorder: true, shipLabel: 'Ships in 3 weeks' }])).toEqual(['Free Shipping $100+', 'Secure Checkout']);
+  });
+});
+

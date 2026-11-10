@@ -14,6 +14,7 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShipping } from './cart-shipping';
 import { drawerTotal } from './cart-total';
+import { trustStripFor } from '~/utils/backorder';
 import { CartExpress } from './CartExpress';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -349,7 +350,7 @@ export default component$(() => {
 							>
 								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
 							</button>
-							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
+							{trustStripFor(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence), cartState.cart.lines).map((text, i) => (
 								<div key={i} style="display: contents">
 									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
 									<span class={`text-[10px] tracking-[0.06em] text-[#6B6459] ${CART_TRUST_STRIP_WRAP ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}`}>{text}</span>
