@@ -806,6 +806,13 @@
       "when": 1790000026000,
       "tag": "0124_backorder_incoming_stock",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1790000027000,
+      "tag": "0125_restock_trigger_sellable",
+      "breakpoints": true
     }
   ]
 }
