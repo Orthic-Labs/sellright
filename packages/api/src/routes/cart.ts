@@ -631,10 +631,28 @@ export async function quoteShippingMethods(tx: Tx, st: StoreCtx, items: Array<{ 
     .from(s.taxZone)
     .where(eq(s.taxZone.enabled, true));
   const taxRate = resolveTaxRate(taxZones, opts.country, st.taxRate);
-  return { freeShipping, methods: methods.filter(method => isMethodEligible(method.calculator, ctx)).map(method => {
+  // A promotion that waives shipping for this cart (a free-shipping coupon, or an automatic one) makes every eligible
+  // method free in the quote, exactly as checkout charges it. Other coupons never change a method's rate.
+  const waived = await shippingWaivedByPromotion(tx, st, items, opts);
+  return { freeShipping: waived ? null : freeShipping, methods: methods.filter(method => isMethodEligible(method.calculator, ctx)).map(method => {
     const calc = method.calculator as ShippingCalculator;
-    return { code: method.code, name: method.name, rate: shippingRate(calc), price: shippingQuotePrice(st, calc, taxRate) };
+    return { code: method.code, name: method.name, rate: waived ? 0 : shippingRate(calc), price: waived ? 0 : shippingQuotePrice(st, calc, taxRate) };
   }) };
+}
+
+/** True when the promotion stack waives shipping for these items and coupons. Decided by the stack itself (a one-cent
+ *  probe priced as checkout prices it), and only asked when the store has a shipping-waiving promotion this request can reach. */
+async function shippingWaivedByPromotion(tx: Tx, st: StoreCtx, items: Array<{ sku: string; quantity: number }>,
+  opts: { country: string; couponCode?: string; couponCodes?: string[]; token?: string | null }): Promise<boolean> {
+  const codes = canonicalCouponCodes(opts.couponCodes ?? (opts.couponCode ? [opts.couponCode] : [])).map(code => code.toLowerCase());
+  const [candidate] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(and(
+    eq(s.promotion.storeId, st.id), eq(s.promotion.enabled, true),
+    or(eq(s.promotion.freeShipping, true), eq(s.promotion.type, 'free_shipping')),
+    codes.length ? or(isNull(s.promotion.code), inArray(sql`lower(${s.promotion.code})`, codes)) : isNull(s.promotion.code),
+  )).limit(1);
+  if (!candidate) return false;
+  const probe = await priceCart(tx, st, items, { shipCountry: opts.country, couponCode: opts.couponCode, couponCodes: opts.couponCodes, pricingIntent: 'checkout', token: opts.token, shipping: 1 });
+  return probe.shippingTotal === 0;
 }
 
 /** What one shipping method costs the shopper at `taxRate` (the destination rate): rate plus tax where shipping is taxable and tax-exclusive. */

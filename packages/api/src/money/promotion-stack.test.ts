@@ -74,7 +74,7 @@ describe('captured-default promotion stack', () => {
     expect(result.grandTotal).toBe(450);
   });
 
-  it('re-tests later order & shipping actions against current discounted merchandise', () => {
+  it('re-tests later order actions against current discounted merchandise; an accepted discount keeps its free shipping (#447)', () => {
     const result = calculatePromotionStack(input({ promotions: [
       promotion({ id: 'first', value: 50 }),
       promotion({ id: 'minimum', code: null, value: 10, priority: 1, conditions: minimum(600) }),
@@ -82,7 +82,19 @@ describe('captured-default promotion stack', () => {
     ] }));
     expect(result.applied.map(entry => entry.promotionId)).toEqual(['first', 'combined']);
     expect(result.discountTotal).toBe(600);
-    expect(result.shippingTotal).toBe(100);
+    // 'combined' met its minimum when its discount applied; that discount does not then cost it the shipping waiver.
+    expect(result.shippingTotal).toBe(0);
+  });
+
+  it('a 100% off coupon with free shipping and a minimum ships free; a combined promotion that never applied waives nothing (#447)', () => {
+    const everything = calculatePromotionStack(input({ promotions: [promotion({ value: 100, freeShipping: true, conditions: minimum(100) })] }));
+    expect(everything).toMatchObject({ discountTotal: 1000, shippingTotal: 0, grandTotal: 0 });
+    const short = calculatePromotionStack(input({ promotions: [promotion({ value: 100, freeShipping: true, conditions: minimum(5000) })] }));
+    expect(short).toMatchObject({ discountTotal: 0, shippingTotal: 100 });
+    // A shipping-only promotion still tests its minimum against the discounted merchandise.
+    const shippingOnly = calculatePromotionStack(input({ promotions: [promotion({ id: 'half', value: 50 }),
+      promotion({ id: 'ship', code: null, kind: 'free_shipping', value: 0, priority: 1, conditions: minimum(600) })] }));
+    expect(shippingOnly.shippingTotal).toBe(100);
   });
 
   it('selects condition net/gross basis independently from channel discount basis', () => {

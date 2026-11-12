@@ -252,12 +252,13 @@ export function calculatePromotionStack(input: StackInput): PromotionStackTotals
     pointsDiscount = -sum(active.map((line, index) => addAdjustment(line, shares[index]!).amount));
   }
   const final = totals(lines);
-  // Shipping is quoted by caller from discounted merchandise, then its actions
-  // re-test current conditions. A combined action may lose its shipping benefit.
+  // Shipping is quoted by caller from discounted merchandise. A promotion whose discount was accepted above keeps its
+  // shipping benefit (#447): its own discount, or an earlier one, never takes the free shipping it promised away. A
+  // shipping-only promotion has no earlier acceptance and tests its conditions here, against the discounted merchandise.
   let shippingTotal = input.shipping;
   let retainedShippingFinal = input.retainedShipping ? structuredClone(input.retainedShipping.lines) : undefined;
   for (const promotion of promotions) {
-    if ((input.retainedShipping && input.retainedShipping.mode !== 'revalidate-promotions') || (promotion.kind !== 'free_shipping' && !promotion.freeShipping) || !eligible(promotion)) continue;
+    if ((input.retainedShipping && input.retainedShipping.mode !== 'revalidate-promotions') || (promotion.kind !== 'free_shipping' && !promotion.freeShipping) || !(accepted.has(promotion.id) || eligible(promotion))) continue;
     const old = shippingTotal;
     const oldGross = retainedShippingFinal ? sum(retainedShippingFinal.map(l => l.gross))
       : input.shippingIncludesTax ? old : rounded(old * (1 + input.shippingTaxRateBps / 10000));

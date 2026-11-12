@@ -98,6 +98,27 @@ describe('cart read with includeShippingMethods', () => {
     expect(one).toMatchObject({ shippingMethodCode: 'free', shippingTotal: 0 });
   });
 
+  it('a free-shipping coupon makes every quoted method free, as checkout charges it; another coupon leaves the rates alone', async () => {
+    await withStore(STORE, (tx) => tx.insert(s.promotion).values([
+      { storeId: STORE, code: 'FREESHIP', type: 'percentage', value: 100, freeShipping: true, enabled: true },
+      { storeId: STORE, code: 'TENOFF', type: 'percentage', value: 10, enabled: true },
+    ]));
+    const items = [{ sku: SKU, quantity: 1 }];
+    const plain = await postQuote({ country: 'US', items }) as NonNullable<Read['shippingQuote']>;
+    expect(plain.methods.map((m) => [m.code, m.rate])).toEqual(expect.arrayContaining([['express', 1500], ['standard', 500]]));
+    // A discount-only coupon: the rates are the methods' own.
+    expect(await postQuote({ country: 'US', items, couponCodes: ['TENOFF'] })).toMatchObject({ methods: plain.methods });
+    const free = await postQuote({ country: 'US', items, couponCodes: ['freeship'] }) as NonNullable<Read['shippingQuote']>;
+    expect(free.methods.map((m) => m.code).sort()).toEqual(plain.methods.map((m) => m.code).sort());
+    expect(free.methods.every((m) => m.rate === 0 && m.price === 0)).toBe(true);
+    expect(free.freeShipping).toBeNull();
+    // The cart read's quote and the price it charges agree.
+    const c = await newCart();
+    const one = await read(c.token, { pricingIntent: 'checkout', shipCountry: 'US', includeShippingMethods: '1', couponCodes: JSON.stringify(['FREESHIP']) });
+    expect(one.shippingQuote!.methods.every((m) => m.rate === 0)).toBe(true);
+    expect(one).toMatchObject({ shippingTotal: 0, grandTotal: 0 });
+  });
+
   it('no flag, an invalid country or no eligible method: the plain read, unchanged', async () => {
     const c = await newCart();
     const plain = await read(c.token, { pricingIntent: 'checkout', shipCountry: 'US' });
