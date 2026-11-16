@@ -15,6 +15,7 @@ import { magicLinkPolicy } from '../auth/magic-link.js';
 import { passkeysEnabled } from '../auth/passkeys-core.js';
 import { appleServicesId } from '../auth/apple.js';
 import { env } from '../env.js';
+import { phoneRequiredOutside } from '../checkout/phone-policy.js';
 
 export const shopConfig = new OpenAPIHono();
 
@@ -45,6 +46,8 @@ shopConfig.openapi(
           // Public client ids for social sign-in (null = off for this store). Set in admin Settings; the storefront renders
           // the buttons and opens its CSP only for the ids it receives here.
           auth: z.object({ magicLink: z.boolean(), passkeys: z.boolean(), googleClientId: z.string().nullable(), appleServicesId: z.string().nullable() }),
+          // #451: present only when the store requires a phone on orders shipped outside these countries.
+          checkout: z.object({ phoneRequiredOutside: z.array(z.string()) }).optional(),
         }) } },
       },
     },
@@ -62,7 +65,9 @@ shopConfig.openapi(
     const loyalty = loyaltySettingsFromConfig(st.config);
     // One credential resolution for both Stripe fields (#362); the usable gate is the same one payment-intent applies.
     const stripe = await resolveStripeClientConfig(st.id, mode);
+    const phoneOptionalIn = phoneRequiredOutside(st.config);
     return c.json({
+      ...(phoneOptionalIn ? { checkout: { phoneRequiredOutside: phoneOptionalIn } } : {}),
       gateways: { nmi, sezzle },
       loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
       auth: {

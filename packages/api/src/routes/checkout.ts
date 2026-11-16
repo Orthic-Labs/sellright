@@ -39,6 +39,7 @@ import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import { addressErrors, firstAddressError } from '../checkout/address-check.js';
+import { shippingPhoneRequired, PHONE_REQUIRED_MESSAGE } from '../checkout/phone-policy.js';
 import { ReservationConflict } from '../payments/reservation.js';
 import type { CheckoutFingerprintBasis, CheckoutRefusal, CheckoutReplayOrigin, PolicyCustomer, PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
 
@@ -347,7 +348,12 @@ checkout.openapi(
     const extensions = parseCheckoutExtensions(body.extensions);
     if (!extensions.ok) return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request', { param: 'extensions' });
     // #407: the storefront's address rules, enforced here too; one message per bad field.
-    const badAddress = addressErrors({ shippingAddress: normalizeAddress(body.shippingAddress), billingAddress: normalizeAddress(body.billingAddress) });
+    const shipTo = normalizeAddress(body.shippingAddress);
+    let badAddress = addressErrors({ shippingAddress: shipTo, billingAddress: normalizeAddress(body.billingAddress) });
+    // #451: a store may require a phone on orders shipped abroad. A location-only address (no street) is a quote, not an order.
+    if (shipTo?.line1 && !shipTo.phone && !badAddress?.['shippingAddress.phone'] && shippingPhoneRequired(st.config, shipTo.country)) {
+      badAddress = { ...(badAddress ?? {}), 'shippingAddress.phone': PHONE_REQUIRED_MESSAGE };
+    }
     if (badAddress) {
       const first = firstAddressError(badAddress);
       return errJson(c, 400, 'INVALID_ADDRESS', first.message, { param: first.param, extra: { fields: badAddress } });

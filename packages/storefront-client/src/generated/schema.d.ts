@@ -23162,6 +23162,9 @@ export interface paths {
                                 magicLink: boolean;
                                 passkeys: boolean;
                             };
+                            checkout?: {
+                                phoneRequiredOutside: string[];
+                            };
                             gateways: {
                                 nmi: {
                                     /** @enum {string} */

@@ -9513,6 +9513,20 @@
                         "googleClientId",
                         "appleServicesId"
                       ]
+                    },
+                    "checkout": {
+                      "type": "object",
+                      "properties": {
+                        "phoneRequiredOutside": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "phoneRequiredOutside"
+                      ]
                     }
                   },
                   "required": [

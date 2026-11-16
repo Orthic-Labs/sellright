@@ -27,6 +27,7 @@ import { checkoutIpRetryAfter, clearLoginAttempts } from '../auth/rate-limit.js'
 import { rateLimitBackend } from '../auth/rate-limit-backend.js';
 import * as customerSessions from '../auth/session.js';
 import { checkout } from './checkout.js';
+import { invalidateStoreCache } from '../store-context.js';
 import { cart } from './cart.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -259,6 +260,24 @@ describe('POST /v1/shop/checkout — address rules (#407)', () => {
     });
     const count = await withStore(STORE, async (tx) => Number(((await tx.execute(sql`SELECT count(*)::int AS n FROM "order"`)).rows[0] as { n: number }).n));
     expect(count).toBe(0);
+  });
+
+  it('#451: a store that requires a phone abroad refuses an international order without one, and only that', async () => {
+    const ie = { fullName: 'Ada Lovelace', line1: '1 Main St', city: 'Dublin', postalCode: 'D02 X285', country: 'IE' };
+    // Unset: phone is optional everywhere.
+    expect((await post({ email: 'ie0@example.org', shippingAddress: ie })).status).toBe(200);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE store SET config = coalesce(config, '{}'::jsonb) || '{"checkout":{"phoneRequiredOutside":["US","PR"]}}'::jsonb WHERE id = ${STORE}`));
+    invalidateStoreCache(SLUG);
+    const res = await post({ email: 'ie1@example.org', shippingAddress: ie });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string; param: string }; fields: Record<string, string> };
+    expect(body.error).toMatchObject({ code: 'INVALID_ADDRESS', param: 'shippingAddress.phone', message: 'Phone number is required for international orders' });
+    expect(body.fields).toEqual({ 'shippingAddress.phone': 'Phone number is required for international orders' });
+    expect((await post({ email: 'ie2@example.org', shippingAddress: { ...ie, phone: '+353 1 234 5678' } })).status).toBe(200);
+    // A listed country still needs no phone.
+    expect((await post({ email: 'us1@example.org', shippingAddress: { fullName: 'Ada Lovelace', line1: '1 Main St', city: 'Austin', province: 'TX', postalCode: '78701', country: 'US' } })).status).toBe(200);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE store SET config = config - 'checkout' WHERE id = ${STORE}`));
+    invalidateStoreCache(SLUG);
   });
 });
 

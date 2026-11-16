@@ -27,7 +27,7 @@ import { expressCheckoutOptions, type ExpressOrderForm, type ExpressOrderResult 
 import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
 import { getShopConfig, getShippingQuote, type ShippingQuote } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
-import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
+import { phoneRequiredFor, validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
 import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
@@ -733,9 +733,11 @@ const CheckoutContent = component$(() => {
           emailAddress: appState.customer?.emailAddress || '',
           phoneNumber: appState.shippingAddress?.phoneNumber || '',
         },
-        appState.shippingAddress?.countryCode || 'US'
+        appState.shippingAddress?.countryCode || 'US',
+        phoneRequiredFor(appState.shippingAddress?.countryCode || 'US', shopConfig.value?.checkout?.phoneRequiredOutside),
       );
       if (!customerSection.isValid) {
+        if (customerSection.errors.phone && !customerSection.errors.email && !customerSection.errors.firstName && !customerSection.errors.lastName) throw new Error(customerSection.errors.phone);
         throw new Error('Please complete all required customer information.');
       }
 

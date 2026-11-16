@@ -3,7 +3,8 @@ import { isServer } from '@qwik.dev/core/build';
 import { APP_STATE } from '~/constants';
 import { submitCheckoutAddresses } from './checkout-address-submit';
 import { validateEmail, validateName, validatePhone, filterPhoneInput, sanitizePhoneNumber } from '~/utils/validation';
-import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
+import { phoneRequiredFor, validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
+import { getShopConfig } from '~/providers/shop/config';
 import { useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
 import { useCheckoutAddressState } from '~/contexts/CheckoutAddressContext';
@@ -38,6 +39,9 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
   const isFormValidSignal = useSignal(false);
   const hasProceeded = useSignal(false);
   const validationTimer = useSignal<number | null>(null);
+  /** #451: countries where the phone stays optional (shop config); null = optional everywhere, or not read yet. */
+  const phoneOptionalIn = useSignal<string[] | null>(null);
+  const phoneRequired = useComputed$(() => phoneRequiredFor(appState.shippingAddress?.countryCode || 'US', phoneOptionalIn.value));
   const validateCompleteForm$ = $(() => {
     const countryCode = appState.shippingAddress.countryCode || 'US';
     const customer = {
@@ -46,7 +50,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       emailAddress: appState.customer?.emailAddress || '',
       phoneNumber: appState.shippingAddress?.phoneNumber || '',
     };
-    const customerSection = validateCustomerSection(customer, countryCode);
+    const customerSection = validateCustomerSection(customer, countryCode, phoneRequiredFor(countryCode, phoneOptionalIn.value));
     const shippingSection = validateShippingSection(appState.shippingAddress);
     const billingSection: ReturnType<typeof validateBillingSection> = useDifferentBilling.value
       ? validateBillingSection(appState.billingAddress)
@@ -55,7 +59,9 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     emailValidationError.value = customerSection.errors.email || '';
     firstNameValidationError.value = customerSection.errors.firstName || '';
     lastNameValidationError.value = customerSection.errors.lastName || '';
-    phoneValidationError.value = phoneCharsRejected.value ? PHONE_CHARACTERS_MESSAGE : (customerSection.errors.phone || '');
+    // A required phone that is still empty and untouched blocks the form without showing an error before the shopper gets there.
+    const phoneError = customerSection.errors.phone || '';
+    phoneValidationError.value = phoneCharsRejected.value ? PHONE_CHARACTERS_MESSAGE : (!customer.phoneNumber && !phoneTouched.value ? '' : phoneError);
     isFormValidSignal.value = overallValid;
     validationActions.updateCustomerValidation(
       customerSection.isValid,
@@ -68,7 +74,16 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       validationActions.updateBillingAddressValidation(billingSection.isValid, billingSection.errors, true);
     }
   });
-  const phonePlaceholder = useComputed$(() => 'Phone number (optional)');
+  const phonePlaceholder = useComputed$(() => (phoneRequired.value ? 'Phone number (required for international orders)' : 'Phone number (optional)'));
+  // #451: the store's phone rule, read in the browser (the shell is edge cached); the form re-validates once it lands.
+  useTask$(async ({ track }) => {
+    track(() => appState.shippingAddress?.countryCode);
+    if (isServer || phoneOptionalIn.value) return;
+    try {
+      const list = (await getShopConfig()).checkout?.phoneRequiredOutside;
+      if (list?.length) { phoneOptionalIn.value = list; await validateCompleteForm$(); }
+    } catch { /* the server enforces the rule at place-order */ }
+  });
   useTask$(({ track }) => {
     track(() => addressSubmissionComplete.value);
     track(() => addressSubmissionInProgress.value);
@@ -146,7 +161,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     if (appState.shippingAddress?.phoneNumber && !phoneTouched.value) {
       phoneTouched.value = true;
       const countryCode = appState.shippingAddress.countryCode || 'US';
-      const result = validatePhone(appState.shippingAddress.phoneNumber, countryCode);
+      const result = validatePhone(appState.shippingAddress.phoneNumber, countryCode, !phoneRequiredFor(countryCode, phoneOptionalIn.value));
       phoneValidationError.value = result.isValid ? '' : (result.message || 'Invalid phone');
     }
   });
@@ -162,7 +177,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       if (appState.shippingAddress?.phoneNumber && !phoneTouched.value) {
         phoneTouched.value = true;
         const countryCode = appState.shippingAddress.countryCode || 'US';
-        const phoneResult = validatePhone(appState.shippingAddress.phoneNumber, countryCode);
+        const phoneResult = validatePhone(appState.shippingAddress.phoneNumber, countryCode, !phoneRequiredFor(countryCode, phoneOptionalIn.value));
         if (!phoneResult.isValid) {
           phoneValidationError.value = phoneResult.message || 'Invalid phone number';
         }
@@ -196,7 +211,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
       if (!phoneTouched.value) {
         phoneTouched.value = true;
       }
-      const phoneResult = validatePhone(customerPhoneNumber, countryCode);
+      const phoneResult = validatePhone(customerPhoneNumber, countryCode, !phoneRequiredFor(countryCode, phoneOptionalIn.value));
       phoneValidationError.value = phoneResult.isValid ? '' : (phoneResult.message || 'Invalid phone number');
       console.log(`📞 [CheckoutAddresses] Phone re-validated for ${countryCode}: ${phoneResult.isValid ? 'valid' : (phoneResult.message || 'Invalid phone number')}`);
     }
@@ -292,7 +307,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     }
     if (phoneTouched.value) {
       const countryCode = appState.shippingAddress.countryCode || 'US';
-      const phoneResult = validatePhone(filteredValue, countryCode);
+      const phoneResult = validatePhone(filteredValue, countryCode, !phoneRequiredFor(countryCode, phoneOptionalIn.value));
       if (phoneResult.isValid) {
         phoneValidationError.value = '';
       } else {
@@ -305,7 +320,7 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     if (phoneCharsRejected.value) { phoneValidationError.value = PHONE_CHARACTERS_MESSAGE; return; }
     const phoneNumber = appState.shippingAddress?.phoneNumber || '';
     const countryCode = appState.shippingAddress.countryCode || 'US';
-    const phoneResult = validatePhone(phoneNumber, countryCode);
+    const phoneResult = validatePhone(phoneNumber, countryCode, !phoneRequiredFor(countryCode, phoneOptionalIn.value));
     if (phoneResult.isValid) {
       phoneValidationError.value = '';
     } else {

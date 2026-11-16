@@ -37,12 +37,18 @@ type AddressInput = {
   countryCode?: string;
 };
 
-export function validateCustomerSection(customer: CustomerInput, countryCode = 'US') {
+/** #451: whether the store requires a phone for this shipping country (`checkout.phoneRequiredOutside` in the shop config). */
+export function phoneRequiredFor(countryCode: string | null | undefined, optionalIn: readonly string[] | null | undefined): boolean {
+  const c = (countryCode || '').toUpperCase();
+  return !!optionalIn?.length && /^[A-Z]{2}$/.test(c) && !optionalIn.includes(c);
+}
+
+export function validateCustomerSection(customer: CustomerInput, countryCode = 'US', phoneRequired = false) {
   const normalizedCountry = countryCode.toUpperCase();
   const firstName = validateName(customer.firstName || '', 'First name');
   const lastName = validateName(customer.lastName || '', 'Last name');
   const email = validateEmail(customer.emailAddress || '');
-  const phone = validatePhone(customer.phoneNumber || '', normalizedCountry);
+  const phone = validatePhone(customer.phoneNumber || '', normalizedCountry, !phoneRequired);
   const errors: CustomerSectionErrors = {
     firstName: firstName.isValid ? undefined : (firstName.message || 'Invalid first name'),
     lastName: lastName.isValid ? undefined : (lastName.message || 'Invalid last name'),
