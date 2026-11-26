@@ -12,6 +12,7 @@ import {
   Badge, EmptyStateActionPanel, Modal, Field, type Column, type TabDef,
 } from '../components/ui';
 import { dateTime } from '../lib/format';
+import { inventoryQuery } from './inventory-query';
 
 const VIEWS: TabDef[] = [
   { key: 'all', label: 'All stock' },
@@ -42,7 +43,7 @@ export default function Inventory() {
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['inventory', store?.slug, q, low, page],
-    queryFn: ({ signal }) => api.get<Page<InventoryRow>>(`/inventory?${new URLSearchParams({ q, lowStock: low ? '1' : '', page: String(page), pageSize: '50' })}`, { signal }),
+    queryFn: ({ signal }) => api.get<Page<InventoryRow>>(`/inventory?${inventoryQuery(q, low, page)}`, { signal }),
     placeholderData: keepPreviousData,
   });
   const save = useMutation({
